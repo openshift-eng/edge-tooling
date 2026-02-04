@@ -31,6 +31,27 @@ All LVMS source repositories are cloned into the `repos/` folder. The `CLAUDE.md
 | `./setup.sh status` | Show clone status and current branches |
 | `./setup.sh list` | List configured repositories |
 
+## Release Branching
+
+The `branch-release.sh` script automates the LVMS Y-stream release branching procedure across multiple repositories.
+
+```bash
+# Preview changes with dry run
+./branch-release.sh --old-version 4.21 --new-version 4.22 \
+  --lvm-dir ~/repos/lvm-operator \
+  --konflux-dir ~/repos/konflux-release-data \
+  --prodsec-dir ~/repos/product-definitions \
+  --dry-run
+
+# Run interactively
+./branch-release.sh --old-version 4.21 --new-version 4.22 \
+  --lvm-dir ~/repos/lvm-operator \
+  --konflux-dir ~/repos/konflux-release-data \
+  --prodsec-dir ~/repos/product-definitions
+```
+
+See `CLAUDE.md` for detailed documentation on all script options and steps.
+
 ## Configuration
 
 Edit `repos.txt` to customize which repositories to clone and which branches to use. The file is created from `repos.txt.template` on first run.
@@ -39,3 +60,4 @@ Edit `repos.txt` to customize which repositories to clone and which branches to 
 
 - Git
 - [Claude Code](https://claude.ai/code) (recommended for AI-assisted development)
+- For release branching: `kustomize`, `jq`, `sed`

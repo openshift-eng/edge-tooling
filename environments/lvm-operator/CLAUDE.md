@@ -49,6 +49,54 @@ Repositories are grouped by their primary purpose:
 #### Troubleshooting
 <!-- TODO: Add guidance for debugging and troubleshooting tasks -->
 
+#### Release Management
+
+The `branch-release.sh` script automates the LVMS release branching procedure across multiple repositories. Use this when creating a new Y-stream release branch.
+
+**Prerequisites**:
+- `kustomize`, `jq`, `git`, and `sed` installed
+- All required repos cloned with `origin` pointing to upstream
+- Clean working directories (no uncommitted changes)
+
+**Usage**:
+```bash
+# Dry run first to preview all changes
+./branch-release.sh --old-version 4.21 --new-version 4.22 \
+  --lvm-dir ~/repos/lvm-operator \
+  --konflux-dir ~/repos/konflux-release-data \
+  --prodsec-dir ~/repos/product-definitions \
+  --dry-run
+
+# Run interactively (prompts before each step)
+./branch-release.sh --old-version 4.21 --new-version 4.22 \
+  --lvm-dir ~/repos/lvm-operator \
+  --konflux-dir ~/repos/konflux-release-data \
+  --prodsec-dir ~/repos/product-definitions
+
+# Run a specific step only
+./branch-release.sh --old-version 4.21 --new-version 4.22 \
+  --lvm-dir ~/repos/lvm-operator --step 4
+```
+
+**Steps performed**:
+1. **GitHub branching** - Create `release-X.Y` branch in lvm-operator
+2. **Prodsec update** - Add new version to `product-definitions`
+3. **Konflux updates** - Update version configs in `konflux-release-data`
+4. **Release branch tekton** - Update `.tekton/` files on release branch
+5. **Main branch versions** - Bump versions on main branch
+6. **Catalog regeneration** - Run `make catalog-template` (post-merge)
+
+**Version formats** (automatically computed):
+| Format | Example | Used for |
+|--------|---------|----------|
+| `X.Y` | `4.21` | Release branch names (`release-4.21`) |
+| `X-Y` | `4-21` | Component names, service accounts |
+| `vX.Y` | `v4.21` | LVMS_TAGS, Y_STREAM, CATALOG_VERSION |
+| `X.Y.Z` | `4.21.0` | OPERATOR_VERSION |
+| `vX.Y-vZ` | `v4.21-v4.22` | OPENSHIFT_VERSIONS range |
+
+**Note**: The script creates commits locally but does NOT push. After each step, push to your fork and create PRs manually.
+
 ---
 
 ## Repositories
