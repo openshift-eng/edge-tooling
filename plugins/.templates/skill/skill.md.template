@@ -1,0 +1,155 @@
+# {{PLUGIN_NAME}} Skill
+
+## Purpose
+
+This skill helps Claude Code {{PURPOSE_DESCRIPTION}}.
+
+**When to use this skill:**
+- Use case 1
+- Use case 2
+- Use case 3
+
+## Trigger
+
+Claude should invoke this skill when the user:
+- Mentions {{TRIGGER_PHRASE}}
+- Asks to {{ACTION_DESCRIPTION}}
+- Needs help with {{DOMAIN_AREA}}
+
+## Prerequisites
+
+Before using this skill, ensure:
+- OpenShift cluster is accessible (KUBECONFIG set)
+- Required CLI tools are installed: `oc`, `kubectl`
+- User has appropriate RBAC permissions
+
+## Implementation Steps
+
+When this skill is invoked, follow these steps:
+
+### 1. Validate Prerequisites
+
+First, verify the environment is ready:
+- Check KUBECONFIG is set
+- Verify cluster connectivity: `oc whoami`
+- Validate required tools are available
+
+### 2. Gather Information
+
+Collect necessary context:
+- Cluster version: `oc version`
+- Relevant resources: `oc get <resource>`
+- Configuration details
+
+### 3. Perform Analysis
+
+Execute the core workflow:
+- Step-by-step analysis approach
+- Use appropriate CLI commands
+- Parse and interpret results
+
+### 4. Provide Results
+
+Present findings to the user:
+- Summarize key findings
+- Highlight issues or anomalies
+- Suggest next steps or remediation
+
+## Examples
+
+### Example 1: Basic Usage
+
+**User request:**
+> "Use {{PLUGIN_NAME}} to check X"
+
+**Claude response:**
+```
+I'll use the {{PLUGIN_NAME}} skill to analyze X.
+
+1. Checking prerequisites...
+   ✓ Cluster accessible
+   ✓ Tools available
+
+2. Gathering information...
+   [Command output]
+
+3. Analysis:
+   - Finding 1
+   - Finding 2
+
+Recommendations:
+- Action 1
+- Action 2
+```
+
+### Example 2: Advanced Scenario
+
+**User request:**
+> "Analyze Y in my cluster"
+
+**Claude response:**
+[Detailed example of advanced usage]
+
+## Common Issues and Troubleshooting
+
+### Issue: Cannot connect to cluster
+
+**Symptom:** Commands fail with connection errors
+
+**Solution:**
+- Verify KUBECONFIG: `echo $KUBECONFIG`
+- Check cluster status: `oc cluster-info`
+- Ensure VPN/network access
+
+### Issue: Insufficient permissions
+
+**Symptom:** RBAC errors when running commands
+
+**Solution:**
+- Check permissions: `oc auth can-i <verb> <resource>`
+- Request appropriate role from cluster admin
+- Use `oc adm policy add-role-to-user` if admin
+
+## Technical Details
+
+### Commands Used
+
+This skill leverages these key commands:
+- `oc get <resource>` - Retrieve resource information
+- `oc describe <resource>` - Detailed resource inspection
+- `oc logs <pod>` - Container logs
+- Custom analysis scripts
+
+### Output Format
+
+Results are presented as:
+- Structured summaries
+- Actionable recommendations
+- Links to relevant documentation
+
+### Performance Considerations
+
+- Large clusters may take longer to analyze
+- Use label selectors to filter results
+- Consider using sub-agents for parallel work
+
+## Related Skills
+
+This skill works well with:
+- `cluster-health-check` - Comprehensive cluster health
+- `must-gather-analysis` - Deep dive diagnostics
+- `prow-job-analyzer` - CI/CD troubleshooting
+
+## References
+
+- [OpenShift Documentation](https://docs.openshift.com/)
+- [Kubernetes Best Practices](https://kubernetes.io/docs/concepts/)
+- Related RFEs and bugs in Jira
+
+## Notes for Claude
+
+- Always validate prerequisites before executing
+- Provide clear, actionable output
+- Suggest follow-up actions when appropriate
+- Use sub-agents for complex multi-step analysis
+- Maintain context between related queries

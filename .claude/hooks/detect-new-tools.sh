@@ -25,6 +25,7 @@ DOCUMENTED_TOOLS=(
     "ec2-deploy"
     "sno-deploy"
     "environments/lvm-operator"
+    "plugins"
 )
 
 # Function to check if a directory looks like a tool

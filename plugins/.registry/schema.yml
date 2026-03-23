@@ -1,0 +1,47 @@
+# Plugin Metadata Schema
+# All plugins must include a plugin.yml file following this schema
+
+# Required fields
+name: string              # Unique plugin identifier (lowercase, hyphens)
+version: string           # Semantic version (e.g., "1.0.0")
+type: string              # Plugin type: skill | command | subagent | hybrid
+category: string          # Category: cluster-ops | debug | deploy | network | operator | ci-cd | util
+description: string       # Short description (< 120 chars)
+author: string            # Maintainer name or GitHub handle
+
+# Optional fields
+long_description: string  # Detailed description (markdown supported)
+homepage: string          # URL to documentation or repo
+license: string           # SPDX license identifier (default: Apache-2.0)
+tags: [string]            # Search tags
+
+# Compatibility
+compatibility:
+  claude_code_min: string       # Minimum Claude Code version
+  openshift_versions: [string]  # Compatible OCP versions (e.g., ["4.14+", "4.15"])
+  required_tools: [string]      # Required CLI tools (e.g., ["oc", "kubectl"])
+  platforms: [string]           # Supported platforms: linux | darwin | windows
+
+# Dependencies
+dependencies:
+  plugins: [string]             # Required plugin names
+  optional_plugins: [string]    # Enhanced functionality if installed
+
+# Installation
+install:
+  skills: [string]              # Skill files to install (relative paths)
+  commands: [string]            # Command scripts to install
+  files: [string]               # Additional files to copy
+  hooks: [string]               # Hook scripts to register
+  post_install: string          # Optional post-install script
+
+# Usage
+usage:
+  trigger_keywords: [string]    # Keywords that should invoke this plugin
+  examples: [string]            # Usage examples
+
+# Changelog (optional, for version tracking)
+changelog:
+  - version: string
+    date: string
+    changes: [string]

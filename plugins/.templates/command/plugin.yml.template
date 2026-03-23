@@ -1,0 +1,44 @@
+name: {{PLUGIN_NAME}}
+version: 1.0.0
+type: command
+category: {{CATEGORY}}
+description: {{DESCRIPTION}}
+author: {{AUTHOR}}
+
+long_description: |
+  Detailed explanation of what this command does and when to use it.
+
+homepage: https://github.com/jeff-roche/edge-tooling/tree/main/plugins/{{PLUGIN_NAME}}
+license: Apache-2.0
+tags:
+  - openshift
+  - automation
+
+compatibility:
+  claude_code_min: "1.0.0"
+  openshift_versions: ["4.14+"]
+  required_tools: ["bash"]
+  platforms: ["linux", "darwin"]
+
+dependencies:
+  plugins: []
+  optional_plugins: []
+
+install:
+  commands:
+    - command.sh
+  files: []
+  post_install: null
+
+usage:
+  trigger_keywords:
+    - "{{PLUGIN_NAME}}"
+  examples:
+    - "Run {{PLUGIN_NAME}} to perform X"
+    - "Execute {{PLUGIN_NAME}} with arguments Y"
+
+changelog:
+  - version: 1.0.0
+    date: {{DATE}}
+    changes:
+      - "Initial release"

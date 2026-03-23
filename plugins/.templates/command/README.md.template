@@ -1,0 +1,121 @@
+# {{PLUGIN_NAME}}
+
+{{DESCRIPTION}}
+
+## Installation
+
+```bash
+./marketplace install {{PLUGIN_NAME}}
+```
+
+## Usage
+
+```bash
+{{PLUGIN_NAME}} [options] <arguments>
+```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `-h, --help` | Show help message |
+| `-v, --verbose` | Enable verbose output |
+| `-d, --dry-run` | Perform dry run |
+
+### Arguments
+
+- `<arg1>` - Description of first argument
+- `<arg2>` - Description of second argument (optional)
+
+## Examples
+
+### Basic Usage
+
+```bash
+{{PLUGIN_NAME}} cluster-name
+```
+
+### With Options
+
+```bash
+{{PLUGIN_NAME}} --verbose --dry-run cluster-name namespace
+```
+
+### In Claude Code
+
+Ask Claude to run the command:
+
+```
+User: "Run {{PLUGIN_NAME}} for my production cluster"
+
+Claude: I'll execute the {{PLUGIN_NAME}} command...
+[Command output]
+```
+
+## Requirements
+
+- **Claude Code:** >= 1.0.0
+- **OpenShift:** 4.14+
+- **CLI Tools:** `bash`, `oc`, `kubectl`
+- **Permissions:** Appropriate RBAC for operations performed
+
+## Environment Variables
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `KUBECONFIG` | Path to kubeconfig | Yes |
+| `DEBUG` | Enable debug output | No |
+
+## How It Works
+
+1. Validates prerequisites (tools, connectivity)
+2. Parses command line arguments
+3. Executes core command logic
+4. Reports results
+
+## Troubleshooting
+
+### Command not found
+
+**Solution:** Ensure plugin is installed:
+```bash
+./marketplace status
+```
+
+### Permission denied
+
+**Solution:** Ensure execute permission:
+```bash
+chmod +x ~/.claude/commands/{{PLUGIN_NAME}}
+```
+
+### Cluster connection errors
+
+**Solution:** Verify KUBECONFIG and connectivity:
+```bash
+export KUBECONFIG=/path/to/kubeconfig
+oc whoami
+```
+
+## Exit Codes
+
+- `0` - Success
+- `1` - General error
+- `2` - Invalid arguments
+- `3` - Prerequisite check failed
+
+## Contributing
+
+See [CONTRIBUTING.md](../../docs/CONTRIBUTING.md) for contribution guidelines.
+
+## License
+
+Apache-2.0
+
+## Author
+
+{{AUTHOR}}
+
+## Version History
+
+See plugin.yml changelog.

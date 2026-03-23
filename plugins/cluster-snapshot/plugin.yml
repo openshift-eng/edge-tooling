@@ -1,0 +1,54 @@
+name: cluster-snapshot
+version: 1.0.0
+type: skill
+category: cluster-ops
+description: Generate comprehensive cluster snapshot with version, health, and resource summary
+author: jeff-roche
+
+long_description: |
+  The cluster-snapshot skill generates a comprehensive snapshot of an OpenShift
+  cluster's current state, including version information, operator health,
+  node status, and resource utilization. This is useful for quick health checks,
+  troubleshooting, or documenting cluster state.
+
+homepage: https://github.com/jeff-roche/edge-tooling/tree/main/plugins/cluster-snapshot
+license: Apache-2.0
+tags:
+  - openshift
+  - cluster-health
+  - diagnostics
+  - troubleshooting
+
+compatibility:
+  claude_code_min: "1.0.0"
+  openshift_versions: ["4.14+", "4.15", "4.16"]
+  required_tools: ["oc", "kubectl"]
+  platforms: ["linux", "darwin"]
+
+dependencies:
+  plugins: []
+  optional_plugins: []
+
+install:
+  skills:
+    - skill.md
+  post_install: null
+
+usage:
+  trigger_keywords:
+    - "cluster snapshot"
+    - "cluster overview"
+    - "cluster status"
+    - "cluster health summary"
+  examples:
+    - "Generate a cluster snapshot"
+    - "Show me a comprehensive cluster overview"
+    - "Get cluster status and health"
+
+changelog:
+  - version: 1.0.0
+    date: 2026-03-23
+    changes:
+      - "Initial release"
+      - "Support for OCP 4.14+"
+      - "Basic cluster health and version reporting"

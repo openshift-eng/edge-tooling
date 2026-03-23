@@ -1,0 +1,14 @@
+# Plugin Installation State
+# Tracks which plugins are currently installed
+# Do not edit manually - managed by marketplace CLI
+
+version: "1.0"
+installed_plugins: []
+  # Example entry:
+  # - name: ovn-topology
+  #   version: 1.0.0
+  #   install_date: "2026-03-23T10:30:00Z"
+  #   install_path: /home/user/.claude/skills/
+  #   status: active
+
+last_update_check: null

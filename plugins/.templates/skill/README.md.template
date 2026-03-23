@@ -1,0 +1,100 @@
+# {{PLUGIN_NAME}}
+
+{{DESCRIPTION}}
+
+## Overview
+
+{{PLUGIN_NAME}} is a Claude Code skill that {{PURPOSE_DESCRIPTION}}.
+
+**Key features:**
+- Feature 1
+- Feature 2
+- Feature 3
+
+## Installation
+
+```bash
+./marketplace install {{PLUGIN_NAME}}
+```
+
+## Usage
+
+This skill is automatically triggered when you ask Claude to:
+- {{USE_CASE_1}}
+- {{USE_CASE_2}}
+- {{USE_CASE_3}}
+
+### Basic Example
+
+```
+User: "Use {{PLUGIN_NAME}} to check cluster health"
+
+Claude: I'll analyze your cluster using the {{PLUGIN_NAME}} skill...
+```
+
+### Advanced Example
+
+```
+User: "{{ADVANCED_USE_CASE}}"
+
+Claude: [Detailed analysis with recommendations]
+```
+
+## Requirements
+
+- **Claude Code:** >= 1.0.0
+- **OpenShift:** 4.14+
+- **CLI Tools:** `oc`, `kubectl`
+- **Permissions:** Cluster reader or higher
+
+## Configuration
+
+No additional configuration required. The skill uses standard OpenShift CLI tools and KUBECONFIG.
+
+## How It Works
+
+1. Validates cluster connectivity
+2. Gathers relevant resource information
+3. Performs analysis based on best practices
+4. Provides actionable recommendations
+
+## Troubleshooting
+
+### Skill not triggering
+
+**Solution:** Use explicit keywords like "use {{PLUGIN_NAME}}" or "{{TRIGGER_PHRASE}}"
+
+### Connection errors
+
+**Solution:** Verify KUBECONFIG is set and cluster is accessible:
+```bash
+export KUBECONFIG=/path/to/kubeconfig
+oc whoami
+```
+
+### Permission denied
+
+**Solution:** Ensure you have appropriate RBAC permissions:
+```bash
+oc auth can-i get pods --all-namespaces
+```
+
+## Examples
+
+See [examples/](examples/) directory for complete usage examples.
+
+## Contributing
+
+Found a bug or want to add a feature? See [CONTRIBUTING.md](../../docs/CONTRIBUTING.md).
+
+## License
+
+Apache-2.0
+
+## Author
+
+{{AUTHOR}}
+
+## Version History
+
+See plugin.yml changelog for version history.

@@ -1,0 +1,15 @@
+# Plugin Marketplace Catalog
+# Auto-generated - do not edit manually
+# Last updated: 2026-03-23T16:36:36Z
+
+version: "1.0"
+plugins:
+  - name: cluster-snapshot
+    version: 1.0.0
+    type: skill
+    category: cluster-ops
+    description: Generate comprehensive cluster snapshot with version, health, and resource summary
+    author: jeff-roche
+    path: cluster-snapshot
+
+
