@@ -1,0 +1,56 @@
+name: dev-env-setup
+version: 1.0.0
+type: skill
+category: development
+description: Initialize or refresh multi-repo development environment from presets or custom configuration
+author: jeff-roche
+
+long_description: |
+  The dev-env-setup skill helps you bootstrap multi-repository development
+  environments. It can clone repos from presets, generate context files,
+  and set up structured project workspaces. Perfect for teams working across
+  multiple related repositories that need coordinated development environments.
+
+homepage: https://github.com/jeff-roche/edge-tooling/tree/main/plugins/dev-env-setup
+license: Apache-2.0
+tags:
+  - multi-repo
+  - development-environment
+  - workspace
+  - preset
+  - repository-management
+
+compatibility:
+  claude_code_min: "1.0.0"
+  required_tools: ["git"]
+  platforms: ["linux", "darwin"]
+
+dependencies:
+  plugins: []
+  optional_plugins: []
+
+install:
+  skills:
+    - skill.md
+    - context-template.md
+  post_install: null
+
+usage:
+  trigger_keywords:
+    - "setup dev environment"
+    - "initialize workspace"
+    - "clone repositories"
+    - "multi-repo setup"
+  examples:
+    - "/dev-env-setup"
+    - "/dev-env-setup setup"
+    - "/dev-env-setup setup custom"
+
+changelog:
+  - version: 1.0.0
+    date: 2026-03-23
+    changes:
+      - "Initial release"
+      - "Support for preset-based setup"
+      - "Custom dev environment configuration"
+      - "Automated context file distribution"
