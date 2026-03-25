@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "permission": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["group", "user", "authenticated", "project", "role", "global"]
+        },
+        "group": {
+          "type": "object",
+          "required": ["name"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 }
+          }
+        },
+        "user": {
+          "type": "object"
+        }
+      },
+      "if": {
+        "properties": { "type": { "const": "group" } }
+      },
+      "then": {
+        "required": ["group"]
+      }
+    }
+  },
+  "type": "object",
+  "required": ["filters"],
+  "additionalProperties": false,
+  "properties": {
+    "filters": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "description", "jql", "editPermissions", "sharePermissions"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string"
+          },
+          "jql": {
+            "type": "string",
+            "minLength": 1
+          },
+          "editPermissions": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/permission" }
+          },
+          "sharePermissions": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/permission" }
+          }
+        }
+      }
+    }
+  }
+}

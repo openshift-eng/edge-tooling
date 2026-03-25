@@ -1,0 +1,45 @@
+name: Jira Config — Apply Changes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'edge-scrum/.jira-config/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jira-sync-apply
+  cancel-in-progress: false
+
+jobs:
+  validate-configs:
+    name: Validate JSON config schemas
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install check-jsonschema
+        run: pip install check-jsonschema
+
+      - name: Validate .jira-config JSON files
+        run: edge-scrum/.ci/scripts/validate-configs.sh
+
+  apply:
+    name: Apply Jira config changes
+    needs: validate-configs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply metadata changes to Jira
+        run: edge-scrum/.ci/scripts/apply-changes.sh
+        env:
+          JIRA_USERNAME: ${{ secrets.JIRA_USERNAME }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          GIT_BASE_SHA: ${{ github.event.before }}
+          SYNC_ALL: ${{ github.event_name == 'workflow_dispatch' }}

@@ -1,0 +1,156 @@
+{
+  "projects": [
+    {
+      "id": "11690",
+      "key": "OCPEDGE",
+      "name": "OpenShift Edge Enablement",
+      "description": "Project for the OpenShift Edge Team",
+      "assigneeType": "UNASSIGNED",
+      "isPrivate": false,
+      "lead": {
+        "id": "712020:93a6a685-d36f-4660-a64a-6870675c2ec8",
+        "email": "cscribne@redhat.com"
+      },
+      "roles": [
+        {
+          "id": "10002",
+          "name": "Administrators",
+          "description": "A project role that represents administrators in a project",
+          "actors": [
+            {
+              "type": "atlassian-user-role-actor",
+              "account_id": "712020:93a6a685-d36f-4660-a64a-6870675c2ec8",
+              "display_name": "Chad Scribner"
+            },
+            {
+              "type": "atlassian-user-role-actor",
+              "account_id": "712020:eca54813-6101-4bb6-b169-5b91a02029a1",
+              "display_name": "Jeff Roche"
+            },
+            {
+              "type": "atlassian-user-role-actor",
+              "account_id": "70121:fd715ae6-c353-45e3-ab6d-4d856939baac",
+              "display_name": "Jeremy Poulin"
+            },
+            {
+              "type": "atlassian-user-role-actor",
+              "account_id": "712020:188ebd21-393a-42a0-82dc-4646bc713e61",
+              "display_name": "Pablo Acevedo Montserrat"
+            },
+            {
+              "type": "atlassian-user-role-actor",
+              "account_id": "61e811135fcc37006876d93a",
+              "display_name": "Gregory Giguashvili"
+            },
+            {
+              "type": "atlassian-user-role-actor",
+              "account_id": "604a3e8543eac6006f8fbe82",
+              "display_name": "Nicole Wilker"
+            },
+            {
+              "type": "atlassian-user-role-actor",
+              "account_id": "604bf97ce19f910069714b6c",
+              "display_name": "Sarah Kyros"
+            },
+            {
+              "type": "atlassian-user-role-actor",
+              "account_id": "712020:06373c2b-9dbb-4310-b3c9-05b75997831c",
+              "display_name": "Suleyman Akbas"
+            },
+            {
+              "type": "atlassian-group-role-actor",
+              "group_id": "21adff1a-e3a7-434f-a9e0-ad57c4f70762",
+              "group_name": "jira-administrators"
+            }
+          ]
+        },
+        {
+          "id": "10125",
+          "name": "Users",
+          "description": "Standard user access",
+          "actors": []
+        },
+        {
+          "id": "10126",
+          "name": "Developers",
+          "description": "This project role is intended for anyone who is a team member, actively working in the Jira project. Developers cannot access the project settings, comments, and attachments that are not their own. They also do not have the ability to manage components, releases, or sprint information in the project. Developers do have the ability to start and complete sprints.",
+          "actors": [
+            {
+              "type": "atlassian-user-role-actor",
+              "account_id": "712020:07290b97-3f2b-4fe2-81a5-d5d501f306fe",
+              "display_name": "Edge JiraBot"
+            },
+            {
+              "type": "atlassian-user-role-actor",
+              "account_id": "712020:510de16d-fc42-48cf-8412-8b5cb72dc6bd",
+              "display_name": "Jira-SD-Elements-Integration Bot"
+            },
+            {
+              "type": "atlassian-group-role-actor",
+              "group_id": "70b1c436-6bfe-4027-bc2d-78ec147d8cb1",
+              "group_name": "OpenShift Jira Bots"
+            },
+            {
+              "type": "atlassian-group-role-actor",
+              "group_id": "13bd0387-d75c-4c18-9d37-5439e8bf984c",
+              "group_name": "Red Hat Employee"
+            }
+          ]
+        },
+        {
+          "id": "10127",
+          "name": "Scrum master",
+          "description": "This role is intended for users that assist with day-to-day operation of the team but don't require full project administration access. Scrum masters, program managers, and others may find themselves in this role. It provides access to create, edit, start, and end sprints.",
+          "actors": [
+            {
+              "type": "atlassian-user-role-actor",
+              "account_id": "712020:eca54813-6101-4bb6-b169-5b91a02029a1",
+              "display_name": "Jeff Roche"
+            },
+            {
+              "type": "atlassian-group-role-actor",
+              "group_id": "4937a28d-eae0-4776-990c-589b162a7fe7",
+              "group_name": "openshift-scrummaster-role"
+            }
+          ]
+        },
+        {
+          "id": "10128",
+          "name": "Approver",
+          "description": "Approval permissions",
+          "actors": []
+        },
+        {
+          "id": "10129",
+          "name": "Viewers",
+          "description": "Read-only access",
+          "actors": []
+        },
+        {
+          "id": "10162",
+          "name": "Version Manager",
+          "description": "Manages versions and releases",
+          "actors": []
+        },
+        {
+          "id": "10056",
+          "name": "Service Desk Customers",
+          "description": "Service desk customer access",
+          "actors": []
+        },
+        {
+          "id": "10057",
+          "name": "Service Desk Team",
+          "description": "Service desk team members",
+          "actors": []
+        },
+        {
+          "id": "10003",
+          "name": "atlassian-addons-project-access",
+          "description": "Atlassian add-on access",
+          "actors": []
+        }
+      ]
+    }
+  ]
+}

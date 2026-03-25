@@ -1,0 +1,48 @@
+name: Jira Config — PR Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'edge-scrum/.jira-config/**'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-configs:
+    name: Validate JSON config schemas
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install check-jsonschema
+        run: pip install check-jsonschema
+
+      - name: Validate .jira-config JSON files
+        run: edge-scrum/.ci/scripts/validate-configs.sh
+
+  validate-readme:
+    name: Validate README sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate README updated alongside config changes
+        run: edge-scrum/.ci/scripts/validate-readme-sync.sh
+
+  dry-run:
+    name: Dry-run Jira sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Preview changes
+        run: edge-scrum/.ci/scripts/apply-changes.sh --dry-run
+        env:
+          JIRA_USERNAME: ${{ secrets.JIRA_USERNAME }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}

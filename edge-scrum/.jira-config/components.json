@@ -1,0 +1,91 @@
+{
+  "components": [
+    {
+      "name": "Microshift",
+      "description": "For capturing work items that fall under the Microshift workstream [gitops-managed]",
+      "projects": [
+        {
+          "project_id": "11690",
+          "project_key": "OCPEDGE"
+        }
+      ]
+    },
+    {
+      "name": "Topology Transition",
+      "description": "For capturing work items that fall under the Topology Transition workstream [gitops-managed]",
+      "projects": [
+        {
+          "component_id": "83238",
+          "project_id": "11690",
+          "project_key": "OCPEDGE"
+        }
+      ]
+    },
+    {
+      "name": "Bandwidth Reduction",
+      "description": "For capturing work items that fall under the Bandwidth Reduction workstream [gitops-managed]",
+      "projects": [
+        {
+          "component_id": "83240",
+          "project_id": "11690",
+          "project_key": "OCPEDGE"
+        }
+      ]
+    },
+    {
+      "name": "Logical Volume Manager Storage",
+      "description": "For capturing work items that fall under the LVMS workstream [gitops-managed]",
+      "projects": [
+        {
+          "component_id": "64858",
+          "project_id": "11690",
+          "project_key": "OCPEDGE"
+        }
+      ]
+    },
+    {
+      "name": "Planning",
+      "description": "Used for cutline epics only. This should not be used for anything else. [gitops-managed]",
+      "projects": [
+        {
+          "component_id": "64855",
+          "project_id": "11690",
+          "project_key": "OCPEDGE"
+        }
+      ]
+    },
+    {
+      "name": "SNO",
+      "description": "For capturing work items that fall under the LVMS workstream [gitops-managed]",
+      "projects": [
+        {
+          "component_id": "64850",
+          "project_id": "11690",
+          "project_key": "OCPEDGE"
+        }
+      ]
+    },
+    {
+      "name": "TNF",
+      "description": "For capturing work items that fall under the Two Node with Fencing workstream [gitops-managed]",
+      "projects": [
+        {
+          "component_id": "64861",
+          "project_id": "11690",
+          "project_key": "OCPEDGE"
+        }
+      ]
+    },
+    {
+      "name": "TNA",
+      "description": "For capturing work items that fall under the Two Node with Arbiter workstream [gitops-managed]",
+      "projects": [
+        {
+          "component_id": "64853",
+          "project_id": "11690",
+          "project_key": "OCPEDGE"
+        }
+      ]
+    }
+  ]
+}

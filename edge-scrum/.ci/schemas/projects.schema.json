@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["projects"],
+  "additionalProperties": false,
+  "properties": {
+    "projects": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "key", "name", "description", "assigneeType", "lead", "roles"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          },
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Z]+$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string"
+          },
+          "assigneeType": {
+            "type": "string",
+            "enum": ["UNASSIGNED", "PROJECT_LEAD"]
+          },
+          "isPrivate": {
+            "type": "boolean"
+          },
+          "lead": {
+            "type": "object",
+            "required": ["id", "email"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "email": { "type": "string", "pattern": ".+@.+" }
+            }
+          },
+          "roles": {
+            "type": "array"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "labels": [
+    {
+      "name": "OCPEDGE:Docs",
+      "description": "Docs specific tasks for OpenShift Edge"
+    },
+    {
+      "name": "OCPEDGE:QE",
+      "description": "QE specific tasks for OpenShift Edge"
+    },
+    {
+      "name": "OCPEDGE:RHEL-Verification",
+      "description": "OpenShift Edge tracker label for tickets related to RHEL Verification tasks for TNF"
+    },
+    {
+      "name": "OCPEDGE:CI",
+      "description": "For tracking any bugs specific to OpenShift Edge CI or for CI automation tasks"
+    },
+    {
+      "name": "OCPEDGE:Payload-Manager",
+      "description": "For capturing work done as part of payload manager duties and Payload Manager Duty automation"
+    },
+    {
+      "name": "OCPEDGE:Tooling",
+      "description": "For capturing work to improve tooling for the OpenShift Edge team (ie: improvements in the edge-tooling repo)"
+    },
+    {
+      "name": "OCPEDGE:Process-Improvement",
+      "description": "For capturing work to investigate, document, and implement improvements to processes related to OpenShift Edge"
+    }
+  ]
+}

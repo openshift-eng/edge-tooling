@@ -1,0 +1,378 @@
+{
+  "filters": [
+    {
+      "id": "105160",
+      "name": "OpenShift Edge Workstream - Adaptable Topology",
+      "description": "An OpenShift Edge utility filter to limit lists specifically to Adaptable Topology work",
+      "jql": "component = \"Adaptable Topology\" or labels in (adaptable-topology)",
+      "editPermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "openshift-scrummaster-role"
+          }
+        }
+      ],
+      "sharePermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "Red Hat Employee"
+          }
+        }
+      ]
+    },
+    {
+      "id": "105147",
+      "name": "OpenShift Edge Workstream - SNO",
+      "description": "An OpenShift Edge utility filter to limit lists specifically to SNO work",
+      "jql": "component in (\"Installer / Single Node OpenShift\", SNO) or labels in (SNO, sno)",
+      "editPermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "openshift-scrummaster-role"
+          }
+        }
+      ],
+      "sharePermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "Red Hat Employee"
+          }
+        }
+      ]
+    },
+    {
+      "id": "105141",
+      "name": "OpenShift Edge Workstream - TNA",
+      "description": "An OpenShift Edge utility filter to limit lists specifically to Two Node with Arbiter work",
+      "jql": "component = \"Two Node with Arbiter\" or labels in (TNA)",
+      "editPermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "openshift-scrummaster-role"
+          }
+        }
+      ],
+      "sharePermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "Red Hat Employee"
+          }
+        }
+      ]
+    },
+    {
+      "id": "104860",
+      "name": "OpenShift Edge - Bugs and CVEs",
+      "description": "Bugs and CVEs that affect any of the work streams in the OpenShift Edge organization",
+      "jql": "(project = OCPBUGS AND filter = \"OpenShift Edge - Components\") OR (filter = \"OpenShift Edge - Core Backlog\" AND type in (Bug, Vulnerability, Weakness)) OR (project = TRT and filter = \"OpenShift Edge - Team Assigned\")",
+      "editPermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "openshift-scrummaster-role"
+          }
+        }
+      ],
+      "sharePermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "Red Hat Employee"
+          }
+        }
+      ]
+    },
+    {
+      "id": "104868",
+      "name": "OpenShift Edge - Core Backlog",
+      "description": "All issues from the OCPEDGE and USHIFT projects",
+      "jql": "project in (OCPEDGE, USHIFT)",
+      "editPermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "openshift-scrummaster-role"
+          }
+        }
+      ],
+      "sharePermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "Red Hat Employee"
+          }
+        }
+      ]
+    },
+    {
+      "id": "105142",
+      "name": "OpenShift Edge Workstream - TNF",
+      "description": "",
+      "jql": "component = \"Two Node Fencing\" or labels in (TNF)",
+      "editPermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "openshift-scrummaster-role"
+          }
+        }
+      ],
+      "sharePermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "Red Hat Employee"
+          }
+        }
+      ]
+    },
+    {
+      "id": "105139",
+      "name": "OpenShift Edge Workstream - MicroShift",
+      "description": "",
+      "jql": "project = USHIFT or component in (MicroShift, \"MicroShift / Networking\", \"MicroShift / Storage\") OR labels in (microshift, MicroShift)",
+      "editPermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "openshift-scrummaster-role"
+          }
+        }
+      ],
+      "sharePermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "Red Hat Employee"
+          }
+        }
+      ]
+    },
+    {
+      "id": "104872",
+      "name": "OpenShift Edge - Labels",
+      "description": "Any labels  that might be relevant to Openshift Edge",
+      "jql": "labels in (ocpedge, ocpedge-plan, MicroShift, microshift, TNF, TNA, SNO, sno, lvms, edge-payload)",
+      "editPermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "openshift-scrummaster-role"
+          }
+        }
+      ],
+      "sharePermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "Red Hat Employee"
+          }
+        }
+      ]
+    },
+    {
+      "id": "105161",
+      "name": "OpenShift Edge Workstream - MicroShift to SNO",
+      "description": "",
+      "jql": "component = \"MicroShift to SNO\" or labels in (microshift-to-sno)",
+      "editPermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "openshift-scrummaster-role"
+          }
+        }
+      ],
+      "sharePermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "Red Hat Employee"
+          }
+        }
+      ]
+    },
+    {
+      "id": "104874",
+      "name": "OpenShift Edge - Components",
+      "description": "Any components that might be relevant to Openshift Edge",
+      "jql": "component in (\"Installer / Single Node OpenShift\", \"Two Node with Arbiter\", \"Two Node Fencing\", \"Logical Volume Manager Storage\", MicroShift, \"MicroShift / Networking\", \"MicroShift / Storage\")",
+      "editPermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "openshift-scrummaster-role"
+          }
+        }
+      ],
+      "sharePermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "Red Hat Employee"
+          }
+        }
+      ]
+    },
+    {
+      "id": "104882",
+      "name": "OpenShift Edge - Scrum Board",
+      "description": "",
+      "jql": "project in (USHIFT, OCPEDGE) OR filter = \"OpenShift Edge - Core Backlog\" OR filter in (\"OpenShift Edge - External Projects\", \"OpenShift Edge - Bugs and CVEs\") AND (filter = \"OpenShift Edge - Team Assigned\" OR (filter = \"OpenShift Edge - QE Assigned\" AND status in (Review, MODIFIED, ON_QA, Testing))) ORDER BY Rank ASC",
+      "editPermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "openshift-scrummaster-role"
+          }
+        }
+      ],
+      "sharePermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "Red Hat Employee"
+          }
+        }
+      ]
+    },
+    {
+      "id": "104844",
+      "name": "OpenShift Edge - Team Assigned",
+      "description": "A filter for limiting issue searches to issues assigned to OpenShift Edge Members",
+      "jql": "assignee IN (712020:776c46bf-4843-415f-b22c-2cfe1a0dbf76, 712020:8ccae1f4-8b38-483e-b8fb-803381ed8128, 712020:eca54813-6101-4bb6-b169-5b91a02029a1, 70121:fd715ae6-c353-45e3-ab6d-4d856939baac, 712020:f55cd58b-0b6b-4f4c-bab6-4b6d159fa903, 712020:603765f6-a123-4102-81eb-35016a2417dc, 712020:2fe6ed01-1363-498c-b60c-47aaa73c31b8, 712020:3f5c0d77-9c08-4283-b8d4-a8c36239f0cc, 712020:68a47ba1-67a5-49a1-b22f-67e305d3ce13, 712020:99131988-93fb-4f73-9049-65977ee89263, 712020:accacd89-ddc5-46bf-852d-6b81923e7f10, 60213e1561800100699b61a0, 5c9fb65763c4be37069fc169, 61e811135fcc37006876d93a, 70121:978d797b-a96a-43b1-a1bc-aad7c053f205, 61a8ef1cc15977006aed294c, 712020:188ebd21-393a-42a0-82dc-4646bc713e61, 712020:a2a53ec9-624d-43dd-b9e9-2631248317b1, 70121:b3364a04-e4bd-41d1-bae9-80e0d45657b0, 712020:f96735f0-ab26-4108-b61f-236febb8e20b)",
+      "editPermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "openshift-scrummaster-role"
+          }
+        }
+      ],
+      "sharePermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "Red Hat Employee"
+          }
+        }
+      ]
+    },
+    {
+      "id": "104857",
+      "name": "OpenShift Edge - QE Assigned",
+      "description": "A filter for limiting issue searches to issues OpenShift Edge Members as the assigned QA Contact",
+      "jql": "\"QA Contact\" IN (712020:776c46bf-4843-415f-b22c-2cfe1a0dbf76, 712020:8ccae1f4-8b38-483e-b8fb-803381ed8128, 712020:eca54813-6101-4bb6-b169-5b91a02029a1, 70121:fd715ae6-c353-45e3-ab6d-4d856939baac, 712020:f55cd58b-0b6b-4f4c-bab6-4b6d159fa903, 712020:603765f6-a123-4102-81eb-35016a2417dc, 712020:2fe6ed01-1363-498c-b60c-47aaa73c31b8, 712020:3f5c0d77-9c08-4283-b8d4-a8c36239f0cc, 712020:68a47ba1-67a5-49a1-b22f-67e305d3ce13, 712020:99131988-93fb-4f73-9049-65977ee89263, 712020:accacd89-ddc5-46bf-852d-6b81923e7f10, 60213e1561800100699b61a0, 5c9fb65763c4be37069fc169, 61e811135fcc37006876d93a, 70121:978d797b-a96a-43b1-a1bc-aad7c053f205, 61a8ef1cc15977006aed294c, 712020:188ebd21-393a-42a0-82dc-4646bc713e61, 712020:a2a53ec9-624d-43dd-b9e9-2631248317b1, 70121:b3364a04-e4bd-41d1-bae9-80e0d45657b0, 712020:f96735f0-ab26-4108-b61f-236febb8e20b)",
+      "editPermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "openshift-scrummaster-role"
+          }
+        }
+      ],
+      "sharePermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "Red Hat Employee"
+          }
+        }
+      ]
+    },
+    {
+      "id": "105719",
+      "name": "OpenShift Edge Workstream - RHEL Ticket Verification",
+      "description": "",
+      "jql": "(project = RHEL AND summary ~ \"\\\\[TNF\\\\]\" AND component = resource-agents) OR (project = OCPEDGE AND component = RHEL-Verification) order by RANK asc",
+      "editPermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "openshift-scrummaster-role"
+          }
+        }
+      ],
+      "sharePermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "Red Hat Employee"
+          }
+        }
+      ]
+    },
+    {
+      "id": "105140",
+      "name": "OpenShift Edge Workstream - LVMS",
+      "description": "",
+      "jql": "component = \"Logical Volume Manager Storage\" or labels in (lvms)",
+      "editPermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "openshift-scrummaster-role"
+          }
+        }
+      ],
+      "sharePermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "Red Hat Employee"
+          }
+        }
+      ]
+    },
+    {
+      "id": "104866",
+      "name": "OpenShift Edge - External Projects",
+      "description": "External Projects that OpenShift Edge team members might be contributing to",
+      "jql": "project in (\"Cloud-native Network Functions\", \"Network Edge\", \"OpenShift Staff Engineering\", \"OCP Technical Release Team\", \"On Prem Networking\", \"Edge and Ecosystem Enablement\", \"OpenShift Core Networking\", API, ETCD, OSDOCS, PERFSCALE, \"Operator Runtime\", \"Distributed Tracing\") AND filter in (\"OpenShift Edge - Components\", \"OpenShift Edge - Labels\", \"OpenShift Edge - QE Assigned\", \"OpenShift Edge - Team Assigned\")",
+      "editPermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "openshift-scrummaster-role"
+          }
+        }
+      ],
+      "sharePermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "Red Hat Employee"
+          }
+        }
+      ]
+    },
+    {
+      "id": "105164",
+      "name": "OpenShift Edge Workstream - Bandwidth Reduction",
+      "description": "",
+      "jql": "component = \"Bandwidth Reduction\" or labels in (bandwidth-reduction)",
+      "editPermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "openshift-scrummaster-role"
+          }
+        }
+      ],
+      "sharePermissions": [
+        {
+          "type": "group",
+          "group": {
+            "name": "Red Hat Employee"
+          }
+        }
+      ]
+    }
+  ]
+}

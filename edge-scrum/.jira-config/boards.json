@@ -1,0 +1,31 @@
+{
+  "boards": [
+    {
+      "id": "11479",
+      "name": "OpenShift Edge Scrum",
+      "type": "scrum",
+      "filter_id": "104882",
+      "properties": {
+        "jsw-roadmaps-classic-board-enable-roadmaps": true,
+        "jsw-roadmaps-cmp-enable-child-issue-planning": true
+      }
+    },
+    {
+      "id": "8557",
+      "name": "OCPEDGE Scrum",
+      "type": "scrum",
+      "filter_id": "77276",
+      "properties": {}
+    },
+    {
+      "id": "11551",
+      "name": "OpenShift Edge RHEL Verification Tickets",
+      "type": "kanban",
+      "filter_id": "105719",
+      "properties": {
+        "jsw-roadmaps-classic-board-enable-roadmaps": false,
+        "jsw-roadmaps-cmp-enable-child-issue-planning": true
+      }
+    }
+  ]
+}
