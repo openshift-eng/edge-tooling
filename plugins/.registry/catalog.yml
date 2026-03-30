@@ -1,31 +1,6 @@
 # Plugin Marketplace Catalog
 # Auto-generated - do not edit manually
-# Last updated: 2026-03-23T16:36:36Z
+# Last updated: 2026-03-30T00:00:00Z
 
 version: "1.0"
-plugins:
-  - name: cluster-snapshot
-    version: 1.0.0
-    type: skill
-    category: cluster-ops
-    description: Generate comprehensive cluster snapshot with version, health, and resource summary
-    author: jeff-roche
-    path: cluster-snapshot
-
-  - name: dev-env-setup
-    version: 1.0.0
-    type: skill
-    category: development
-    description: Initialize or refresh multi-repo development environment from presets or custom configuration
-    author: jeff-roche
-    path: dev-env-setup
-
-  - name: project-workspace
-    version: 1.0.0
-    type: command
-    category: development
-    description: Create and manage structured project workspaces for development tasks
-    author: jeff-roche
-    path: project-workspace
-
-
+plugins: []

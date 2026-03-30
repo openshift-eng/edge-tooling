@@ -66,12 +66,29 @@ yaml_get() {
     yq eval "$query" "$file" 2>/dev/null || echo ""
 }
 
+# Check if a plugin is installed
+is_installed() {
+    local name="$1"
+    local check
+    check=$(yq eval ".installed_plugins[] | select(.name == \"$name\") | .name" "$STATE_FILE" 2>/dev/null)
+    [[ -n "$check" && "$check" != "null" ]]
+}
+
 # Update catalog from plugins directory
 update_catalog() {
     info "Scanning plugins directory..."
 
     local plugin_count=0
-    local catalog_content="# Plugin Marketplace Catalog\n# Auto-generated - do not edit manually\n# Last updated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")\n\nversion: \"1.0\"\nplugins:\n"
+
+    # Write initial catalog structure
+    cat > "$CATALOG_FILE" <<EOF
+# Plugin Marketplace Catalog
+# Auto-generated - do not edit manually
+# Last updated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+version: "1.0"
+plugins: []
+EOF
 
     # Find all plugin directories (contain plugin.yml)
     while IFS= read -r -d '' plugin_file; do
@@ -95,20 +112,14 @@ update_catalog() {
             continue
         fi
 
-        # Add to catalog
-        catalog_content+="  - name: ${name}\n"
-        catalog_content+="    version: ${version}\n"
-        catalog_content+="    type: ${type}\n"
-        catalog_content+="    category: ${category}\n"
-        catalog_content+="    description: ${description}\n"
-        catalog_content+="    author: ${author}\n"
-        catalog_content+="    path: ${plugin_name}\n\n"
+        # Add to catalog using yq with env vars for safe YAML generation
+        NAME="$name" VERSION="$version" TYPE="$type" CATEGORY="$category" \
+            DESCRIPTION="$description" AUTHOR="$author" PLUGIN_PATH="$plugin_name" \
+            yq eval -i '.plugins += [{"name": env(NAME), "version": env(VERSION), "type": env(TYPE), "category": env(CATEGORY), "description": env(DESCRIPTION), "author": env(AUTHOR), "path": env(PLUGIN_PATH)}]' "$CATALOG_FILE"
 
         ((plugin_count++)) || true
     done < <(find "$PLUGINS_DIR" -maxdepth 2 -name "plugin.yml" -print0)
 
-    # Write catalog
-    echo -e "$catalog_content" > "$CATALOG_FILE"
     success "Catalog updated: $plugin_count plugins found"
 }
 
@@ -140,7 +151,7 @@ list_plugins() {
 
         # Check if installed
         local installed=""
-        if yq eval ".installed_plugins[] | select(.name == \"$name\")" "$STATE_FILE" &>/dev/null; then
+        if is_installed "$name"; then
             installed=" ${GREEN}[installed]${NC}"
         fi
 
@@ -222,7 +233,7 @@ show_plugin() {
 
     # Installation status
     echo -e "\n${BOLD}Status:${NC}"
-    if yq eval ".installed_plugins[] | select(.name == \"$plugin_name\")" "$STATE_FILE" &>/dev/null; then
+    if is_installed "$plugin_name"; then
         local install_date=$(yq eval ".installed_plugins[] | select(.name == \"$plugin_name\") | .install_date" "$STATE_FILE")
         echo -e "  ${GREEN}Installed${NC} (on $install_date)"
     else
@@ -245,7 +256,7 @@ install_plugin() {
     info "Installing plugin: $plugin_name"
 
     # Check if already installed
-    if yq eval ".installed_plugins[] | select(.name == \"$plugin_name\")" "$STATE_FILE" &>/dev/null; then
+    if is_installed "$plugin_name"; then
         if [[ "$force" != "true" ]]; then
             warn "Plugin already installed. Use --force to reinstall."
             return 0
@@ -272,7 +283,7 @@ install_plugin() {
     if [[ -n "$deps" && "$deps" != "null" ]]; then
         info "Checking dependencies..."
         while IFS= read -r dep; do
-            if ! yq eval ".installed_plugins[] | select(.name == \"$dep\")" "$STATE_FILE" &>/dev/null; then
+            if ! is_installed "$dep"; then
                 warn "Missing dependency: $dep"
                 read -p "Install dependency $dep? (y/n) " -n 1 -r
                 echo
@@ -385,7 +396,7 @@ uninstall_plugin() {
     info "Uninstalling plugin: $plugin_name"
 
     # Check if installed
-    if ! yq eval ".installed_plugins[] | select(.name == \"$plugin_name\")" "$STATE_FILE" &>/dev/null; then
+    if ! is_installed "$plugin_name"; then
         warn "Plugin not installed: $plugin_name"
         return 0
     fi
@@ -696,7 +707,9 @@ EOF
             ;;
         install)
             [[ -z "${1:-}" ]] && error "Usage: marketplace install <plugin-name> [--force]"
-            install_plugin "$1" "${2:-false}"
+            local force_flag="false"
+            [[ "${2:-}" == "--force" ]] && force_flag="true"
+            install_plugin "$1" "$force_flag"
             ;;
         uninstall|remove)
             [[ -z "${1:-}" ]] && error "Usage: marketplace uninstall <plugin-name>"
@@ -762,7 +775,7 @@ ${BOLD}Documentation:${NC}
   Plugin structure:   plugins/README.md
 
 ${BOLD}Support:${NC}
-  Report issues at: https://github.com/jeff-roche/edge-tooling/issues
+  Report issues at: https://github.com/openshift-eng/edge-tooling/issues
 EOF
             ;;
         *)

@@ -104,7 +104,7 @@ Plugins use semantic versioning (major.minor.patch). The marketplace tracks inst
 ./marketplace update plugin-name
 
 # Update all plugins
-./marketplace update --all
+./marketplace update
 ```
 
 ## Plugin Compatibility
@@ -137,4 +137,4 @@ For plugin issues:
 - Report issues to the plugin maintainer (listed in plugin.yml)
 
 For marketplace issues:
-- Report at https://github.com/jeff-roche/edge-tooling/issues
+- Report at https://github.com/openshift-eng/edge-tooling/issues

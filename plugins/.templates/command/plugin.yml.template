@@ -8,7 +8,7 @@ author: {{AUTHOR}}
 long_description: |
   Detailed explanation of what this command does and when to use it.
 
-homepage: https://github.com/jeff-roche/edge-tooling/tree/main/plugins/{{PLUGIN_NAME}}
+homepage: https://github.com/openshift-eng/edge-tooling/tree/main/plugins/{{PLUGIN_NAME}}
 license: Apache-2.0
 tags:
   - openshift
@@ -28,7 +28,6 @@ install:
   commands:
     - command.sh
   files: []
-  post_install: null
 
 usage:
   trigger_keywords:
