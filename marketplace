@@ -560,14 +560,14 @@ create_plugin() {
     local plugin_dir="${PLUGINS_DIR}/${plugin_name}"
     mkdir -p "$plugin_dir"
 
-    # Create plugin.yml
+    # Create plugin.yml (validated fields inline; free-form fields set via yq to prevent YAML injection)
     cat > "${plugin_dir}/plugin.yml" <<EOF
 name: ${plugin_name}
 version: 1.0.0
 type: ${type}
 category: ${category}
-description: ${description}
-author: ${author}
+description: ""
+author: ""
 
 compatibility:
   claude_code_min: "1.0.0"
@@ -577,6 +577,9 @@ compatibility:
 
 install:
 EOF
+
+    DESCRIPTION="$description" AUTHOR="$author" \
+        yq eval -i '.description = env(DESCRIPTION) | .author = env(AUTHOR)' "${plugin_dir}/plugin.yml"
 
     case "$type" in
         skill)
