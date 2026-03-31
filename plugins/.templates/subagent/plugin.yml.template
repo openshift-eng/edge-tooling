@@ -1,0 +1,44 @@
+name: {{PLUGIN_NAME}}
+version: 1.0.0
+type: {{TYPE}}
+category: {{CATEGORY}}
+description: {{DESCRIPTION}}
+author: {{AUTHOR}}
+
+long_description: |
+  Detailed explanation of what this agent does, when the parent Claude should
+  spawn it, and what specialized work it handles.
+
+homepage: https://github.com/openshift-eng/edge-tooling/tree/main/plugins/{{PLUGIN_NAME}}
+license: Apache-2.0
+tags:
+  - openshift
+  - edge
+  - agent
+
+compatibility:
+  claude_code_min: "1.0.0"
+  openshift_versions: ["4.14+"]
+  required_tools: ["oc", "kubectl"]
+  platforms: ["linux", "darwin"]
+
+dependencies:
+  plugins: []
+  optional_plugins: []
+
+install:
+  agents:
+    - agent.md
+
+usage:
+  trigger_keywords:
+    - "{{PLUGIN_NAME}}"
+  examples:
+    - "Spawn {{PLUGIN_NAME}} to handle X task"
+    - "Delegate Y analysis to {{PLUGIN_NAME}}"
+
+changelog:
+  - version: 1.0.0
+    date: {{DATE}}
+    changes:
+      - "Initial release"

@@ -4,7 +4,7 @@
 
 ## Overview
 
-{{PLUGIN_NAME}} is a Claude Code skill that {{PURPOSE_DESCRIPTION}}.
+{{PLUGIN_NAME}} is a Claude Code skill that <!-- TODO: describe the skill's primary function in one sentence -->.
 
 **Key features:**
 - Feature 1
@@ -20,9 +20,9 @@
 ## Usage
 
 This skill is automatically triggered when you ask Claude to:
-- {{USE_CASE_1}}
-- {{USE_CASE_2}}
-- {{USE_CASE_3}}
+- <!-- TODO: primary use case (e.g., "analyze cluster health") -->
+- <!-- TODO: secondary use case -->
+- <!-- TODO: tertiary use case -->
 
 ### Basic Example
 
@@ -35,7 +35,7 @@ Claude: I'll analyze your cluster using the {{PLUGIN_NAME}} skill...
 ### Advanced Example
 
 ```
-User: "{{ADVANCED_USE_CASE}}"
+User: "<!-- TODO: describe an advanced use case for this skill -->"
 
 Claude: [Detailed analysis with recommendations]
 ```
@@ -62,7 +62,7 @@ No additional configuration required. The skill uses standard OpenShift CLI tool
 
 ### Skill not triggering
 
-**Solution:** Use explicit keywords like "use {{PLUGIN_NAME}}" or "{{TRIGGER_PHRASE}}"
+**Solution:** Use explicit keywords like "use {{PLUGIN_NAME}}" or <!-- TODO: provide an example trigger phrase -->.
 
 ### Connection errors
 

@@ -48,7 +48,7 @@ my-command/
 ├── README.md
 ├── command.sh         # Main executable
 ├── lib/               # Supporting scripts
-└── tests/
+└── tests/             # Optional; test infrastructure is planned for a future release
     └── test.sh
 ```
 
@@ -66,7 +66,7 @@ Specialized sub-agents for focused research or analysis tasks.
 my-subagent/
 ├── plugin.yml
 ├── README.md
-└── subagent-config.yml
+└── agent.md
 ```
 
 ### Hybrid Plugin
@@ -159,10 +159,10 @@ For commands, create executable scripts.
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| `name` | Unique identifier (lowercase, hyphens) | `ovn-topology` |
+| `name` | Unique identifier; must start with a letter, followed by lowercase letters, numbers, or hyphens | `ovn-topology` |
 | `version` | Semantic version | `1.0.0` |
 | `type` | Plugin type | `skill`, `command`, `subagent`, `hybrid` |
-| `category` | Plugin category | `network`, `debug`, `deploy` |
+| `category` | Plugin category | `cluster-ops`, `debug`, `deploy`, `network`, `operator`, `ci-cd`, `util` |
 | `description` | Short description (< 120 chars) | `Generate OVN topology diagrams` |
 | `author` | Maintainer GitHub handle | `jeff-roche` |
 
@@ -210,6 +210,8 @@ install:
     - advanced-skill.md
   commands:                   # Commands to install
     - bin/my-command
+  agents:                     # Sub-agent definition files to install
+    - agent.md
   files:                      # Additional files
     - config/defaults.yml
   hooks:                      # Hook scripts
@@ -235,10 +237,12 @@ usage:
 
 ### Manual Testing
 
-1. **Install locally:**
+1. **Validate your plugin:**
 ```bash
-./marketplace install my-plugin --local
+./marketplace validate my-plugin
 ```
+
+Use `./marketplace validate <plugin-name>` to verify your plugin before publishing.
 
 2. **Test functionality:**
 - Invoke skills/commands
@@ -252,26 +256,13 @@ usage:
 
 ### Automated Testing
 
-Create tests in `tests/` directory:
+Run the marketplace smoke tests to verify core CLI behavior:
 
 ```bash
-my-plugin/
-└── tests/
-    ├── test-basic.sh
-    └── test-advanced.sh
+bash plugins/tests/marketplace_smoke_test.sh
 ```
 
-Run tests:
-```bash
-./marketplace test my-plugin
-```
-
-### Integration Testing
-
-Test with other plugins:
-```bash
-./marketplace test my-plugin --with-deps
-```
+This covers: help output, catalog validation, plugin creation scaffolding, and field-level validation.
 
 ## Publishing to Marketplace
 
@@ -283,7 +274,6 @@ Test with other plugins:
 - [ ] All dependencies are declared
 - [ ] Compatibility requirements are accurate
 - [ ] Examples are tested and work
-- [ ] Tests pass
 - [ ] License is specified
 
 ### Validation
@@ -325,7 +315,7 @@ This checks:
 Maintainers will review for:
 - Code quality and security
 - Documentation completeness
-- Test coverage
+- Smoke test passes (`bash plugins/tests/marketplace_smoke_test.sh`); plugin-specific automated tests are planned for a future release
 - Usefulness to OpenShift/edge workflows
 - No duplication of existing plugins
 - Follows repository standards
@@ -334,7 +324,7 @@ Maintainers will review for:
 
 ### Naming Conventions
 
-- **Plugin names:** lowercase-with-hyphens
+- **Plugin names:** start with a letter, followed by lowercase letters, numbers, or hyphens
 - **Skills:** Use descriptive trigger keywords
 - **Commands:** Prefix with category (e.g., `ovn-topology`)
 

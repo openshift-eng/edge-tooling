@@ -1,0 +1,114 @@
+# {{PLUGIN_NAME}}
+
+{{DESCRIPTION}}
+
+## Overview
+
+{{PLUGIN_NAME}} is a Claude Code sub-agent that <!-- TODO: describe the agent's primary function in one sentence -->.
+
+The parent Claude instance spawns this agent to delegate focused, multi-step
+<!-- TODO: name the domain area (e.g., "storage diagnostics", "network analysis") --> work — keeping the main context clean and results structured.
+
+**Key features:**
+- <!-- TODO: key feature 1 -->
+- <!-- TODO: key feature 2 -->
+- <!-- TODO: key feature 3 -->
+
+## Installation
+
+```bash
+./marketplace install {{PLUGIN_NAME}}
+```
+
+Once installed, the agent definition is available to Claude Code and the parent
+instance will spawn it automatically when appropriate.
+
+## Usage
+
+This agent is spawned when Claude needs to:
+- <!-- TODO: primary use case -->
+- <!-- TODO: secondary use case -->
+- <!-- TODO: tertiary use case -->
+
+### Basic Example
+
+```
+User: "Investigate the storage operator degradation in my cluster"
+
+Claude: I'll spawn the {{PLUGIN_NAME}} agent to handle this investigation...
+
+[Agent runs, returns structured findings]
+
+Claude: The agent identified a degraded VolumeGroup on worker-0. Here's what to do next...
+```
+
+### Advanced Example
+
+```
+User: "<!-- TODO: describe an advanced use case for this agent -->"
+
+Claude: [Delegates full workflow to agent, summarizes findings, proposes remediation]
+```
+
+## Requirements
+
+- **Claude Code:** >= 1.0.0
+- **OpenShift:** 4.14+
+- **CLI Tools:** `oc`, `kubectl`
+- **Permissions:** Cluster reader or higher
+
+## Configuration
+
+No additional configuration required. The agent uses standard OpenShift CLI tools
+and the KUBECONFIG set in your environment.
+
+## How It Works
+
+1. Parent Claude spawns the agent with a scoped task description
+2. Agent validates cluster connectivity and prerequisites
+3. Agent gathers resource state, logs, and events
+4. Agent analyzes findings against known failure patterns
+5. Agent returns a structured summary to the parent
+6. Parent presents findings and recommendations to the user
+
+## Troubleshooting
+
+### Agent not being spawned
+
+**Solution:** Ask Claude explicitly to delegate the task — e.g., "use the
+{{PLUGIN_NAME}} agent to investigate X" or reference the agent by name.
+
+### Connection errors
+
+**Solution:** Verify KUBECONFIG is set and the cluster is reachable:
+```bash
+export KUBECONFIG=/path/to/kubeconfig
+oc whoami
+```
+
+### Permission denied
+
+**Solution:** Ensure you have appropriate RBAC permissions:
+```bash
+oc auth can-i get pods --all-namespaces
+```
+
+## Examples
+
+See [examples/](examples/) directory for complete spawn scenarios and sample output.
+
+## Contributing
+
+Found a bug or want to add a feature? See [CONTRIBUTING.md](../../docs/CONTRIBUTING.md).
+
+## License
+
+Apache-2.0
+
+## Author
+
+{{AUTHOR}}
+
+## Version History
+
+See plugin.yml changelog for version history.

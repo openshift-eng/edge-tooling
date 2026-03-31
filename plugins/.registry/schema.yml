@@ -2,7 +2,7 @@
 # All plugins must include a plugin.yml file following this schema
 
 # Required fields
-name: string              # Unique plugin identifier (lowercase, hyphens)
+name: string              # Unique plugin identifier (must start with a letter, lowercase alphanumeric and hyphens only)
 version: string           # Semantic version (e.g., "1.0.0")
 type: string              # Plugin type: skill | command | subagent | hybrid
 category: string          # Category: cluster-ops | debug | deploy | network | operator | ci-cd | util
@@ -31,6 +31,7 @@ dependencies:
 install:
   skills: [string]              # Skill files to install (relative paths)
   commands: [string]            # Command scripts to install
+  agents: [string]              # Agent definition files to install
   files: [string]               # Additional files to copy
   hooks: [string]               # Hook scripts to register
   post_install: string          # Optional post-install script
