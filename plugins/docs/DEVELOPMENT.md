@@ -376,9 +376,8 @@ Maintainers will review for:
 
 Study these reference implementations:
 
-- `ovn-topology` - Network visualization skill
-- `cluster-health` - Health check command
-- `prow-analyzer` - CI/CD analysis subagent
+- `dev-env-setup` - Development environment initialization skill
+- `project-workspace` - Multi-repo project workspace management command
 
 ## Support
 
