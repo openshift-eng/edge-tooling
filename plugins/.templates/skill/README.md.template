@@ -7,6 +7,7 @@
 {{PLUGIN_NAME}} is a Claude Code skill that <!-- TODO: describe the skill's primary function in one sentence -->.
 
 **Key features:**
+
 - Feature 1
 - Feature 2
 - Feature 3
@@ -20,13 +21,14 @@
 ## Usage
 
 This skill is automatically triggered when you ask Claude to:
+
 - <!-- TODO: primary use case (e.g., "analyze cluster health") -->
 - <!-- TODO: secondary use case -->
 - <!-- TODO: tertiary use case -->
 
 ### Basic Example
 
-```
+```text
 User: "Use {{PLUGIN_NAME}} to check cluster health"
 
 Claude: I'll analyze your cluster using the {{PLUGIN_NAME}} skill...
@@ -34,7 +36,7 @@ Claude: I'll analyze your cluster using the {{PLUGIN_NAME}} skill...
 
 ### Advanced Example
 
-```
+```text
 User: "<!-- TODO: describe an advanced use case for this skill -->"
 
 Claude: [Detailed analysis with recommendations]
@@ -67,6 +69,7 @@ No additional configuration required. The skill uses standard OpenShift CLI tool
 ### Connection errors
 
 **Solution:** Verify KUBECONFIG is set and cluster is accessible:
+
 ```bash
 export KUBECONFIG=/path/to/kubeconfig
 oc whoami
@@ -75,6 +78,7 @@ oc whoami
 ### Permission denied
 
 **Solution:** Ensure you have appropriate RBAC permissions:
+
 ```bash
 oc auth can-i get pods --all-namespaces
 ```

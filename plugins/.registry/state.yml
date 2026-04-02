@@ -9,6 +9,6 @@ installed_plugins: []
   #   version: 1.0.0
   #   install_date: "2026-03-23T10:30:00Z"
   #   install_path: /home/user/.claude/skills/
-  #   status: active
+  #   status: active        # valid: active, disabled, deprecated
 
 last_update_check: null

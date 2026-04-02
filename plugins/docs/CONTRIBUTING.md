@@ -1,6 +1,7 @@
 # Contributing to the Plugin Marketplace
 
-Thank you for contributing to the Edge Tooling Plugin Marketplace! This guide covers submission guidelines and review process.
+Thank you for contributing to the Edge Tooling Plugin Marketplace!
+This guide covers submission guidelines and review process.
 
 ## Quick Contribution Checklist
 
@@ -22,16 +23,19 @@ Thank you for contributing to the Edge Tooling Plugin Marketplace! This guide co
 Submit a completely new plugin to the marketplace.
 
 **Process:**
+
 1. Check existing plugins to avoid duplication
 2. Create plugin following [Development Guide](DEVELOPMENT.md)
 3. Test thoroughly
-4. Submit PR with plugin added to `plugins/` directory
+4. Run `./marketplace catalog-update` to rebuild the catalog
+5. Submit PR with plugin added to `plugins/` directory
 
 ### Plugin Update
 
 Update an existing plugin (bug fix, feature, version bump).
 
 **Process:**
+
 1. Fork the repository
 2. Make changes to plugin directory
 3. Update version in plugin.yml
@@ -43,6 +47,7 @@ Update an existing plugin (bug fix, feature, version bump).
 Improve plugin documentation or marketplace docs.
 
 **Process:**
+
 1. Edit relevant markdown files
 2. Submit PR with "docs:" prefix in commit message
 
@@ -51,6 +56,7 @@ Improve plugin documentation or marketplace docs.
 Report issues with plugins or marketplace.
 
 **Process:**
+
 1. Check existing issues
 2. Create new issue with template
 3. Include reproduction steps
@@ -61,12 +67,14 @@ Report issues with plugins or marketplace.
 ### Plugin Requirements
 
 #### Functionality
+
 - Solves a specific, well-defined problem
 - Relevant to OpenShift or edge computing workflows
 - Doesn't duplicate existing plugins (or improves significantly)
 - Works as documented
 
 #### Code Quality
+
 - Clean, readable code
 - Follows shell script best practices (for commands)
 - Proper error handling
@@ -74,6 +82,7 @@ Report issues with plugins or marketplace.
 - No hardcoded credentials or secrets
 
 #### Documentation
+
 - Clear, concise README.md
 - Usage examples that work
 - Prerequisites listed
@@ -81,12 +90,14 @@ Report issues with plugins or marketplace.
 - Installation instructions
 
 #### Testing
+
 - Manual testing completed
 - Works on declared compatible versions
 - Edge cases considered
 - Tests included where appropriate
 
 #### Security
+
 - No known vulnerabilities
 - No credential leakage
 - Validates user inputs
@@ -98,6 +109,7 @@ Report issues with plugins or marketplace.
 Your plugin.yml must include:
 
 **Required:**
+
 - name (unique, lowercase-with-hyphens)
 - version (semantic versioning)
 - type (skill|command|subagent|hybrid)
@@ -106,6 +118,7 @@ Your plugin.yml must include:
 - author (GitHub handle or name)
 
 **Strongly Recommended:**
+
 - compatibility.claude_code_min
 - compatibility.openshift_versions
 - compatibility.required_tools
@@ -113,6 +126,7 @@ Your plugin.yml must include:
 - usage.examples
 
 **Optional but Encouraged:**
+
 - long_description
 - homepage (link to docs/repo)
 - license
@@ -123,14 +137,16 @@ Your plugin.yml must include:
 ### File Structure
 
 Minimum required files:
-```
+
+```text
 my-plugin/
 ├── plugin.yml          # Required: metadata
 └── README.md           # Required: documentation
 ```
 
 Typical structure:
-```
+
+```text
 my-plugin/
 ├── plugin.yml
 ├── README.md
@@ -160,7 +176,7 @@ my-plugin/
 
 Follow conventional commits:
 
-```
+```text
 <type>(<scope>): <subject>
 
 <body>
@@ -169,6 +185,7 @@ Follow conventional commits:
 ```
 
 **Types:**
+
 - `feat`: New plugin or feature
 - `fix`: Bug fix
 - `docs`: Documentation changes
@@ -177,7 +194,8 @@ Follow conventional commits:
 - `chore`: Maintenance tasks
 
 **Examples:**
-```
+
+```text
 feat(plugins): add ovn-topology visualizer plugin
 
 Adds a new skill for generating and visualizing OVN-Kubernetes
@@ -186,7 +204,7 @@ network topology diagrams from must-gather data.
 Closes #123
 ```
 
-```
+```text
 fix(cluster-health): handle missing kubeconfig gracefully
 
 Previously failed with unclear error when KUBECONFIG not set.
@@ -198,6 +216,7 @@ Now provides clear error message and suggests fixes.
 ### Automatic Checks
 
 When you submit a PR, automated checks run:
+
 - Schema validation
 - Required file presence
 - Naming convention compliance
@@ -241,6 +260,7 @@ Maintainers will review:
 ### Addressing Feedback
 
 When maintainers request changes:
+
 1. Read feedback carefully
 2. Ask questions if unclear
 3. Make requested changes
@@ -250,6 +270,7 @@ When maintainers request changes:
 ## Publishing
 
 Once approved:
+
 1. Maintainer merges PR
 2. Plugin added to catalog
 3. Available via `./marketplace list`
@@ -260,6 +281,7 @@ Once approved:
 ### Your Responsibilities
 
 As a plugin author, you're expected to:
+
 - Respond to issues within reasonable time
 - Keep plugin updated for new OpenShift versions
 - Fix security vulnerabilities promptly
@@ -269,6 +291,7 @@ As a plugin author, you're expected to:
 ### Deprecation
 
 If you can no longer maintain a plugin:
+
 1. Open an issue announcing deprecation
 2. Update plugin.yml with deprecation notice
 3. Suggest alternatives if available
@@ -277,6 +300,7 @@ If you can no longer maintain a plugin:
 ### Transfer of Ownership
 
 To transfer plugin ownership:
+
 1. Find new maintainer
 2. Update author field in plugin.yml
 3. Submit PR with both parties acknowledging
@@ -304,14 +328,13 @@ To transfer plugin ownership:
 - **GitHub Issues:** Bug reports, feature requests
 - **GitHub Discussions:** Questions, ideas, general discussion
 - **Pull Requests:** Code contributions
-- **Slack/IRC:** Real-time community chat (if available)
 
 ## Recognition
 
 Contributors are recognized:
+
 - Listed in plugin.yml author field
 - Mentioned in release notes
-- Added to CONTRIBUTORS.md
 - Karma in the community
 
 ## Legal
@@ -333,6 +356,7 @@ Contributors are recognized:
 ### Third-Party Code
 
 If including third-party code:
+
 - Ensure license compatibility
 - Include attribution
 - List in dependencies
@@ -341,6 +365,7 @@ If including third-party code:
 ## Questions?
 
 Not sure about something?
+
 - Review existing plugins for examples
 - Check [DEVELOPMENT.md](DEVELOPMENT.md) for details
 - Ask in GitHub Discussions

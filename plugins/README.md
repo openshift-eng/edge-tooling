@@ -1,8 +1,11 @@
 # Edge Tooling Plugin Marketplace
 
-A curated collection of Claude Code skills, commands, and automation tools for OpenShift and edge computing workflows.
+A curated collection of Claude Code skills, commands, and automation
+tools for OpenShift and edge computing workflows.
 
 ## Quick Start
+
+All `./marketplace` commands must be run from the repository root.
 
 ```bash
 # List all available plugins
@@ -26,7 +29,9 @@ A curated collection of Claude Code skills, commands, and automation tools for O
 
 ## What are Plugins?
 
-Plugins extend Claude Code's capabilities with domain-specific knowledge and automation for:
+Plugins extend Claude Code's capabilities with domain-specific
+knowledge and automation for:
+
 - OpenShift cluster operations and debugging
 - Edge computing deployment workflows
 - CI/CD pipeline automation
@@ -57,6 +62,7 @@ The marketplace CLI handles installation automatically:
 ```
 
 This will:
+
 1. Validate plugin compatibility
 2. Check and install dependencies
 3. Copy plugin files to the appropriate locations
@@ -72,6 +78,7 @@ Use the built-in generator to scaffold a new plugin:
 ```
 
 Follow the prompts to select:
+
 - Plugin type (skill, command, subagent)
 - Category
 - Dependencies
@@ -82,7 +89,7 @@ See [Plugin Development Guide](docs/DEVELOPMENT.md) for detailed authoring instr
 
 Each plugin follows a standard structure:
 
-```
+```text
 plugin-name/
 ├── plugin.yml           # Metadata and configuration
 ├── README.md            # Plugin documentation
@@ -94,7 +101,8 @@ plugin-name/
 
 ## Versioning and Updates
 
-Plugins use semantic versioning (major.minor.patch). The marketplace tracks installed versions and can update plugins:
+Plugins use semantic versioning (major.minor.patch). The marketplace
+tracks installed versions and can update plugins:
 
 ```bash
 # Check for updates
@@ -110,6 +118,7 @@ Plugins use semantic versioning (major.minor.patch). The marketplace tracks inst
 ## Plugin Compatibility
 
 Each plugin declares:
+
 - Minimum Claude Code version
 - OpenShift version compatibility
 - Required tools/binaries
@@ -123,18 +132,20 @@ To contribute a plugin to the marketplace:
 
 1. Create your plugin using `./marketplace new`
 2. Test thoroughly with your workflows
-3. Submit a pull request to this repository
-4. Add your plugin to `plugins/` directory
-5. Update `.registry/catalog.yml`
+3. Run `./marketplace catalog-update` to rebuild the catalog
+4. Submit a pull request to this repository
 
-See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for submission guidelines.
+See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for submission
+guidelines.
 
 ## Support
 
 For plugin issues:
+
 - Check plugin README for troubleshooting
 - Review plugin compatibility requirements
 - Report issues to the plugin maintainer (listed in plugin.yml)
 
 For marketplace issues:
-- Report at https://github.com/openshift-eng/edge-tooling/issues
+
+- Report at [https://github.com/openshift-eng/edge-tooling/issues](https://github.com/openshift-eng/edge-tooling/issues)

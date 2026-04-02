@@ -12,6 +12,7 @@ long_description: |
 homepage: https://github.com/openshift-eng/edge-tooling/tree/main/plugins/{{PLUGIN_NAME}}
 license: Apache-2.0
 tags:
+
   - openshift
   - edge
   - agent
@@ -32,13 +33,18 @@ install:
 
 usage:
   trigger_keywords:
+
     - "{{PLUGIN_NAME}}"
+
   examples:
+
     - "Spawn {{PLUGIN_NAME}} to handle X task"
     - "Delegate Y analysis to {{PLUGIN_NAME}}"
 
 changelog:
+
   - version: 1.0.0
     date: {{DATE}}
     changes:
+    
       - "Initial release"

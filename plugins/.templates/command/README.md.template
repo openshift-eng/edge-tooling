@@ -45,7 +45,7 @@
 
 Ask Claude to run the command:
 
-```
+```text
 User: "Run {{PLUGIN_NAME}} for my production cluster"
 
 Claude: I'll execute the {{PLUGIN_NAME}} command...
@@ -78,6 +78,7 @@ Claude: I'll execute the {{PLUGIN_NAME}} command...
 ### Command not found
 
 **Solution:** Ensure plugin is installed:
+
 ```bash
 ./marketplace status
 ```
@@ -85,6 +86,7 @@ Claude: I'll execute the {{PLUGIN_NAME}} command...
 ### Permission denied
 
 **Solution:** Ensure execute permission:
+
 ```bash
 chmod +x ~/.claude/commands/{{PLUGIN_NAME}}
 ```
@@ -92,6 +94,7 @@ chmod +x ~/.claude/commands/{{PLUGIN_NAME}}
 ### Cluster connection errors
 
 **Solution:** Verify KUBECONFIG and connectivity:
+
 ```bash
 export KUBECONFIG=/path/to/kubeconfig
 oc whoami
