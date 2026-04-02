@@ -18,10 +18,10 @@ CATALOG_FILE="${PLUGINS_DIR}/.registry/catalog.yml"
 # Exit if catalog doesn't exist (marketplace not initialized)
 [[ ! -f "$CATALOG_FILE" ]] && exit 0
 
-# Function to check if plugin is in catalog
+# Function to check if plugin is in catalog (exact match)
 plugin_in_catalog() {
     local plugin_name="$1"
-    grep -q "name: ${plugin_name}" "$CATALOG_FILE" 2>/dev/null
+    yq eval ".plugins[] | select(.name == \"$plugin_name\") | .name" "$CATALOG_FILE" 2>/dev/null | grep -q .
 }
 
 # Find all plugin directories (contain plugin.yml)
