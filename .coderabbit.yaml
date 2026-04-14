@@ -9,7 +9,7 @@ reviews:
   review_status: true
   changed_files_summary: true
   collapse_walkthrough: false
-  request_changes_workflow: true
+  request_changes_workflow: false
   abort_on_close: true
 
   auto_review:
