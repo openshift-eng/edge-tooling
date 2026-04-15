@@ -13,7 +13,6 @@ You are creating a new Epic in Jira for the OpenShift Edge team. All conventions
 
 ```yaml
 projects: [OCPEDGE, USHIFT]
-default_project: OCPEDGE
 issue_type: Epic
 
 fields:
@@ -55,7 +54,7 @@ Arguments can include any combination of:
 
 - Summary text
 - `--parent OCPSTRAT-XXX` — parent Feature/Initiative key
-- `--project USHIFT` — target project (default: OCPEDGE)
+- `--project OCPEDGE` or `--project USHIFT` — target project
 - `--component "Component Name"` — workstream component
 - `--size M` — T-shirt size (XS/S/M/L/XL)
 - `--assignee username` — epic assignee
@@ -85,7 +84,7 @@ The Laws are authoritative. When this skill and the Laws conflict, the Laws win.
 Parse any provided arguments. Use `AskUserQuestion` for every missing value — do not assume defaults for description fields:
 
 1. **Summary** — concise epic title
-2. **Project** — `OCPEDGE` (default) or `USHIFT`
+2. **Project** — `OCPEDGE` or `USHIFT`
 3. **Component** — must be one of the valid workstreams listed above
 4. **Parent Feature/Initiative** — OCPSTRAT key (recommended, not required)
 5. **Size** — T-shirt size (XS/S/M/L/XL)
