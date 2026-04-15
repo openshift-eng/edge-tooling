@@ -49,7 +49,7 @@ def search_bugs(
 
     # Search by job name in summary or description
     # Escape special JQL characters
-    escaped = job_name.replace('"', '\\"')
+    escaped = job_name.replace('\\', '\\\\').replace('"', '\\"')
     component = config.jira_component_for(topology) if topology else ""
     component_clause = f'AND component = "{component}" ' if component else ""
     jql = (
@@ -69,7 +69,7 @@ def search_bugs(
         )
         resp.raise_for_status()
         data = resp.json()
-    except requests.RequestException as e:
+    except (requests.RequestException, ValueError) as e:
         logger.warning(f"JIRA search failed for {job_name}: {e}")
         return []
 
@@ -115,7 +115,11 @@ def search_bugs_for_jobs(
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = [pool.submit(_search, job) for job in failing_jobs]
         for future in as_completed(futures):
-            name, bugs = future.result()
+            try:
+                name, bugs = future.result()
+            except Exception as e:
+                logger.warning(f"JIRA search task failed: {e}")
+                continue
             if bugs:
                 logger.info(f"  Found {len(bugs)} JIRA bugs for {name}")
                 results[name] = bugs

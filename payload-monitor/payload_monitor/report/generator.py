@@ -25,6 +25,7 @@ from ..models import (
     StreamReport,
     SuggestedBug,
 )
+from ..config import PERSISTENT_THRESHOLD, RECURRING_THRESHOLD
 from .timing_section import render_timing_section
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,10 @@ def _build_template_context(report: MonitorReport) -> dict:
         "cr_versions": sorted(set(
             cr.version for cr in report.component_regressions
         )),
+        "cr_comparisons": sorted(set(
+            cr.comparison for cr in report.component_regressions
+            if cr.comparison
+        )),
         "topologies": topologies,
         "versions": versions,
         "reg_topologies": sorted(set(
@@ -111,6 +116,15 @@ def _build_template_context(report: MonitorReport) -> dict:
             r.version for r in all_regressions if r.version
         )),
         "timing_html": timing_html,
+        "failure_counts": report.failure_counts,
+        "persistent_count": sum(1 for c in report.failure_counts.values() if c >= PERSISTENT_THRESHOLD),
+        "recurring_threshold": RECURRING_THRESHOLD,
+        "persistent_threshold": PERSISTENT_THRESHOLD,
+        "escalation_risks": report.escalation_risks,
+        "escalation_risk_jobs": set(er.job_name for er in report.escalation_risks),
+        "cross_topology": report.cross_topology,
+        "jira_matches_by_job": report.jira_matches,
+        "suggested_bugs_by_job": {b.job_name: b for b in report.suggested_bugs},
     }
 
 
@@ -232,7 +246,7 @@ def _render_analysis_card(da: dict) -> str:
         parts.append('    </ul>')
         parts.append('  </div>')
     parts.extend([
-        '  <div class="da-field">',
+        '  <div class="da-field da-recommendation">',
         '    <span class="da-label">Recommendation:</span>',
         f'    <span>{e(da.get("recommendation", ""))}</span>',
         '  </div>',

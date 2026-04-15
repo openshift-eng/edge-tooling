@@ -460,6 +460,10 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     container.appendChild(wrapper);
+
+    // Hide the plain inline job list — AI highlights already show job names with richer context
+    var inlineJobs = container.closest('.fs-section-critical')?.querySelector('.fs-inline-jobs');
+    if (inlineJobs) inlineJobs.style.display = 'none';
   })();
 
   // Copy full bug description to clipboard

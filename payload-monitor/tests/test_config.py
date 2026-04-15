@@ -1,6 +1,14 @@
 """Tests for payload_monitor.config."""
 
-from payload_monitor.config import Config, VERSIONS, PAYLOADS_PER_STREAM, JIRA_PROJECT
+from payload_monitor.config import (
+    Config,
+    CR_VIEWS,
+    VERSIONS,
+    PAYLOADS_PER_STREAM,
+    JIRA_PROJECT,
+    RECURRING_THRESHOLD,
+    PERSISTENT_THRESHOLD,
+)
 
 
 class TestConfig:
@@ -30,6 +38,23 @@ class TestConfig:
 
     def test_jira_component_for_unknown(self, config):
         assert config.jira_component_for("NONEXISTENT") == ""
+
+    def test_recurring_threshold_constant(self):
+        assert RECURRING_THRESHOLD == 2
+
+    def test_persistent_threshold_constant(self):
+        assert PERSISTENT_THRESHOLD == 3
+
+    def test_cr_views_include_sno_and_tnf(self):
+        topologies = {v["topology"] for v in CR_VIEWS}
+        assert "SNO" in topologies
+        assert "TNF" in topologies
+
+    def test_cr_views_have_pattern_and_topology(self):
+        for view in CR_VIEWS:
+            assert "pattern" in view
+            assert "topology" in view
+            assert "{version}" in view["pattern"]
 
     def test_versions_are_independent(self):
         c1 = Config()

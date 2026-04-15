@@ -25,9 +25,18 @@ INSTALL_PHASES = [
     "install should succeed: overall",
 ]
 
+# Component Readiness views — topology comparisons against HA baseline
+CR_VIEWS = [
+    {"pattern": "{version}-ha-vs-single", "topology": "SNO"},
+    {"pattern": "{version}-ha-vs-two-node-fencing", "topology": "TNF"},
+]
+
 JIRA_PROJECT = "OCPBUGS"
 PAYLOADS_PER_STREAM = 5
 REPORT_DIR = "./reports"
+ESCALATION_THRESHOLD = 3
+RECURRING_THRESHOLD = 2
+PERSISTENT_THRESHOLD = 3
 
 
 @dataclass
@@ -37,6 +46,9 @@ class Config:
     payloads_per_stream: int = PAYLOADS_PER_STREAM
     jira_project: str = JIRA_PROJECT
     report_dir: str = REPORT_DIR
+    escalation_threshold: int = ESCALATION_THRESHOLD
+    recurring_threshold: int = RECURRING_THRESHOLD
+    persistent_threshold: int = PERSISTENT_THRESHOLD
 
     def classify_topology(self, job_name: str) -> Optional[str]:
         """Return the topology name if job_name matches any configured topology."""

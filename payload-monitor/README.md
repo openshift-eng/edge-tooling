@@ -27,7 +27,7 @@ python -m payload_monitor --merge-analysis reports/analysis-2026-03-25.json --ou
 2. **Filters for edge topology jobs** (SNO, TNA, TNF) in blocking and informing job results
 3. **Analyzes failures** by fetching Prow job logs and extracting failing test names and error signatures
 4. **Queries Sippy** for job-level regressions (pass rate drops) across edge topologies
-5. **Queries Component Readiness** for statistically significant regressions on Single Node vs HA topology
+5. **Queries Component Readiness** for statistically significant regressions on edge topologies (SNO, TNF) vs HA
 6. **Collects timing insights** (opt-in via `--with-timing`) for install/upgrade durations across SNO/TNA/TNF topologies
 7. **Searches JIRA** for existing bugs matching failure signatures
 8. **Generates an HTML dashboard** with health summaries, failure details, regressions, timing insights, and JIRA integration
@@ -51,6 +51,8 @@ python -m payload_monitor --merge-analysis reports/analysis-2026-03-25.json --ou
              +--------v----------+
              |    Analyzer       |
              | (recurring fails, |
+             |  unstable jobs,   |
+             |  cross-topology,  |
              |  JIRA matching)   |
              +--------+----------+
                       |
@@ -87,6 +89,9 @@ Configuration is hardcoded in `payload_monitor/config.py`. The defaults are:
 | Payloads per stream | 5 | — |
 | JIRA project | OCPBUGS | — |
 | Report directory | `./reports` | `--output` CLI flag |
+| Recurring threshold | 2 payloads | — |
+| Persistent threshold | 3 payloads | — |
+| Escalation threshold | 3 consecutive | — |
 
 ### Environment Variables
 
@@ -129,7 +134,7 @@ Options:
 |--------|-----|------|---------|
 | [Release Controller](https://amd64.ocp.releases.ci.openshift.org) | `/api/v1/releasestream/*/tags` | None | Payload status, blocking/informing job results |
 | [Sippy](https://sippy.dptools.openshift.org) | `/api/jobs` | None | Job pass rates, regressions |
-| [Sippy Component Readiness](https://sippy.dptools.openshift.org/sippy-ng/component_readiness/main) | `/api/component_readiness` | None | HA vs Single Node topology regression detection |
+| [Sippy Component Readiness](https://sippy.dptools.openshift.org/sippy-ng/component_readiness/main) | `/api/component_readiness` | None | HA vs edge topology (SNO, TNF) regression detection |
 | [Prow](https://prow.ci.openshift.org) | GCS artifacts via `gsutil` | Google Cloud SDK | Job logs, junit XMLs, failing test details |
 | [JIRA](https://redhat.atlassian.net) | REST API v3 | Token (read-only) | Existing bug search, bug creation links |
 
@@ -150,13 +155,24 @@ These patterns are defined in `payload_monitor/config.py`.
 The generated HTML report is a single self-contained file (no external dependencies) with:
 
 - **Health overview**: Per-version status badges, blocking/informing counts, topology badges, trend indicators, and payload acceptance timeline
-- **Findings summary**: Priority-ordered action items (P1–P4) with AI root cause highlights and inline action chips
+- **Findings summary**: Situation bar (blocking, informing, regressions, affected topologies) with severity-tiered sections (Critical/Warning/Regressions), inline blocking job list, unstable job details, priority-ordered next steps checklist, and prominent action buttons
 - **Failing edge jobs**: Blocking and informing job failures across SNO/TNA/TNF topologies with sortable, filterable tables
 - **Failure analysis**: Error messages, failing tests, and AI root cause analysis (when enriched via Claude skill)
-- **Sippy job regressions**: Edge jobs with significant pass rate drops compared to previous periods
-- **Component Readiness**: HA vs Single Node topology regressions detected by Fisher's exact test
+- **Sippy job regressions**: Edge jobs with significant pass rate drops compared to previous periods, with an **Action** column containing copyable `/ci:triage-regression` commands
+- **Component Readiness**: HA vs edge topology (SNO, TNF) regressions detected by Fisher's exact test, with comparison filter and **Action** column for triage commands
 - **Timing insights** (opt-in): Install/upgrade duration stats, variant breakdowns, and phase duration trends per topology
 - **JIRA integration**: Matching existing bugs and suggested new bugs with pre-filled create links
+
+### Failure Intelligence
+
+The analyzer automatically detects patterns across payloads to surface high-priority issues:
+
+- **Recurring failures** (2+ payloads): Jobs that fail in multiple payloads are badged as "Recurring (Nx)" — likely not flakes
+- **Persistent failures** (3+ payloads): Jobs failing across 3 or more payloads are badged as "Persistent (Nx)" and highlighted in the findings summary
+- **Unstable jobs**: Informing jobs with 3+ **consecutive** recent failures are flagged as "Unstable" — these are consistently failing and need attention
+- **Cross-topology correlation**: When the same base job fails across multiple topologies (e.g., SNO and TNA), each failure shows an "Also in: [topology]" hint to surface shared platform issues
+- **Inline JIRA matches**: Each failing job's detail section shows any matching JIRA bugs inline, or a "Create Bug in JIRA" button if no existing bug is found (requires `JIRA_TOKEN`)
+- **No dead ends**: Every finding in the dashboard has a clear next step — a JIRA link, a copyable Claude command, a triage URL, or a bug creation button
 
 ## Development
 

@@ -230,7 +230,10 @@ Offer follow-up actions the user can take from this session:
 - Do NOT duplicate report data in your output — the HTML dashboard is the primary output, keep your response brief
 - Deep analysis runs automatically for **blocking jobs only** — informing jobs get a Claude suggestion instead
 - Prioritize blocking failures over informing failures in all analysis
-- Flag recurring failures prominently — 2+ payload recurrence strongly suggests a real regression, not a flake
+- The dashboard automatically detects **recurring** (2+ payloads) and **persistent** (3+ payloads) failures — highlight these in your summary
+- **Unstable** jobs are informing jobs failing in 3+ consecutive payloads — these are consistently failing and need attention
+- **Cross-topology correlation** ("Also in: SNO/TNA/TNF" hints) surfaces shared platform issues — when you see these, investigate the shared root cause rather than each topology independently
+- Every finding in the dashboard has a next step (JIRA link, Claude command, triage URL, or create-bug button) — reference these in your follow-up suggestions
 - For TNF/TNA failures, pay special attention to etcd, Pacemaker, and fencing-related errors
 - For SNO failures, check for single-node-specific issues like workload partitioning, resource constraints
 - When multiple edge topologies fail in the same payload, investigate whether it's a shared platform issue vs topology-specific

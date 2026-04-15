@@ -33,6 +33,22 @@ class TestGetHeaders:
             assert "Authorization" not in headers
 
 
+class TestJqlEscaping:
+    @patch.object(jira, "_session")
+    def test_jql_escaping_backslash(self, mock_session, config):
+        with patch.dict(os.environ, {"JIRA_TOKEN": "tok"}):
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"issues": []}
+            mock_resp.raise_for_status = MagicMock()
+            mock_session.get.return_value = mock_resp
+
+            jira.search_bugs("job\\with\\backslash", config)
+
+            call_args = mock_session.get.call_args
+            jql = call_args.kwargs.get("params", call_args[1].get("params", {}))["jql"]
+            assert "job\\\\with\\\\backslash" in jql
+
+
 class TestSearchBugs:
     @patch.object(jira, "_session")
     def test_returns_bugs(self, mock_session, config):

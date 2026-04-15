@@ -10,6 +10,7 @@ import pytest
 from payload_monitor.models import (
     ComponentRegression,
     DeepAnalysis,
+    EscalationRisk,
     FailingTest,
     JobResult,
     JobRun,
@@ -107,6 +108,30 @@ class TestBuildTemplateContext:
         ctx = _build_template_context(report)
         # r1 has worse delta (-40) than r2 (-10), should come first
         assert ctx["all_regressions"][0].test_name == "t1"
+
+
+class TestFailureCountsContext:
+    def test_context_includes_failure_counts(self):
+        job = JobRun("j", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")
+        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(
+            generated_at="now",
+            streams=[stream],
+            failure_counts={"j": 3, "k": 1},
+        )
+        ctx = _build_template_context(report)
+        assert ctx["failure_counts"] == {"j": 3, "k": 1}
+        assert ctx["recurring_threshold"] == 2
+        assert ctx["persistent_threshold"] == 3
+
+    def test_persistent_count_calculation(self):
+        report = MonitorReport(
+            generated_at="now",
+            failure_counts={"a": 3, "b": 4, "c": 1},
+        )
+        ctx = _build_template_context(report)
+        assert ctx["persistent_count"] == 2
 
 
 class TestRenderAnalysisCard:
@@ -332,3 +357,91 @@ class TestLoadJson:
         loaded = load_json(json_path)
         prs = loaded.streams[0].payloads[0].jobs[0].deep_analysis.suspect_prs
         assert prs == ["https://github.com/pr/1"]
+
+
+class TestCrComparisonsContext:
+    def test_context_includes_cr_comparisons(self):
+        cr_sno = ComponentRegression(
+            component="c1", test_name="t1", test_suite="s",
+            test_id="id1", capability="", version="4.22",
+            comparison="SNO",
+        )
+        cr_tnf = ComponentRegression(
+            component="c2", test_name="t2", test_suite="s",
+            test_id="id2", capability="", version="4.22",
+            comparison="TNF",
+        )
+        report = MonitorReport(
+            generated_at="now",
+            streams=[],
+            component_regressions=[cr_sno, cr_tnf],
+        )
+        ctx = _build_template_context(report)
+        assert ctx["cr_comparisons"] == ["SNO", "TNF"]
+
+
+class TestEscalationRisksContext:
+    def test_context_includes_escalation_risks(self):
+        er = EscalationRisk(
+            job_name="j1", topology="SNO", version="4.19",
+            consecutive_failures=3, sippy_url="https://sippy/j1",
+        )
+        job = JobRun("j1", "url", JobResult.FAILURE, JobType.INFORMING, "SNO")
+        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(
+            generated_at="now",
+            streams=[stream],
+            escalation_risks=[er],
+        )
+        ctx = _build_template_context(report)
+        assert ctx["escalation_risks"] == [er]
+        assert "j1" in ctx["escalation_risk_jobs"]
+
+
+class TestCrossTopologyContext:
+    def test_context_includes_cross_topology(self):
+        job = JobRun("j1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")
+        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(
+            generated_at="now",
+            streams=[stream],
+            cross_topology={"j1": ["TNA"]},
+        )
+        ctx = _build_template_context(report)
+        assert ctx["cross_topology"] == {"j1": ["TNA"]}
+
+
+class TestJiraMatchesContext:
+    def test_context_includes_jira_matches(self):
+        bug = JiraBug(key="OCPBUGS-1", summary="bug", status="New", url="https://issues.redhat.com/browse/OCPBUGS-1")
+        job = JobRun("j1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")
+        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(
+            generated_at="now",
+            streams=[stream],
+            jira_matches={"j1": [bug]},
+        )
+        ctx = _build_template_context(report)
+        assert "jira_matches_by_job" in ctx
+        assert ctx["jira_matches_by_job"] == {"j1": [bug]}
+
+    def test_context_includes_suggested_bugs_by_job(self):
+        suggested = SuggestedBug(
+            title="Bug", description="desc", job_name="j2",
+            topology="SNO", versions=["4.19"],
+            create_url="https://issues.redhat.com/create",
+        )
+        job = JobRun("j2", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")
+        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(
+            generated_at="now",
+            streams=[stream],
+            suggested_bugs=[suggested],
+        )
+        ctx = _build_template_context(report)
+        assert "suggested_bugs_by_job" in ctx
+        assert ctx["suggested_bugs_by_job"]["j2"] is suggested

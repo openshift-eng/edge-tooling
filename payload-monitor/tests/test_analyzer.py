@@ -6,8 +6,11 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from payload_monitor.analyzer import (
+    _correlate_cross_topology,
+    _find_escalation_risks,
     _find_recurring_failures,
     _find_unmatched_jobs,
+    _normalize_job_name,
     analyze,
 )
 from payload_monitor.config import Config
@@ -93,6 +96,39 @@ class TestFindUnmatchedJobs:
         assert _find_unmatched_jobs([stream], {"matched"}) == []
 
 
+class TestFailureCountsOnReport:
+    @patch("payload_monitor.analyzer.jira_has_auth", return_value=False)
+    @patch("payload_monitor.analyzer.jira_collector")
+    def test_failure_counts_stored_on_report(self, mock_jira, mock_auth):
+        mock_jira.search_bugs_for_jobs.return_value = {}
+        j1 = _make_job("job-a")
+        j2 = _make_job("job-a")
+        j3 = _make_job("job-b")
+        p1 = _make_payload("t1", [j1])
+        p2 = _make_payload("t2", [j2, j3])
+        stream = StreamReport("s", "4.19", payloads=[p1, p2])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        analyze(report, Config())
+
+        assert report.failure_counts["job-a"] == 2
+        assert report.failure_counts["job-b"] == 1
+
+    @patch("payload_monitor.analyzer.jira_has_auth", return_value=False)
+    @patch("payload_monitor.analyzer.jira_collector")
+    def test_failure_counts_empty_when_no_failures(self, mock_jira, mock_auth):
+        mock_jira.search_bugs_for_jobs.return_value = {}
+        job = _make_job("j1", result=JobResult.SUCCESS)
+        report = MonitorReport(
+            generated_at="now",
+            streams=[StreamReport("s", "4.19", payloads=[
+                _make_payload("t1", [job]),
+            ])],
+        )
+        analyze(report, Config())
+        assert report.failure_counts == {}
+
+
 class TestAnalyze:
     @patch("payload_monitor.analyzer.jira_has_auth", return_value=False)
     @patch("payload_monitor.analyzer.jira_collector")
@@ -136,6 +172,32 @@ class TestAnalyze:
 
     @patch("payload_monitor.analyzer.jira_has_auth", return_value=True)
     @patch("payload_monitor.analyzer.jira_collector")
+    def test_jira_matches_stored_on_report(self, mock_jira, mock_auth):
+        from payload_monitor.models import JiraBug
+
+        jira_matches = {
+            "j1": [JiraBug(key="OCPBUGS-10", summary="bug1", status="Open")],
+            "j2": [JiraBug(key="OCPBUGS-11", summary="bug2", status="Closed")],
+        }
+        mock_jira.search_bugs_for_jobs.return_value = jira_matches
+
+        j1 = _make_job("j1")
+        j2 = _make_job("j2")
+        report = MonitorReport(
+            generated_at="now",
+            streams=[StreamReport("s", "4.19", payloads=[
+                _make_payload("t1", [j1, j2]),
+            ])],
+        )
+        analyze(report, Config())
+
+        assert report.jira_matches == jira_matches
+        assert "j1" in report.jira_matches
+        assert "j2" in report.jira_matches
+        assert report.jira_matches["j1"][0].key == "OCPBUGS-10"
+
+    @patch("payload_monitor.analyzer.jira_has_auth", return_value=True)
+    @patch("payload_monitor.analyzer.jira_collector")
     def test_no_failures(self, mock_jira, mock_auth):
         mock_jira.search_bugs_for_jobs.return_value = {}
         job = _make_job("j1", result=JobResult.SUCCESS)
@@ -149,3 +211,165 @@ class TestAnalyze:
         assert report.jira_bugs == []
         assert report.suggested_bugs == []
         mock_jira.search_bugs_for_jobs.assert_not_called()
+
+
+def _make_informing_job(name, result=JobResult.FAILURE, topology="SNO"):
+    return JobRun(name=name, prow_url=f"https://prow/{name}",
+                  result=result, job_type=JobType.INFORMING, topology=topology)
+
+
+class TestFindEscalationRisks:
+    def test_consecutive(self):
+        """Informing job failing in last 3 consecutive payloads -> 1 EscalationRisk."""
+        j = lambda r: _make_informing_job("j1", result=r)
+        # 5 payloads, oldest first; j1 passes in first 2, fails in last 3
+        payloads = [
+            _make_payload("t1", [j(JobResult.SUCCESS)]),
+            _make_payload("t2", [j(JobResult.SUCCESS)]),
+            _make_payload("t3", [j(JobResult.FAILURE)]),
+            _make_payload("t4", [j(JobResult.FAILURE)]),
+            _make_payload("t5", [j(JobResult.FAILURE)]),
+        ]
+        stream = StreamReport("s", "4.19", payloads=payloads)
+
+        risks = _find_escalation_risks([stream], Config())
+        assert len(risks) == 1
+        assert risks[0].job_name == "j1"
+        assert risks[0].consecutive_failures == 3
+        assert risks[0].topology == "SNO"
+        assert risks[0].version == "4.19"
+        assert "j1" in risks[0].sippy_url
+
+    def test_non_consecutive(self):
+        """Informing job fails in payloads 1, 3, 5 (gaps) -> no EscalationRisk."""
+        # Oldest first: F, S, F, S, F -> newest first: F, S, F, S, F
+        # Consecutive from newest: only 1 (fails, then passes)
+        payloads = [
+            _make_payload("t1", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+            _make_payload("t2", [_make_informing_job("j1", result=JobResult.SUCCESS)]),
+            _make_payload("t3", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+            _make_payload("t4", [_make_informing_job("j1", result=JobResult.SUCCESS)]),
+            _make_payload("t5", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+        ]
+        stream = StreamReport("s", "4.19", payloads=payloads)
+
+        risks = _find_escalation_risks([stream], Config())
+        assert len(risks) == 0
+
+    def test_blocking_excluded(self):
+        """Blocking job failing in all payloads -> no EscalationRisk (only informing)."""
+        payloads = [
+            _make_payload(f"t{i}", [_make_job("j1", result=JobResult.FAILURE)])
+            for i in range(5)
+        ]
+        stream = StreamReport("s", "4.19", payloads=payloads)
+
+        risks = _find_escalation_risks([stream], Config())
+        assert len(risks) == 0
+
+    def test_below_threshold(self):
+        """Informing job fails in 2 consecutive -> no EscalationRisk (threshold is 3)."""
+        payloads = [
+            _make_payload("t1", [_make_informing_job("j1", result=JobResult.SUCCESS)]),
+            _make_payload("t2", [_make_informing_job("j1", result=JobResult.SUCCESS)]),
+            _make_payload("t3", [_make_informing_job("j1", result=JobResult.SUCCESS)]),
+            _make_payload("t4", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+            _make_payload("t5", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+        ]
+        stream = StreamReport("s", "4.19", payloads=payloads)
+
+        risks = _find_escalation_risks([stream], Config())
+        assert len(risks) == 0
+
+    def test_empty_streams(self):
+        """No streams -> empty list."""
+        assert _find_escalation_risks([], Config()) == []
+
+    def test_all_passing(self):
+        """All jobs pass -> empty list."""
+        payloads = [
+            _make_payload(f"t{i}", [_make_informing_job("j1", result=JobResult.SUCCESS)])
+            for i in range(5)
+        ]
+        stream = StreamReport("s", "4.19", payloads=payloads)
+
+        risks = _find_escalation_risks([stream], Config())
+        assert len(risks) == 0
+
+
+class TestNormalizeJobName:
+    def test_sno(self):
+        """SNO job name -> topology marker replaced."""
+        config = Config()
+        result = _normalize_job_name(
+            "periodic-ci-openshift-release-master-nightly-4.19-e2e-metal-single-node-live-iso",
+            config,
+        )
+        assert "__TOPO__" in result
+        assert "single-node" not in result
+
+    def test_tna(self):
+        """TNA job name with 'arbiter' -> marker replaced."""
+        config = Config()
+        result = _normalize_job_name(
+            "periodic-ci-openshift-release-master-nightly-4.19-e2e-metal-arbiter-live-iso",
+            config,
+        )
+        assert "__TOPO__" in result
+        assert "arbiter" not in result
+
+    def test_no_topology(self):
+        """Non-edge job -> returned unchanged."""
+        config = Config()
+        name = "periodic-ci-openshift-release-master-nightly-4.19-e2e-aws-ovn"
+        result = _normalize_job_name(name, config)
+        assert result == name
+
+    def test_exclude_patterns_respected(self):
+        """Job matching exclude_patterns (e.g. 'telco') should not be normalized."""
+        config = Config()
+        name = "periodic-ci-openshift-release-master-nightly-4.19-e2e-telco-single-node-live-iso"
+        result = _normalize_job_name(name, config)
+        # 'telco' is in SNO exclude_patterns, so 'single-node' should NOT be replaced
+        assert "__TOPO__" not in result
+        assert result == name
+
+
+class TestCorrelateCrossTopology:
+    def test_groups(self):
+        """SNO and TNA jobs share base -> cross_topology maps each to the other."""
+        config = Config()
+        # Two jobs that differ only in topology marker
+        sno_job = _make_job(
+            "periodic-ci-openshift-release-master-nightly-4.19-e2e-metal-single-node-live-iso",
+            topology="SNO",
+        )
+        tna_job = _make_job(
+            "periodic-ci-openshift-release-master-nightly-4.19-e2e-metal-arbiter-live-iso",
+            topology="TNA",
+        )
+        payloads = [_make_payload("t1", [sno_job, tna_job])]
+        stream = StreamReport("s", "4.19", payloads=payloads)
+
+        cross = _correlate_cross_topology([stream], config)
+        assert sno_job.name in cross
+        assert "TNA" in cross[sno_job.name]
+        assert tna_job.name in cross
+        assert "SNO" in cross[tna_job.name]
+
+    def test_different_base_names_not_grouped(self):
+        """Different base names -> cross_topology empty."""
+        config = Config()
+        sno_job = _make_job(
+            "periodic-ci-openshift-release-master-nightly-4.19-e2e-metal-single-node-live-iso",
+            topology="SNO",
+        )
+        tna_job = _make_job(
+            "periodic-ci-openshift-release-master-nightly-4.19-e2e-metal-arbiter-upgrade",
+            topology="TNA",
+        )
+        payloads = [_make_payload("t1", [sno_job, tna_job])]
+        stream = StreamReport("s", "4.19", payloads=payloads)
+
+        cross = _correlate_cross_topology([stream], config)
+        assert cross == {}

@@ -221,12 +221,8 @@ def main(
     )
 
     # Step 4: Analyze and find JIRA matches
-    # TODO: JIRA integration is temporarily disabled (work in progress).
-    # Uncomment the lines below to re-enable:
-    # logger.info("Step 4: Analyzing failures and searching JIRA...")
-    # analyze(report, config)
-    report.skip_jira = True
-    logger.info("Step 4: Skipping JIRA analysis (temporarily disabled — work in progress)")
+    logger.info("Step 4: Analyzing failures and searching JIRA...")
+    analyze(report, config)
 
     # Generate HTML report
     generate_html(report, html_path)
