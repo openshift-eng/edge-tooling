@@ -1,13 +1,13 @@
 ---
 name: release-health
 description: Use when analyzing the health of an OCP release cycle — evaluates Features, Initiatives, Epics, and Tasks from Jira to assess progress, identify risks, surface refinement gaps, and recommend actions to keep the team on track toward branch cut
-allowed-tools: Agent, AskUserQuestion, Write, Read, Glob, Bash
+allowed-tools: Agent, AskUserQuestion, Write, Read, Glob, Bash, mcp__plugin_edge-scrum_mcp-atlassian__jira_get_sprints_from_board, mcp__plugin_edge-scrum_mcp-atlassian__jira_search
 user-invocable: true
 ---
 
 # Release Health Analysis
 
-You are orchestrating a release health analysis for the OCPEDGE team. Delegate all Jira data-fetching and analysis to sub-agents — the main context is for coordination and report writing only.
+You are orchestrating a release health analysis for the OCPEDGE team. Data fetching runs inline using MCP tools and transform scripts. Analysis is delegated to a sub-agent.
 
 > **Before proceeding**: Read `plugins/edge-scrum/references/Edge-Scrum-Laws.md` to find which law files apply to release health orchestration. For this skill, load: `laws/00-team-roster.md`, `laws/01-jira-projects.md`, `laws/05-jira-features.md`, `laws/06-jira-fields.md`, `laws/09-sprint-policies.md`, `laws/14-agent-conventions.md`. The configuration below is derived from the Laws — when in doubt, defer to the law files.
 
@@ -32,19 +32,19 @@ fields:
 
 ## Execution Model
 
-All Jira data-fetching and analysis runs in sub-agents defined in `plugins/edge-scrum/skills/`. The main context:
-
-1. Reads Edge Scrum Laws (Step 0)
-2. Collects user inputs (Step 1)
-3. For each phase: reads the agent definition file, substitutes `{VARIABLE}` placeholders, spawns the agent
-4. Reads compact file outputs between phases for guard checks
-5. Writes the final report (Step 9)
+1. **Steps 0–1**: Load laws/roster, gather release parameters (main context)
+2. **Phase 2**: Fetch sprints + features inline using MCP tools → transform scripts (main context)
+3. **Phase 3**: Fetch epics + spikes inline using MCP tools → transform scripts (main context)
+4. **Phase 4**: Delegate full analysis to sub-agent (LLM-driven risk assessment)
+5. **Step 9**: Assemble and write the final report (main context)
 
 **Rules:**
 
-- Spawn all agents in a phase in **one message** with multiple `Agent` calls (concurrent execution)
-- Agents write output to `$WORKDIR` via the `Write` tool; main context reads those files with `Read`
-- Substitute all `{VARIABLE}` placeholders in agent definition content before spawning
+- Data fetching uses MCP tools directly in the main context
+- MCP responses are large and get persisted to files automatically — note those file paths
+- Transform scripts (`plugins/edge-scrum/bin/`) convert raw MCP data to structured JSON
+- Use `check-page.py` to extract pagination info from persisted files
+- The analysis sub-agent only needs `Read`, `Write`, and `jira_search` — it consumes the structured JSON
 - Never embed raw Jira response data in the main context
 
 ## User Arguments
@@ -108,40 +108,132 @@ Record `WORKDIR` — substitute it into all agent prompts.
 
 ---
 
-### Phase 2: Sprint + Feature Collection
+### Phase 2: Sprint + Feature Collection (inline)
 
-> **Spawn both agents in a single message (concurrent).**
+Fetch sprints and features in parallel using MCP tools, then transform with scripts.
 
-Read `plugins/edge-scrum/skills/sprint-mapper/SKILL.md` and `plugins/edge-scrum/skills/release-health-feature-fetcher/SKILL.md`. Substitute all `{VARIABLE}` placeholders with the computed values, then spawn:
+#### 2a — Fetch Sprints
 
-- **Agent 2a** — prompt: sprint-mapper content with `{WORKDIR}`, `{TODAY}`, `{FIRST_SPRINT}`, `{LAST_SPRINT}`, `{TOTAL_DEV_SPRINTS}`, `{TARGET_SPRINT}` (→ empty string) substituted
-- **Agent 2b** — prompt: feature-fetcher content with `{WORKDIR}`, `{VERSION}` substituted
+Call `jira_get_sprints_from_board` for board_id `"11479"` three times:
 
-**After both complete**, read and check:
+- `state="active"`
+- `state="closed"` — paginate using `page_token` (see pagination protocol below); use `limit=50`
+- `state="future"`
+
+After all pages are fetched, note all persisted file paths and run:
+
+```bash
+python3 plugins/edge-scrum/bin/transform-sprints.py \
+  --input <all_persisted_file_paths> \
+  --output {WORKDIR}/sprints.json \
+  --today {TODAY} \
+  --first-sprint {FIRST} \
+  --last-sprint {LAST} \
+  --total-dev-sprints {TOTAL_DEV_SPRINTS}
+```
+
+#### 2b — Fetch Features
+
+Call `jira_search` with:
+
+- **JQL:** `project = OCPSTRAT AND labels = "ocpedge-plan" AND labels = "{VERSION}-candidate" ORDER BY priority ASC`
+- **Fields:** `key, summary, status, issuetype, priority, assignee, fixVersions, labels, description, issuelinks, customfield_10795, customfield_10470, customfield_10473, customfield_10475`
+- **limit:** `50`
+
+Paginate using `page_token`. If zero results, use fallback JQL (set `fallback_used`):
+
+```
+project = OCPSTRAT AND labels = "ocpedge-plan" AND status not in (Done, Closed) ORDER BY priority ASC
+```
+
+After all pages fetched, run:
+
+```bash
+python3 plugins/edge-scrum/bin/transform-features.py \
+  --input <all_persisted_file_paths> \
+  --output {WORKDIR}/features.json
+```
+
+Append `--fallback-used` if fallback JQL was used.
+
+#### 2c — Verify
+
+Read and check:
 
 - `{WORKDIR}/sprints.json` — if `"error"` key is present or `sprint_map` is empty, warn the user and stop
 - `{WORKDIR}/features.json` — if `feature_keys` is empty, warn the user about scope and stop
 
 ---
 
-### Phase 3: Epic + Spike Collection
+### Phase 3: Epic + Spike Collection (inline)
 
-> **Spawn both agents in a single message (concurrent).**
+#### 3a — Fetch Epics
 
-Read `plugins/edge-scrum/skills/release-health-epic-fetcher/SKILL.md` and `plugins/edge-scrum/skills/release-health-spike-finder/SKILL.md`. Substitute `{WORKDIR}`, then spawn:
+Read `{WORKDIR}/features.json`. Extract `feature_keys_csv`.
 
-- **Agent 3a** — prompt: epic-fetcher content with `{WORKDIR}` substituted
-- **Agent 3b** — prompt: spike-finder content with `{WORKDIR}` substituted
+If `feature_keys` has more than 50 entries, split into batches of 50. For each batch, call `jira_search`:
 
-**After both complete**, read `{WORKDIR}/epics.json` and verify: `epic_keys` is a non-empty array, `feature_to_epics` is an object, and `epics` is an array. If any check fails, warn the user with a descriptive error and stop.
+- **JQL:** `project in (OCPEDGE, USHIFT) AND "Parent Link" in ({feature_keys_batch_csv}) ORDER BY priority ASC`
+- **Fields:** `key, summary, status, assignee, labels, description, customfield_10028, customfield_10018, customfield_10470, customfield_10473, customfield_10475`
+- **limit:** `50`
+
+Paginate using `page_token`. After all pages fetched, run:
+
+```bash
+python3 plugins/edge-scrum/bin/transform-epics.py \
+  --input <all_persisted_file_paths> \
+  --output {WORKDIR}/epics.json
+```
+
+#### 3b — Fetch Spikes
+
+Read `{WORKDIR}/sprints.json`. Extract `refinement_sprint_id`.
+
+Call `jira_search`:
+
+- **JQL:** `project in (OCPEDGE, USHIFT) AND issuetype = Spike AND sprint = {refinement_sprint_id}`
+- **Fields:** `key, summary, status, assignee, issuelinks`
+- **limit:** `50`
+
+Paginate using `page_token`. After all pages fetched, run:
+
+```bash
+python3 plugins/edge-scrum/bin/transform-spikes.py \
+  --input <all_persisted_file_paths> \
+  --features-file {WORKDIR}/features.json \
+  --sprints-file {WORKDIR}/sprints.json \
+  --output {WORKDIR}/spikes.json
+```
+
+#### 3c — Verify
+
+Read `{WORKDIR}/epics.json` and verify: `epic_keys` is a non-empty array, `feature_to_epics` is an object, and `epics` is an array. If any check fails, warn the user with a descriptive error and stop.
 
 ---
 
-### Phase 4: Full Analysis
+### Pagination Protocol
 
-> **Spawn one agent.**
+This Jira instance uses `page_token` pagination, NOT `start_at`. Follow this protocol for all paginated MCP calls:
 
-Read `plugins/edge-scrum/skills/release-health-analysis/SKILL.md`. Substitute `{WORKDIR}`, `{VERSION}`, `{TODAY}`, `{REFINEMENT_SPRINT_NUM}`, then spawn:
+1. Make the first call without `page_token`
+2. The response may be persisted to a file. Note the file path.
+3. Run `check-page.py` to get pagination info:
+   ```bash
+   python3 plugins/edge-scrum/bin/check-page.py <persisted_file_path>
+   ```
+   Output: `{"issues_count": N, "has_more": bool, "next_page_token": "..."}`
+4. If `has_more` is `true`: make the next call with `page_token` set to the `next_page_token` value. Repeat from step 2.
+5. If `has_more` is `false`: pagination is complete.
+
+For small responses that fit in context (not persisted), write them to `{WORKDIR}/raw_<type>_<page>.json` using `Write`, then run `check-page.py` on that file.
+
+For `jira_get_sprints_from_board`: closed sprints may require multiple pages. Active and future typically fit in one page each.
+
+---
+
+### Phase 4: Full Analysis (sub-agent)
+
+Read `plugins/edge-scrum/skills/release-health-analysis/SKILL.md`. Substitute `{WORKDIR}`, `{VERSION}`, `{TODAY}`, `{REFINEMENT_SPRINT_NUM}`, then spawn as a sub-agent:
 
 - **Agent 4** — prompt: analysis content with all placeholders substituted
 
@@ -182,14 +274,14 @@ Cover: overall verdict, count on track vs. at risk, top 2–3 risks, one recomme
 
 ## Edge Cases
 
-- **No Features found**: Try fallback JQL (handled inside feature-fetcher agent); warn user to confirm scope; stop if still empty.
-- **Feature with no Epics**: Flag as "Unplanned"; epic-fetcher returns empty list for that feature.
+- **No Features found**: Try fallback JQL (handled in Phase 2b); warn user to confirm scope; stop if still empty.
+- **Feature with no Epics**: Flag as "Unplanned"; epic fetch returns empty list for that feature.
 - **Epic with no Stories**: Flag as "Empty" in analysis.
 - **Version format varies** (`4.19` vs `4.19.0`): Analysis agent tries both in fixVersion queries.
-- **SME / Docs field errors**: Agents skip those fields and note "field not configured."
-- **Sprint resolution failure**: sprint-mapper agent returns `"error"` in JSON; main context stops before Phase 3.
-- **Multiple spikes per Feature**: spike-finder records all in `spike_keys[]`; analysis agent uses worst-case status.
-- **OCPBUGS without Epics**: Grouped under "(Unlinked Bugs)" section.
+- **SME / Docs field errors**: Transform scripts handle gracefully with fallback values.
+- **Sprint resolution failure**: transform-sprints.py sets `"error"` in JSON; main context stops before Phase 3.
+- **Multiple spikes per Feature**: transform-spikes.py records all in `spike_keys[]`; analysis agent uses worst-case status.
+- **OCPBUGS without Epics**: Grouped under "(Unlinked Bugs)" section by analysis agent.
 - **Analysis during refinement sprint**: Analysis agent skips 7a entirely — no delivery progress expected.
 - **Spike linked to child Epic**: Detected by analysis agent via `all_ref_sprint_spikes` cross-reference with `epics.json`.
 
@@ -198,6 +290,7 @@ Cover: overall verdict, count on track vs. at risk, top 2–3 risks, one recomme
 ## Important Notes
 
 - **Read-only**: This skill does not modify any Jira data.
-- **Sub-agent skills**: `plugins/edge-scrum/skills/release-health-*/SKILL.md` and `sprint-mapper/SKILL.md` — edit these to update sub-agent behavior without touching orchestration logic.
-- **Work directory**: `{WORKDIR}` persists across agents within a run. Rerunning on the same day overwrites prior files.
-- **Laws files**: Agents read specific files from `plugins/edge-scrum/references/laws/` per the index at `plugins/edge-scrum/references/Edge-Scrum-Laws.md` — never hardcode roster, rules, or sizing in agent definitions.
+- **Transform scripts**: `plugins/edge-scrum/bin/` — reusable data transformation (no LLM needed)
+- **Analysis sub-agent**: `plugins/edge-scrum/skills/release-health-analysis/SKILL.md` — LLM-driven risk assessment and report generation
+- **Work directory**: `{WORKDIR}` persists across phases within a run. Rerunning on the same day overwrites prior files.
+- **Laws files**: The analysis sub-agent reads specific files from `plugins/edge-scrum/references/laws/` per the index at `plugins/edge-scrum/references/Edge-Scrum-Laws.md` — never hardcode roster, rules, or sizing in skill definitions.
