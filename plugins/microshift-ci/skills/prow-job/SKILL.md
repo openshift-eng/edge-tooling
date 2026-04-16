@@ -109,7 +109,7 @@ grep '${SOME_TEXT}' ${GREP_OPTS} ${TMP}/build-log.txt
 Download all prow job artifacts (only needed when given a URL, not a local path):
 ```bash
 GCS_PATH=$(echo "${PROW_URL}" | sed -e 's|https://prow.ci.openshift.org/view/gs/|gs://|' -e 's|https://gcsweb-ci.apps.ci.l2s4.p1.openshiftapps.com/gcs/|gs://|')
-gcloud storage cp -r "${GCS_PATH}/" ${TMP}/
+gsutil -q -m cp -r "${GCS_PATH}/" ${TMP}/
 ```
 
 ## Workflow
@@ -121,10 +121,10 @@ The user argument is: $ARGUMENTS
    - If `$ARGUMENTS` is a **URL** (starts with `http`): create a temporary working directory with `mktemp -d ${WORKDIR}/openshift-ci-analysis-XXXX`, set `TMP` to that directory, and proceed to step 1.
 
 1. **Download all artifacts** (skip if using pre-downloaded artifacts from step 0):
-   Download all prow job artifacts using `gcloud storage cp -r` into the temporary working directory. Derive the GCS path by stripping the web prefix from the job URL (handles both Prow and GCS web URL formats):
+   Download all prow job artifacts using `gsutil -q -m cp -r` into the temporary working directory. Derive the GCS path by stripping the web prefix from the job URL (handles both Prow and GCS web URL formats):
    ```bash
    GCS_PATH=$(echo "${PROW_URL}" | sed -e 's|https://prow.ci.openshift.org/view/gs/|gs://|' -e 's|https://gcsweb-ci.apps.ci.l2s4.p1.openshiftapps.com/gcs/|gs://|')
-   gcloud storage cp -r "${GCS_PATH}/" ${TMP}/
+   gsutil -q -m cp -r "${GCS_PATH}/" ${TMP}/
    ```
    This works for both periodic (`logs/...`) and presubmit PR (`pr-logs/pull/...`) job URLs, and for both Prow and GCS web URL formats.
    This makes all build logs, step logs, and SOS reports available locally for analysis.
@@ -145,7 +145,7 @@ The user argument is: $ARGUMENTS
 
 ## Prerequisites
 
-- `gcloud` CLI must be installed and authenticated for GCS access
+- `gsutil` CLI must be installed for GCS access (uses anonymous access on public buckets)
 - Internet access to fetch job data from Prow/GCS
 - Bash shell
 

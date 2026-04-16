@@ -39,7 +39,7 @@ Analyze MicroShift CI failures, produce HTML reports, and create JIRA bugs.
 
 ## Requirements
 
-- `gcloud` CLI (authenticated for GCS access)
+- `gsutil` CLI (uses anonymous access on public GCS buckets)
 - `gh` CLI (authenticated with access to openshift/microshift)
 - Jira MCP server configured (for bug correlation)
 - Python 3

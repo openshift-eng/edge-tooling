@@ -85,9 +85,13 @@ cmd_prepare() {
         fi
 
         echo "  Found ${count} failed periodic jobs, downloading artifacts..." >&2
+        local dl_err
+        dl_err=$(mktemp)
         echo "${filtered_json}" | \
-            bash "${SCRIPT_DIR}/download-jobs.sh" --workdir "${WORKDIR}" 2>/dev/null \
+            bash "${SCRIPT_DIR}/download-jobs.sh" --workdir "${WORKDIR}" 2>"${dl_err}" \
             > "${jobs_file}"
+        [[ -s "${dl_err}" ]] && cat "${dl_err}" >&2
+        rm -f "${dl_err}"
 
         total_jobs=$((total_jobs + count))
         echo "  Done: ${jobs_file}" >&2
@@ -147,9 +151,13 @@ cmd_prepare() {
                     job_count=$(echo "${failed_prs}" | jq '[.[].jobs[] | select(.status == "FAILURE")] | length')
 
                     echo "  Downloading artifacts for ${job_count} failed jobs across ${failed_pr_count} PRs..." >&2
+                    local dl_err
+                    dl_err=$(mktemp)
                     echo "${failed_prs}" | \
-                        bash "${SCRIPT_DIR}/download-jobs.sh" --workdir "${WORKDIR}" 2>/dev/null \
+                        bash "${SCRIPT_DIR}/download-jobs.sh" --workdir "${WORKDIR}" 2>"${dl_err}" \
                         > "${prs_file}"
+                    [[ -s "${dl_err}" ]] && cat "${dl_err}" >&2
+                    rm -f "${dl_err}"
 
                     total_jobs=$((total_jobs + job_count))
                     echo "  Done: ${prs_file}" >&2
@@ -223,7 +231,7 @@ cmd_finalize() {
         release=$(echo "${release}" | xargs)
         echo "=== Aggregating release ${release} ===" >&2
         python3 "${SCRIPT_DIR}/aggregate.py" \
-            --release "${release}" --workdir "${WORKDIR}" >/dev/null 2>&1 || \
+            --release "${release}" --workdir "${WORKDIR}" >/dev/null || \
             echo "  WARNING: aggregation failed for ${release}" >&2
     done
 
@@ -233,7 +241,7 @@ cmd_finalize() {
     if [[ -n "${pr_files}" ]]; then
         echo "=== Aggregating PRs ===" >&2
         python3 "${SCRIPT_DIR}/aggregate.py" \
-            --prs --workdir "${WORKDIR}" >/dev/null 2>&1 || \
+            --prs --workdir "${WORKDIR}" >/dev/null || \
             echo "  WARNING: PR aggregation failed" >&2
     fi
 

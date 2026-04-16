@@ -187,9 +187,10 @@ mode_detail() {
 
 # Approve mode: add /lgtm to PRs where all jobs pass
 mode_approve() {
-    local filter="${1:-}" author="${2:-}"
+    local filter="${1:-}" author="${2:-}" execute="${3:-false}"
     local pr_data
 
+    ${execute} || echo "[DRY-RUN] Use --execute to actually post comments" >&2
     echo "Fetching open PRs..." >&2
     pr_data=$(fetch_open_prs "${filter}" "${author}")
     [[ "$(echo "${pr_data}" | jq 'length')" -eq 0 ]] && { echo "No open pull requests found."; return; }
@@ -224,9 +225,12 @@ mode_approve() {
         if [[ "${success}" -eq "${total}" ]]; then
             local comment=$'/lgtm\n/verified by ci\n'
             comment+="${SIGNATURE}"
-
             echo "PR #${pr_number}: All ${total} jobs passed, approving..."
-            gh pr comment "${pr_number}" --repo "${GH_REPO}" --body "${comment}"
+            if ${execute}; then
+                gh pr comment "${pr_number}" --repo "${GH_REPO}" --body "${comment}"
+            else
+                echo "gh pr comment ${pr_number} --repo ${GH_REPO} --body '${comment}'"
+            fi
             echo "PR #${pr_number}: Approved"
         else
             echo "PR #${pr_number}: ${success}/${total} jobs passed, skipping"
@@ -236,9 +240,10 @@ mode_approve() {
 
 # Restart mode: comment /test for each failed job
 mode_restart() {
-    local filter="${1:-}" author="${2:-}"
+    local filter="${1:-}" author="${2:-}" execute="${3:-false}"
     local pr_data
 
+    ${execute} || echo "[DRY-RUN] Use --execute to actually post comments" >&2
     echo "Fetching open PRs..." >&2
     pr_data=$(fetch_open_prs "${filter}" "${author}")
     [[ "$(echo "${pr_data}" | jq 'length')" -eq 0 ]] && { echo "No open pull requests found."; return; }
@@ -288,23 +293,28 @@ mode_restart() {
             echo "PR #${pr_number}: Could not resolve rerun commands for failed job(s), skipping"
             continue
         fi
-        comment+="${SIGNATURE}"
 
+        comment+="${SIGNATURE}"
         echo "PR #${pr_number}: Restarting ${#failed_jobs[@]} failed job(s): ${failed_jobs[*]}"
-        gh pr comment "${pr_number}" --repo "${GH_REPO}" --body "${comment}"
+        if ${execute}; then
+            gh pr comment "${pr_number}" --repo "${GH_REPO}" --body "${comment}"
+        else
+            echo "gh pr comment ${pr_number} --repo ${GH_REPO} --body '${comment}'"
+        fi
         echo "PR #${pr_number}: Restart comment posted"
     done < <(echo "${pr_data}" | jq -r '.[] | [.number, .title, .url] | @tsv')
 }
 
 usage() {
-    echo "Usage: ${0} [--mode MODE] [--filter STRING] [--author USER]" >&2
+    echo "Usage: ${0} [--mode MODE] [--filter STRING] [--author USER] [--execute]" >&2
     echo "  --mode MODE:     Operation mode (default: summary)" >&2
     echo "    summary: JSON array of PRs with pass/fail counts" >&2
     echo "    detail:  JSON array of PRs with full job lists" >&2
-    echo "    approve: Approve PRs where ALL test jobs passed" >&2
-    echo "    restart: Restart failed test jobs by commenting /test" >&2
+    echo "    approve: Approve PRs where ALL test jobs passed (dry-run by default)" >&2
+    echo "    restart: Restart failed test jobs by commenting /test (dry-run by default)" >&2
     echo "  --filter STRING: Only include PRs whose title contains STRING" >&2
     echo "  --author USER:   Only include PRs authored by USER" >&2
+    echo "  --execute:       Actually post comments (approve/restart modes). Without this flag, only shows what would be done." >&2
     exit 1
 }
 
@@ -312,6 +322,7 @@ main() {
     local mode="summary"
     local filter=""
     local author=""
+    local execute=false
 
     while [[ ${#} -gt 0 ]]; do
         case "${1}" in
@@ -324,6 +335,8 @@ main() {
             --author)
                 [[ ${#} -lt 2 ]] && { echo "Error: author requires an argument" >&2; usage; }
                 author="${2}"; shift 2 ;;
+            --execute)
+                execute=true; shift ;;
             -*) echo "Unknown option: ${1}" >&2; usage ;;
             *) echo "Unknown argument: ${1}" >&2; usage ;;
         esac
@@ -332,8 +345,8 @@ main() {
     case "${mode}" in
         summary) mode_summary "${filter}" "${author}" ;;
         detail)  mode_detail "${filter}" "${author}" ;;
-        approve) mode_approve "${filter}" "${author}" ;;
-        restart) mode_restart "${filter}" "${author}" ;;
+        approve) mode_approve "${filter}" "${author}" "${execute}" ;;
+        restart) mode_restart "${filter}" "${author}" "${execute}" ;;
         *) echo "Error: Unknown mode '${mode}'" >&2; usage ;;
     esac
 }

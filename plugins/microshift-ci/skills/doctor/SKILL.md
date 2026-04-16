@@ -40,7 +40,7 @@ WORKDIR=/tmp/microshift-ci-claude-workdir.$(date +%y%m%d)
 **Goal**: Deterministically collect all failed jobs and download their artifacts before any LLM analysis.
 
 **Actions**:
-1. Run `WORKDIR=/tmp/microshift-ci-claude-workdir.$(date +%y%m%d)` using the `Bash` tool
+1. Determine today's WORKDIR path by running `date +%y%m%d` and substituting into `/tmp/microshift-ci-claude-workdir.YYMMDD`. Use this value in all subsequent `--workdir` arguments.
 2. Run the prepare script:
    ```bash
    bash ${SCRIPTS_DIR}/doctor.sh prepare --workdir ${WORKDIR} $ARGUMENTS --rebase
@@ -50,6 +50,14 @@ WORKDIR=/tmp/microshift-ci-claude-workdir.$(date +%y%m%d)
    - For rebase PRs: fetches PRs with failures, downloads artifacts, writes `${WORKDIR}/analyze-ci-prs-jobs.json` and `${WORKDIR}/analyze-ci-prs-status.json`
    - Outputs a JSON summary listing all releases, job counts, and file paths
 4. Read the JSON output to know which releases have jobs to analyze and how many
+
+**Job JSON field names** (use these exactly — do NOT guess alternatives like `job_name`):
+- `job` — full job name
+- `build_id` — unique build identifier
+- `artifacts_dir` — local path to downloaded artifacts
+- `url` — Prow job URL
+- `status` — job result (`failure`, `FAILURE`, `SUCCESS`, `PENDING`)
+- `pr_number` — PR number (PR jobs only)
 
 **Error Handling**:
 - If `$ARGUMENTS` is empty, show usage and stop
@@ -160,7 +168,7 @@ HTML report generated: ${WORKDIR}/microshift-ci-doctor-report.html
 
 ## Prerequisites
 
-- `gcloud` CLI must be installed and authenticated for GCS access
+- `gsutil` CLI must be installed for GCS access (uses anonymous access on public buckets)
 - `gh` CLI must be authenticated with access to openshift/microshift
 - MCP Jira server must be configured (for bug correlation)
 - Internet access to fetch job data from Prow/GCS

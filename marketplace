@@ -349,7 +349,7 @@ _scaffold_from_template() {
         "$src" > "$dst"
 }
 
-# Create new plugin from template
+# Create new plugin from template, or add components to an existing plugin
 create_plugin() {
     local plugin_name="$1"
     shift
@@ -359,9 +359,16 @@ create_plugin() {
         error "Invalid plugin name. Must start with a letter; use only lowercase letters, numbers, and hyphens."
     fi
 
-    # Check if already exists
-    if [[ -d "${PLUGINS_DIR}/${plugin_name}" ]]; then
-        error "Plugin directory already exists: ${plugin_name}"
+    local plugin_dir="${PLUGINS_DIR}/${plugin_name}"
+    local adding_to_existing=false
+
+    if [[ -d "$plugin_dir" ]]; then
+        if [[ -f "${plugin_dir}/.claude-plugin/plugin.json" ]]; then
+            adding_to_existing=true
+            info "Plugin '${plugin_name}' already exists — adding components"
+        else
+            error "Directory '${plugin_dir}' exists but is not a valid plugin (missing .claude-plugin/plugin.json)"
+        fi
     fi
 
     # Parse component flags
@@ -402,6 +409,88 @@ create_plugin() {
         done
     fi
 
+    # --- Add components to existing plugin ---
+    if [[ "$adding_to_existing" == "true" ]]; then
+        echo -e "\n${BOLD}Adding components to: ${CYAN}${plugin_name}${NC}\n"
+
+        # Read description from existing plugin.json for skill scaffolding
+        local description=""
+        local plugin_json="${plugin_dir}/.claude-plugin/plugin.json"
+        if [[ -f "$plugin_json" ]]; then
+            description=$(json_get "$plugin_json" ".description")
+        fi
+
+        local added=0
+
+        if [[ "$has_skill" == "true" ]]; then
+            local skill_dst="${plugin_dir}/skills/${plugin_name}/SKILL.md"
+            if [[ -f "$skill_dst" ]]; then
+                warn "Skill already exists: skills/${plugin_name}/SKILL.md (skipping)"
+            else
+                mkdir -p "${plugin_dir}/skills/${plugin_name}"
+                (python3 - "${TEMPLATES_DIR}/SKILL.md.template" "$skill_dst" \
+                    "$plugin_name" "$description" <<'PYEOF'
+import sys
+tmpl, dst, name, desc = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+content = open(tmpl, encoding='utf-8').read()
+yaml_desc = desc.replace('\\', '\\\\').replace('"', '\\"')
+for placeholder, value in [('{{PLUGIN_NAME}}', name), ('{{DESCRIPTION}}', yaml_desc)]:
+    content = content.replace(placeholder, value)
+open(dst, 'w', encoding='utf-8').write(content)
+PYEOF
+                ) || error "Failed to generate SKILL.md from template"
+                echo "  + Skill:  skills/${plugin_name}/SKILL.md"
+                ((added++)) || true
+            fi
+        fi
+
+        if [[ "$has_hook" == "true" ]]; then
+            if [[ -f "${plugin_dir}/hooks/hooks.json" ]]; then
+                warn "Hooks already exist: hooks/hooks.json (skipping)"
+            else
+                mkdir -p "${plugin_dir}/hooks"
+                _scaffold_from_template "${TEMPLATES_DIR}/hooks.json.template" "${plugin_dir}/hooks/hooks.json" "$plugin_name" ""
+                echo "  + Hook:   hooks/hooks.json"
+                ((added++)) || true
+            fi
+        fi
+
+        if [[ "$has_mcp" == "true" ]]; then
+            if [[ -f "${plugin_dir}/.mcp.json" ]]; then
+                warn "MCP config already exists: .mcp.json (skipping)"
+            else
+                _scaffold_from_template "${TEMPLATES_DIR}/mcp.json.template" "${plugin_dir}/.mcp.json" "$plugin_name" ""
+                echo "  + MCP:    .mcp.json"
+                ((added++)) || true
+            fi
+        fi
+
+        if [[ "$has_agent" == "true" ]]; then
+            local agent_dst="${plugin_dir}/agents/${plugin_name}.md"
+            if [[ -f "$agent_dst" ]]; then
+                warn "Agent already exists: agents/${plugin_name}.md (skipping)"
+            else
+                mkdir -p "${plugin_dir}/agents"
+                _scaffold_from_template "${TEMPLATES_DIR}/agent.md.template" "$agent_dst" "$plugin_name" ""
+                echo "  + Agent:  agents/${plugin_name}.md"
+                ((added++)) || true
+            fi
+        fi
+
+        echo ""
+        if [[ $added -eq 0 ]]; then
+            warn "No new components added (all requested components already exist)"
+        else
+            success "$added component(s) added to ${plugin_name}"
+            echo "Next steps:"
+            echo "  1. Implement your new components"
+            echo "  2. Fill in TODO markers"
+            echo "  3. Test with: ./marketplace validate ${plugin_name}"
+        fi
+        return
+    fi
+
+    # --- Create new plugin ---
     echo -e "\n${BOLD}Creating new plugin: ${CYAN}${plugin_name}${NC}\n"
 
     # Prompt for metadata
@@ -411,8 +500,6 @@ create_plugin() {
     read -p "Short description: " description
     [[ -z "$description" ]] && error "Description cannot be empty"
     read -p "Author (your GitHub handle): " author
-
-    local plugin_dir="${PLUGINS_DIR}/${plugin_name}"
 
     # Validate required templates exist
     [[ ! -f "${TEMPLATES_DIR}/plugin.json.template" ]] && error "Template not found: plugin.json.template"
@@ -518,7 +605,7 @@ main() {
             [[ -z "${1:-}" ]] && error "Usage: marketplace validate <plugin-name>"
             validate_plugin "$1"
             ;;
-        new|create)
+        new|create|add)
             [[ -z "${1:-}" ]] && error "Usage: marketplace new <plugin-name> [--skill] [--hook] [--mcp] [--agent]"
             create_plugin "$@"
             ;;
@@ -538,9 +625,10 @@ ${BOLD}Commands:${NC}
   ${CYAN}show${NC} <plugin>              Show detailed information about a plugin
   ${CYAN}validate${NC} <plugin>          Validate plugin structure and metadata
   ${CYAN}new${NC} <name> [flags]         Create new plugin from template
+  ${CYAN}add${NC} <name> [flags]         Add components to an existing plugin
   ${CYAN}catalog-update${NC}             Rebuild .claude-plugin/marketplace.json
 
-${BOLD}Component Flags for 'new':${NC}
+${BOLD}Component Flags for 'new' / 'add':${NC}
   --skill                    Include a skill (SKILL.md)
   --hook                     Include hooks (hooks.json)
   --mcp                      Include MCP server config (.mcp.json)
@@ -552,6 +640,7 @@ ${BOLD}Examples:${NC}
   marketplace show ovn-topology                 # Show plugin details
   marketplace new my-plugin --skill --agent     # Create plugin with skill + agent
   marketplace new my-plugin                     # Create plugin (interactive)
+  marketplace add my-plugin --hook              # Add a hook to an existing plugin
   marketplace catalog-update                    # Rebuild marketplace catalog
 
 ${BOLD}User Installation:${NC}

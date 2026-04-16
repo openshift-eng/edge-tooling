@@ -31,8 +31,9 @@ url_to_gcs() {
 # Args: build_id url
 # Returns: 0 on success (cached or downloaded), 1 on failure
 #
-# gcloud storage cp -r gs://bucket/.../BUILD_ID/ dest/ creates dest/BUILD_ID/...
+# gsutil cp -r gs://bucket/.../BUILD_ID/ dest/ creates dest/BUILD_ID/...
 # so the final layout is: ${WORKDIR}/artifacts/${BUILD_ID}/finished.json etc.
+# Uses gsutil anonymous access since the bucket is public.
 download_job() {
     local build_id="$1"
     local url="$2"
@@ -46,15 +47,20 @@ download_job() {
     local gcs_path
     gcs_path=$(url_to_gcs "${url}")
 
-    # gcloud cp -r .../BUILD_ID/ parent/ → parent/BUILD_ID/...
-    # so we download into the parent and let gcloud create the BUILD_ID dir
+    # gsutil cp -r .../BUILD_ID/ parent/ → parent/BUILD_ID/...
+    # so we download into the parent and let gsutil create the BUILD_ID dir
     local parent="${WORKDIR}/artifacts"
     mkdir -p "${parent}"
-    if gcloud storage cp -r "${gcs_path}/" "${parent}/" >/dev/null 2>&1; then
+    local dl_err
+    dl_err=$(mktemp)
+    if gsutil -q -m cp -r "${gcs_path}/" "${parent}/" 2>"${dl_err}"; then
         echo "  downloaded: ${build_id}" >&2
+        rm -f "${dl_err}"
         return 0
     else
         echo "  FAILED: ${build_id}" >&2
+        [[ -s "${dl_err}" ]] && cat "${dl_err}" >&2
+        rm -f "${dl_err}"
         return 1
     fi
 }
@@ -145,18 +151,23 @@ main() {
     done < <(echo "${jobs_json}" | jq -r '.[] | [.build_id, .url] | @tsv')
     wait
 
-    # Count results
-    local ok=0 fail=0
+    # Count results and collect failed build IDs
+    local ok=0 fail=0 failed_ids=""
     if [[ -f "${status_file}" ]]; then
         ok=$(grep -c ':ok$' "${status_file}" 2>/dev/null || true)
         fail=$(grep -c ':fail$' "${status_file}" 2>/dev/null || true)
+        failed_ids=$(grep ':fail$' "${status_file}" 2>/dev/null | cut -d: -f1 || true)
     fi
     rm -f "${status_file}"
 
     echo "Done: ${ok} downloaded/cached, ${fail} failed." >&2
 
-    # Output enriched JSON with artifacts_dir added
-    echo "${jobs_json}" | jq --arg workdir "${WORKDIR}" '[.[] | . + {artifacts_dir: ($workdir + "/artifacts/" + .build_id)}]'
+    # Exclude failed downloads, then add artifacts_dir
+    local output_json="${jobs_json}"
+    for bid in ${failed_ids}; do
+        output_json=$(echo "${output_json}" | jq --arg id "${bid}" '[.[] | select(.build_id != $id)]')
+    done
+    echo "${output_json}" | jq --arg workdir "${WORKDIR}" '[.[] | . + {artifacts_dir: ($workdir + "/artifacts/" + .build_id)}]'
 }
 
 main "${@}"

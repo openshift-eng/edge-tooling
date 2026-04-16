@@ -1,0 +1,8 @@
+{
+  "name": "challenge",
+  "description": "Adversarial hypothesis reviewer — systematically attacks theories and root cause analyses to find weaknesses before they find you",
+  "version": "1.0.0",
+  "author": { "name": "fonta-rh" },
+  "homepage": "https://github.com/openshift-eng/edge-tooling",
+  "license": "Apache-2.0"
+}

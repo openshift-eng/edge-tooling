@@ -1,0 +1,10 @@
+{
+  "name": "microshift-release",
+  "description": "Set of tools to perform MicroShift Release Testing activities",
+  "version": "1.0.0",
+  "author": {
+    "name": "agullon"
+  },
+  "homepage": "https://github.com/openshift-eng/edge-tooling",
+  "license": "Apache-2.0"
+}

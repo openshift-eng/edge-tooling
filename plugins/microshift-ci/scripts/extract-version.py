@@ -154,7 +154,7 @@ def parse_prow_url(prow_url):
     - Periodic jobs: https://prow.ci.openshift.org/view/gs/test-platform-results/logs/{job_name}/{job_id}
 
     Returns:
-        Tuple of (job_id, version, job_type, pr_number) or (None, None, None, None) on error
+        Tuple of (job_id, version, job_type, pr_number, error) or (None, None, None, None, error_string) on failure
     """
     # Remove the prow.ci.openshift.org prefix and normalize
     url_parts = prow_url.replace("https://prow.ci.openshift.org/view/gs/test-platform-results/", "")

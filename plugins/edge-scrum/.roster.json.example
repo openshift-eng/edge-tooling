@@ -1,0 +1,6 @@
+{
+  "members": [
+    { "username": "alice@example.com", "display_name": "Alice Smith", "country": "US", "sp_target": 8 },
+    { "username": "bob@example.com", "display_name": "Bob Jones", "country": "UK", "sp_target": 6 }
+  ]
+}

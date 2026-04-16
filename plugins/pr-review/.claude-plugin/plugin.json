@@ -1,0 +1,8 @@
+{
+  "name": "pr-review",
+  "description": "Post-review utilities for PR workflows — vet and filter findings from automated reviews",
+  "version": "1.0.0",
+  "author": { "name": "fonta-rh" },
+  "homepage": "https://github.com/openshift-eng/edge-tooling",
+  "license": "Apache-2.0"
+}

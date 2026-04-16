@@ -77,7 +77,7 @@ WORKDIR=/tmp/microshift-ci-claude-workdir.$(date +%y%m%d)
 **Actions**:
 1. Parse `$ARGUMENTS` to extract `<source>` and detect `--create` flag
 2. Determine mode: if `--create` is present, set `MODE=create`; otherwise `MODE=dry-run`
-3. Run `WORKDIR=/tmp/microshift-ci-claude-workdir.$(date +%y%m%d) && mkdir -p ${WORKDIR}` using the `Bash` tool
+3. Determine today's WORKDIR path by running `date +%y%m%d` and substituting into `/tmp/microshift-ci-claude-workdir.YYMMDD`. Run `mkdir -p` on it.
 4. Run the preparation script to parse job files, group by signature, and extract search keywords:
    ```bash
    python3 ${SCRIPTS_DIR}/search-bugs.py <source> --workdir ${WORKDIR}
