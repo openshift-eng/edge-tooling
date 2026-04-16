@@ -506,6 +506,16 @@ class TestJsonRoundTripNewFields:
         assert loaded.recurring_threshold == 5
         assert loaded.persistent_threshold == 10
 
+    def test_jira_errors_round_trip(self, tmp_path):
+        report = MonitorReport(
+            generated_at="now",
+            jira_errors=["JIRA search failed for j1: timeout", "JIRA search failed for j2: 403"],
+        )
+        out = tmp_path / "report.json"
+        generate_json(report, out)
+        loaded = load_json(out)
+        assert loaded.jira_errors == ["JIRA search failed for j1: timeout", "JIRA search failed for j2: 403"]
+
 
 class TestSafeDataclassInit:
     def test_ignores_unknown_keys(self):

@@ -209,6 +209,7 @@ def generate_json(report: MonitorReport, output_path: Path) -> None:
         },
         "escalation_risks": [asdict(er) for er in report.escalation_risks],
         "cross_topology": report.cross_topology,
+        "jira_errors": report.jira_errors,
         "recurring_threshold": report.recurring_threshold,
         "persistent_threshold": report.persistent_threshold,
     }
@@ -508,6 +509,7 @@ def load_json(json_path: Path) -> MonitorReport:
         jira_matches=jira_matches,
         escalation_risks=escalation_risks,
         cross_topology=data.get("cross_topology", {}),
+        jira_errors=data.get("jira_errors", []),
         recurring_threshold=data.get("recurring_threshold", 2),
         persistent_threshold=data.get("persistent_threshold", 3),
     )

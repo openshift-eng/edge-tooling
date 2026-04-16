@@ -466,6 +466,40 @@ class TestJiraErrorTracking:
         assert "j1" in report.jira_errors[0]
 
 
+class TestAnalyzerErrorRecovery:
+    @patch("payload_monitor.analyzer.jira_has_auth", return_value=False)
+    @patch("payload_monitor.analyzer.jira_collector")
+    @patch("payload_monitor.analyzer._find_escalation_risks", side_effect=RuntimeError("boom"))
+    def test_escalation_risk_failure_appends_data_error(self, mock_esc, mock_jira, mock_auth):
+        """Escalation risk failure should append to data_errors and set safe default."""
+        mock_jira.search_bugs_for_jobs.return_value = ({}, [])
+        report = MonitorReport(
+            generated_at="now",
+            streams=[StreamReport("s", "4.19", payloads=[
+                _make_payload("t1", [_make_job("j1")]),
+            ])],
+        )
+        analyze(report, Config())
+        assert report.escalation_risks == []
+        assert any("Escalation risk" in e for e in report.data_errors)
+
+    @patch("payload_monitor.analyzer.jira_has_auth", return_value=False)
+    @patch("payload_monitor.analyzer.jira_collector")
+    @patch("payload_monitor.analyzer._correlate_cross_topology", side_effect=RuntimeError("boom"))
+    def test_cross_topology_failure_appends_data_error(self, mock_cross, mock_jira, mock_auth):
+        """Cross-topology failure should append to data_errors and set safe default."""
+        mock_jira.search_bugs_for_jobs.return_value = ({}, [])
+        report = MonitorReport(
+            generated_at="now",
+            streams=[StreamReport("s", "4.19", payloads=[
+                _make_payload("t1", [_make_job("j1")]),
+            ])],
+        )
+        analyze(report, Config())
+        assert report.cross_topology == {}
+        assert any("Cross-topology" in e for e in report.data_errors)
+
+
 class TestTnfNormalization:
     def test_tnf_fencing_pattern(self):
         """TNF job with 'fencing' pattern should be normalized."""

@@ -235,8 +235,12 @@ def analyze(
         report.escalation_risks = _find_escalation_risks(report.streams, config)
     except Exception as e:
         logger.error(f"Escalation risk analysis failed: {e}")
+        report.escalation_risks = []
+        report.data_errors.append(f"Escalation risk analysis: {e}")
 
     try:
         report.cross_topology = _correlate_cross_topology(report.streams, config)
     except Exception as e:
         logger.error(f"Cross-topology correlation failed: {e}")
+        report.cross_topology = {}
+        report.data_errors.append(f"Cross-topology correlation: {e}")

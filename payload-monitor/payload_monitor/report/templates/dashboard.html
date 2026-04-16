@@ -307,7 +307,8 @@
       <div class="fs-blocking-row">
         <div class="fs-blocking-main">
           <span class="badge {{ item.job.topology | lower }}">{{ item.job.topology }}</span>
-          <a class="fs-blocking-name" href="#detail-{{ blocking_job_first_idx.get(item.job.name, loop.index) }}" title="Jump to failure analysis">{{ item.job.name }}</a>
+          {% set _detail_idx = blocking_job_first_idx.get(item.job.name) %}
+          {% if _detail_idx is not none %}<a class="fs-blocking-name" href="#detail-{{ _detail_idx }}" title="Jump to failure analysis">{{ item.job.name }}</a>{% else %}<span class="fs-blocking-name">{{ item.job.name }}</span>{% endif %}
           {% if fc >= recurring_threshold %}
           <span class="badge {% if fc >= persistent_threshold %}persistent{% else %}recurring{% endif %}">{{ fc }}x</span>
           {% endif %}
@@ -420,6 +421,7 @@
   {% endfor %}
 </div>
 
+<div class="table-wrapper">
 <table>
   <thead>
     <tr>
@@ -464,6 +466,7 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% if all_failing | length > 5 %}
 <button class="expand-btn" id="expand-jobs-btn" onclick="expandSection('jobs')">Show all {{ all_failing | length }} failing jobs</button>
 {% endif %}
@@ -597,6 +600,7 @@
   <button class="filter-btn" data-group="regversion" data-value="{{ v }}">{{ v }}</button>
   {% endfor %}
 </div>
+<div class="table-wrapper">
 <table>
   <thead>
     <tr>
@@ -648,6 +652,7 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% if all_regressions|length > 5 %}
 <button class="expand-btn" id="expand-regressions-btn" onclick="expandSection('regressions')">Show all {{ all_regressions|length }} regressions</button>
 {% endif %}
@@ -682,6 +687,7 @@
   {% endfor %}
 </div>
 
+<div class="table-wrapper">
 <table id="cr-table">
   <thead>
     <tr>
@@ -699,7 +705,7 @@
     {% for cr in component_regressions %}
     <tr class="cr-row" data-row-index="{{ loop.index }}" data-crcomparison="{{ cr.comparison }}" data-crplatform="{{ cr.variants.get('Platform', '') }}" data-crversion="{{ cr.version }}">
       <td>{{ cr.component }}</td>
-      <td style="font-size:13px;max-width:700px">
+      <td style="font-size:13px">
         {% if cr.detail_url %}
         <a href="{{ cr.detail_url }}" target="_blank">{{ cr.test_name }}</a>
         {% else %}
@@ -745,6 +751,7 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% if component_regressions|length > 5 %}
 <button class="expand-btn" id="expand-cr-btn" onclick="expandSection('cr')">Show all {{ component_regressions|length }} component regressions</button>
 {% endif %}

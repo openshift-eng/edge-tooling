@@ -63,7 +63,7 @@ The tool uses a virtual environment at `$TOOL_DIR/.venv`. Create it and install 
 
 PLUGIN_DIR is the directory containing this skill file (i.e., plugins/edge-ocp-ci/skills/generate-dashboard).
 
-TOOL_DIR="$PLUGIN_DIR/../../payload-monitor"
+TOOL_DIR="$(git -C "$PLUGIN_DIR" rev-parse --show-toplevel)/payload-monitor"
 
 ```bash
 cd "$TOOL_DIR" && (test -d .venv || python3 -m venv .venv) && .venv/bin/python -c "import requests, jinja2, click" 2>/dev/null || .venv/bin/pip install -r requirements.txt

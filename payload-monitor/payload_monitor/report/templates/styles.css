@@ -635,10 +635,13 @@ a:hover { text-decoration: underline; }
 .filter-btn.active { background: var(--accent); color: #000; border-color: var(--accent); }
 
 /* Tables */
+.table-wrapper {
+  overflow-x: auto;
+  margin-bottom: 16px;
+}
 table {
   width: 100%;
   border-collapse: collapse;
-  margin-bottom: 16px;
   font-size: 13px;
 }
 th {
@@ -908,8 +911,11 @@ details pre {
 }
 .claude-suggestion:hover .copy-btn,
 .claude-cmd-popup:hover .copy-btn,
-.action-cell:hover .copy-btn { opacity: 1; }
-.copy-btn:hover { background: var(--surface-hover); }
+.action-cell:hover .copy-btn,
+.copy-btn:focus,
+.copy-btn:focus-visible,
+.action-cell:focus-within .copy-btn { opacity: 1; }
+.copy-btn:hover, .copy-btn:focus { background: var(--surface-hover); }
 .copy-btn.copied { opacity: 1; color: var(--green); border-color: var(--green); }
 
 /* AI Analysis Highlights */
