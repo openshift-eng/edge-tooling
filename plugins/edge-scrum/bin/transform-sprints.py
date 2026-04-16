@@ -2,6 +2,7 @@
 """Transform raw Jira sprint board results into sprints.json."""
 
 import argparse
+from datetime import datetime
 import sys
 import os
 
@@ -16,7 +17,7 @@ from _jira_transforms import (
 
 
 def parse_sprint(raw):
-    name = raw.get("name", "")
+    name = raw.get("name") or ""
     start = raw.get("startDate") or raw.get("start_date") or raw.get("start")
     end = raw.get("endDate") or raw.get("end_date") or raw.get("end")
 
@@ -36,8 +37,8 @@ def build_target_sprint(sprint, today):
         return None
 
     total = days_between(sprint["start"], sprint["end"])
-    elapsed = min(days_between(sprint["start"], today), total)
-    remaining = max(days_between(today, sprint["end"]), 0)
+    elapsed = max(0, min(days_between(sprint["start"], today), total))
+    remaining = max(0, min(days_between(today, sprint["end"]), total))
 
     return {
         "id": sprint["id"],
@@ -65,12 +66,23 @@ def main():
     parser.add_argument("--total-dev-sprints", type=int, default=None)
     args = parser.parse_args()
 
+    try:
+        datetime.strptime(args.today, "%Y-%m-%d")
+    except ValueError:
+        parser.error(f"--today must be YYYY-MM-DD, got: {args.today}")
+
+    if (args.first_sprint is None) != (args.last_sprint is None):
+        parser.error("--first-sprint and --last-sprint must be provided together")
+
+    if args.first_sprint is not None and args.first_sprint > args.last_sprint:
+        args.first_sprint, args.last_sprint = args.last_sprint, args.first_sprint
+
     raw_sprints = load_sprints(args.input)
     sprints = [parse_sprint(s) for s in raw_sprints]
     sprints = [s for s in sprints if s["num"] is not None]
 
     # Build sprint map
-    use_range = args.first_sprint is not None and args.last_sprint is not None
+    use_range = args.first_sprint is not None
     if use_range:
         map_sprints = [
             s for s in sprints if args.first_sprint <= s["num"] <= args.last_sprint
@@ -151,7 +163,7 @@ def main():
         if args.target_sprint == "active":
             active = [s for s in sprints if s["state"] == "active"]
             if active:
-                target = active[0]
+                target = max(active, key=lambda s: s["num"])
             else:
                 closed = [
                     s
@@ -160,7 +172,10 @@ def main():
                 ]
                 target = max(closed, key=lambda s: s["num"]) if closed else None
         else:
-            target_num = int(args.target_sprint)
+            try:
+                target_num = int(args.target_sprint)
+            except ValueError:
+                parser.error(f"--target-sprint must be 'active' or an integer, got: {args.target_sprint}")
             target = next((s for s in sprints if s["num"] == target_num), None)
 
         if target:

@@ -49,10 +49,13 @@ Read all input files. Extract:
 
 ### 2. Delivery Summary
 
+- Determine each issue's done state using the per-type definitions from `07-workflow-states.md`:
+  - **Bug** with key starting with `OCPBUGS-`: done if `status` in `{"Verified", "Closed"}`
+  - **All other types** (Story, Spike, Task, Bug with OCPEDGE/other key): done if `status` = `"Closed"`
 - `committed_sp` = `total_sp`
-- `delivered_sp` = `total_done_sp`
+- `delivered_sp` = sum of SP for issues matching their type's done state
 - `delivery_rate` = `round(delivered_sp / committed_sp × 100, 1)` — use `0` if `committed_sp = 0`
-- `spill_list`: issues where `status` NOT in `{"Done", "Closed", "Verified", "Won't Fix"}` — record: key, summary, assignee, SP
+- `spill_list`: issues NOT matching their type's done state — record: key, summary, assignee, SP
 - `total_spill_sp`: sum of SP for all issues in `spill_list`
 
 ### 3. Churn Tracking
@@ -80,7 +83,7 @@ Compute:
 
 Churn rule violation: if `net_churn_sp > 0`, flag as a violation — more SP was added than removed.
 
-If `jira_batch_get_changelogs` is unavailable or returns no changelog data, note "Churn data unavailable" and skip this section.
+If `jira_batch_get_changelogs` is unavailable or returns no changelog data, still write the full CHURN section skeleton with the `===SECTION:CHURN===` sentinel, a top-line note "Churn data unavailable", and both Added and Removed subsections showing "None".
 
 ### 4. Sprint Goal Analysis
 
@@ -162,3 +165,7 @@ After writing `{WORKDIR}/analysis.md`, read it back and confirm:
 - The CHURN section contains both Added and Removed subsections (even if "None")
 - The GOAL_ANALYSIS section contains a Result line (Fully Met / Partially Met / Not Met / N/A)
 - The ACTIONS section contains at least one numbered item
+
+Do NOT commit.
+
+Report: **DONE**, **DONE_WITH_CONCERNS**, **NEEDS_CONTEXT**, or **BLOCKED**.

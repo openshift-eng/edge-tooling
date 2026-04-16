@@ -2,7 +2,7 @@
 """Check pagination info from a raw MCP jira_search response file.
 
 Usage: python3 check-page.py <file_path>
-Output: JSON with issues_count and has_more fields.
+Output: JSON with issues_count, has_more, and (when has_more is true) next_page_token.
 """
 
 import json
@@ -40,7 +40,7 @@ def main():
     has_more = next_token is not None or count >= max_results
 
     result = {"issues_count": count, "has_more": has_more}
-    if next_token:
+    if has_more:
         result["next_page_token"] = next_token
     print(json.dumps(result))
 
