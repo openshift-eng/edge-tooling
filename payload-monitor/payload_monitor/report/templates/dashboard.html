@@ -80,8 +80,7 @@
     <div class="health-header-topos">Topology</div>
     <div class="health-header-trend" title="Compares edge job failure count in recent vs older payloads">Trend <span style="font-weight:normal;color:var(--text-muted);font-size:10px">(recent vs older)</span></div>
     <div class="health-header-timeline">
-      <span>Payload History</span>
-      <span class="time-arrow">older &#8594; newer</span>
+      <span>Payload History <span class="time-arrow">older &#8594; newer</span></span>
     </div>
   </div>
   {% for stream in report.streams %}
@@ -189,7 +188,7 @@
       <span><span style="color:var(--red)">&#9679;</span> blocking failures</span>
       <span><span style="color:var(--text-muted)">&#9679;</span> non-edge rejection</span>
     </span>
-    <span class="health-legend-note">across last {{ report.streams[0].payloads | length if report.streams else 5 }} payloads per stream</span>
+    <span class="health-legend-note">across last {{ report.streams[0].payloads | length if report.streams else 6 }} payloads per stream</span>
   </div>
 </div>
 
@@ -242,8 +241,8 @@
 
   {# Situation bar: compact horizontal summary with real context #}
   <div class="fs-situation-bar">
-    <div class="fs-situation-item {% if ns.blocking_failures > 0 %}critical{% endif %}" onclick="jumpToFailures(null,'blocking')" title="View blocking failures">
-      <span class="fs-situation-count">{{ ns.blocking_failures }}</span>
+    <div class="fs-situation-item {% if blocking_jobs_list %}critical{% endif %}" onclick="jumpToFailures(null,'blocking')" title="View blocking failures">
+      <span class="fs-situation-count">{{ blocking_jobs_list|length }}</span>
       <span class="fs-situation-label">blocking</span>
       {% if ns.rejected_payloads > 0 %}
       <span class="fs-situation-context">{{ ns.rejected_payloads }} payload{{ 's' if ns.rejected_payloads != 1 else '' }} rejected</span>
@@ -272,7 +271,7 @@
         <span style="color:var(--text-muted)">&mdash;</span>
         {% endif %}
       </div>
-      <span class="fs-situation-label">affected</span>
+      <span class="fs-situation-label">affected topologies</span>
     </div>
   </div>
 
@@ -288,28 +287,33 @@
       </div>
       <a class="fs-section-action fs-action-critical" onclick="jumpToFailures(null,'blocking')">Investigate All &#8594;</a>
     </div>
-    {# Inline list of blocking jobs — users see exactly what's broken #}
+    {# Compact blocking job summary — unique jobs with versions and top failing test #}
     <div class="fs-inline-jobs">
       {% for item in blocking_jobs_list %}
       {% set fc = failure_counts.get(item.job.name, 0) %}
-      <a class="fs-job-item" href="{{ item.job.prow_url }}" target="_blank">
-        <span class="fs-job-name">{{ item.job.name }}</span>
-        <span class="fs-job-meta">
+      {% set versions = blocking_job_versions.get(item.job.name, []) %}
+      {% set tests = blocking_job_tests.get(item.job.name, []) %}
+      <div class="fs-blocking-row">
+        <div class="fs-blocking-main">
           <span class="badge {{ item.job.topology | lower }}">{{ item.job.topology }}</span>
-          <span class="fs-job-version">{{ item.version }}</span>
-          {% if fc >= persistent_threshold %}
-          <span class="badge persistent">{{ fc }}x</span>
+          <a class="fs-blocking-name" href="#detail-{{ loop.index }}" title="Jump to failure analysis">{{ item.job.name }}</a>
+          {% if fc >= recurring_threshold %}
+          <span class="badge {% if fc >= persistent_threshold %}persistent{% else %}recurring{% endif %}">{{ fc }}x</span>
           {% endif %}
-        </span>
-      </a>
+          <span class="fs-blocking-versions">{{ versions | join(', ') }}</span>
+        </div>
+        {% if tests %}
+        <div class="fs-blocking-test">
+          <span class="fs-blocking-test-label">failing:</span>
+          <span class="fs-blocking-test-name">{{ tests[0] }}</span>
+          {% if tests | length > 1 %}
+          <span class="fs-blocking-test-more">+{{ tests | length - 1 }} more</span>
+          {% endif %}
+        </div>
+        {% endif %}
+      </div>
       {% endfor %}
     </div>
-    {% if persistent_count > 0 %}
-    <div class="fs-section-footer">
-      <span class="badge persistent" style="cursor:default">{{ persistent_count }} persistent</span>
-      <span>failing in {{ persistent_threshold }}+ payloads — likely real regressions, not flakes</span>
-    </div>
-    {% endif %}
     {# AI analysis sub-items injected here by JS #}
     <div id="ai-highlights-container"></div>
   </div>
@@ -319,28 +323,25 @@
   {% if ns.informing_failures > 0 %}
   <div class="fs-section fs-section-warning">
     <div class="fs-section-header">
-      <div class="fs-severity-icon fs-icon-warning" title="Warning — monitor for escalation">&#9650;</div>
+      <div class="fs-severity-icon fs-icon-warning" title="Warning — monitor for stability">&#9650;</div>
       <div class="fs-section-content">
-        <div class="fs-priority-label">Warning — Monitor for Escalation</div>
-        <div class="fs-section-title">{{ ns.informing_failures }} Informing Failure{{ 's' if ns.informing_failures != 1 else '' }}</div>
-        <div class="fs-section-desc">across {{ ns.total_payloads }} payload{{ 's' if ns.total_payloads != 1 else '' }} — not blocking yet, may escalate</div>
+        <div class="fs-priority-label">Warning — Monitor for Stability</div>
+        <div class="fs-section-title">{{ ns.informing_failures }} Informing Job Failure{{ 's' if ns.informing_failures != 1 else '' }}</div>
+        <div class="fs-section-desc">across {{ ns.total_payloads }} payload{{ 's' if ns.total_payloads != 1 else '' }} — not blocking</div>
       </div>
-      <a class="fs-section-action" onclick="jumpToFailures(null,'informing')">View All &#8594;</a>
+      <a class="fs-section-action fs-action-warning" onclick="jumpToFailures(null,'informing')">View All &#8594;</a>
     </div>
     {% if escalation_risks %}
     <div class="fs-escalation-list">
-      <div class="fs-escalation-heading">
-        <span class="badge escalation-risk" style="cursor:default">Unstable</span>
-        <span>{{ escalation_risks|length }} informing job{{ 's' if escalation_risks|length != 1 else '' }} failing 3+ consecutive payloads</span>
-      </div>
       {% for er in escalation_risks %}
       <a class="fs-escalation-item" {% if er.sippy_url %}href="{{ er.sippy_url }}" target="_blank"{% endif %}>
-        <span class="fs-escalation-name">{{ er.job_name }}</span>
-        <span class="fs-escalation-meta">
+        <span class="fs-escalation-left">
+          <span class="fs-escalation-name">{{ er.job_name }}</span>
+          <span class="badge escalation-risk">Unstable</span>
           <span class="badge {{ er.topology | lower }}">{{ er.topology }}</span>
           <span class="fs-job-version">{{ er.version }}</span>
-          <span class="fs-escalation-streak">{{ er.consecutive_failures }}x consecutive</span>
         </span>
+        <span class="fs-escalation-streak">{{ er.consecutive_failures }}x consecutive</span>
       </a>
       {% endfor %}
     </div>
@@ -374,54 +375,20 @@
   </div>
   {% endif %}
 
-  {# Next Steps: priority-ordered checklist so users know exactly what to do #}
-  <div class="fs-next-steps">
-    <div class="fs-next-steps-title">Next Steps</div>
-    <ol class="fs-next-steps-list">
-      {% if ns.blocking_failures > 0 %}
-      <li class="fs-step fs-step-critical">
-        <span class="fs-step-priority">P0</span>
-        <span class="fs-step-text">Investigate <strong>{{ blocking_jobs_list|length }} blocking job{{ 's' if blocking_jobs_list|length != 1 else '' }}</strong> — {{ ns.rejected_payloads }} payload{{ 's' if ns.rejected_payloads != 1 else '' }} cannot accept until resolved</span>
-        <a class="fs-step-action" onclick="jumpToFailures(null,'blocking')">Go &#8594;</a>
-      </li>
-      {% endif %}
-      {% if escalation_risks %}
-      <li class="fs-step fs-step-warning">
-        <span class="fs-step-priority">P1</span>
-        <span class="fs-step-text">Monitor <strong>{{ escalation_risks|length }} unstable job{{ 's' if escalation_risks|length != 1 else '' }}</strong> — informing jobs consistently failing</span>
-        <a class="fs-step-action" onclick="jumpToFailures(null,'informing')">Go &#8594;</a>
-      </li>
-      {% endif %}
-      {% if ns.regression_count > 0 %}
-      <li class="fs-step fs-step-info">
-        <span class="fs-step-priority">P2</span>
-        <span class="fs-step-text">Triage <strong>{{ ns.regression_count }} Sippy regression{{ 's' if ns.regression_count != 1 else '' }}</strong> — pass rate drops detected</span>
-        <a class="fs-step-action" href="#section-sippy-regressions">Go &#8594;</a>
-      </li>
-      {% endif %}
-      {% if ns.component_regression_count > 0 %}
-      <li class="fs-step fs-step-info">
-        <span class="fs-step-priority">P2</span>
-        <span class="fs-step-text">Review <strong>{{ ns.component_regression_count }} component regression{{ 's' if ns.component_regression_count != 1 else '' }}</strong> — edge underperforming vs HA</span>
-        <a class="fs-step-action" href="#section-component-readiness">Go &#8594;</a>
-      </li>
-      {% endif %}
-      {% if report.suggested_bugs %}
-      <li class="fs-step">
-        <span class="fs-step-priority">P3</span>
-        <span class="fs-step-text">File <strong>{{ report.suggested_bugs|length }} suggested bug{{ 's' if report.suggested_bugs|length != 1 else '' }}</strong> in JIRA — failing jobs with no existing tracker</span>
-        <a class="fs-step-action" href="#section-suggested-bugs">Go &#8594;</a>
-      </li>
-      {% endif %}
-    </ol>
-  </div>
-
   {# Hidden AI container when no blocking failures #}
   {% if ns.blocking_failures == 0 %}
   <div id="ai-highlights-container" style="display:none"></div>
   {% endif %}
 
   {% endif %}
+</div>
+
+{# Badge legend — explains recurring/persistent/unstable badges used in tables below #}
+<div class="badge-legend">
+  <span class="badge-legend-title">Badge Legend</span>
+  <span class="badge-legend-item"><span class="badge recurring" style="cursor:default">Recurring</span> job failed in {{ recurring_threshold }}+ payloads</span>
+  <span class="badge-legend-item"><span class="badge persistent" style="cursor:default">Persistent</span> job failed in {{ persistent_threshold }}+ payloads — likely not a flake</span>
+  <span class="badge-legend-item"><span class="badge escalation-risk" style="cursor:default">Unstable</span> informing job failing 3+ consecutive payloads</span>
 </div>
 
 <!-- Filters -->
@@ -494,12 +461,6 @@
 {% if all_failing | length > 5 %}
 <button class="expand-btn" id="expand-jobs-btn" onclick="expandSection('jobs')">Show all {{ all_failing | length }} failing jobs</button>
 {% endif %}
-<div class="badge-legend">
-  <span class="badge-legend-title">Legend:</span>
-  <span><span class="badge recurring" style="cursor:default">Recurring (2x)</span> failed in 2 payloads</span>
-  <span><span class="badge persistent" style="cursor:default">Persistent (3x)</span> failed in 3+ payloads — likely not a flake</span>
-  <span><span class="badge escalation-risk" style="cursor:default">Unstable</span> informing job failing 3+ consecutive payloads</span>
-</div>
 {% else %}
 <div class="empty-state">No failing edge jobs found across monitored payloads.</div>
 {% endif %}

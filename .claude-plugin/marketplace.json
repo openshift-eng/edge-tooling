@@ -17,6 +17,12 @@
       "source": "./plugins/microshift-ci",
       "description": "MicroShift CI Automation",
       "version": "1.0.0"
+    },
+    {
+      "name": "ee-payload-monitor",
+      "source": "./plugins/ee-payload-monitor",
+      "description": "Edge Enablement Payload Monitor — monitor OpenShift nightly payloads for edge topology (SNO/TNA/TNF) failures with AI-enriched analysis",
+      "version": "1.0.0"
     }
   ]
 }

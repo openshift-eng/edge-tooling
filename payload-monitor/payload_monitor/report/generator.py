@@ -62,8 +62,33 @@ def _build_template_context(report: MonitorReport) -> dict:
                 if job.failing_tests:
                     failure_details.append(item)
 
-    # Sort blocking jobs first
-    all_failing.sort(key=lambda x: (0 if x["job"].job_type == JobType.BLOCKING else 1))
+    # Sort: blocking first, then escalation-risk (unstable), then the rest
+    escalation_risk_names = {er.job_name for er in report.escalation_risks}
+
+    def _fail_sort_key(x):
+        if x["job"].job_type == JobType.BLOCKING:
+            return 0
+        if x["job"].name in escalation_risk_names:
+            return 1
+        return 2
+
+    all_failing.sort(key=_fail_sort_key)
+
+    # Build blocking job summaries: versions, test names, topology per unique job
+    blocking_job_versions: dict[str, list[str]] = {}
+    blocking_job_tests: dict[str, list[str]] = {}
+    for item in all_failing:
+        if item["job"].job_type == JobType.BLOCKING:
+            name = item["job"].name
+            ver = item["version"]
+            if name not in blocking_job_versions:
+                blocking_job_versions[name] = []
+                blocking_job_tests[name] = []
+            if ver not in blocking_job_versions[name]:
+                blocking_job_versions[name].append(ver)
+            for ft in item["job"].failing_tests:
+                if ft.name not in blocking_job_tests[name]:
+                    blocking_job_tests[name].append(ft.name)
 
     # Collect all regressions
     all_regressions = []
@@ -125,6 +150,8 @@ def _build_template_context(report: MonitorReport) -> dict:
         "cross_topology": report.cross_topology,
         "jira_matches_by_job": report.jira_matches,
         "suggested_bugs_by_job": {b.job_name: b for b in report.suggested_bugs},
+        "blocking_job_versions": blocking_job_versions,
+        "blocking_job_tests": blocking_job_tests,
     }
 
 

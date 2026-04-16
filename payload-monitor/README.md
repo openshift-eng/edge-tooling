@@ -86,7 +86,7 @@ Configuration is hardcoded in `payload_monitor/config.py`. The defaults are:
 | Setting | Default | Override |
 |---------|---------|----------|
 | Versions | 4.18, 4.19, 4.20, 4.21, 4.22, 4.23, 5.0 | `--versions` CLI flag |
-| Payloads per stream | 5 | — |
+| Payloads per stream | 6 | — |
 | JIRA project | OCPBUGS | — |
 | Report directory | `./reports` | `--output` CLI flag |
 | Recurring threshold | 2 payloads | — |

@@ -1,0 +1,10 @@
+{
+  "name": "ee-payload-monitor",
+  "description": "Edge Enablement Payload Monitor — monitor OpenShift nightly payloads for edge topology (SNO/TNA/TNF) failures with AI-enriched analysis",
+  "version": "1.0.0",
+  "author": {
+    "name": "vimauro"
+  },
+  "homepage": "https://github.com/openshift-eng/edge-tooling",
+  "license": "Apache-2.0"
+}
