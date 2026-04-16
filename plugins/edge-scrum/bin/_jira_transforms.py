@@ -57,7 +57,7 @@ def extract_sp(issue, issue_type=None):
     if isinstance(raw, dict):
         val = raw.get("value")
         return int(val) if val is not None else 0
-    return int(float(raw))
+    return int(float(raw))  # truncates fractional SP intentionally
 
 
 def extract_epic_key(issue):
@@ -227,12 +227,8 @@ def has_acceptance_criteria(description):
 
 
 def _check_ac_text(text):
-    return (
-        "Acceptance Criteria" in text
-        or "acceptance criteria" in text
-        or "AC:" in text
-        or "ac:" in text
-    )
+    lower = text.lower()
+    return "acceptance criteria" in lower or "ac:" in lower
 
 
 def _check_adf_headings(node):

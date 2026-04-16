@@ -49,7 +49,7 @@ for f in \
     "$PLUGIN_DIR/README.md" \
     "$PLUGIN_DIR/skills/create-epic/SKILL.md" \
     "$PLUGIN_DIR/skills/release-health/SKILL.md" \
-    "$PLUGIN_DIR/agents/release-health-analysis.md"; do
+    "$PLUGIN_DIR/skills/release-health-analysis/SKILL.md"; do
     check_no_old "$f"
     check_new "$f"
 done

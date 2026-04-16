@@ -2,3 +2,4 @@
 .mcp.json
 !plugins/**/.mcp.json
 .DS_Store
+.worktrees

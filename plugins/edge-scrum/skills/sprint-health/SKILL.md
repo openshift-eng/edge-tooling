@@ -252,7 +252,7 @@ After the sub-agent completes, read `{WORKDIR}/analysis.md` to verify it was wri
 
 ## Edge Cases
 
-- **No active sprint**: sprint-mapper selects the highest-numbered closed sprint; report proceeds normally.
+- **No active sprint**: `transform-sprints.py` selects the highest-numbered closed sprint; report proceeds normally.
 - **Empty sprint**: warn user, proceed — analysis sections will indicate no issues.
 - **No sprint goal**: all three modes handle null goal gracefully — retro and mid-sprint note "No sprint goal set."
 - **Unrostered assignees**: capacity analyzer lists them under "Unrostered assignees."

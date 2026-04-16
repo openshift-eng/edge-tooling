@@ -70,7 +70,7 @@ Update the `features_spike_on_epic` count in memory (do not rewrite `spikes.json
 
 ### 3. Fetch Child Issues
 
-Split `epic_keys_csv` from `epics.json` into batches of ~20. For each batch, paginate with `startAt=0`, `limit=50` until all results are fetched:
+Split `epic_keys_csv` from `epics.json` into batches of ~20. For each batch, paginate with `page_token`, `limit=50` until all results are fetched:
 
 ```jql
 project in (OCPEDGE, USHIFT, OCPBUGS) AND "Epic Link" in ({batch_csv}) ORDER BY priority ASC

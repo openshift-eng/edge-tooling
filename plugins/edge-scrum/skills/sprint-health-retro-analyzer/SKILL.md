@@ -157,7 +157,7 @@ Write structured markdown to `{WORKDIR}/analysis.md` using this exact structure.
 ## Verify
 
 After writing `{WORKDIR}/analysis.md`, read it back and confirm:
-- All five sentinel lines are present: `===SECTION:DELIVERY===`, `===SECTION:CHURN===`, `===SECTION:GOAL_ANALYSIS===`, `===SECTION:ACTIONS===` (note: HEADER section is NOT written by this agent — SKILL.md generates the header)
+- All four sentinel lines are present: `===SECTION:DELIVERY===`, `===SECTION:CHURN===`, `===SECTION:GOAL_ANALYSIS===`, `===SECTION:ACTIONS===` (note: HEADER section is NOT written by this agent — SKILL.md generates the header)
 - The DELIVERY section contains the summary table and spill list
 - The CHURN section contains both Added and Removed subsections (even if "None")
 - The GOAL_ANALYSIS section contains a Result line (Fully Met / Partially Met / Not Met / N/A)

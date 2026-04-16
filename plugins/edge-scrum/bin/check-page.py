@@ -26,6 +26,7 @@ def main():
         issues = data.get("issues", [])
         count = len(issues)
     else:
+        print(f"Warning: unexpected MCP response type: {type(data).__name__}", file=sys.stderr)
         count = 0
 
     max_results = 50

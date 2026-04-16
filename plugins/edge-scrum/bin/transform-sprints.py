@@ -136,7 +136,7 @@ def main():
                 s for s in range_sprints if s["state"] in ("active", "future")
             ]
             rh["remaining_sprint_count"] = len(remaining)
-            rh["sprints_until_branch_cut"] = len(remaining)
+            rh["sprints_until_branch_cut"] = len(remaining)  # alias for release-health consumers
 
             if args.total_dev_sprints and args.total_dev_sprints > 0:
                 rh["expected_dev_completion_pct"] = round(
