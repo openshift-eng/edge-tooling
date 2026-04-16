@@ -2,10 +2,30 @@
 
 Automated monitoring tool for OpenShift nightly payload health across edge topologies (SNO, TNA, TNF). Fetches data from the amd64 release controller, Sippy Component Readiness, Prow CI, and JIRA to produce an interactive HTML dashboard.
 
+## Installation
+
+Install via Claude Code's plugin system:
+
+```text
+/plugin marketplace add openshift-eng/edge-tooling
+/plugin install edge-ci
+```
+
+Or invoke directly with the skill:
+
+```text
+/ee-payload-monitor [--versions 4.18,4.19] [--skip-prow] [--with-timing]
+```
+
 ## Quick Start
+
+The primary invocation method is the `/ee-payload-monitor` skill, which runs the Python tool and adds AI-powered root cause analysis for blocking job failures.
+
+To run the Python tool directly:
 
 ```bash
 # Install dependencies
+cd plugins/edge-ci
 pip install -r requirements.txt
 
 # Run with defaults (monitors versions 4.18 through 5.0)
@@ -61,9 +81,9 @@ python -m payload_monitor --merge-analysis reports/analysis-2026-03-25.json --ou
 
 ### Usage
 
-**Standalone CLI**: Run `python -m payload_monitor` to collect data and generate an HTML dashboard.
+**Claude Code skill** (recommended): Run `/ee-payload-monitor` to collect data, generate an HTML dashboard, and get AI-powered root cause analysis for blocking job failures using marketplace CI skills from [ai-helpers](https://github.com/openshift-eng/ai-helpers).
 
-**Claude Code skill**: Run `/ee-payload-monitor` to also get AI-powered root cause analysis for blocking job failures, using marketplace CI skills from [ai-helpers](https://github.com/openshift-eng/ai-helpers).
+**Standalone CLI**: Run `python -m payload_monitor` from the `plugins/edge-ci` directory to collect data and generate an HTML dashboard without AI analysis.
 
 ### Performance and Token Efficiency
 
@@ -150,7 +170,7 @@ These patterns are defined in `payload_monitor/config.py`.
 The generated HTML report is a single self-contained file (no external dependencies) with:
 
 - **Health overview**: Per-version status badges, blocking/informing counts, topology badges, trend indicators, and payload acceptance timeline
-- **Findings summary**: Priority-ordered action items (P1–P4) with AI root cause highlights and inline action chips
+- **Findings summary**: Priority-ordered action items (P1-P4) with AI root cause highlights and inline action chips
 - **Failing edge jobs**: Blocking and informing job failures across SNO/TNA/TNF topologies with sortable, filterable tables
 - **Failure analysis**: Error messages, failing tests, and AI root cause analysis (when enriched via Claude skill)
 - **Sippy job regressions**: Edge jobs with significant pass rate drops compared to previous periods
@@ -162,6 +182,7 @@ The generated HTML report is a single self-contained file (no external dependenc
 
 ```bash
 # Install dependencies
+cd plugins/edge-ci
 pip install -r requirements.txt
 
 # Run with verbose output
@@ -176,7 +197,7 @@ Tests use [pytest](https://docs.pytest.org/) and live in the `tests/` directory.
 # Install test dependencies
 pip install pytest
 
-# Run all tests
+# Run all tests (from plugins/edge-ci/)
 python -m pytest tests/
 
 # Run with verbose output

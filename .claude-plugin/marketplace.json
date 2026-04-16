@@ -7,6 +7,18 @@
   },
   "plugins": [
     {
+      "name": "challenge",
+      "source": "./plugins/challenge",
+      "description": "Adversarial hypothesis reviewer — systematically attacks theories and root cause analyses to find weaknesses before they find you",
+      "version": "1.0.0"
+    },
+    {
+      "name": "edge-scrum",
+      "source": "./plugins/edge-scrum",
+      "description": "Agents, skills, and workflows relevant to scrum process management for the OpenShift Edge Team",
+      "version": "1.0.0"
+    },
+    {
       "name": "hello-world",
       "source": "./plugins/hello-world",
       "description": "A simple hello-world plugin demonstrating the marketplace plugin structure",
@@ -25,27 +37,21 @@
       "version": "1.0.0"
     },
     {
-      "name": "edge-scrum",
-      "source": "./plugins/edge-scrum",
-      "description": "Agents, skills, and workflows relevant to scrum process management for the OpenShift Edge Team",
-      "version": "1.0.0"
-    },
-    {
       "name": "pr-review",
       "source": "./plugins/pr-review",
       "description": "Post-review utilities for PR workflows — vet and filter findings from automated reviews",
       "version": "1.0.0"
     },
     {
-      "name": "challenge",
-      "source": "./plugins/challenge",
-      "description": "Adversarial hypothesis reviewer — systematically attacks theories and root cause analyses to find weaknesses before they find you",
-      "version": "1.0.0"
-    },
-    {
       "name": "two-node",
       "source": "./plugins/two-node",
       "description": "Two-node topology (TNA/TNF) workflow automation — RHEL verification, Jira integration, and more",
+      "version": "1.0.0"
+    },
+    {
+      "name": "edge-ci",
+      "source": "./plugins/edge-ci",
+      "description": "Edge Enablement CI monitoring — nightly payload health for SNO/TNA/TNF topologies with AI-enriched failure analysis",
       "version": "1.0.0"
     }
   ]

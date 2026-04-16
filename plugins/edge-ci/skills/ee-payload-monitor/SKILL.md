@@ -59,10 +59,10 @@ Parse `$ARGUMENTS` to determine options:
 
 ### Step 2: Install Prerequisites (if needed)
 
-The tool uses a virtual environment at `payload-monitor/.venv`. Create it and install dependencies if not already present:
+The tool uses a virtual environment at `${PLUGIN_DIR}/.venv`. Create it and install dependencies if not already present:
 
 ```bash
-cd payload-monitor && (test -d .venv || python3 -m venv .venv) && .venv/bin/python -c "import requests, jinja2, click" 2>/dev/null || .venv/bin/pip install -r requirements.txt
+cd ${PLUGIN_DIR} && (test -d .venv || python3 -m venv .venv) && .venv/bin/python -c "import requests, jinja2, click" 2>/dev/null || .venv/bin/pip install -r requirements.txt
 ```
 
 This avoids re-creating the venv or re-running `pip install` on every invocation when the environment is already set up.
@@ -72,7 +72,7 @@ This avoids re-creating the venv or re-running `pip install` on every invocation
 Run the payload monitor Python tool to collect data and generate the base report:
 
 ```bash
-cd payload-monitor && .venv/bin/python -m payload_monitor --output reports/report-$(date +%Y-%m-%d).html [OPTIONS]
+cd ${PLUGIN_DIR} && .venv/bin/python -m payload_monitor --output reports/report-$(date +%Y-%m-%d).html [OPTIONS]
 ```
 
 Pass through any relevant flags (`--versions`, `--skip-prow`, `--skip-sippy`, `--with-timing`).
@@ -179,7 +179,7 @@ This file is intentionally small — it contains only the AI analysis results, n
 Patch the analysis directly into the existing HTML report. Use the actual report path from Step 3:
 
 ```bash
-cd payload-monitor && .venv/bin/python -m payload_monitor \
+cd ${PLUGIN_DIR} && .venv/bin/python -m payload_monitor \
   --merge-analysis reports/<actual-analysis>.json \
   --output reports/<actual-report>.html
 ```
@@ -193,7 +193,7 @@ If there were no blocking failures (no analysis file), skip this step entirely �
 After successfully patching the analysis into the HTML report, delete the intermediate analysis JSON file:
 
 ```bash
-rm payload-monitor/reports/<actual-analysis>.json
+rm ${PLUGIN_DIR}/reports/<actual-analysis>.json
 ```
 
 This file has served its purpose — the analysis is now embedded in the HTML report.
@@ -205,7 +205,7 @@ Do NOT duplicate the report data or findings summary — the HTML dashboard alre
 ```
 ## Edge Enablement Payload Monitor Report Generated
 
-Report: `payload-monitor/reports/report-{date}.html`
+Report: `${PLUGIN_DIR}/reports/report-{date}.html`
 
 Analyzed {N} blocking job failure(s) with AI root cause analysis.
 Open the HTML report for the full interactive dashboard with findings summary, suggested actions, and detailed analysis.
@@ -222,7 +222,7 @@ Offer follow-up actions the user can take from this session:
 
 ## Important Notes
 
-- The Python tool must be run from the `payload-monitor/` directory
+- The Python tool must be run from the `${PLUGIN_DIR}/` directory
 - Dependencies are checked and installed automatically in Step 2
 - JIRA features require a `JIRA_TOKEN` environment variable with **read-only** permissions — the tool only searches for existing bugs, never creates or modifies issues
 - Prow artifact fetching requires `gsutil` (Google Cloud SDK)
