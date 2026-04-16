@@ -376,25 +376,11 @@ a:hover { text-decoration: underline; }
   color: var(--text-muted);
   margin-top: 2px;
 }
-.fs-section-detail {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-  font-size: 12px;
-  color: var(--text-muted);
-  padding: 6px 10px;
-  background: rgba(255,255,255,0.03);
-  border-radius: 6px;
-}
-
 /* Priority-graduated section sizing */
 .fs-section-critical .fs-section-header { padding: 16px 18px; }
 .fs-section-critical .fs-severity-icon { width: 36px; height: 36px; font-size: 18px; }
 .fs-section-critical .fs-section-title { font-size: 17px; font-weight: 700; }
 .fs-section-critical .fs-section-desc { font-size: 13px; }
-.fs-section-critical .fs-section-detail { background: rgba(248,81,73,0.06); border: 1px solid rgba(248,81,73,0.15); }
-
 .fs-section-warning .fs-section-title { font-size: 16px; }
 
 .fs-section-info .fs-section-header { padding: 12px 16px; }
@@ -475,29 +461,10 @@ a:hover { text-decoration: underline; }
   font-weight: 500;
 }
 
-/* Section footer (persistent count) */
-.fs-section-footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 18px;
-  border-top: 1px solid rgba(248,81,73,0.15);
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
 /* Escalation risk list */
 .fs-escalation-list {
   border-top: 1px solid rgba(210,153,34,0.2);
   padding: 8px 18px 4px 18px;
-}
-.fs-escalation-heading {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-bottom: 6px;
 }
 .fs-escalation-item {
   display: flex;
@@ -531,69 +498,6 @@ a:hover { text-decoration: underline; }
   color: var(--orange);
   font-weight: 600;
 }
-
-/* Next Steps checklist */
-.fs-next-steps {
-  margin-top: 16px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px 16px;
-}
-.fs-next-steps-title {
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: var(--text-muted);
-  margin-bottom: 8px;
-}
-.fs-next-steps-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  counter-reset: none;
-}
-.fs-step {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 8px;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-}
-.fs-step:last-child { border-bottom: none; }
-.fs-step-priority {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  flex-shrink: 0;
-  background: rgba(139,148,158,0.15);
-  color: var(--text-muted);
-}
-.fs-step-critical .fs-step-priority { background: rgba(248,81,73,0.15); color: var(--red); }
-.fs-step-warning .fs-step-priority { background: rgba(210,153,34,0.15); color: var(--yellow); }
-.fs-step-info .fs-step-priority { background: rgba(88,166,255,0.15); color: var(--accent); }
-.fs-step-text {
-  flex: 1;
-  color: var(--text-muted);
-  min-width: 0;
-}
-.fs-step-text strong { color: var(--text); font-weight: 600; }
-.fs-step-action {
-  font-size: 12px;
-  color: var(--accent);
-  cursor: pointer;
-  flex-shrink: 0;
-  padding: 2px 8px;
-  border-radius: 4px;
-  transition: background 0.12s;
-  text-decoration: none;
-}
-.fs-step-action:hover { background: rgba(88,166,255,0.1); text-decoration: none; }
 
 .fs-section-action {
   display: inline-flex;
@@ -941,7 +845,7 @@ details pre {
   margin-right: 6px;
   font-size: 14px;
 }
-.da-field span:not(.da-label):not(.badge) {
+.da-field span:not(.da-label, .badge) {
   color: rgba(230,237,243,0.7);
   font-size: 14px;
 }
@@ -1212,10 +1116,5 @@ details pre {
   .fs-section-header { flex-direction: column; align-items: flex-start; gap: 8px; }
   .fs-section-action { align-self: flex-start; }
   .fs-section-actions { flex-direction: row; flex-wrap: wrap; }
-  .fs-job-item { padding-left: 18px; flex-wrap: wrap; }
-  .fs-job-meta { margin-left: 0; margin-top: 4px; }
   .fs-escalation-item { flex-wrap: wrap; padding-left: 0; }
-  .fs-escalation-meta { margin-left: 0; margin-top: 4px; }
-  .fs-step { flex-wrap: wrap; }
-  .fs-step-action { margin-left: auto; }
 }

@@ -27,6 +27,7 @@ from payload_monitor.report.generator import (
     _build_template_context,
     _extract_date,
     _render_analysis_card,
+    _safe_dataclass_init,
     _safe_urls,
     generate_html,
     generate_json,
@@ -445,3 +446,94 @@ class TestJiraMatchesContext:
         ctx = _build_template_context(report)
         assert "suggested_bugs_by_job" in ctx
         assert ctx["suggested_bugs_by_job"]["j2"] is suggested
+
+
+class TestJsonRoundTripNewFields:
+    def test_failure_counts_round_trip(self, tmp_path):
+        report = MonitorReport(
+            generated_at="now",
+            failure_counts={"j1": 3, "j2": 1},
+        )
+        out = tmp_path / "report.json"
+        generate_json(report, out)
+        loaded = load_json(out)
+        assert loaded.failure_counts == {"j1": 3, "j2": 1}
+
+    def test_jira_matches_round_trip(self, tmp_path):
+        bug = JiraBug(key="OCPBUGS-1", summary="b", status="New")
+        report = MonitorReport(
+            generated_at="now",
+            jira_matches={"j1": [bug]},
+        )
+        out = tmp_path / "report.json"
+        generate_json(report, out)
+        loaded = load_json(out)
+        assert "j1" in loaded.jira_matches
+        assert loaded.jira_matches["j1"][0].key == "OCPBUGS-1"
+
+    def test_escalation_risks_round_trip(self, tmp_path):
+        er = EscalationRisk(
+            job_name="j1", topology="SNO", version="4.19",
+            consecutive_failures=3, sippy_url="https://sippy/j1",
+        )
+        report = MonitorReport(generated_at="now", escalation_risks=[er])
+        out = tmp_path / "report.json"
+        generate_json(report, out)
+        loaded = load_json(out)
+        assert len(loaded.escalation_risks) == 1
+        assert loaded.escalation_risks[0].job_name == "j1"
+        assert loaded.escalation_risks[0].consecutive_failures == 3
+
+    def test_cross_topology_round_trip(self, tmp_path):
+        report = MonitorReport(
+            generated_at="now",
+            cross_topology={"j1": ["TNA"], "j2": ["SNO", "TNF"]},
+        )
+        out = tmp_path / "report.json"
+        generate_json(report, out)
+        loaded = load_json(out)
+        assert loaded.cross_topology == {"j1": ["TNA"], "j2": ["SNO", "TNF"]}
+
+    def test_thresholds_round_trip(self, tmp_path):
+        report = MonitorReport(
+            generated_at="now",
+            recurring_threshold=5,
+            persistent_threshold=10,
+        )
+        out = tmp_path / "report.json"
+        generate_json(report, out)
+        loaded = load_json(out)
+        assert loaded.recurring_threshold == 5
+        assert loaded.persistent_threshold == 10
+
+
+class TestSafeDataclassInit:
+    def test_ignores_unknown_keys(self):
+        result = _safe_dataclass_init(JiraBug, {
+            "key": "X-1", "summary": "s", "status": "New",
+            "unknown_field": "should be ignored",
+        })
+        assert result.key == "X-1"
+        assert not hasattr(result, "unknown_field")
+
+    def test_uses_defaults_for_missing_optional(self):
+        result = _safe_dataclass_init(JiraBug, {
+            "key": "X-1", "summary": "s", "status": "New",
+        })
+        assert result.assignee == ""
+
+
+class TestBlockingJobFirstIdx:
+    def test_blocking_job_first_idx(self):
+        blocking = JobRun("b1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")
+        informing = JobRun("i1", "url", JobResult.FAILURE, JobType.INFORMING, "SNO")
+        blocking2 = JobRun("b1", "url2", JobResult.FAILURE, JobType.BLOCKING, "SNO")
+        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED,
+                          jobs=[informing, blocking, blocking2])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        # blocking is sorted first, so b1 should be at index 1
+        assert "blocking_job_first_idx" in ctx
+        assert "b1" in ctx["blocking_job_first_idx"]

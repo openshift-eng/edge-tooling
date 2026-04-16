@@ -23,6 +23,7 @@ from payload_monitor.models import (
     Payload,
     PayloadStatus,
     StreamReport,
+    SuggestedBug,
 )
 
 
@@ -100,7 +101,7 @@ class TestFailureCountsOnReport:
     @patch("payload_monitor.analyzer.jira_has_auth", return_value=False)
     @patch("payload_monitor.analyzer.jira_collector")
     def test_failure_counts_stored_on_report(self, mock_jira, mock_auth):
-        mock_jira.search_bugs_for_jobs.return_value = {}
+        mock_jira.search_bugs_for_jobs.return_value = ({}, [])
         j1 = _make_job("job-a")
         j2 = _make_job("job-a")
         j3 = _make_job("job-b")
@@ -117,7 +118,7 @@ class TestFailureCountsOnReport:
     @patch("payload_monitor.analyzer.jira_has_auth", return_value=False)
     @patch("payload_monitor.analyzer.jira_collector")
     def test_failure_counts_empty_when_no_failures(self, mock_jira, mock_auth):
-        mock_jira.search_bugs_for_jobs.return_value = {}
+        mock_jira.search_bugs_for_jobs.return_value = ({}, [])
         job = _make_job("j1", result=JobResult.SUCCESS)
         report = MonitorReport(
             generated_at="now",
@@ -133,7 +134,7 @@ class TestAnalyze:
     @patch("payload_monitor.analyzer.jira_has_auth", return_value=False)
     @patch("payload_monitor.analyzer.jira_collector")
     def test_no_jira_auth(self, mock_jira, mock_auth):
-        mock_jira.search_bugs_for_jobs.return_value = {}
+        mock_jira.search_bugs_for_jobs.return_value = ({}, [])
         report = MonitorReport(
             generated_at="now",
             streams=[StreamReport("s", "4.19", payloads=[
@@ -148,9 +149,10 @@ class TestAnalyze:
     def test_analyze_with_jira(self, mock_jira, mock_auth):
         from payload_monitor.models import JiraBug, SuggestedBug
 
-        mock_jira.search_bugs_for_jobs.return_value = {
-            "j1": [JiraBug(key="OCPBUGS-1", summary="bug", status="New")]
-        }
+        mock_jira.search_bugs_for_jobs.return_value = (
+            {"j1": [JiraBug(key="OCPBUGS-1", summary="bug", status="New")]},
+            [],
+        )
         mock_jira.suggest_bug.return_value = SuggestedBug(
             title="t", description="d", job_name="j2", topology="SNO",
         )
@@ -179,7 +181,7 @@ class TestAnalyze:
             "j1": [JiraBug(key="OCPBUGS-10", summary="bug1", status="Open")],
             "j2": [JiraBug(key="OCPBUGS-11", summary="bug2", status="Closed")],
         }
-        mock_jira.search_bugs_for_jobs.return_value = jira_matches
+        mock_jira.search_bugs_for_jobs.return_value = (jira_matches, [])
 
         j1 = _make_job("j1")
         j2 = _make_job("j2")
@@ -199,7 +201,7 @@ class TestAnalyze:
     @patch("payload_monitor.analyzer.jira_has_auth", return_value=True)
     @patch("payload_monitor.analyzer.jira_collector")
     def test_no_failures(self, mock_jira, mock_auth):
-        mock_jira.search_bugs_for_jobs.return_value = {}
+        mock_jira.search_bugs_for_jobs.return_value = ({}, [])
         job = _make_job("j1", result=JobResult.SUCCESS)
         report = MonitorReport(
             generated_at="now",
@@ -221,7 +223,8 @@ def _make_informing_job(name, result=JobResult.FAILURE, topology="SNO"):
 class TestFindEscalationRisks:
     def test_consecutive(self):
         """Informing job failing in last 3 consecutive payloads -> 1 EscalationRisk."""
-        j = lambda r: _make_informing_job("j1", result=r)
+        def j(r):
+            return _make_informing_job("j1", result=r)
         # 5 payloads, oldest first; j1 passes in first 2, fails in last 3
         payloads = [
             _make_payload("t1", [j(JobResult.SUCCESS)]),
@@ -373,3 +376,112 @@ class TestCorrelateCrossTopology:
 
         cross = _correlate_cross_topology([stream], config)
         assert cross == {}
+
+
+class TestAbsentJobBreaksStreak:
+    def test_absent_job_breaks_streak(self):
+        """Job absent from a payload should break the consecutive failure streak."""
+        # 5 payloads, oldest first; j1 present in t1-t3 (fail), absent in t4, present in t5 (fail)
+        payloads = [
+            _make_payload("t1", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+            _make_payload("t2", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+            _make_payload("t3", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+            _make_payload("t4", []),  # j1 absent
+            _make_payload("t5", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+        ]
+        stream = StreamReport("s", "4.19", payloads=payloads)
+
+        risks = _find_escalation_risks([stream], Config())
+        # Newest-first: t5(fail), t4(absent) -> streak breaks at 1 -> below threshold
+        assert len(risks) == 0
+
+
+class TestAnalyzeEndToEnd:
+    @patch("payload_monitor.analyzer.jira_has_auth", return_value=False)
+    @patch("payload_monitor.analyzer.jira_collector")
+    def test_escalation_risks_populated(self, mock_jira, mock_auth):
+        """analyze() should populate escalation_risks on the report."""
+        mock_jira.search_bugs_for_jobs.return_value = ({}, [])
+
+        # 3 consecutive informing failures (threshold=3)
+        payloads = [
+            _make_payload("t1", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+            _make_payload("t2", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+            _make_payload("t3", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+        ]
+        stream = StreamReport("s", "4.19", payloads=payloads)
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        analyze(report, Config())
+
+        assert len(report.escalation_risks) == 1
+        assert report.escalation_risks[0].job_name == "j1"
+
+    @patch("payload_monitor.analyzer.jira_has_auth", return_value=False)
+    @patch("payload_monitor.analyzer.jira_collector")
+    def test_cross_topology_populated(self, mock_jira, mock_auth):
+        """analyze() should populate cross_topology on the report."""
+        mock_jira.search_bugs_for_jobs.return_value = ({}, [])
+
+        sno_job = _make_job(
+            "periodic-ci-openshift-release-master-nightly-4.19-e2e-metal-single-node-live-iso",
+            topology="SNO",
+        )
+        tna_job = _make_job(
+            "periodic-ci-openshift-release-master-nightly-4.19-e2e-metal-arbiter-live-iso",
+            topology="TNA",
+        )
+        payloads = [_make_payload("t1", [sno_job, tna_job])]
+        stream = StreamReport("s", "4.19", payloads=payloads)
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        analyze(report, Config())
+
+        assert sno_job.name in report.cross_topology
+        assert "TNA" in report.cross_topology[sno_job.name]
+
+
+class TestJiraErrorTracking:
+    @patch("payload_monitor.analyzer.jira_has_auth", return_value=True)
+    @patch("payload_monitor.analyzer.jira_collector")
+    def test_jira_errors_stored_on_report(self, mock_jira, mock_auth):
+        """JIRA search errors should be stored on the report."""
+        mock_jira.search_bugs_for_jobs.return_value = (
+            {},
+            ["JIRA search failed for j1: Connection refused"],
+        )
+        mock_jira.suggest_bug.return_value = SuggestedBug(
+            title="t", description="d", job_name="j1", topology="SNO",
+        )
+
+        report = MonitorReport(
+            generated_at="now",
+            streams=[StreamReport("s", "4.19", payloads=[
+                _make_payload("t1", [_make_job("j1")]),
+            ])],
+        )
+        analyze(report, Config())
+
+        assert len(report.jira_errors) == 1
+        assert "j1" in report.jira_errors[0]
+
+
+class TestTnfNormalization:
+    def test_tnf_fencing_pattern(self):
+        """TNF job with 'fencing' pattern should be normalized."""
+        config = Config()
+        result = _normalize_job_name(
+            "periodic-ci-openshift-release-master-nightly-4.19-e2e-metal-fencing-live-iso",
+            config,
+        )
+        assert "__TOPO__" in result
+        assert "fencing" not in result
+
+    def test_case_insensitive_normalization(self):
+        """Normalization should be case-insensitive."""
+        config = Config()
+        result = _normalize_job_name(
+            "periodic-ci-openshift-release-master-nightly-4.19-e2e-metal-SNO-live-iso",
+            config,
+        )
+        assert "__TOPO__" in result

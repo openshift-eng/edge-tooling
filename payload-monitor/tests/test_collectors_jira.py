@@ -80,10 +80,11 @@ class TestSearchBugs:
             assert jira.search_bugs("job", config) == []
 
     @patch.object(jira, "_session")
-    def test_http_error_returns_empty(self, mock_session, config):
+    def test_http_error_raises(self, mock_session, config):
         with patch.dict(os.environ, {"JIRA_TOKEN": "tok"}):
             mock_session.get.side_effect = requests.RequestException("fail")
-            assert jira.search_bugs("job", config) == []
+            with pytest.raises(requests.RequestException):
+                jira.search_bugs("job", config)
 
     @patch.object(jira, "_session")
     def test_handles_null_assignee(self, mock_session, config):
@@ -114,7 +115,9 @@ class TestSearchBugsForJobs:
     def test_no_auth(self, config):
         with patch.dict(os.environ, {}, clear=True):
             jobs = [JobRun("j1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")]
-            assert jira.search_bugs_for_jobs(jobs, config) == {}
+            results, errors = jira.search_bugs_for_jobs(jobs, config)
+            assert results == {}
+            assert errors == []
 
     @patch.object(jira, "search_bugs")
     def test_returns_matches(self, mock_search, config):
@@ -125,8 +128,19 @@ class TestSearchBugsForJobs:
         ]
         with patch.dict(os.environ, {"JIRA_TOKEN": "tok"}):
             jobs = [JobRun("j1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")]
-            result = jira.search_bugs_for_jobs(jobs, config)
-            assert "j1" in result
+            results, errors = jira.search_bugs_for_jobs(jobs, config)
+            assert "j1" in results
+            assert errors == []
+
+    @patch.object(jira, "search_bugs")
+    def test_collects_errors(self, mock_search, config):
+        mock_search.side_effect = requests.RequestException("connection refused")
+        with patch.dict(os.environ, {"JIRA_TOKEN": "tok"}):
+            jobs = [JobRun("j1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")]
+            results, errors = jira.search_bugs_for_jobs(jobs, config)
+            assert results == {}
+            assert len(errors) == 1
+            assert "j1" in errors[0]
 
 
 class TestCreateBugUrl:

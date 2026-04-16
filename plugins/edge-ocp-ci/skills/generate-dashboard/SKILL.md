@@ -61,6 +61,8 @@ Parse `$ARGUMENTS` to determine options:
 
 The tool uses a virtual environment at `$TOOL_DIR/.venv`. Create it and install dependencies if not already present:
 
+PLUGIN_DIR is the directory containing this skill file (i.e., plugins/edge-ocp-ci/skills/generate-dashboard).
+
 TOOL_DIR="$PLUGIN_DIR/../../payload-monitor"
 
 ```bash
@@ -207,11 +209,13 @@ Do NOT duplicate the report data or findings summary — the HTML dashboard alre
 ```
 ## Edge OCP Payload Monitor Report Generated
 
-Report: `$TOOL_DIR/reports/report-{date}.html`
+Report: `<actual report path captured from Step 3>`
 
 Analyzed {N} blocking job failure(s) with AI root cause analysis.
 Open the HTML report for the full interactive dashboard with findings summary, suggested actions, and detailed analysis.
 ```
+
+Use the actual report file path captured from the tool's `Report:` log line in Step 3 — do NOT hardcode a date-based path.
 
 Offer follow-up actions the user can take from this session:
 - **Create JIRA bugs** for untracked failures

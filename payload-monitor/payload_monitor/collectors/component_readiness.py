@@ -137,7 +137,7 @@ def collect(versions: list[str]) -> list[ComponentRegression]:
             v, topo = futures[future]
             try:
                 all_regressions.extend(future.result())
-            except Exception as e:
-                logger.error(f"Failed to fetch component readiness for {v} ({topo}): {e}")
+            except Exception:
+                logger.exception(f"Failed to fetch component readiness for {v} ({topo})")
                 continue
     return all_regressions

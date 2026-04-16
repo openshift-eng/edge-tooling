@@ -218,11 +218,17 @@ def main(
         skip_timing=not with_timing,
         timing_report=timing_report,
         data_errors=data_errors,
+        recurring_threshold=config.recurring_threshold,
+        persistent_threshold=config.persistent_threshold,
     )
 
     # Step 4: Analyze and find JIRA matches
     logger.info("Step 4: Analyzing failures and searching JIRA...")
-    analyze(report, config)
+    try:
+        analyze(report, config)
+    except Exception as e:
+        logger.error(f"Analysis failed: {e}")
+        data_errors.append(f"Analysis: {e}")
 
     # Generate HTML report
     generate_html(report, html_path)

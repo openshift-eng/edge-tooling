@@ -208,8 +208,11 @@ class MonitorReport:
     escalation_risks: list[EscalationRisk] = field(default_factory=list)
     cross_topology: dict[str, list[str]] = field(default_factory=dict)
     data_errors: list[str] = field(default_factory=list)
+    jira_errors: list[str] = field(default_factory=list)
     failure_counts: dict[str, int] = field(default_factory=dict)
     jira_matches: dict[str, list[JiraBug]] = field(default_factory=dict)
+    recurring_threshold: int = 2
+    persistent_threshold: int = 3
 
 
 @dataclass

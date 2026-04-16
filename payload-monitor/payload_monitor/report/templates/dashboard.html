@@ -24,7 +24,7 @@
     {% else %}
     <div class="meta" style="margin-top:4px">
       <span style="color:var(--text-muted)">○ Data only</span>
-      <span style="margin-left:4px">— run <code style="font-size:12px;color:var(--accent)">/edge-ocp-ci</code> for AI analysis</span>
+      <span style="margin-left:4px">— run <code style="font-size:12px;color:var(--accent)">/edge-ocp-ci:generate-dashboard</code> for AI analysis</span>
     </div>
     {% endif %}
   </div>
@@ -64,6 +64,17 @@
   <strong>Data collection errors:</strong> Some data sources failed. The report may be incomplete.
   <ul>
     {% for err in report.data_errors %}
+    <li>{{ err }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if report.jira_errors %}
+<div class="error-banner">
+  <strong>JIRA search errors:</strong> Some JIRA searches failed. Bug matching may be incomplete for affected jobs.
+  <ul>
+    {% for err in report.jira_errors %}
     <li>{{ err }}</li>
     {% endfor %}
   </ul>
@@ -296,7 +307,7 @@
       <div class="fs-blocking-row">
         <div class="fs-blocking-main">
           <span class="badge {{ item.job.topology | lower }}">{{ item.job.topology }}</span>
-          <a class="fs-blocking-name" href="#detail-{{ loop.index }}" title="Jump to failure analysis">{{ item.job.name }}</a>
+          <a class="fs-blocking-name" href="#detail-{{ blocking_job_first_idx.get(item.job.name, loop.index) }}" title="Jump to failure analysis">{{ item.job.name }}</a>
           {% if fc >= recurring_threshold %}
           <span class="badge {% if fc >= persistent_threshold %}persistent{% else %}recurring{% endif %}">{{ fc }}x</span>
           {% endif %}
@@ -373,11 +384,6 @@
       </div>
     </div>
   </div>
-  {% endif %}
-
-  {# Hidden AI container when no blocking failures #}
-  {% if ns.blocking_failures == 0 %}
-  <div id="ai-highlights-container" style="display:none"></div>
   {% endif %}
 
   {% endif %}

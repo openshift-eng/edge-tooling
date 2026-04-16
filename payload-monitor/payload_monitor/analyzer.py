@@ -121,6 +121,7 @@ def _normalize_job_name(name: str, config: Config) -> str:
                 rf'(?:^|(?<=[-_])){re.escape(pattern)}(?=[-_]|$)',
                 '__TOPO__',
                 result,
+                flags=re.IGNORECASE,
             )
             if replaced != result:
                 return replaced
@@ -190,7 +191,8 @@ def analyze(
     failure_counts = _find_recurring_failures(report.streams)
     report.failure_counts = failure_counts
     recurring = {
-        name: count for name, count in failure_counts.items() if count > 1
+        name: count for name, count in failure_counts.items()
+        if count >= config.recurring_threshold
     }
     if recurring:
         logger.info("Recurring edge failures (appeared in >1 payload):")
@@ -199,9 +201,10 @@ def analyze(
 
     # Search JIRA for existing bugs
     unique_failing = {j.name: j for j in all_failing}
-    jira_matches = jira_collector.search_bugs_for_jobs(
+    jira_matches, jira_errors = jira_collector.search_bugs_for_jobs(
         list(unique_failing.values()), config
     )
+    report.jira_errors = jira_errors
 
     # Store raw JIRA matches on the report for per-job inline display
     report.jira_matches = jira_matches
@@ -228,5 +231,12 @@ def analyze(
         f"{len(report.suggested_bugs)} suggested new bugs"
     )
 
-    report.escalation_risks = _find_escalation_risks(report.streams, config)
-    report.cross_topology = _correlate_cross_topology(report.streams, config)
+    try:
+        report.escalation_risks = _find_escalation_risks(report.streams, config)
+    except Exception as e:
+        logger.error(f"Escalation risk analysis failed: {e}")
+
+    try:
+        report.cross_topology = _correlate_cross_topology(report.streams, config)
+    except Exception as e:
+        logger.error(f"Cross-topology correlation failed: {e}")
