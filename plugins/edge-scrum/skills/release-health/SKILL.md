@@ -112,9 +112,9 @@ Record `WORKDIR` — substitute it into all agent prompts.
 
 > **Spawn both agents in a single message (concurrent).**
 
-Read `plugins/edge-scrum/agents/release-health-sprint-mapper.md` and `plugins/edge-scrum/agents/release-health-feature-fetcher.md`. Substitute all `{VARIABLE}` placeholders with the computed values, then spawn:
+Read `plugins/edge-scrum/agents/sprint-mapper.md` and `plugins/edge-scrum/agents/release-health-feature-fetcher.md`. Substitute all `{VARIABLE}` placeholders with the computed values, then spawn:
 
-- **Agent 2a** — prompt: sprint-mapper content with `{WORKDIR}`, `{FIRST_SPRINT}`, `{LAST_SPRINT}`, `{TOTAL_DEV_SPRINTS}` substituted
+- **Agent 2a** — prompt: sprint-mapper content with `{WORKDIR}`, `{FIRST_SPRINT}`, `{LAST_SPRINT}`, `{TOTAL_DEV_SPRINTS}`, `{TARGET_SPRINT}` (→ empty string) substituted
 - **Agent 2b** — prompt: feature-fetcher content with `{WORKDIR}`, `{VERSION}` substituted
 
 **After both complete**, read and check:
