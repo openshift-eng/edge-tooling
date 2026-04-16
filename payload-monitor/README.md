@@ -65,7 +65,7 @@ python -m payload_monitor --merge-analysis reports/analysis-2026-03-25.json --ou
 
 **Standalone CLI**: Run `python -m payload_monitor` to collect data and generate an HTML dashboard.
 
-**Claude Code skill**: Run `/ee-payload-monitor` to also get AI-powered root cause analysis for blocking job failures, using marketplace CI skills from [ai-helpers](https://github.com/openshift-eng/ai-helpers).
+**Claude Code skill**: Run `/ee-ocp-ci` to also get AI-powered root cause analysis for blocking job failures, using marketplace CI skills from [ai-helpers](https://github.com/openshift-eng/ai-helpers).
 
 ### Performance and Token Efficiency
 

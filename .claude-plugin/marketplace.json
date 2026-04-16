@@ -19,8 +19,8 @@
       "version": "1.0.0"
     },
     {
-      "name": "ee-payload-monitor",
-      "source": "./plugins/ee-payload-monitor",
+      "name": "ee-ocp-ci",
+      "source": "./plugins/ee-ocp-ci",
       "description": "Edge Enablement Payload Monitor — monitor OpenShift nightly payloads for edge topology (SNO/TNA/TNF) failures with AI-enriched analysis",
       "version": "1.0.0"
     }
