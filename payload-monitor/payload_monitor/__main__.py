@@ -1,4 +1,4 @@
-"""CLI entry point for Edge Enablement Payload Monitor."""
+"""CLI entry point for Edge OCP Payload Monitor."""
 
 import logging
 import re
@@ -78,7 +78,7 @@ def main(
     open_browser, verbose, skip_prow, skip_sippy, with_timing,
     merge_analysis_path,
 ):
-    """Edge Enablement Payload Monitor — monitor OpenShift nightly payloads for edge topology failures."""
+    """Edge OCP Payload Monitor — monitor OpenShift nightly payloads for edge topology failures."""
     _setup_logging(verbose)
     logger = logging.getLogger("payload_monitor")
 
@@ -133,7 +133,7 @@ def main(
             raise SystemExit(1)
         config.versions = parsed
 
-    logger.info("Starting Edge Enablement Payload Monitor")
+    logger.info("Starting Edge OCP Payload Monitor")
 
     # Step 1: Discover versions and resolve stream names
     logger.info("Step 1: Discovering active versions...")

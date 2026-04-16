@@ -1,4 +1,4 @@
-# Edge Enablement Payload Monitor
+# Edge OCP Payload Monitor
 
 Automated monitoring tool for OpenShift nightly payload health across edge topologies (SNO, TNA, TNF). Fetches data from the amd64 release controller, Sippy Component Readiness, Prow CI, and JIRA to produce an interactive HTML dashboard.
 
@@ -65,7 +65,7 @@ python -m payload_monitor --merge-analysis reports/analysis-2026-03-25.json --ou
 
 **Standalone CLI**: Run `python -m payload_monitor` to collect data and generate an HTML dashboard.
 
-**Claude Code skill**: Run `/ee-ocp-ci` to also get AI-powered root cause analysis for blocking job failures, using marketplace CI skills from [ai-helpers](https://github.com/openshift-eng/ai-helpers).
+**Claude Code skill**: Run `/edge-ocp-ci` to also get AI-powered root cause analysis for blocking job failures, using marketplace CI skills from [ai-helpers](https://github.com/openshift-eng/ai-helpers).
 
 ### Performance and Token Efficiency
 

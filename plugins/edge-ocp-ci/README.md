@@ -1,4 +1,4 @@
-# ee-ocp-ci
+# edge-ocp-ci
 
 Automated monitoring of OpenShift nightly payload health across edge topologies (SNO, TNA, TNF). Generates an interactive HTML dashboard with failure analysis, JIRA integration, Sippy regressions, Component Readiness comparisons, and optional timing insights. When run as a Claude Code skill, blocking job failures are automatically analyzed by AI subagents.
 
@@ -6,29 +6,29 @@ Automated monitoring of OpenShift nightly payload health across edge topologies 
 
 ```text
 /plugin marketplace add openshift-eng/edge-tooling
-/plugin install ee-ocp-ci
+/plugin install edge-ocp-ci
 ```
 
 ## Skills
 
 | Skill | Description |
 |---|---|
-| `/ee-ocp-ci:generate-dashboard` | Collect data, generate HTML dashboard, and run AI analysis on blocking failures |
+| `/edge-ocp-ci:generate-dashboard` | Collect data, generate HTML dashboard, and run AI analysis on blocking failures |
 
 ## Usage
 
 ```text
 # Run with defaults (all configured versions)
-/ee-ocp-ci:generate-dashboard
+/edge-ocp-ci:generate-dashboard
 
 # Override versions
-/ee-ocp-ci:generate-dashboard --versions 4.19,4.20
+/edge-ocp-ci:generate-dashboard --versions 4.19,4.20
 
 # Skip slow collectors
-/ee-ocp-ci:generate-dashboard --skip-prow --skip-sippy
+/edge-ocp-ci:generate-dashboard --skip-prow --skip-sippy
 
 # Include timing insights
-/ee-ocp-ci:generate-dashboard --with-timing
+/edge-ocp-ci:generate-dashboard --with-timing
 ```
 
 ## Requirements

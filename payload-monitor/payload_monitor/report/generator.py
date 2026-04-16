@@ -338,7 +338,7 @@ def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
         old_status = (
             '<span style="color:var(--text-muted)">○ Data only</span>'
             '\n      <span style="margin-left:4px">— run '
-            '<code style="font-size:12px;color:var(--accent)">/ee-ocp-ci</code>'
+            '<code style="font-size:12px;color:var(--accent)">/edge-ocp-ci</code>'
             ' for AI analysis</span>'
         )
         new_status = '<span style="color:var(--green)">● AI-enriched via Claude</span>'

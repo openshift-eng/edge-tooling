@@ -1,4 +1,4 @@
-"""Configuration defaults for Edge Enablement Payload Monitor."""
+"""Configuration defaults for Edge OCP Payload Monitor."""
 
 from dataclasses import dataclass, field
 from typing import Optional

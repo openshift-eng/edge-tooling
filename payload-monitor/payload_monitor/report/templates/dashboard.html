@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Edge Enablement Payload Monitor</title>
+  <title>Edge OCP Payload Monitor</title>
   <style>{{ css | safe }}</style>
 </head>
 <body>
 
 <div class="header">
   <div>
-    <h1>Edge Enablement Payload Monitor</h1>
+    <h1>Edge OCP Payload Monitor</h1>
     <div class="meta">SNO / TNA / TNF topology health across OpenShift nightly payloads</div>
   </div>
   <div style="text-align:right">
@@ -24,7 +24,7 @@
     {% else %}
     <div class="meta" style="margin-top:4px">
       <span style="color:var(--text-muted)">○ Data only</span>
-      <span style="margin-left:4px">— run <code style="font-size:12px;color:var(--accent)">/ee-ocp-ci</code> for AI analysis</span>
+      <span style="margin-left:4px">— run <code style="font-size:12px;color:var(--accent)">/edge-ocp-ci</code> for AI analysis</span>
     </div>
     {% endif %}
   </div>
@@ -70,8 +70,8 @@
 </div>
 {% endif %}
 
-<!-- Edge Enablement Jobs Health Overview -->
-<h2 style="margin-top:0">Edge Enablement Jobs Health Overview</h2>
+<!-- Edge OCP Jobs Health Overview -->
+<h2 style="margin-top:0">Edge OCP Jobs Health Overview</h2>
 <div class="health-overview">
   <div class="health-header">
     <div class="health-header-left">Version</div>

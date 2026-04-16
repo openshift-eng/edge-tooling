@@ -176,7 +176,7 @@ class TestRenderAnalysisCard:
 class TestGenerateHtml:
     def test_generates_html(self, sample_report):
         html = generate_html(sample_report)
-        assert "Edge Enablement Payload Monitor" in html
+        assert "Edge OCP Payload Monitor" in html
         assert "4.19" in html
 
     def test_writes_to_file(self, sample_report, tmp_path):
@@ -184,7 +184,7 @@ class TestGenerateHtml:
         generate_html(sample_report, out)
         assert out.exists()
         content = out.read_text()
-        assert "Edge Enablement Payload Monitor" in content
+        assert "Edge OCP Payload Monitor" in content
 
     def test_creates_parent_dirs(self, sample_report, tmp_path):
         out = tmp_path / "sub" / "dir" / "report.html"
