@@ -32,7 +32,7 @@ fields:
 
 ## Execution Model
 
-All Jira data-fetching and analysis runs in sub-agents defined in `plugins/edge-scrum/agents/`. The main context:
+All Jira data-fetching and analysis runs in sub-agents defined in `plugins/edge-scrum/skills/`. The main context:
 
 1. Reads Edge Scrum Laws (Step 0)
 2. Collects user inputs (Step 1)
@@ -112,9 +112,9 @@ Record `WORKDIR` — substitute it into all agent prompts.
 
 > **Spawn both agents in a single message (concurrent).**
 
-Read `plugins/edge-scrum/agents/sprint-mapper.md` and `plugins/edge-scrum/agents/release-health-feature-fetcher.md`. Substitute all `{VARIABLE}` placeholders with the computed values, then spawn:
+Read `plugins/edge-scrum/skills/sprint-mapper/SKILL.md` and `plugins/edge-scrum/skills/release-health-feature-fetcher/SKILL.md`. Substitute all `{VARIABLE}` placeholders with the computed values, then spawn:
 
-- **Agent 2a** — prompt: sprint-mapper content with `{WORKDIR}`, `{FIRST_SPRINT}`, `{LAST_SPRINT}`, `{TOTAL_DEV_SPRINTS}`, `{TARGET_SPRINT}` (→ empty string) substituted
+- **Agent 2a** — prompt: sprint-mapper content with `{WORKDIR}`, `{TODAY}`, `{FIRST_SPRINT}`, `{LAST_SPRINT}`, `{TOTAL_DEV_SPRINTS}`, `{TARGET_SPRINT}` (→ empty string) substituted
 - **Agent 2b** — prompt: feature-fetcher content with `{WORKDIR}`, `{VERSION}` substituted
 
 **After both complete**, read and check:
@@ -128,7 +128,7 @@ Read `plugins/edge-scrum/agents/sprint-mapper.md` and `plugins/edge-scrum/agents
 
 > **Spawn both agents in a single message (concurrent).**
 
-Read `plugins/edge-scrum/agents/release-health-epic-fetcher.md` and `plugins/edge-scrum/agents/release-health-spike-finder.md`. Substitute `{WORKDIR}`, then spawn:
+Read `plugins/edge-scrum/skills/release-health-epic-fetcher/SKILL.md` and `plugins/edge-scrum/skills/release-health-spike-finder/SKILL.md`. Substitute `{WORKDIR}`, then spawn:
 
 - **Agent 3a** — prompt: epic-fetcher content with `{WORKDIR}` substituted
 - **Agent 3b** — prompt: spike-finder content with `{WORKDIR}` substituted
@@ -141,7 +141,7 @@ Read `plugins/edge-scrum/agents/release-health-epic-fetcher.md` and `plugins/edg
 
 > **Spawn one agent.**
 
-Read `plugins/edge-scrum/agents/release-health-analysis.md`. Substitute `{WORKDIR}`, `{VERSION}`, `{TODAY}`, `{REFINEMENT_SPRINT_NUM}`, then spawn:
+Read `plugins/edge-scrum/skills/release-health-analysis/SKILL.md`. Substitute `{WORKDIR}`, `{VERSION}`, `{TODAY}`, `{REFINEMENT_SPRINT_NUM}`, then spawn:
 
 - **Agent 4** — prompt: analysis content with all placeholders substituted
 
@@ -198,6 +198,6 @@ Cover: overall verdict, count on track vs. at risk, top 2–3 risks, one recomme
 ## Important Notes
 
 - **Read-only**: This skill does not modify any Jira data.
-- **Agent definitions**: `plugins/edge-scrum/agents/release-health-*.md` — edit these to update agent behavior without touching orchestration logic.
+- **Sub-agent skills**: `plugins/edge-scrum/skills/release-health-*/SKILL.md` and `sprint-mapper/SKILL.md` — edit these to update sub-agent behavior without touching orchestration logic.
 - **Work directory**: `{WORKDIR}` persists across agents within a run. Rerunning on the same day overwrites prior files.
 - **Laws files**: Agents read specific files from `plugins/edge-scrum/references/laws/` per the index at `plugins/edge-scrum/references/Edge-Scrum-Laws.md` — never hardcode roster, rules, or sizing in agent definitions.

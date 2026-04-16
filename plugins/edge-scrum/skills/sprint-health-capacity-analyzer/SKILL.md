@@ -1,3 +1,10 @@
+---
+name: sprint-health-capacity-analyzer
+description: Analyze sprint capacity and commitment health
+allowed-tools: Read, Write, Bash
+user-invocable: false
+---
+
 # Sprint Health: Capacity Analyzer
 
 ## Purpose

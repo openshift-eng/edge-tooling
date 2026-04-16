@@ -1,3 +1,10 @@
+---
+name: sprint-health-retro-analyzer
+description: Analyze sprint delivery, churn, and goal attainment for retrospective
+allowed-tools: Read, Write, Bash, mcp__plugin_edge-scrum_mcp-atlassian__jira_batch_get_changelogs
+user-invocable: false
+---
+
 # Sprint Health: Retro Analyzer
 
 ## Purpose

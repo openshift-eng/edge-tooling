@@ -1,3 +1,10 @@
+---
+name: sprint-health-midpoint-analyzer
+description: Analyze mid-sprint burndown, blockers, and risk
+allowed-tools: Read, Write, Bash
+user-invocable: false
+---
+
 # Sprint Health: Mid-Sprint Analyzer
 
 ## Purpose

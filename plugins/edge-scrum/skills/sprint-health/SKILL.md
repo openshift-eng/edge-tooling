@@ -1,13 +1,13 @@
 ---
 name: sprint-health
 description: Use when analyzing sprint health — capacity at the start, risks mid-sprint, or retrospective input at the end
-allowed-tools: Agent, AskUserQuestion, Write, Read, Glob, Bash
+allowed-tools: Agent, AskUserQuestion, Write, Read, Glob, Bash, mcp__plugin_edge-scrum_mcp-atlassian__jira_get_sprints_from_board, mcp__plugin_edge-scrum_mcp-atlassian__jira_search
 user-invocable: true
 ---
 
 # Sprint Health Analysis
 
-You are orchestrating a sprint health analysis for the OCPEDGE team. Delegate all Jira data-fetching and analysis to sub-agents — the main context is for coordination and report writing only.
+You are orchestrating a sprint health analysis for the OCPEDGE team. Data fetching runs inline using MCP tools and transform scripts. Analysis is delegated to sub-agents.
 
 > **Before proceeding**: Read `plugins/edge-scrum/references/Edge-Scrum-Laws.md` to identify which law files apply to Sprint Health, then read those files. Law files are the canonical reference for story pointing rules, workflow states, churn rules, and hygiene expectations. When in doubt, the Laws win.
 
@@ -28,18 +28,18 @@ fields:
 
 ## Execution Model
 
-All Jira data-fetching and analysis runs in sub-agents defined in `plugins/edge-scrum/agents/`. The main context:
-
-1. Reads Laws and Roster (Step 0)
-2. Parses args and asks mode (Step 1)
-3. For each phase: reads the agent definition file, substitutes `{VARIABLE}` placeholders, spawns the agent
-4. Reads compact file outputs between phases for guard checks
-5. Writes the final report (Step 4)
+1. **Steps 0–1**: Load laws/roster, parse args (main context)
+2. **Phase 2**: Fetch Jira data inline using MCP tools → save to persisted files → run transform scripts (main context)
+3. **Phase 3**: Delegate analysis to a sub-agent (capacity/midpoint/retro)
+4. **Step 4**: Assemble and write the final report (main context)
 
 **Rules:**
 
-- Agents write output to `$WORKDIR` via the `Write` tool; main context reads those files with `Read`
-- Substitute all `{VARIABLE}` placeholders in agent definition content before spawning
+- Data fetching uses MCP tools directly in the main context
+- MCP responses are large and get persisted to files automatically — note those file paths
+- Transform scripts (`plugins/edge-scrum/bin/`) convert raw MCP data to structured JSON
+- Use `check-page.py` to extract pagination info from persisted files
+- Analysis sub-agents only need `Read` and `Write` — they consume the structured JSON
 - Never embed raw Jira response data in the main context
 
 ## User Arguments
@@ -97,56 +97,97 @@ Record `WORKDIR`.
 
 ---
 
-> **Phase 2 is sequential**: Run Phase 2a to completion before starting Phase 2b — Phase 2b requires `SPRINT_ID` from Phase 2a's output.
+> **Phase 2 is sequential**: Complete Phase 2a before starting Phase 2b — Phase 2b requires `SPRINT_ID` from Phase 2a's output.
 
-### Phase 2a: Sprint Metadata
+### Phase 2a: Fetch Sprint Metadata (inline)
 
-Read `plugins/edge-scrum/agents/sprint-mapper.md`. Substitute all placeholders:
+#### 2a.1 — Fetch sprints from Jira
 
-- `{WORKDIR}` → work directory path
-- `{TARGET_SPRINT}` → the target sprint value (`"active"` or a sprint number)
-- `{FIRST_SPRINT}` → (leave empty — release-health field)
-- `{LAST_SPRINT}` → (leave empty — release-health field)
-- `{TOTAL_DEV_SPRINTS}` → (leave empty — release-health field)
+Call `jira_get_sprints_from_board` for board_id `"11479"` three times:
 
-Spawn the agent with substituted content.
+- `state="active"`
+- `state="closed"` — paginate using `page_token` (see pagination protocol below)
+- `state="future"`
 
-After completion, read `{WORKDIR}/sprints.json`. Verify:
+After each MCP call, the response is persisted to a file. Note each file path.
 
-- `target_sprint` is non-null. If null, stop: "Could not find sprint '{TARGET_SPRINT}'. Check the sprint number and try again."
+#### 2a.2 — Run transform script
+
+```bash
+python3 plugins/edge-scrum/bin/transform-sprints.py \
+  --input <all_persisted_file_paths> \
+  --output {WORKDIR}/sprints.json \
+  --today {TODAY} \
+  --target-sprint {TARGET_SPRINT}
+```
+
+#### 2a.3 — Verify and extract
+
+Read `{WORKDIR}/sprints.json`. Verify `target_sprint` is non-null. If null, stop: "Could not find sprint '{TARGET_SPRINT}'."
 
 Extract:
 
 - `SPRINT_ID` = `target_sprint.id`
 - `SPRINT_START` = `target_sprint.start`
 - `SPRINT_NAME` = `target_sprint.name`
-- `SPRINT_NUM` = sprint number extracted from `target_sprint.name` using the pattern `/(\d+)$/` (last sequence of digits in the name, e.g., `"OCPEDGE Sprint 285"` → `285`). If no digits are found, use `TARGET_SPRINT` as fallback.
+- `SPRINT_NUM` = last digits from `target_sprint.name` (e.g., `"OCPEDGE Sprint 285"` → `285`)
 
 ---
 
-### Phase 2b: Sprint Issues
+### Phase 2b: Fetch Sprint Issues (inline)
 
-Read `plugins/edge-scrum/agents/sprint-health-issues.md`. Substitute all placeholders:
+#### 2b.1 — Fetch issues from Jira
 
-- `{WORKDIR}` → work directory path
-- `{SPRINT_ID}` → sprint ID integer
-- `{SPRINT_START}` → sprint start date
+Call `jira_search` with:
 
-Spawn the agent with substituted content.
+- **JQL:** `project in (OCPEDGE, USHIFT, OCPBUGS) AND sprint = {SPRINT_ID} ORDER BY priority ASC`
+- **Fields:** `key, summary, description, status, issuetype, assignee, created, updated, labels, issuelinks, customfield_10028, customfield_10014, customfield_10021, customfield_10470`
+- **limit:** `50`
 
-After completion, read `{WORKDIR}/sprint_issues.json`. Verify:
+Paginate using `page_token` (see pagination protocol below). Note all persisted file paths.
 
-- `issues` array is non-empty. If empty, warn: "Sprint {SPRINT_NAME} has no issues — analysis sections will be sparse." Proceed anyway.
+#### 2b.2 — Run transform script
+
+```bash
+python3 plugins/edge-scrum/bin/transform-sprint-issues.py \
+  --input <all_persisted_file_paths> \
+  --output {WORKDIR}/sprint_issues.json \
+  --sprint-id {SPRINT_ID} \
+  --sprint-name "{SPRINT_NAME}" \
+  --today {TODAY}
+```
+
+#### 2b.3 — Verify
+
+Read `{WORKDIR}/sprint_issues.json`. If `total_issues` is 0, warn: "Sprint {SPRINT_NAME} has no issues — analysis sections will be sparse." Proceed anyway.
 
 ---
 
-### Phase 3: Mode-Specific Analysis
+### Pagination Protocol
 
-Based on `MODE`, read the corresponding agent file, substitute placeholders, and spawn.
+This Jira instance uses `page_token` pagination, NOT `start_at`. Follow this protocol for all paginated MCP calls:
+
+1. Make the first call without `page_token`
+2. The response is persisted to a file. Note the file path.
+3. Run `check-page.py` to get pagination info:
+   ```bash
+   python3 plugins/edge-scrum/bin/check-page.py <persisted_file_path>
+   ```
+   Output: `{"issues_count": N, "has_more": bool, "next_page_token": "..."}`
+4. If `has_more` is `true`: make the next call with `page_token` set to the `next_page_token` value. Repeat from step 2.
+5. If `has_more` is `false`: pagination is complete.
+
+For `jira_get_sprints_from_board`: closed sprints may require multiple pages. Active and future typically fit in one page each.
+
+---
+
+### Phase 3: Mode-Specific Analysis (sub-agent)
+
+Based on `MODE`, read the corresponding skill file, substitute placeholders, and spawn as a sub-agent.
 
 **capacity:**
 
-Read `plugins/edge-scrum/agents/sprint-health-capacity-analyzer.md`. Substitute:
+Read `plugins/edge-scrum/skills/sprint-health-capacity-analyzer/SKILL.md`. Substitute:
 
 - `{WORKDIR}` → work directory path
 - `{TODAY}` → today's date
@@ -154,21 +195,21 @@ Read `plugins/edge-scrum/agents/sprint-health-capacity-analyzer.md`. Substitute:
 
 **mid-sprint:**
 
-Read `plugins/edge-scrum/agents/sprint-health-midpoint-analyzer.md`. Substitute:
+Read `plugins/edge-scrum/skills/sprint-health-midpoint-analyzer/SKILL.md`. Substitute:
 
 - `{WORKDIR}` → work directory path
 - `{TODAY}` → today's date
 
 **retro:**
 
-Read `plugins/edge-scrum/agents/sprint-health-retro-analyzer.md`. Substitute:
+Read `plugins/edge-scrum/skills/sprint-health-retro-analyzer/SKILL.md`. Substitute:
 
 - `{WORKDIR}` → work directory path
 - `{TODAY}` → today's date
 - `{SPRINT_START}` → sprint start date
 - `{SPRINT_ID}` → sprint ID integer
 
-After the mode-specific agent completes, read `{WORKDIR}/analysis.md` to verify it was written successfully.
+After the sub-agent completes, read `{WORKDIR}/analysis.md` to verify it was written successfully.
 
 ---
 
@@ -222,6 +263,7 @@ After the mode-specific agent completes, read `{WORKDIR}/analysis.md` to verify 
 ## Important Notes
 
 - **Read-only**: This skill does not modify any Jira data.
-- **Agent definitions**: `plugins/edge-scrum/agents/sprint-health-*.md` and `sprint-mapper.md`
+- **Transform scripts**: `plugins/edge-scrum/bin/` — reusable data transformation (no LLM needed)
+- **Analysis sub-agents**: `plugins/edge-scrum/skills/sprint-health-*/SKILL.md` — LLM-driven analysis
 - **Work directory**: cleaned up after each run; rerunning same day overwrites prior files.
-- **Laws**: agents read their required law files from `plugins/edge-scrum/references/laws/` (per the index in `references/Edge-Scrum-Laws.md`) — never hardcode rules here.
+- **Laws**: sub-agents read their required law files from `plugins/edge-scrum/references/laws/` (per the index in `references/Edge-Scrum-Laws.md`) — never hardcode rules here.

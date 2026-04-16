@@ -1,3 +1,10 @@
+---
+name: release-health-analysis
+description: Analyze release health data and produce assessment
+allowed-tools: Read, Write, Bash, mcp__plugin_edge-scrum_mcp-atlassian__jira_search
+user-invocable: false
+---
+
 # release-health: Analysis
 
 ## Purpose
