@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Generate an HTML report from analyze-ci JSON files.
+Generate an HTML report from CI analysis JSON files.
 
-Reads JSON summary files (from aggregate.py) and JSON bug mapping
-files (from microshift-ci:create-bugs) to produce a consolidated HTML report.
+Supports multiple products via --product flag:
+  - microshift: PR tab with rebase PR analysis, tab bar navigation
+  - lvms: index image section per release
 
 Usage:
-    create-report.py [--workdir DIR] <release1,release2,...>
+    create-report.py --product PRODUCT [--workdir DIR] <release1,release2,...>
 """
 
 import json
@@ -22,11 +23,12 @@ from datetime import datetime, timezone
 # Constants
 # ---------------------------------------------------------------------------
 
+PRODUCT_TITLES = {
+    "microshift": "MicroShift",
+    "lvms": "LVMS",
+}
+
 # Threshold for fuzzy matching issue titles to bug candidate signatures.
-# Uses asymmetric formula: overlap / len(sig_tokens) — measures what fraction
-# of the bug candidate's signature is covered by the issue title. This differs
-# from the symmetric min-based formula in aggregate.py/search-bugs.py because
-# issue titles are short summaries while signatures are detailed.
 MATCH_THRESHOLD = 0.50
 
 STOP_WORDS = frozenset({
@@ -103,19 +105,11 @@ CSS = """\
         .ftype-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 700; text-transform: uppercase; }
         .ftype-test { background: #cce5ff; color: #004085; }
         .ftype-build { background: #e2d5f1; color: #4a235a; }
-        .ftype-infra { background: #fde2cc; color: #7d4e24; }"""
+        .ftype-infra { background: #fde2cc; color: #7d4e24; }
+        .index-image-info { background: #e8f4fd; border-left: 3px solid #0366d6; padding: 8px 12px; margin: 8px 0; font-size: 0.9em; }
+        .index-image-info code { background: #f1f1f1; padding: 2px 4px; border-radius: 3px; font-size: 0.9em; }"""
 
-JS = """\
-function showTab(e, name) {
-    document.querySelectorAll('.tab-content').forEach(function(el) {
-        el.classList.remove('active');
-    });
-    document.querySelectorAll('.tab-btn').forEach(function(el) {
-        el.classList.remove('active');
-    });
-    document.getElementById('tab-' + name).classList.add('active');
-    e.target.classList.add('active');
-}
+JS_EXPAND_COLLAPSE = """\
 document.querySelectorAll('.col-title').forEach(function(el) {
     el.addEventListener('click', function() {
         this.classList.toggle('active');
@@ -125,6 +119,18 @@ document.querySelectorAll('.col-title').forEach(function(el) {
         }
     });
 });"""
+
+JS_TAB_SWITCH = """\
+function showTab(e, name) {
+    document.querySelectorAll('.tab-content').forEach(function(el) {
+        el.classList.remove('active');
+    });
+    document.querySelectorAll('.tab-btn').forEach(function(el) {
+        el.classList.remove('active');
+    });
+    document.getElementById('tab-' + name).classList.add('active');
+    e.target.classList.add('active');
+}"""
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +168,7 @@ def discover_files(workdir, releases):
 
 
 # ---------------------------------------------------------------------------
-# JSON loading (replaces all text parsers)
+# JSON loading
 # ---------------------------------------------------------------------------
 
 def load_json(filepath):
@@ -181,6 +187,45 @@ def load_bug_candidates(filepath):
     if not data:
         return []
     return data.get("candidates", [])
+
+
+# ---------------------------------------------------------------------------
+# Index image extraction (LVMS-specific)
+# ---------------------------------------------------------------------------
+
+def extract_index_image(workdir, version):
+    """Extract index image info from per-job report files.
+
+    Scans per-job report files for an '## Index Image' section containing
+    Image, Digest, Built, and Source Commit fields.
+    """
+    pattern = os.path.join(workdir, f"analyze-ci-release-{version}-job-*.txt")
+    for filepath in sorted(glob_mod.glob(pattern)):
+        try:
+            with open(filepath, "r") as f:
+                content = f.read()
+        except IOError:
+            continue
+
+        if "## Index Image" not in content:
+            continue
+
+        info = {}
+        for line in content.split("\n"):
+            line = line.strip()
+            if line.startswith("- **Image:**"):
+                info["image"] = line.split("**Image:**", 1)[1].strip()
+            elif line.startswith("- **Digest:**"):
+                info["digest"] = line.split("**Digest:**", 1)[1].strip()
+            elif line.startswith("- **Built:**"):
+                info["built"] = line.split("**Built:**", 1)[1].strip()
+            elif line.startswith("- **Source Commit:**"):
+                info["commit"] = line.split("**Source Commit:**", 1)[1].strip()
+
+        if info.get("image"):
+            return info
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -212,12 +257,7 @@ def match_issue_to_bugs(issue_title, bug_candidates):
 
 
 def _extract_pr_numbers(candidate):
-    """Extract PR numbers from a bug candidate's job names/URLs.
-
-    Handles two patterns:
-    - File-derived job names: "-pr123-" (from analyze-ci-prs-job-*-pr<N>-*.txt)
-    - Prow URLs: ".../pull/openshift_microshift/123/..."
-    """
+    """Extract PR numbers from a bug candidate's job names/URLs."""
     pr_nums = set()
     for job in candidate.get("jobs", []):
         url = job.get("job_url", "")
@@ -232,11 +272,7 @@ def _extract_pr_numbers(candidate):
 
 
 def _index_pr_bugs(bug_paths):
-    """Load PR bug candidates and index them by PR number.
-
-    Returns a dict mapping PR number (int) to list of bug candidates.
-    Candidates affecting multiple PRs appear under each PR.
-    """
+    """Load PR bug candidates and index them by PR number."""
     by_pr = {}
     for path in bug_paths:
         for cand in load_bug_candidates(path):
@@ -292,42 +328,33 @@ def _render_bug_links(bug_match):
     return "".join(parts)
 
 
-# ---------------------------------------------------------------------------
-# HTML rendering
-# ---------------------------------------------------------------------------
-
-def render_release_section(version, rdata, bug_candidates):
-    if rdata is None:
-        return (
-            f'        <div class="release-section" id="release-{_e(version)}">\n'
-            '            <div class="release-header">\n'
-            f'                <h2>Release {_e(version)}</h2>\n'
-            '                <span class="badge badge-nodata">no data</span>\n'
-            '            </div>\n'
-            "            <p>Analysis failed to produce results.</p>\n"
-            "        </div>"
+def _render_index_image(index_info):
+    """Render index image info box HTML (LVMS-specific)."""
+    if not index_info:
+        return ""
+    lines = ['            <div class="index-image-info">']
+    if index_info.get("image"):
+        lines.append(f'                <strong>Catalog Index Image:</strong> <code>{_e(index_info["image"])}</code><br>')
+    if index_info.get("digest"):
+        lines.append(f'                <strong>Digest:</strong> <code>{_e(index_info["digest"])}</code><br>')
+    if index_info.get("built"):
+        lines.append(f'                <strong>Built:</strong> {_e(index_info["built"])}<br>')
+    if index_info.get("commit"):
+        commit = index_info["commit"]
+        short = commit[:12] if len(commit) >= 12 else commit
+        lines.append(
+            f'                <strong>Source Commit:</strong> '
+            f'<a href="https://github.com/openshift/lvm-operator/commit/{_e(commit)}" target="_blank">{_e(short)}</a>'
         )
+    lines.append("            </div>")
+    return "\n".join(lines)
 
-    total = rdata["total_failed"]
-    has_critical = any(i.get("severity", "").upper() == "CRITICAL" for i in rdata["issues"])
-    badge = _badge_class(total, has_critical)
-    b = rdata["breakdown"]
 
+def _render_issues_table(issues, bug_candidates):
+    """Render the issues table rows (shared between release and PR sections)."""
     lines = []
-    lines.append(f'        <div class="release-section" id="release-{_e(version)}">')
-    lines.append('            <div class="release-header">')
-    lines.append(f"                <h2>Release {_e(version)}</h2>")
-    label = "failure" if total == 1 else "failures"
-    lines.append(f'                <span class="badge {badge}">{total} {label}</span>')
-    lines.append("            </div>")
-    lines.append('            <div class="breakdown">')
-    lines.append(f'                <span class="breakdown-item"><strong>{b["build"]}</strong> Build</span>')
-    lines.append(f'                <span class="breakdown-item"><strong>{b["test"]}</strong> Test</span>')
-    lines.append(f'                <span class="breakdown-item"><strong>{b["infrastructure"]}</strong> Infrastructure</span>')
-    lines.append("            </div>")
-
     lines.append('            <table class="issues-table">')
-    for issue in rdata["issues"]:
+    for issue in issues:
         bug_match = match_issue_to_bugs(issue["title"], bug_candidates)
         jc = issue["job_count"]
         sev = issue.get("severity", "UNKNOWN").upper()
@@ -360,25 +387,62 @@ def render_release_section(version, rdata, bug_candidates):
             lines.append(f"                <p><em>Next Steps:</em> {_e(issue['next_steps'])}</p>")
         lines.append("            </td></tr>")
     lines.append('            </table>')
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# HTML rendering
+# ---------------------------------------------------------------------------
+
+def render_release_section(version, rdata, bug_candidates, index_info=None):
+    if rdata is None:
+        return (
+            f'        <div class="release-section" id="release-{_e(version)}">\n'
+            '            <div class="release-header">\n'
+            f'                <h2>Release {_e(version)}</h2>\n'
+            '                <span class="badge badge-nodata">no data</span>\n'
+            '            </div>\n'
+            "            <p>Analysis failed to produce results.</p>\n"
+            "        </div>"
+        )
+
+    total = rdata["total_failed"]
+    has_critical = any(i.get("severity", "").upper() == "CRITICAL" for i in rdata["issues"])
+    badge = _badge_class(total, has_critical)
+    b = rdata["breakdown"]
+
+    lines = []
+    lines.append(f'        <div class="release-section" id="release-{_e(version)}">')
+    lines.append('            <div class="release-header">')
+    lines.append(f"                <h2>Release {_e(version)}</h2>")
+    label = "failure" if total == 1 else "failures"
+    lines.append(f'                <span class="badge {badge}">{total} {label}</span>')
+    lines.append("            </div>")
+
+    # Index image info (LVMS-specific, shared across all jobs in a release)
+    idx_html = _render_index_image(index_info)
+    if idx_html:
+        lines.append(idx_html)
+
+    lines.append('            <div class="breakdown">')
+    lines.append(f'                <span class="breakdown-item"><strong>{b["build"]}</strong> Build</span>')
+    lines.append(f'                <span class="breakdown-item"><strong>{b["test"]}</strong> Test</span>')
+    lines.append(f'                <span class="breakdown-item"><strong>{b["infrastructure"]}</strong> Infrastructure</span>')
+    lines.append("            </div>")
+
+    lines.append(_render_issues_table(rdata["issues"], bug_candidates))
 
     lines.append("        </div>")
     return "\n".join(lines)
 
 
 def render_pr_section(pr_data, all_pr_bugs, pr_status):
-    """Render the Pull Requests tab.
-
-    pr_data: analyzed PR summary (from aggregate), may be None.
-    all_pr_bugs: dict mapping PR number (int) to list of bug candidates.
-    pr_status: list of all PR status snapshots (from prepare), may be None.
-    """
-    # Build a lookup of analyzed PRs by number
+    """Render the Pull Requests tab."""
     analyzed = {}
     if pr_data and pr_data.get("has_content"):
         for pr in pr_data["prs"]:
             analyzed[pr["number"]] = pr
 
-    # Build the full PR list: all PRs from status, merged with analysis
     all_prs = []
     if pr_status:
         for s in pr_status:
@@ -396,7 +460,6 @@ def render_pr_section(pr_data, all_pr_bugs, pr_status):
                 entry["analysis"] = analyzed[num]
             all_prs.append(entry)
     elif analyzed:
-        # No status file — fall back to analyzed data only
         for pr in pr_data["prs"]:
             all_prs.append({
                 "number": pr["number"],
@@ -458,8 +521,6 @@ def render_pr_section(pr_data, all_pr_bugs, pr_status):
 
         lines.append("            </div>")
 
-        # Breakdown: same format as periodics (Build/Test/Infrastructure)
-        # Plus job status (passed/running) when available
         pending = pr.get("pending", 0)
         if analysis and analysis.get("breakdown"):
             b = analysis["breakdown"]
@@ -477,49 +538,17 @@ def render_pr_section(pr_data, all_pr_bugs, pr_status):
 
         pr_bugs = all_pr_bugs.get(pr["number"], [])
         if analysis and analysis.get("issues"):
-
-            lines.append('            <table class="issues-table">')
-            for issue in analysis["issues"]:
-                bug_match = match_issue_to_bugs(issue.get("title", ""), pr_bugs)
-                jc = issue["job_count"]
-                sev = issue.get("severity", "UNKNOWN").upper()
-                sev_css = f"severity-{sev.lower()}" if sev in ("HIGH", "MEDIUM", "LOW", "CRITICAL") else ""
-                ftype = issue.get("failure_type", "test")
-                ftype_label = "INFRA" if ftype == "infrastructure" else ftype.upper()
-                ftype_css = "ftype-infra" if ftype == "infrastructure" else f"ftype-{ftype}"
-                jobs_label = f'{jc} {"job" if jc == 1 else "jobs"}'
-
-                lines.append('            <tr class="issue-row">')
-                lines.append(f'                <td class="col-num">{issue["number"]}.</td>')
-                lines.append(f'                <td class="col-sev"><span class="severity-badge {sev_css}">{sev}</span></td>')
-                lines.append(f'                <td class="col-ftype"><span class="ftype-badge {ftype_css}">{ftype_label}</span></td>')
-                lines.append(f'                <td class="col-title">{_e(issue["title"])}</td>')
-                lines.append(f'                <td class="col-jobs">{jobs_label}</td>')
-                lines.append('            </tr>')
-                lines.append('            <tr class="detail-row"><td colspan="5">')
-                if issue.get("root_cause"):
-                    lines.append(f'                <div class="root-cause"><strong>Root Cause:</strong> {_e(issue["root_cause"])}</div>')
-                lines.append(f'                <div class="bug-links">{_render_bug_links(bug_match)}</div>')
-                if issue.get("affected_jobs"):
-                    lines.append("                <p><strong>Affected Jobs:</strong></p><ul>")
-                    for job in issue["affected_jobs"]:
-                        if job.get("url"):
-                            lines.append(f'                    <li><span class="job-date">[{_e(job["date"])}]</span> <a href="{_e(job["url"])}" target="_blank">{_e(job["name"])}</a></li>')
-                        else:
-                            lines.append(f'                    <li><span class="job-date">[{_e(job["date"])}]</span> {_e(job["name"])}</li>')
-                    lines.append("                </ul>")
-                if issue.get("next_steps"):
-                    lines.append(f"                <p><em>Next Steps:</em> {_e(issue['next_steps'])}</p>")
-                lines.append("            </td></tr>")
-            lines.append('            </table>')
+            lines.append(_render_issues_table(analysis["issues"], pr_bugs))
 
         lines.append("        </div>")
     return "\n".join(toc_lines) + "\n\n" + "\n".join(lines)
 
 
-def generate_html(releases_data, bug_data, pr_data, all_pr_bugs, pr_status, timestamp):
+def generate_html(product, releases_data, bug_data, index_data, pr_data, all_pr_bugs, pr_status, timestamp):
+    product_title = PRODUCT_TITLES.get(product, product.upper())
     date_str = timestamp.strftime("%Y-%m-%d")
     time_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+    has_prs = bool(pr_data or pr_status)
 
     cards = []
     for version, rdata in releases_data.items():
@@ -531,20 +560,21 @@ def generate_html(releases_data, bug_data, pr_data, all_pr_bugs, pr_status, time
             f'            <div class="label">Release {_e(version)}</div>\n'
             "        </div>"
         )
-    # PR overview: count failures from status (all PRs) or analysis
-    if pr_status:
-        pr_failed = sum(p.get("failed", 0) for p in pr_status)
-    elif pr_data:
-        pr_failed = pr_data.get("total_failed", 0)
-    else:
-        pr_failed = 0
-    pr_css = "status-fail" if pr_failed > 0 else "status-pass"
-    cards.append(
-        '        <div class="overview-card">\n'
-        f'            <div class="number {pr_css}">{pr_failed}</div>\n'
-        f'            <div class="label">Rebase PRs</div>\n'
-        "        </div>"
-    )
+
+    if has_prs:
+        if pr_status:
+            pr_failed = sum(p.get("failed", 0) for p in pr_status)
+        elif pr_data:
+            pr_failed = pr_data.get("total_failed", 0)
+        else:
+            pr_failed = 0
+        pr_css = "status-fail" if pr_failed > 0 else "status-pass"
+        cards.append(
+            '        <div class="overview-card">\n'
+            f'            <div class="number {pr_css}">{pr_failed}</div>\n'
+            f'            <div class="label">Rebase PRs</div>\n'
+            "        </div>"
+        )
 
     toc = []
     for version, rdata in releases_data.items():
@@ -560,53 +590,77 @@ def generate_html(releases_data, bug_data, pr_data, all_pr_bugs, pr_status, time
     sections = []
     for version, rdata in releases_data.items():
         bugs = bug_data.get(version, [])
-        sections.append(render_release_section(version, rdata, bugs))
+        idx = index_data.get(version)
+        sections.append(render_release_section(version, rdata, bugs, idx))
 
-    pr_section = render_pr_section(pr_data, all_pr_bugs, pr_status)
+    # Build JS
+    js_parts = [JS_EXPAND_COLLAPSE]
+    if has_prs:
+        js_parts.insert(0, JS_TAB_SWITCH)
+    js = "\n".join(js_parts)
+
+    # Build body content
+    body_parts = []
+    body_parts.append(f'    <h1>{product_title} CI Doctor Report</h1>')
+    body_parts.append(f'    <p class="timestamp">Generated: {time_str} UTC</p>')
+    body_parts.append('')
+    body_parts.append('    <div class="overview-grid">')
+    body_parts.append(chr(10).join(cards))
+    body_parts.append('    </div>')
+
+    if has_prs:
+        # Tabbed layout
+        pr_section = render_pr_section(pr_data, all_pr_bugs, pr_status)
+        body_parts.append('')
+        body_parts.append('    <div class="tab-bar">')
+        body_parts.append('        <button class="tab-btn active" onclick="showTab(event, \'periodics\')">Periodics</button>')
+        body_parts.append('        <button class="tab-btn" onclick="showTab(event, \'pull-requests\')">Pull Requests</button>')
+        body_parts.append('    </div>')
+        body_parts.append('')
+        body_parts.append('    <div id="tab-periodics" class="tab-content active">')
+        body_parts.append('        <div class="toc">')
+        body_parts.append('            <h3>Table of Contents</h3>')
+        body_parts.append('            <ul>')
+        body_parts.append(chr(10).join(toc))
+        body_parts.append('            </ul>')
+        body_parts.append('        </div>')
+        body_parts.append('')
+        body_parts.append(chr(10).join(sections))
+        body_parts.append('    </div>')
+        body_parts.append('')
+        body_parts.append('    <div id="tab-pull-requests" class="tab-content">')
+        body_parts.append(pr_section)
+        body_parts.append('    </div>')
+    else:
+        # Simple layout (no tabs)
+        body_parts.append('')
+        body_parts.append('    <div class="toc">')
+        body_parts.append('        <h3>Table of Contents</h3>')
+        body_parts.append('        <ul>')
+        body_parts.append(chr(10).join(toc))
+        body_parts.append('        </ul>')
+        body_parts.append('    </div>')
+        body_parts.append('')
+        body_parts.append(chr(10).join(sections))
 
     return f"""\
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>MicroShift CI Doctor Report - {date_str}</title>
+    <title>{product_title} CI Doctor Report - {date_str}</title>
     <style>
 {CSS}
     </style>
 </head>
 <body>
 <div class="container">
-    <h1>MicroShift CI Doctor Report</h1>
-    <p class="timestamp">Generated: {time_str} UTC</p>
-
-    <div class="overview-grid">
-{chr(10).join(cards)}
-    </div>
-
-    <div class="tab-bar">
-        <button class="tab-btn active" onclick="showTab(event, 'periodics')">Periodics</button>
-        <button class="tab-btn" onclick="showTab(event, 'pull-requests')">Pull Requests</button>
-    </div>
-
-    <div id="tab-periodics" class="tab-content active">
-        <div class="toc">
-            <h3>Table of Contents</h3>
-            <ul>
-{chr(10).join(toc)}
-            </ul>
-        </div>
-
-{chr(10).join(sections)}
-    </div>
-
-    <div id="tab-pull-requests" class="tab-content">
-{pr_section}
-    </div>
+{chr(10).join(body_parts)}
 
     <p>&nbsp;</p><p>&nbsp;</p><p>&nbsp;</p><p>&nbsp;</p>
 </div>
 <script>
-{JS}
+{js}
 </script>
 </body>
 </html>
@@ -619,6 +673,7 @@ def generate_html(releases_data, bug_data, pr_data, all_pr_bugs, pr_status, time
 
 def main():
     workdir = None
+    product = None
     releases_arg = None
 
     args = sys.argv[1:]
@@ -630,6 +685,12 @@ def main():
                 sys.exit(1)
             workdir = args[i + 1]
             i += 2
+        elif args[i] == "--product":
+            if i + 1 >= len(args):
+                print("Error: --product requires an argument", file=sys.stderr)
+                sys.exit(1)
+            product = args[i + 1]
+            i += 2
         elif args[i].startswith("-"):
             print(f"Unknown option: {args[i]}", file=sys.stderr)
             sys.exit(1)
@@ -637,8 +698,13 @@ def main():
             releases_arg = args[i]
             i += 1
 
+    if not product:
+        print("Error: --product is required", file=sys.stderr)
+        print("Usage: create-report.py --product PRODUCT [--workdir DIR] <release1,release2,...>", file=sys.stderr)
+        sys.exit(1)
+
     if not releases_arg:
-        print("Usage: create-report.py [--workdir DIR] <release1,release2,...>", file=sys.stderr)
+        print("Usage: create-report.py --product PRODUCT [--workdir DIR] <release1,release2,...>", file=sys.stderr)
         sys.exit(1)
 
     releases = [v.strip() for v in releases_arg.split(",") if v.strip()]
@@ -647,7 +713,7 @@ def main():
         sys.exit(1)
 
     if workdir is None:
-        workdir = f"/tmp/microshift-ci-claude-workdir.{datetime.now().strftime('%y%m%d')}"
+        workdir = f"/tmp/{product}-ci-claude-workdir.{datetime.now().strftime('%y%m%d')}"
 
     if not os.path.isdir(workdir):
         print(f"Error: work directory does not exist: {workdir}", file=sys.stderr)
@@ -686,15 +752,15 @@ def main():
         print(f"\nError: no analysis files found in {workdir}", file=sys.stderr)
         sys.exit(1)
 
-    # Load everything via json.load
+    # Load release data
     releases_data = {}
     bug_data = {}
+    index_data = {}
     _EMPTY_BREAKDOWN = {"build": 0, "test": 0, "infrastructure": 0}
     for version in releases:
         entry = files["releases"][version]
         rdata = load_json(entry["summary"])
         if rdata is None:
-            # Distinguish "no failures" from "analysis failed" by checking the jobs file
             jobs = load_json(entry["jobs"])
             if jobs is not None and len(jobs) == 0:
                 rdata = {
@@ -704,22 +770,26 @@ def main():
                 }
         releases_data[version] = rdata
         bug_data[version] = load_bug_candidates(entry["bugs"])
+        if product == "lvms":
+            index_data[version] = extract_index_image(workdir, version)
 
+    # Load PR data
     pr_data = load_json(pr_entry["summary"])
     pr_status = load_json(pr_entry["status"])
-
     all_pr_bugs = _index_pr_bugs(pr_entry["bugs"])
 
     # Generate HTML
+    product_title = PRODUCT_TITLES.get(product, product.upper())
     timestamp = datetime.now(timezone.utc)
-    html_content = generate_html(releases_data, bug_data, pr_data, all_pr_bugs, pr_status, timestamp)
+    html_content = generate_html(product, releases_data, bug_data, index_data,
+                                 pr_data, all_pr_bugs, pr_status, timestamp)
 
-    output_path = os.path.join(workdir, "microshift-ci-doctor-report.html")
+    output_path = os.path.join(workdir, f"{product}-ci-doctor-report.html")
     with open(output_path, "w") as f:
         f.write(html_content)
 
     # Summary
-    print("\nSummary:")
+    print(f"\nSummary:")
     print("  Periodics:")
     for version in releases:
         rdata = releases_data[version]
@@ -727,8 +797,8 @@ def main():
             print(f"    Release {version}: {rdata['total_failed']} failed periodic jobs")
         else:
             print(f"    Release {version}: no data")
-    print("  Pull Requests:")
     if pr_status:
+        print("  Pull Requests:")
         pr_total_failed = sum(p.get("failed", 0) for p in pr_status)
         pr_total_pending = sum(p.get("pending", 0) for p in pr_status)
         parts = [f"{len(pr_status)} rebase PRs", f"{pr_total_failed} failed jobs"]
@@ -736,9 +806,8 @@ def main():
             parts.append(f"{pr_total_pending} running")
         print(f"    {', '.join(parts)}")
     elif pr_data and pr_data.get("has_content"):
+        print("  Pull Requests:")
         print(f"    {len(pr_data['prs'])} rebase PRs with {pr_data['total_failed']} total failed jobs")
-    else:
-        print("    No PR data")
     print(f"\nHTML report generated: {output_path}")
 
 

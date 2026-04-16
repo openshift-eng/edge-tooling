@@ -1,0 +1,10 @@
+{
+  "name": "lvms-ci",
+  "description": "LVMS CI Release Manager - Analyze LVMS periodic job failures and generate HTML reports",
+  "version": "1.0.0",
+  "author": {
+    "name": "kasturinarra"
+  },
+  "homepage": "https://github.com/openshift-eng/edge-tooling",
+  "license": "Apache-2.0"
+}

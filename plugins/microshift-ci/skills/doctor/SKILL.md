@@ -21,9 +21,9 @@ Accepts a comma-separated list of MicroShift release versions, runs analysis for
 
 ## Scripts Directory
 
-All scripts are run relative to the repository root:
+Shared scripts are in:
 ```bash
-SCRIPTS_DIR=plugins/microshift-ci/scripts
+SHARED_SCRIPTS=plugins/shared/scripts
 ```
 
 ## Work Directory
@@ -43,7 +43,7 @@ WORKDIR=/tmp/microshift-ci-claude-workdir.$(date +%y%m%d)
 1. Determine today's WORKDIR path by running `date +%y%m%d` and substituting into `/tmp/microshift-ci-claude-workdir.YYMMDD`. Use this value in all subsequent `--workdir` arguments.
 2. Run the prepare script:
    ```bash
-   bash ${SCRIPTS_DIR}/doctor.sh prepare --workdir ${WORKDIR} $ARGUMENTS --rebase
+   bash ${SHARED_SCRIPTS}/doctor.sh prepare --product microshift --filter microshift --workdir ${WORKDIR} $ARGUMENTS --rebase
    ```
 3. The script deterministically:
    - For each release: fetches failed periodic jobs, downloads artifacts, writes `${WORKDIR}/analyze-ci-release-<version>-jobs.json`
@@ -122,7 +122,7 @@ WORKDIR=/tmp/microshift-ci-claude-workdir.$(date +%y%m%d)
 **Actions**:
 1. Run the finalize script:
    ```bash
-   bash ${SCRIPTS_DIR}/doctor.sh finalize --workdir ${WORKDIR} $ARGUMENTS
+   bash ${SHARED_SCRIPTS}/doctor.sh finalize --product microshift --workdir ${WORKDIR} $ARGUMENTS
    ```
 2. The script deterministically:
    - Runs `aggregate.py` for each release and for PRs → `summary.json` files

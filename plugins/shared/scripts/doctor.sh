@@ -1,27 +1,28 @@
 #!/bin/bash
 set -euo pipefail
 
-# Deterministic orchestration for microshift-ci:doctor.
+# Shared CI doctor orchestration.
 #
-# Two phases called by the doctor skill with LLM steps in between:
+# Two phases called by doctor skills with LLM steps in between:
 #
-#   doctor.sh prepare --workdir DIR <releases> [--rebase]
-#     - Collects failed jobs for each release and rebase PRs
+#   doctor.sh prepare --product PRODUCT --filter FILTER --workdir DIR <releases> [--rebase]
+#     - Collects failed jobs for each release (and rebase PRs if --rebase)
 #     - Downloads all artifacts in parallel
 #     - Writes per-release and PR jobs JSON files
 #
-#   doctor.sh finalize --workdir DIR <releases>
+#   doctor.sh finalize --product PRODUCT --workdir DIR <releases>
 #     - Runs aggregate.py for each release and PRs
 #     - Runs create-report.py to generate HTML
 #
-# Usage from doctor skill:
-#   1. doctor.sh prepare --workdir $WORKDIR 4.18,4.19,4.20,main --rebase
-#   2. (LLM launches prow-job agents for all jobs)
-#   3. (LLM launches create-bugs agents for Jira search)
-#   4. doctor.sh finalize --workdir $WORKDIR 4.18,4.19,4.20,main
+# Examples:
+#   doctor.sh prepare --product microshift --filter microshift --workdir $W 4.22 --rebase
+#   doctor.sh finalize --product microshift --workdir $W 4.22
+#   doctor.sh prepare --product lvms --filter lvm --workdir $W 4.22
+#   doctor.sh finalize --product lvms --workdir $W 4.22
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKDIR=""
+PRODUCT=""
 
 # ---------------------------------------------------------------------------
 # prepare
@@ -29,22 +30,28 @@ WORKDIR=""
 
 cmd_prepare() {
     local releases_arg=""
+    local filter=""
     local do_rebase=false
 
     while [[ ${#} -gt 0 ]]; do
         case "${1}" in
             --workdir) WORKDIR="${2}"; shift 2 ;;
+            --product) PRODUCT="${2}"; shift 2 ;;
+            --filter) filter="${2}"; shift 2 ;;
             --rebase) do_rebase=true; shift ;;
             -*) echo "Unknown option: ${1}" >&2; return 1 ;;
             *) releases_arg="${1}"; shift ;;
         esac
     done
 
-    WORKDIR="${WORKDIR:-/tmp/microshift-ci-claude-workdir.$(date +%y%m%d)}"
+    [[ -z "${PRODUCT}" ]] && { echo "Error: --product is required" >&2; return 1; }
+    [[ -z "${filter}" ]] && { echo "Error: --filter is required" >&2; return 1; }
+
+    WORKDIR="${WORKDIR:-/tmp/${PRODUCT}-ci-claude-workdir.$(date +%y%m%d)}"
 
     if [[ -z "${releases_arg}" ]]; then
         echo "Error: releases argument required" >&2
-        echo "Usage: $(basename "$0") prepare [--workdir DIR] <release1,release2,...> [--rebase]" >&2
+        echo "Usage: $(basename "$0") prepare --product PRODUCT --filter FILTER [--workdir DIR] <releases> [--rebase]" >&2
         return 1
     fi
 
@@ -63,7 +70,7 @@ cmd_prepare() {
         echo "  Collecting failed periodic jobs..." >&2
         local raw_json raw_err
         raw_err=$(mktemp)
-        if ! raw_json=$(bash "${SCRIPT_DIR}/prow-jobs-for-release.sh" "${release}" 2>"${raw_err}"); then
+        if ! raw_json=$(bash "${SCRIPT_DIR}/prow-jobs-for-release.sh" --filter "${filter}" "${release}" 2>"${raw_err}"); then
             echo "  ERROR: failed to collect jobs for release ${release}:" >&2
             cat "${raw_err}" >&2
             rm -f "${raw_err}"
@@ -104,63 +111,72 @@ cmd_prepare() {
         local prs_file="${WORKDIR}/analyze-ci-prs-jobs.json"
         local prs_status_file="${WORKDIR}/analyze-ci-prs-status.json"
 
-        echo "  Collecting rebase PRs..." >&2
-        local pr_json pr_err
-        pr_err=$(mktemp)
-        if ! pr_json=$(bash "${SCRIPT_DIR}/prow-jobs-for-pull-requests.sh" \
-            --mode detail --author "microshift-rebase-script[bot]" 2>"${pr_err}"); then
-            echo "  ERROR: failed to collect rebase PRs:" >&2
-            cat "${pr_err}" >&2
-            rm -f "${pr_err}"
+        # Find the product-specific PR script
+        local pr_script="${SCRIPT_DIR}/../../${PRODUCT}-ci/scripts/prow-jobs-for-pull-requests.sh"
+        if [[ ! -f "${pr_script}" ]]; then
+            echo "  ERROR: PR script not found: ${pr_script}" >&2
+            echo "  --rebase requires plugins/${PRODUCT}-ci/scripts/prow-jobs-for-pull-requests.sh" >&2
             echo "[]" > "${prs_file}"
             echo "[]" > "${prs_status_file}"
         else
-            rm -f "${pr_err}"
-
-            local pr_count
-            pr_count=$(echo "${pr_json}" | jq 'length')
-
-            if [[ "${pr_count}" -eq 0 ]]; then
-                echo "  No rebase PRs found" >&2
+            echo "  Collecting rebase PRs..." >&2
+            local pr_json pr_err
+            pr_err=$(mktemp)
+            if ! pr_json=$(bash "${pr_script}" \
+                --mode detail --author "microshift-rebase-script[bot]" 2>"${pr_err}"); then
+                echo "  ERROR: failed to collect rebase PRs:" >&2
+                cat "${pr_err}" >&2
+                rm -f "${pr_err}"
                 echo "[]" > "${prs_file}"
                 echo "[]" > "${prs_status_file}"
             else
-                # Save job status snapshot for all PRs (used by HTML report)
-                echo "${pr_json}" | jq '[.[] | {
-                    pr_number, title, url,
-                    passed:  [.jobs[] | select(.status == "SUCCESS")] | length,
-                    failed:  [.jobs[] | select(.status == "FAILURE")] | length,
-                    pending: [.jobs[] | select(.status != "SUCCESS" and .status != "FAILURE")] | length,
-                    total:   (.jobs | length)
-                }]' > "${prs_status_file}"
-                echo "  Saved status for ${pr_count} rebase PRs" >&2
+                rm -f "${pr_err}"
 
-                # Filter to PRs with failed jobs for artifact download
-                local failed_prs
-                failed_prs=$(echo "${pr_json}" | \
-                    jq '[.[] | select(.jobs | map(select(.status == "FAILURE")) | length > 0)]')
+                local pr_count
+                pr_count=$(echo "${pr_json}" | jq 'length')
 
-                local failed_pr_count
-                failed_pr_count=$(echo "${failed_prs}" | jq 'length')
-
-                if [[ "${failed_pr_count}" -eq 0 ]]; then
-                    echo "  No PRs with failures to investigate" >&2
+                if [[ "${pr_count}" -eq 0 ]]; then
+                    echo "  No rebase PRs found" >&2
                     echo "[]" > "${prs_file}"
+                    echo "[]" > "${prs_status_file}"
                 else
-                    local job_count
-                    job_count=$(echo "${failed_prs}" | jq '[.[].jobs[] | select(.status == "FAILURE")] | length')
+                    # Save job status snapshot for all PRs (used by HTML report)
+                    echo "${pr_json}" | jq '[.[] | {
+                        pr_number, title, url,
+                        passed:  [.jobs[] | select(.status == "SUCCESS")] | length,
+                        failed:  [.jobs[] | select(.status == "FAILURE")] | length,
+                        pending: [.jobs[] | select(.status != "SUCCESS" and .status != "FAILURE")] | length,
+                        total:   (.jobs | length)
+                    }]' > "${prs_status_file}"
+                    echo "  Saved status for ${pr_count} rebase PRs" >&2
 
-                    echo "  Downloading artifacts for ${job_count} failed jobs across ${failed_pr_count} PRs..." >&2
-                    local dl_err
-                    dl_err=$(mktemp)
-                    echo "${failed_prs}" | \
-                        bash "${SCRIPT_DIR}/download-jobs.sh" --workdir "${WORKDIR}" 2>"${dl_err}" \
-                        > "${prs_file}"
-                    [[ -s "${dl_err}" ]] && cat "${dl_err}" >&2
-                    rm -f "${dl_err}"
+                    # Filter to PRs with failed jobs for artifact download
+                    local failed_prs
+                    failed_prs=$(echo "${pr_json}" | \
+                        jq '[.[] | select(.jobs | map(select(.status == "FAILURE")) | length > 0)]')
 
-                    total_jobs=$((total_jobs + job_count))
-                    echo "  Done: ${prs_file}" >&2
+                    local failed_pr_count
+                    failed_pr_count=$(echo "${failed_prs}" | jq 'length')
+
+                    if [[ "${failed_pr_count}" -eq 0 ]]; then
+                        echo "  No PRs with failures to investigate" >&2
+                        echo "[]" > "${prs_file}"
+                    else
+                        local job_count
+                        job_count=$(echo "${failed_prs}" | jq '[.[].jobs[] | select(.status == "FAILURE")] | length')
+
+                        echo "  Downloading artifacts for ${job_count} failed jobs across ${failed_pr_count} PRs..." >&2
+                        local dl_err
+                        dl_err=$(mktemp)
+                        echo "${failed_prs}" | \
+                            bash "${SCRIPT_DIR}/download-jobs.sh" --workdir "${WORKDIR}" 2>"${dl_err}" \
+                            > "${prs_file}"
+                        [[ -s "${dl_err}" ]] && cat "${dl_err}" >&2
+                        rm -f "${dl_err}"
+
+                        total_jobs=$((total_jobs + job_count))
+                        echo "  Done: ${prs_file}" >&2
+                    fi
                 fi
             fi
         fi
@@ -211,16 +227,19 @@ cmd_finalize() {
     while [[ ${#} -gt 0 ]]; do
         case "${1}" in
             --workdir) WORKDIR="${2}"; shift 2 ;;
+            --product) PRODUCT="${2}"; shift 2 ;;
             -*) echo "Unknown option: ${1}" >&2; return 1 ;;
             *) releases_arg="${1}"; shift ;;
         esac
     done
 
-    WORKDIR="${WORKDIR:-/tmp/microshift-ci-claude-workdir.$(date +%y%m%d)}"
+    [[ -z "${PRODUCT}" ]] && { echo "Error: --product is required" >&2; return 1; }
+
+    WORKDIR="${WORKDIR:-/tmp/${PRODUCT}-ci-claude-workdir.$(date +%y%m%d)}"
 
     if [[ -z "${releases_arg}" ]]; then
         echo "Error: releases argument required" >&2
-        echo "Usage: $(basename "$0") finalize [--workdir DIR] <release1,release2,...>" >&2
+        echo "Usage: $(basename "$0") finalize --product PRODUCT [--workdir DIR] <release1,release2,...>" >&2
         return 1
     fi
 
@@ -248,7 +267,7 @@ cmd_finalize() {
     # Generate HTML report
     echo "=== Generating HTML report ===" >&2
     python3 "${SCRIPT_DIR}/create-report.py" \
-        --workdir "${WORKDIR}" "${releases_arg}"
+        --product "${PRODUCT}" --workdir "${WORKDIR}" "${releases_arg}"
 }
 
 # ---------------------------------------------------------------------------
@@ -256,14 +275,17 @@ cmd_finalize() {
 # ---------------------------------------------------------------------------
 
 usage() {
-    echo "Usage: $(basename "$0") <command> [--workdir DIR] <releases> [options]" >&2
+    echo "Usage: $(basename "$0") <command> --product PRODUCT [options] <releases>" >&2
     echo "" >&2
     echo "Commands:" >&2
-    echo "  prepare [--workdir DIR] <releases> [--rebase]  Collect jobs and download artifacts" >&2
-    echo "  finalize [--workdir DIR] <releases>            Aggregate results and generate HTML" >&2
+    echo "  prepare --product PRODUCT --filter FILTER [--workdir DIR] <releases> [--rebase]" >&2
+    echo "  finalize --product PRODUCT [--workdir DIR] <releases>" >&2
     echo "" >&2
+    echo "  --product PRODUCT: Product name (e.g., microshift, lvms)" >&2
+    echo "  --filter FILTER: Job name filter for Prow (e.g., microshift, lvm)" >&2
     echo "  <releases>: comma-separated release versions (e.g., 4.18,4.19,4.20,main)" >&2
-    echo "  --workdir DIR: work directory (default: /tmp/microshift-ci-claude-workdir.YYMMDD)" >&2
+    echo "  --workdir DIR: work directory (default: /tmp/PRODUCT-ci-claude-workdir.YYMMDD)" >&2
+    echo "  --rebase: collect rebase PR data (prepare only)" >&2
     exit 1
 }
 
