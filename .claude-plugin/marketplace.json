@@ -49,6 +49,12 @@
       "version": "1.0.0"
     },
     {
+      "name": "pr-monitor",
+      "source": "./plugins/pr-monitor",
+      "description": "Automated PR CI lifecycle manager — monitors Prow jobs, analyzes failures, and assists with fixes",
+      "version": "1.0.0"
+    },
+    {
       "name": "pr-review",
       "source": "./plugins/pr-review",
       "description": "Post-review utilities for PR workflows — vet findings, triage CodeRabbit reviews, filter noise",
