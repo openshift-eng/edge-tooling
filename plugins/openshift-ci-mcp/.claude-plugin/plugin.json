@@ -1,0 +1,10 @@
+{
+  "name": "openshift-ci-mcp",
+  "description": "MCP server providing read-only access to OpenShift CI data (Sippy, Release Controller, Search.CI)",
+  "version": "1.0.0",
+  "author": {
+    "name": "@jeff-roche"
+  },
+  "homepage": "https://github.com/openshift-eng/edge-tooling",
+  "license": "Apache-2.0"
+}
