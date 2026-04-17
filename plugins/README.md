@@ -37,6 +37,24 @@ Browse and install plugins:
 ./marketplace list
 ```
 
+### Shell Completion
+
+Enable tab completion for marketplace commands and plugin names:
+
+**Bash** — add to `~/.bashrc`:
+
+```bash
+source <(marketplace completion bash)
+```
+
+**Zsh** — add to `~/.zshrc`:
+
+```bash
+source <(marketplace completion zsh)
+```
+
+Restart your shell or re-source the file to activate.
+
 ### Plugin Structure
 
 Plugins follow the Claude Code plugin format:
