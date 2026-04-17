@@ -26,7 +26,7 @@ Select `mcp-atlassian` when prompted, or install directly if already added.
 
 When installed as a plugin, tools are namespaced as:
 
-```
+```text
 mcp__plugin_mcp-atlassian_mcp-atlassian__<tool_name>
 ```
 

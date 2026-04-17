@@ -23,6 +23,19 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/lint-markdown.sh",
+            "timeout": 10,
+            "statusMessage": "Linting markdown..."
+          }
+        ]
+      }
     ]
   }
 }
