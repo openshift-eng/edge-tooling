@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "plugins/markdownlint/hooks/lint-markdown.sh",
+            "timeout": 10,
+            "statusMessage": "Linting markdown..."
+          }
+        ]
+      }
+    ]
+  }
+}
