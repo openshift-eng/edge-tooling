@@ -68,3 +68,85 @@ Analyzes the health of an OCP release cycle. Traverses the full Jira hierarchy �
 Output is saved to `.reports/release_health_{version}_{YYYY-MM-DD}.md`.
 
 See [`skills/release-health/README.md`](skills/release-health/README.md) for full usage details.
+
+---
+
+#### `epic-status`
+
+Query an epic and display its child tickets with status breakdown.
+
+**Usage:**
+
+```shell
+/edge-scrum:epic-status <epic-key> [--include-done] [--assignee=<user>] [--format=<type>]
+```
+
+| Example | Description |
+|---------|-------------|
+| `/edge-scrum:epic-status OCPEDGE-2237` | Show active tickets for epic |
+| `/edge-scrum:epic-status OCPEDGE-2237 --include-done` | Include completed tickets |
+| `/edge-scrum:epic-status OCPEDGE-2237 --assignee=currentUser()` | Filter to your tickets |
+
+**What it produces:**
+
+- Grouped by status category (In Progress, To Do, Done)
+- Table format with key, status, assignee, priority, summary
+- Total ticket counts with category breakdown
+
+---
+
+#### `strat-status`
+
+Query a STRAT ticket and display its epic hierarchy with rollup statistics.
+
+**Usage:**
+
+```shell
+/edge-scrum:strat-status <strat-key> [--include-done] [--assignee=<user>] [--format=<type>]
+```
+
+| Example | Description |
+|---------|-------------|
+| `/edge-scrum:strat-status OCPSTRAT-1551` | Show active epics and ticket counts |
+| `/edge-scrum:strat-status OCPSTRAT-1551 --include-done` | Include completed epics |
+
+**What it produces:**
+
+- Epic-level breakdown with ticket counts by status
+- STRAT rollup statistics (total epics, tickets, completion percentage)
+- Suggestions for organizational actions (move to Release Pending, etc.)
+
+---
+
+#### `bugs`
+
+Query bugs by topology (SNO, TNF, Arbiter, MicroShift, or all) with status breakdown.
+
+**Usage:**
+
+```shell
+/edge-scrum:bugs [--topology=<type>] [--priority=<level>] [--format=<type>] [--status=<status>] [--untriaged]
+```
+
+| Example | Description |
+|---------|-------------|
+| `/edge-scrum:bugs` | Prompts for topology, shows all active bugs |
+| `/edge-scrum:bugs --topology=tnf` | All active TNF bugs |
+| `/edge-scrum:bugs --topology=microshift` | All active MicroShift bugs (USHIFT + OCPEDGE) |
+| `/edge-scrum:bugs --topology=all --untriaged` | All untriaged bugs across all topologies |
+| `/edge-scrum:bugs --topology=sno --priority=Critical` | Critical SNO bugs only |
+| `/edge-scrum:bugs --topology=arbiter --status=In Progress,ON_QA` | Arbiter bugs in progress or QA |
+
+**Flags:**
+
+- `--topology`: `sno`, `tnf`, `arbiter`, `microshift`, or `all` (prompts if omitted)
+- `--priority`: Filter by priority level(s)
+- `--format`: Output format (`table`, `simple`, `keys-only`; default: `table`)
+- `--status`: Filter by status (mutually exclusive with `--untriaged`)
+- `--untriaged`: Show only untriaged bugs (mutually exclusive with `--status`)
+
+**What it produces:**
+
+- Bugs organized by priority (Critical → Major → Normal → Minor)
+- Multiple output formats: table with full details, simple bulleted list, or keys-only
+- Status and assignee information
