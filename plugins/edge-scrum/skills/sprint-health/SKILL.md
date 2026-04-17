@@ -1,7 +1,7 @@
 ---
 name: sprint-health
 description: Use when analyzing sprint health — capacity at the start, risks mid-sprint, or retrospective input at the end
-allowed-tools: Agent, AskUserQuestion, Write, Read, Glob, Bash, mcp__plugin_edge-scrum_mcp-atlassian__jira_get_sprints_from_board, mcp__plugin_edge-scrum_mcp-atlassian__jira_search
+allowed-tools: Agent, AskUserQuestion, Write, Read, Glob, Bash, mcp__plugin_mcp-atlassian_mcp-atlassian__jira_get_sprints_from_board, mcp__plugin_mcp-atlassian_mcp-atlassian__jira_search
 user-invocable: true
 ---
 

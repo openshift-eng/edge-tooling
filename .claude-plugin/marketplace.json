@@ -59,6 +59,12 @@
       "source": "./plugins/openshift-ci-mcp",
       "description": "MCP server providing read-only access to OpenShift CI data (Sippy, Release Controller, Search.CI)",
       "version": "1.0.0"
+    },
+    {
+      "name": "mcp-atlassian",
+      "source": "./plugins/mcp-atlassian",
+      "description": "Atlassian Jira MCP server for Claude Code — provides Jira tools via the mcp-atlassian container image",
+      "version": "1.0.0"
     }
   ]
 }

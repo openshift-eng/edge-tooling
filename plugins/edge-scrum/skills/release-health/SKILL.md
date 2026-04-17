@@ -1,7 +1,7 @@
 ---
 name: release-health
 description: Use when analyzing the health of an OCP release cycle — evaluates Features, Initiatives, Epics, and Tasks from Jira to assess progress, identify risks, surface refinement gaps, and recommend actions to keep the team on track toward branch cut
-allowed-tools: Agent, AskUserQuestion, Write, Read, Glob, Bash, mcp__plugin_edge-scrum_mcp-atlassian__jira_get_sprints_from_board, mcp__plugin_edge-scrum_mcp-atlassian__jira_search
+allowed-tools: Agent, AskUserQuestion, Write, Read, Glob, Bash, mcp__plugin_mcp-atlassian_mcp-atlassian__jira_get_sprints_from_board, mcp__plugin_mcp-atlassian_mcp-atlassian__jira_search
 user-invocable: true
 ---
 
