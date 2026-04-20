@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const crRows = document.querySelectorAll('.cr-row');
   const regressionRows = document.querySelectorAll('.regression-row');
   const timingRows = document.querySelectorAll('.timing-row');
+  const anomalyRows = document.querySelectorAll('.anomaly-row');
 
   // Track active filters per group
   const activeFilters = {};
@@ -146,6 +147,10 @@ document.addEventListener('DOMContentLoaded', function() {
       row.style.display = isVisible(row) ? '' : 'none';
     });
 
+    anomalyRows.forEach(row => {
+      row.style.display = isVisible(row) ? '' : 'none';
+    });
+
     // When filters are active, expand all to show filtered results
     const hasFilters = Object.keys(activeFilters).length > 0;
     if (hasFilters) {
@@ -153,6 +158,7 @@ document.addEventListener('DOMContentLoaded', function() {
       sectionsCollapsed.details = false;
       sectionsCollapsed.regressions = false;
       sectionsCollapsed.cr = false;
+      sectionsCollapsed.anomalies = false;
     }
 
     applyCollapse();

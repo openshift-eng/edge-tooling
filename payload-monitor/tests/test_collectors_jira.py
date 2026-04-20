@@ -21,6 +21,20 @@ class TestHasAuth:
             assert jira.has_auth() is False
 
 
+class TestGetAuth:
+    def test_basic_auth(self):
+        with patch.dict(os.environ, {"JIRA_USERNAME": "user", "JIRA_TOKEN": "tok"}, clear=True):
+            assert jira._get_auth() == ("user", "tok")
+
+    def test_no_basic_auth(self):
+        with patch.dict(os.environ, {"JIRA_TOKEN": "tok"}, clear=True):
+            assert jira._get_auth() is None
+
+    def test_no_credentials(self):
+        with patch.dict(os.environ, {}, clear=True):
+            assert jira._get_auth() is None
+
+
 class TestGetHeaders:
     def test_with_token(self):
         with patch.dict(os.environ, {"JIRA_TOKEN": "mytoken"}):
@@ -29,6 +43,11 @@ class TestGetHeaders:
 
     def test_without_token(self):
         with patch.dict(os.environ, {}, clear=True):
+            headers = jira._get_headers()
+            assert "Authorization" not in headers
+
+    def test_basic_auth_no_bearer(self):
+        with patch.dict(os.environ, {"JIRA_USERNAME": "user", "JIRA_TOKEN": "tok"}, clear=True):
             headers = jira._get_headers()
             assert "Authorization" not in headers
 
@@ -50,6 +69,20 @@ class TestJqlEscaping:
 
 
 class TestSearchBugs:
+    @patch.object(jira, "_session")
+    def test_basic_auth_passes_tuple(self, mock_session, config):
+        with patch.dict(os.environ, {"JIRA_USERNAME": "user", "JIRA_TOKEN": "tok"}, clear=True):
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"issues": []}
+            mock_resp.raise_for_status = MagicMock()
+            mock_session.get.return_value = mock_resp
+
+            jira.search_bugs("job", config)
+
+            call_kwargs = mock_session.get.call_args.kwargs
+            assert call_kwargs["auth"] == ("user", "tok")
+            assert "Authorization" not in call_kwargs["headers"]
+
     @patch.object(jira, "_session")
     def test_returns_bugs(self, mock_session, config):
         with patch.dict(os.environ, {"JIRA_TOKEN": "tok"}):

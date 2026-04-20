@@ -395,12 +395,14 @@ def render_dow_heatmap(report: TimingReport) -> str:
 
     overall_avg = sum(all_avgs) / len(all_avgs)
 
-    # Per-combo average (used as reference in the avg row)
+    # Per-combo average weighted by actual run count (not equal-weight per day)
     combo_avgs: dict[tuple[str, str], float] = {}
     for topo, rtype in combos:
-        combo_vals = [avgs[(t, rt, d)] for (t, rt, d) in avgs if t == topo and rt == rtype]
-        if combo_vals:
-            combo_avgs[(topo, rtype)] = sum(combo_vals) / len(combo_vals)
+        all_durations = [
+            d for (t, rt, dow), durs in dow_groups.items() if t == topo and rt == rtype for d in durs
+        ]
+        if all_durations:
+            combo_avgs[(topo, rtype)] = sum(all_durations) / len(all_durations)
 
     def cell_color(val: float) -> str:
         """Return CSS color based on how far from overall average."""
@@ -522,7 +524,7 @@ def render_version_comparison(report: TimingReport) -> str:
         '<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">'
         'Percentage shows change vs. previous version: '
         '<span style="color:var(--red)">+N% slower</span>, '
-        '<span style="color:var(--green)">−N% faster</span>.'
+        '<span style="color:var(--green)">-N% faster</span>.'
         '</div>'
         '<table class="timing-variants">'
         f'<thead><tr>{header}</tr></thead>'
