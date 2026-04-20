@@ -35,3 +35,8 @@ Returns a JSON object keyed by `org/repo`. Each value is an array of PR objects 
 - `lastCommentBy` — login of the most recent commenter/reviewer
 - `openLongerThan3Days` — boolean
 - `ageCategory` — one of `< 1 Day`, `< 2 Days`, `< 3 Days`, `> 3 Days`
+
+## Prerequisites
+
+- `gh` CLI authenticated with access to target repositories
+- `jq` available on PATH

@@ -107,16 +107,9 @@ fetch_prs() {
     '
 }
 
-result="{"
-first=true
+result=$(jq -n '{}')
 for repo in "$@"; do
-    if [[ "$first" == true ]]; then
-        first=false
-    else
-        result+=","
-    fi
     repo_json=$(fetch_prs "$repo")
-    result+="\"${repo}\": ${repo_json}"
+    result=$(echo "$result" | jq --arg key "$repo" --argjson val "$repo_json" '. + {($key): $val}')
 done
-result+="}"
-echo "$result" | jq .
+echo "$result"

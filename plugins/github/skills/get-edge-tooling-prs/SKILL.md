@@ -35,3 +35,8 @@ Format each PR as:
 
 If assignees or reviewers are empty, show "none".
 If lastCommentAt is null, show "no comments".
+
+## Prerequisites
+
+- `gh` CLI authenticated with access to target repositories
+- `jq` available on PATH
