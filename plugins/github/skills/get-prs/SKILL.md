@@ -14,7 +14,7 @@ Fetch open, non-draft pull requests for one or more GitHub repositories and retu
 Run the get-prs script with the repos passed via `$ARGUMENTS`:
 
 ```bash
-!`bash "${PLUGIN_DIR}/scripts/get-prs.sh" "${ARGUMENTS}"`
+bash "${PLUGIN_DIR}/scripts/get-prs.sh" ${ARGUMENTS}
 ```
 
 Present the raw JSON output to the user without reformatting.

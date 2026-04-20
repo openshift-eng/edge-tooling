@@ -8,9 +8,9 @@ Fetch open PRs for `openshift-eng/edge-tooling` and present them as a formatted,
 
 ## Step 1: Fetch PR data
 
-```bash
-!`bash "${PLUGIN_DIR}/scripts/get-prs.sh" openshift-eng/edge-tooling`
-```
+Invoke the `get-prs` skill to fetch PR data:
+
+/github:get-prs openshift-eng/edge-tooling
 
 ## Step 2: Format output
 
