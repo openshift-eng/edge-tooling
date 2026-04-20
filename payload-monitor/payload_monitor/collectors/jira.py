@@ -22,14 +22,19 @@ SEARCH_URL = f"{JIRA_BASE}/rest/api/3/search"
 _session = create_session()
 
 
-def _get_headers() -> dict:
-    """Get request headers with auth if available.
+def _get_auth() -> Optional[tuple[str, str]]:
+    """Return (username, token) for Basic auth, or None if Bearer should be used."""
+    username = os.environ.get("JIRA_USERNAME")
+    token = os.environ.get("JIRA_TOKEN")
+    if username and token:
+        return (username, token)
+    return None
 
-    Uses JIRA_TOKEN as a Bearer token (Atlassian Cloud PAT).
-    """
+
+def _get_headers() -> dict:
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     token = os.environ.get("JIRA_TOKEN")
-    if token:
+    if token and not os.environ.get("JIRA_USERNAME"):
         headers["Authorization"] = f"Bearer {token}"
     return headers
 
@@ -66,6 +71,7 @@ def search_bugs(
         SEARCH_URL,
         params={"jql": jql, "maxResults": max_results, "fields": "summary,status,assignee,priority,components"},
         headers=_get_headers(),
+        auth=_get_auth(),
         timeout=15,
     )
     resp.raise_for_status()

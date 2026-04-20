@@ -80,10 +80,11 @@ def render_summary_table(report: TimingReport) -> str:
     rows = []
     for (topo, rtype) in sorted(all_groups.keys()):
         total = len(all_groups[(topo, rtype)])
+        group_versions = " ".join(sorted(set(r.release for r in all_groups[(topo, rtype)])))
         if (topo, rtype) in success_groups:
             stats = compute_stats(success_groups[(topo, rtype)])
             rows.append(
-                f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}">'
+                f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}" data-tversion="{html.escape(group_versions)}">'
                 f'<td><span class="badge {topo.lower()}">{html.escape(topo)}</span></td>'
                 f'<td>{html.escape(rtype.capitalize())}</td>'
                 f'<td>{stats["count"]}</td>'
@@ -92,18 +93,16 @@ def render_summary_table(report: TimingReport) -> str:
                 f'<td>{_fmt_duration(stats["p90"])}</td>'
                 f'<td>{_fmt_duration(stats["p95"])}</td>'
                 f'<td>{_fmt_duration(stats["p99"])}</td>'
-                f'<td>{_fmt_duration(stats["min"])}</td>'
-                f'<td>{_fmt_duration(stats["max"])}</td>'
                 f'<td>{stats["cv"]}%</td>'
                 f'</tr>'
             )
         else:
             rows.append(
-                f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}" style="opacity:0.6">'
+                f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}" data-tversion="{html.escape(group_versions)}" style="opacity:0.6">'
                 f'<td><span class="badge {topo.lower()}">{html.escape(topo)}</span></td>'
                 f'<td>{html.escape(rtype.capitalize())}</td>'
                 f'<td>0 / {total}</td>'
-                f'<td colspan="8" style="color:var(--text-muted);font-style:italic">'
+                f'<td colspan="6" style="color:var(--text-muted);font-style:italic">'
                 f'{total} run{"s" if total != 1 else ""} collected but none successful'
                 f'</td>'
                 f'</tr>'
@@ -114,7 +113,7 @@ def render_summary_table(report: TimingReport) -> str:
         '<thead><tr>'
         '<th>Topology</th><th>Type</th><th>Runs</th>'
         '<th>Avg</th><th>Median</th><th>P90</th><th>P95</th><th>P99</th>'
-        '<th>Min</th><th>Max</th><th>CV</th>'
+        '<th>CV</th>'
         '</tr></thead>'
         '<tbody>' + "\n".join(rows) + '</tbody>'
         '</table>'
@@ -141,8 +140,9 @@ def render_variant_table(report: TimingReport) -> str:
     for (topo, rtype, vk) in sorted(variant_groups.keys()):
         group = variant_groups[(topo, rtype, vk)]
         stats = compute_stats(group)
+        variant_versions = " ".join(sorted(set(r.release for r in group)))
         rows.append(
-            f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}">'
+            f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}" data-tversion="{html.escape(variant_versions)}">'
             f'<td><span class="badge {topo.lower()}">{html.escape(topo)}</span></td>'
             f'<td>{html.escape(rtype.capitalize())}</td>'
             f'<td style="font-size:13px;color:var(--text-muted)">{html.escape(vk)}</td>'
@@ -395,6 +395,13 @@ def render_dow_heatmap(report: TimingReport) -> str:
 
     overall_avg = sum(all_avgs) / len(all_avgs)
 
+    # Per-combo average (used as reference in the avg row)
+    combo_avgs: dict[tuple[str, str], float] = {}
+    for topo, rtype in combos:
+        combo_vals = [avgs[(t, rt, d)] for (t, rt, d) in avgs if t == topo and rt == rtype]
+        if combo_vals:
+            combo_avgs[(topo, rtype)] = sum(combo_vals) / len(combo_vals)
+
     def cell_color(val: float) -> str:
         """Return CSS color based on how far from overall average."""
         if overall_avg == 0:
@@ -428,6 +435,18 @@ def render_dow_heatmap(report: TimingReport) -> str:
                 cells += '<td style="color:var(--text-muted)">—</td>'
         rows.append(f"<tr>{cells}</tr>")
 
+    # Average reference row
+    avg_cells = '<td style="font-weight:600;color:var(--text-muted)">Avg</td>'
+    for topo, rtype in combos:
+        val = combo_avgs.get((topo, rtype))
+        if val is not None:
+            avg_cells += (
+                f'<td style="font-weight:600;color:var(--text-muted)">'
+                f'{_fmt_duration(val)}</td>'
+            )
+        else:
+            avg_cells += '<td style="color:var(--text-muted)">—</td>'
+
     return (
         '<h3>Day-of-Week Heatmap</h3>'
         '<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">'
@@ -437,7 +456,9 @@ def render_dow_heatmap(report: TimingReport) -> str:
         '</div>'
         '<table class="timing-phases">'
         f'<thead><tr>{header_cells}</tr></thead>'
-        '<tbody>' + "\n".join(rows) + '</tbody>'
+        '<tbody>' + "\n".join(rows)
+        + f'<tr style="border-top:2px solid var(--border)">{avg_cells}</tr>'
+        '</tbody>'
         '</table>'
     )
 
@@ -488,7 +509,8 @@ def render_version_comparison(report: TimingReport) -> str:
             else:
                 cells += '<td style="color:var(--text-muted)">—</td><td>—</td>'
                 prev_avg = None
-        rows.append(f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}">{cells}</tr>')
+        combo_versions = " ".join(sorted(v for v in versions if ver_groups.get((topo, rtype, v))))
+        rows.append(f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}" data-tversion="{html.escape(combo_versions)}">{cells}</tr>')
 
     # Build header
     header = "<th>Topology</th><th>Type</th>"
@@ -497,6 +519,11 @@ def render_version_comparison(report: TimingReport) -> str:
 
     return (
         '<h3>Version-over-Version Comparison</h3>'
+        '<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">'
+        'Percentage shows change vs. previous version: '
+        '<span style="color:var(--red)">+N% slower</span>, '
+        '<span style="color:var(--green)">−N% faster</span>.'
+        '</div>'
         '<table class="timing-variants">'
         f'<thead><tr>{header}</tr></thead>'
         '<tbody>' + "\n".join(rows) + '</tbody>'
@@ -529,10 +556,12 @@ def render_anomaly_flags(report: TimingReport) -> str:
     # Sort by excess percentage descending
     anomalies.sort(key=lambda x: -x[4])
 
+    initial_visible = 10
     rows = []
-    for r, topo, rtype, p95, excess in anomalies:
+    for i, (r, topo, rtype, p95, excess) in enumerate(anomalies):
+        collapsed = ' collapsed-row' if i >= initial_visible else ''
         rows.append(
-            f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}" data-tversion="{html.escape(r.release)}">'
+            f'<tr class="timing-row anomaly-row{collapsed}" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}" data-tversion="{html.escape(r.release)}">'
             f'<td><span class="badge {topo.lower()}">{html.escape(topo)}</span></td>'
             f'<td>{html.escape(rtype.capitalize())}</td>'
             f'<td style="font-size:12px">{html.escape(r.job_name)}</td>'
@@ -541,6 +570,14 @@ def render_anomaly_flags(report: TimingReport) -> str:
             f'<td style="color:var(--red);font-weight:600">+{excess:.0f}%</td>'
             f'<td style="font-size:12px;color:var(--text-muted)">{html.escape(r.start_time[:10])}</td>'
             f'</tr>'
+        )
+
+    expand_btn = ""
+    if len(anomalies) > initial_visible:
+        expand_btn = (
+            f'<button class="expand-btn" id="expand-anomalies-btn" '
+            f'onclick="expandSection(\'anomalies\')">'
+            f'Show all {len(anomalies)} anomalies</button>'
         )
 
     return (
@@ -555,6 +592,7 @@ def render_anomaly_flags(report: TimingReport) -> str:
         '</tr></thead>'
         '<tbody>' + "\n".join(rows) + '</tbody>'
         '</table>'
+        + expand_btn
     )
 
 

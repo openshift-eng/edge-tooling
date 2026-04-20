@@ -51,7 +51,7 @@
   <span class="skip-flag">--skip-sippy</span> Sippy regression check was skipped — Sippy Job Regressions section is not available.
   {% endif %}
   {% if report.skip_jira %}
-  <span class="skip-flag">JIRA</span> JIRA_TOKEN not set — bug matching and suggested bugs are unavailable. Set JIRA_TOKEN to enable.
+  <span class="skip-flag">JIRA</span> JIRA_TOKEN not set — bug matching and suggested bugs are unavailable. Set JIRA_TOKEN to enable (optionally JIRA_USERNAME for Basic auth).
   {% endif %}
   {% if report.skip_timing %}
   <span class="skip-flag">Insights</span> Timing insights are disabled by default. Use <code>--with-timing</code> to include install/upgrade timing data.
