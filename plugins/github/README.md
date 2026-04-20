@@ -7,6 +7,11 @@ GitHub workflow skills for PR summaries and cross-repo reporting.
 | Skill | Invocation | Description |
 |-------|-----------|-------------|
 | get-prs | `/github:get-prs <org/repo [...]>` | Fetch open PRs as structured JSON |
+
+## Commands
+
+| Command | Invocation | Description |
+|---------|-----------|-------------|
 | get-edge-tooling-prs | `/github:get-edge-tooling-prs` | Formatted PR list for edge-tooling, grouped by age |
 
 ## Usage

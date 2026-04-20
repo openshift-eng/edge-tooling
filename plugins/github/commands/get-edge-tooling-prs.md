@@ -1,7 +1,5 @@
 ---
-name: get-edge-tooling-prs
 description: "Fetch and display open PRs for openshift-eng/edge-tooling in a formatted list grouped by age"
-user-invocable: true
 ---
 
 # get-edge-tooling-prs
