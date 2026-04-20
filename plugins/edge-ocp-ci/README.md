@@ -14,6 +14,7 @@ Automated monitoring of OpenShift nightly payload health across edge topologies 
 | Skill | Description |
 |---|---|
 | `/edge-ocp-ci:generate-dashboard` | Collect data, generate HTML dashboard, and run AI analysis on blocking failures |
+| `/edge-ocp-ci:sippy` | Generate promotion test status reports from Sippy for edge topologies (SNO/TNA/TNF) with network stack breakdown |
 
 ## Usage
 

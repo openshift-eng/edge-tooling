@@ -3,3 +3,8 @@
 !plugins/**/.mcp.json
 .DS_Store
 .worktrees
+
+# Python
+__pycache__/
+*.so
+.Python
