@@ -13,7 +13,7 @@ Install via Claude Code's plugin system:
 
 ## Usage
 
-**The MCP Server is readonly and requires no credentials. It is fully configured by default.**
+**The MCP Server is read-only and requires no credentials. It is fully configured by default.**
 
 See the usage data available in the [source README](https://github.com/jeff-roche/openshift-ci-mcp?tab=readme-ov-file#usage)
 

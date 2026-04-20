@@ -29,7 +29,7 @@ Fix any warnings before proceeding.
 ## Step 2: Markdown Linting
 
 ```bash
-markdownlint plugins/<plugin-name>/**/*.md
+markdownlint "plugins/<plugin-name>/**/*.md"
 ```
 
 The repo's `.markdownlint.json` disables line-length (MD013) and bare-URL (MD034) rules. Common issues to fix:

@@ -2,7 +2,7 @@
   "mcpServers": {
     "openshift-ci": {
       "command": "podman",
-      "args": ["run", "-i", "--rm", "quay.io/rh_ee_jeroche/openshift-ci-mcp:v0.1.0"]
+      "args": ["run", "-i", "--rm", "quay.io/rh_ee_jeroche/openshift-ci-mcp@sha256:eecbad1c18d84677b5622ec90312b01bcfd602503fb5b1bf5f6c7cafd6f4cdf2"]
     }
   }
 }

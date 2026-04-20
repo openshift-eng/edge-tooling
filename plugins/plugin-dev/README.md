@@ -6,6 +6,7 @@ Skills for developing Claude Code plugins in the edge-tooling marketplace.
 
 ```text
 /plugin marketplace add openshift-eng/edge-tooling
+/plugin install plugin-dev
 ```
 
 ## Skills

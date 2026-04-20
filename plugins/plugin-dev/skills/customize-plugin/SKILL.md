@@ -126,7 +126,7 @@ Common events and matchers:
 Hook scripts receive JSON on stdin with tool context. Key patterns:
 
 ```bash
-#!/usr/bin/env bash
+#!/usr/bin/bash
 set -euo pipefail
 
 input=$(cat)
@@ -170,7 +170,7 @@ The server name determines the tool namespace: `mcp__plugin_<plugin-name>_<serve
 
 ## Agents
 
-Define the agent's role and constraints in markdown:
+Define the agent's role and constraints in Markdown:
 
 ```markdown
 # Agent Name
