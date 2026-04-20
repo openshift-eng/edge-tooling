@@ -182,10 +182,10 @@ _marketplace() {
             ;;
         args)
             case ${words[1]} in
-                show|info|validate|add)
+                show|info|validate)
                     _marketplace_plugin_names
                     ;;
-                new|create)
+                add|new|create)
                     _arguments \
                         '1:plugin-name:' \
                         '--skill[Include a skill]' \

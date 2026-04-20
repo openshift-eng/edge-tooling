@@ -53,12 +53,6 @@
       "source": "./plugins/edge-ocp-ci",
       "description": "Edge OCP Payload Monitor — monitor OpenShift nightly payloads for edge topology (SNO/TNA/TNF) failures with AI-enriched analysis",
       "version": "1.0.0"
-    },
-    {
-      "name": "openshift-ci-mcp",
-      "source": "./plugins/openshift-ci-mcp",
-      "description": "MCP server providing read-only access to OpenShift CI data (Sippy, Release Controller, Search.CI)",
-      "version": "1.0.0"
     }
   ]
 }

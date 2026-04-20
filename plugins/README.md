@@ -44,14 +44,16 @@ Enable tab completion for marketplace commands and plugin names:
 **Bash** — add to `~/.bashrc`:
 
 ```bash
-source <(marketplace completion bash)
+source <(./marketplace completion bash)
 ```
 
 **Zsh** — add to `~/.zshrc`:
 
 ```bash
-source <(marketplace completion zsh)
+source <(./marketplace completion zsh)
 ```
+
+If `marketplace` is installed globally (e.g. symlinked into `$PATH`), omit the `./` prefix.
 
 Restart your shell or re-source the file to activate.
 
