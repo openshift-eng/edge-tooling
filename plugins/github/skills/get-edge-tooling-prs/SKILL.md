@@ -16,7 +16,7 @@ Fetch open PRs for `openshift-eng/edge-tooling` and present them as a formatted,
 
 ## Step 2: Format output
 
-Parse the JSON and group PRs by `ageCategory` in this order (oldest group first):
+The JSON output is keyed by repo. Access the PR array via `["openshift-eng/edge-tooling"]`, then group PRs by `ageCategory` in this order (oldest group first):
 
 1. **> 3 Days**
 2. **< 3 Days**

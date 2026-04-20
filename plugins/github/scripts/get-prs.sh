@@ -107,20 +107,16 @@ fetch_prs() {
     '
 }
 
-if [[ $# -eq 1 ]]; then
-    fetch_prs "$1"
-else
-    result="{"
-    first=true
-    for repo in "$@"; do
-        if [[ "$first" == true ]]; then
-            first=false
-        else
-            result+=","
-        fi
-        repo_json=$(fetch_prs "$repo")
-        result+="\"${repo}\": ${repo_json}"
-    done
-    result+="}"
-    echo "$result" | jq .
-fi
+result="{"
+first=true
+for repo in "$@"; do
+    if [[ "$first" == true ]]; then
+        first=false
+    else
+        result+=","
+    fi
+    repo_json=$(fetch_prs "$repo")
+    result+="\"${repo}\": ${repo_json}"
+done
+result+="}"
+echo "$result" | jq .

@@ -21,9 +21,7 @@ Present the raw JSON output to the user without reformatting.
 
 ## Output Schema
 
-### Single repo
-
-Returns a JSON array of PR objects:
+Returns a JSON object keyed by `org/repo`. Each value is an array of PR objects with these fields:
 
 - `number` — PR number
 - `title` — PR title
@@ -37,7 +35,3 @@ Returns a JSON array of PR objects:
 - `lastCommentBy` — login of the most recent commenter/reviewer
 - `openLongerThan3Days` — boolean
 - `ageCategory` — one of `< 1 Day`, `< 2 Days`, `< 3 Days`, `> 3 Days`
-
-### Multiple repos
-
-Returns a JSON object keyed by `org/repo`, where each value is an array of PR objects with the same fields as above.
