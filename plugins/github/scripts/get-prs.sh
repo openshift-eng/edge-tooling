@@ -1,4 +1,4 @@
-#!/usr/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 usage() {
@@ -31,6 +31,10 @@ one_day=$((24 * 60 * 60))
 
 fetch_prs() {
     local repo="$1"
+    if [[ ! "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+        echo "Invalid repository slug: $repo (expected org/repo)" >&2
+        return 1
+    fi
     local owner="${repo%/*}"
     local name="${repo#*/}"
 
@@ -90,7 +94,7 @@ fetch_prs() {
                 url: $pr.url,
                 author: $pr.author.login,
                 assignees: [($pr.assignees // [])[] | .login],
-                reviewers: [($pr.reviewRequests // [])[] | .login],
+                reviewers: [($pr.reviewRequests // [])[] | .requestedReviewer.login // empty],
                 labels: [($pr.labels // [])[] | .name],
                 createdAt: $pr.createdAt,
                 lastCommentAt: ($latest.createdAt // null),
