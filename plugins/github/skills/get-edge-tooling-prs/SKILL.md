@@ -27,7 +27,7 @@ Omit any group that has no PRs. Within each group, list PRs oldest to newest.
 
 Format each PR as:
 
-```
+```text
 **#N — Title** https://github.com/openshift-eng/edge-tooling/pull/N
 - Author: username | Assignees: a, b | Reviewers: c, d
 - Last comment: YYYY-MM-DD by username

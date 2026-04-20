@@ -35,7 +35,7 @@ fetch_prs() {
     local name="${repo#*/}"
 
     local pr_data
-    pr_data=$(gh pr list --repo "$repo" --state open \
+    pr_data=$(gh pr list --repo "$repo" --state open --limit 1000 \
         --json number,title,author,labels,createdAt,isDraft,url,assignees,reviewRequests \
         --jq '[.[] | select(.isDraft == false)]')
 

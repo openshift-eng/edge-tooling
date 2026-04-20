@@ -14,14 +14,16 @@ Fetch open, non-draft pull requests for one or more GitHub repositories and retu
 Run the get-prs script with the repos passed via `$ARGUMENTS`:
 
 ```bash
-!`bash "${PLUGIN_DIR}/scripts/get-prs.sh" ${ARGUMENTS}`
+!`bash "${PLUGIN_DIR}/scripts/get-prs.sh" "${ARGUMENTS}"`
 ```
 
 Present the raw JSON output to the user without reformatting.
 
 ## Output Schema
 
-Each PR in the JSON array contains:
+### Single repo
+
+Returns a JSON array of PR objects:
 
 - `number` — PR number
 - `title` — PR title
@@ -35,3 +37,7 @@ Each PR in the JSON array contains:
 - `lastCommentBy` — login of the most recent commenter/reviewer
 - `openLongerThan3Days` — boolean
 - `ageCategory` — one of `< 1 Day`, `< 2 Days`, `< 3 Days`, `> 3 Days`
+
+### Multiple repos
+
+Returns a JSON object keyed by `org/repo`, where each value is an array of PR objects with the same fields as above.
