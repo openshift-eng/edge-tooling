@@ -24,7 +24,7 @@ reviews:
   path_instructions:
     - path: "**"
       instructions: |
-        Review all changes against the guidelines in CONTRIBUTING.md. Flag any violations as severity level "major".
+        Review all changes against the guidelines in CONTRIBUTING.md. Flag any violations as severity level "medium".
 
   tools:
     shellcheck:
