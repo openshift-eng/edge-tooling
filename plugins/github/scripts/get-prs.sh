@@ -15,8 +15,8 @@ EOF
 }
 
 if [[ $# -eq 0 ]]; then
-    usage >&2
-    exit 1
+    echo '{}'
+    exit 0
 fi
 
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
