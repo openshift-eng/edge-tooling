@@ -77,16 +77,26 @@ def render_summary_table(report: TimingReport) -> str:
     all_groups = _group_runs(all_runs)
     success_groups = _group_runs(runs) if runs else {}
 
+    # Build per-version index for detail rows
+    version_success: dict[tuple[str, str, str], list] = defaultdict(list)
+    for r in runs:
+        version_success[(r.topology, r.run_type, r.release)].append(r)
+    version_all: dict[tuple[str, str, str], list] = defaultdict(list)
+    for r in all_runs:
+        version_all[(r.topology, r.run_type, r.release)].append(r)
+
     rows = []
     for (topo, rtype) in sorted(all_groups.keys()):
         total = len(all_groups[(topo, rtype)])
-        group_versions = " ".join(sorted(set(r.release for r in all_groups[(topo, rtype)])))
+        # Aggregate row — visible by default, hidden when a version filter is active
         if (topo, rtype) in success_groups:
             stats = compute_stats(success_groups[(topo, rtype)])
             rows.append(
-                f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}" data-tversion="{html.escape(group_versions)}">'
+                f'<tr class="timing-row timing-aggregate" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}"'
+                f' title="Aggregated across all collected versions">'
                 f'<td><span class="badge {topo.lower()}">{html.escape(topo)}</span></td>'
                 f'<td>{html.escape(rtype.capitalize())}</td>'
+                f'<td style="color:var(--text-muted);font-style:italic">all</td>'
                 f'<td>{stats["count"]}</td>'
                 f'<td>{_fmt_duration(stats["avg"])}</td>'
                 f'<td>{_fmt_duration(stats["median"])}</td>'
@@ -98,9 +108,11 @@ def render_summary_table(report: TimingReport) -> str:
             )
         else:
             rows.append(
-                f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}" data-tversion="{html.escape(group_versions)}" style="opacity:0.6">'
+                f'<tr class="timing-row timing-aggregate" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}" style="opacity:0.6"'
+                f' title="Aggregated across all collected versions">'
                 f'<td><span class="badge {topo.lower()}">{html.escape(topo)}</span></td>'
                 f'<td>{html.escape(rtype.capitalize())}</td>'
+                f'<td style="color:var(--text-muted);font-style:italic">all</td>'
                 f'<td>0 / {total}</td>'
                 f'<td colspan="6" style="color:var(--text-muted);font-style:italic">'
                 f'{total} run{"s" if total != 1 else ""} collected but none successful'
@@ -108,15 +120,64 @@ def render_summary_table(report: TimingReport) -> str:
                 f'</tr>'
             )
 
+        # Per-version rows — hidden by default, shown when a version filter is active
+        versions_for_group = sorted(set(
+            r.release for r in all_groups[(topo, rtype)]
+        ))
+        for ver in versions_for_group:
+            ver_success = version_success.get((topo, rtype, ver), [])
+            ver_total = len(version_all.get((topo, rtype, ver), []))
+            if ver_success:
+                ver_stats = compute_stats(ver_success)
+                rows.append(
+                    f'<tr class="timing-row timing-version-detail" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}"'
+                    f' data-tversion="{html.escape(ver)}" style="display:none">'
+                    f'<td><span class="badge {topo.lower()}">{html.escape(topo)}</span></td>'
+                    f'<td>{html.escape(rtype.capitalize())}</td>'
+                    f'<td>{html.escape(ver)}</td>'
+                    f'<td>{ver_stats["count"]}</td>'
+                    f'<td>{_fmt_duration(ver_stats["avg"])}</td>'
+                    f'<td>{_fmt_duration(ver_stats["median"])}</td>'
+                    f'<td>{_fmt_duration(ver_stats["p90"])}</td>'
+                    f'<td>{_fmt_duration(ver_stats["p95"])}</td>'
+                    f'<td>{_fmt_duration(ver_stats["p99"])}</td>'
+                    f'<td>{ver_stats["cv"]}%</td>'
+                    f'</tr>'
+                )
+            else:
+                rows.append(
+                    f'<tr class="timing-row timing-version-detail" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}"'
+                    f' data-tversion="{html.escape(ver)}" style="display:none;opacity:0.6">'
+                    f'<td><span class="badge {topo.lower()}">{html.escape(topo)}</span></td>'
+                    f'<td>{html.escape(rtype.capitalize())}</td>'
+                    f'<td>{html.escape(ver)}</td>'
+                    f'<td>0 / {ver_total}</td>'
+                    f'<td colspan="6" style="color:var(--text-muted);font-style:italic">'
+                    f'{ver_total} run{"s" if ver_total != 1 else ""} collected but none successful'
+                    f'</td>'
+                    f'</tr>'
+                )
+
+    all_versions = sorted(set(r.release for r in all_runs))
+    version_list = ", ".join(all_versions)
+    legend = (
+        f'<div style="font-size:11px;color:var(--text-muted);margin-top:4px">'
+        f'Version <em>all</em> = aggregated across {len(all_versions)} '
+        f'version{"s" if len(all_versions) != 1 else ""} ({version_list}). '
+        f'Use the version filter to see per-version statistics.'
+        f'</div>'
+    )
+
     return (
         '<table class="timing-summary">'
         '<thead><tr>'
-        '<th>Topology</th><th>Type</th><th>Runs</th>'
+        '<th>Topology</th><th>Type</th><th>Version</th><th>Runs</th>'
         '<th>Avg</th><th>Median</th><th>P90</th><th>P95</th><th>P99</th>'
         '<th>CV</th>'
         '</tr></thead>'
         '<tbody>' + "\n".join(rows) + '</tbody>'
         '</table>'
+        + legend
     )
 
 
@@ -637,20 +698,19 @@ def _render_filter_bar(report: TimingReport) -> str:
             f'{html.escape(rtype.capitalize())}</button>'
         )
 
-    if len(versions) > 1:
-        parts.append('<span style="margin:0 4px"></span>')
+    parts.append('<span style="margin:0 4px"></span>')
 
-        # Version filter
+    # Version filter (always shown)
+    parts.append(
+        '<button class="filter-btn active" '
+        'data-group="tversion" data-value="all">All Versions</button>'
+    )
+    for ver in versions:
         parts.append(
-            '<button class="filter-btn active" '
-            'data-group="tversion" data-value="all">All Versions</button>'
+            f'<button class="filter-btn" '
+            f'data-group="tversion" data-value="{html.escape(ver)}">'
+            f'{html.escape(ver)}</button>'
         )
-        for ver in versions:
-            parts.append(
-                f'<button class="filter-btn" '
-                f'data-group="tversion" data-value="{html.escape(ver)}">'
-                f'{html.escape(ver)}</button>'
-            )
 
     parts.append('</div>')
     return "\n".join(parts)

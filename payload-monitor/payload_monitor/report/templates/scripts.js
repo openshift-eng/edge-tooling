@@ -143,23 +143,20 @@ document.addEventListener('DOMContentLoaded', function() {
       row.style.display = isVisible(row) ? '' : 'none';
     });
 
+    const hasVersionFilter = activeFilters.hasOwnProperty('tversion');
     timingRows.forEach(row => {
-      row.style.display = isVisible(row) ? '' : 'none';
+      if (row.classList.contains('timing-aggregate')) {
+        row.style.display = hasVersionFilter ? 'none' : (isVisible(row) ? '' : 'none');
+      } else if (row.classList.contains('timing-version-detail')) {
+        row.style.display = hasVersionFilter ? (isVisible(row) ? '' : 'none') : 'none';
+      } else {
+        row.style.display = isVisible(row) ? '' : 'none';
+      }
     });
 
     anomalyRows.forEach(row => {
       row.style.display = isVisible(row) ? '' : 'none';
     });
-
-    // When filters are active, expand all to show filtered results
-    const hasFilters = Object.keys(activeFilters).length > 0;
-    if (hasFilters) {
-      sectionsCollapsed.jobs = false;
-      sectionsCollapsed.details = false;
-      sectionsCollapsed.regressions = false;
-      sectionsCollapsed.cr = false;
-      sectionsCollapsed.anomalies = false;
-    }
 
     applyCollapse();
     updateExpandButtons();
