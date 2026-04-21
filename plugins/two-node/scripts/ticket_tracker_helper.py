@@ -884,14 +884,6 @@ def diff_data(previous: dict, current: dict) -> dict:
 # history-filename / latest-data-file
 # ---------------------------------------------------------------------------
 
-def _natural_sort_key(filename: str) -> list:
-    """Split filename into text/int chunks so numeric parts sort by value."""
-    return [
-        int(part) if part.isdigit() else part.lower()
-        for part in re.split(r"(\d+)", filename)
-    ]
-
-
 def history_filename(history_dir: str) -> str:
     """Return the full path for the next report file."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -920,12 +912,14 @@ def latest_data_file(history_dir: str) -> str | None:
     """Find the most recent .json data file in the history directory."""
     if not os.path.isdir(history_dir):
         return None
-    data_files = sorted(
-        [f for f in os.listdir(history_dir) if f.endswith(".json")],
-        key=_natural_sort_key,
-        reverse=True,
-    )
-    return os.path.join(history_dir, data_files[0]) if data_files else None
+    candidates = [
+        os.path.join(history_dir, f)
+        for f in os.listdir(history_dir)
+        if f.endswith(".json")
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=os.path.getmtime)
 
 
 # ---------------------------------------------------------------------------
