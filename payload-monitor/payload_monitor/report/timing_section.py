@@ -197,16 +197,24 @@ def render_variant_table(report: TimingReport) -> str:
     if len(variant_groups) <= 1:
         return ""
 
+    # Per-version index for detail rows
+    version_variant: dict[tuple[str, str, str, str], list[TimingRun]] = defaultdict(list)
+    for r in runs:
+        vk = _variant_key(r)
+        version_variant[(r.topology, r.run_type, vk, r.release)].append(r)
+
     rows = []
     for (topo, rtype, vk) in sorted(variant_groups.keys()):
         group = variant_groups[(topo, rtype, vk)]
         stats = compute_stats(group)
-        variant_versions = " ".join(sorted(set(r.release for r in group)))
+        # Aggregate row — visible by default, hidden when version filter active
         rows.append(
-            f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}" data-tversion="{html.escape(variant_versions)}">'
+            f'<tr class="timing-row timing-aggregate" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}"'
+            f' title="Aggregated across all collected versions">'
             f'<td><span class="badge {topo.lower()}">{html.escape(topo)}</span></td>'
             f'<td>{html.escape(rtype.capitalize())}</td>'
             f'<td style="font-size:13px;color:var(--text-muted)">{html.escape(vk)}</td>'
+            f'<td style="color:var(--text-muted);font-style:italic">all</td>'
             f'<td>{stats["count"]}</td>'
             f'<td>{_fmt_duration(stats["avg"])}</td>'
             f'<td>{_fmt_duration(stats["median"])}</td>'
@@ -214,16 +222,46 @@ def render_variant_table(report: TimingReport) -> str:
             f'<td>{stats["cv"]}%</td>'
             f'</tr>'
         )
+        # Per-version rows — hidden by default, shown when version filter active
+        for ver in sorted(set(r.release for r in group)):
+            ver_runs = version_variant.get((topo, rtype, vk, ver), [])
+            if ver_runs:
+                ver_stats = compute_stats(ver_runs)
+                rows.append(
+                    f'<tr class="timing-row timing-version-detail" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}"'
+                    f' data-tversion="{html.escape(ver)}" style="display:none">'
+                    f'<td><span class="badge {topo.lower()}">{html.escape(topo)}</span></td>'
+                    f'<td>{html.escape(rtype.capitalize())}</td>'
+                    f'<td style="font-size:13px;color:var(--text-muted)">{html.escape(vk)}</td>'
+                    f'<td>{html.escape(ver)}</td>'
+                    f'<td>{ver_stats["count"]}</td>'
+                    f'<td>{_fmt_duration(ver_stats["avg"])}</td>'
+                    f'<td>{_fmt_duration(ver_stats["median"])}</td>'
+                    f'<td>{_fmt_duration(ver_stats["p95"])}</td>'
+                    f'<td>{ver_stats["cv"]}%</td>'
+                    f'</tr>'
+                )
+
+    all_versions = sorted(set(r.release for r in runs))
+    version_list = ", ".join(all_versions)
+    legend = (
+        f'<div style="font-size:11px;color:var(--text-muted);margin-top:4px">'
+        f'Version <em>all</em> = aggregated across {len(all_versions)} '
+        f'version{"s" if len(all_versions) != 1 else ""} ({version_list}). '
+        f'Use the version filter to see per-version statistics.'
+        f'</div>'
+    )
 
     return (
         '<h3>Infrastructure Variant Comparison</h3>'
         '<table class="timing-variants">'
         '<thead><tr>'
-        '<th>Topology</th><th>Type</th><th>Variant</th><th>Runs</th>'
+        '<th>Topology</th><th>Type</th><th>Variant</th><th>Version</th><th>Runs</th>'
         '<th>Avg</th><th>Median</th><th>P95</th><th>CV</th>'
         '</tr></thead>'
         '<tbody>' + "\n".join(rows) + '</tbody>'
         '</table>'
+        + legend
     )
 
 
