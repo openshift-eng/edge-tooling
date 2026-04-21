@@ -1,8 +1,8 @@
 {
   "name": "pr-monitor",
-  "description": "Automated PR CI lifecycle manager — monitors Prow jobs, analyzes failures, and assists with fixes",
+  "description": "Automated PR CI lifecycle manager — addresses review comments, fixes CI failures, and loops until the PR is ready",
   "version": "1.0.0",
-  "author": { "name": "vimauro" },
+  "author": { "name": "vmauro" },
   "homepage": "https://github.com/openshift-eng/edge-tooling",
   "license": "Apache-2.0"
 }

@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$PLUGIN_DIR/scripts/pr-stop-check.sh\"",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

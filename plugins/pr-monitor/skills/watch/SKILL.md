@@ -1,9 +1,9 @@
 ---
 name: pr-monitor:watch
 argument-hint: <pr-url>
-description: "Autonomous PR lifecycle monitor — loops until all CI jobs pass and PR review comments are addressed"
+description: "Comment-driven PR lifecycle monitor — loops until all review comments are addressed and CI jobs pass"
 user-invocable: true
-allowed-tools: Skill, Bash, Read, Write, Glob, Grep, Agent
+allowed-tools: Skill, Bash, Read, Write, Edit, Glob, Grep, Agent
 ---
 
 # pr-monitor:watch
@@ -16,10 +16,14 @@ allowed-tools: Skill, Bash, Read, Write, Glob, Grep, Agent
 
 ## Description
 
-Autonomous PR lifecycle monitor. Invoke once and it handles everything: monitors
-CI jobs, analyzes failures, proposes fixes, pushes approved changes, retriggers
-jobs, and addresses PR review comments. Runs in a continuous loop until all CI
-jobs pass and all review feedback is resolved, or until the PR is closed/merged.
+Comment-driven PR lifecycle monitor. Invoke after creating a PR. Waits for
+reviewers (human and CodeRabbit) to post comments, addresses inline code
+suggestions, investigates CI failures, pushes fixes, and loops until no new
+comments appear and all CI jobs pass.
+
+Trivial fixes (style, naming, linting, imports, simple assertions) are
+auto-pushed. Structural changes require confirmation. Security-sensitive
+changes are always refused.
 
 ## Arguments
 
@@ -44,209 +48,203 @@ NEVER propose fixes that modify files matching these patterns:
 
 - `**/rbac*`, `**/*secret*`, `**/*credential*`, `**/*token*`
 
+## Trivial Change Classification
+
+These change types are auto-pushed WITHOUT confirmation:
+
+1. Style and formatting fixes
+2. Variable or function renaming
+3. Linting error fixes (golint, shellcheck, etc.)
+4. Simple test assertion fixes (expected value mismatch)
+5. Adding missing imports
+
+All other code changes (new files, logic changes, API changes, multi-package
+changes) require explicit user confirmation before push.
+
 ## Workflow
 
 The user argument is: $ARGUMENTS
 
 ### Step 1: Validate and Initialize
 
-1. Extract the PR URL from `$ARGUMENTS`. It must match `https://github.com/<org>/<repo>/pull/<number>`.
-2. If invalid, report the error and stop.
-3. Extract variables:
+1. Extract the PR URL from `$ARGUMENTS`. Parse any flags if present.
+2. The URL must match `https://github.com/<org>/<repo>/pull/<number>`.
+3. If invalid, report the error and stop.
+4. Extract variables:
 
 ```bash
-PR_URL="$ARGUMENTS"
+PR_URL="<extracted url>"
 PR_NUMBER="$(echo "${PR_URL}" | grep -oP '[0-9]+$')"
 ORG="$(echo "${PR_URL}" | cut -d'/' -f4)"
 REPO="$(echo "${PR_URL}" | cut -d'/' -f5)"
-STATE_FILE="/tmp/pr-monitor-${PR_NUMBER}.json"
 ```
 
-1. Initialize the state file:
+5. Check for `PR_MONITOR_STATE` env var. If set, this is a **restart**:
+   - Parse the state: `restart_count`, `cycle`, `addressed`, `analyzed` fields
+   - Display: "Resuming PR monitor for `ORG/REPO#PR_NUMBER` (restart N/3, cycle M)."
+   - Skip to Step 2.
+
+6. If `PR_MONITOR_STATE` is NOT set, this is a **fresh start**:
+   - Initialize state:
 
 ```bash
-cat > "${STATE_FILE}" << ENDSTATE
-{
-  "pr_url": "${PR_URL}",
-  "pr_number": ${PR_NUMBER},
-  "org": "${ORG}",
-  "repo": "${REPO}",
-  "analyzed_jobs": {},
-  "addressed_comments": [],
-  "fix_iterations": 0,
-  "max_fix_iterations": 2,
-  "cycle": 0,
-  "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-ENDSTATE
+export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" init "${PR_URL}")
 ```
 
-1. Determine the polling interval: default **5 minutes**. If all job names match fast patterns (`unit`, `verify`, `lint`, `images`, `build`), use **3 minutes**.
+7. Verify the org is in the trusted allowlist. If not, warn: "Org `ORG` is not in the trusted allowlist. Running in analysis-only mode — no auto-push."
 
-2. Display: "Starting autonomous PR monitor for `ORG/REPO#PR_NUMBER`. Polling every N minutes. I will loop until all CI jobs pass and PR review comments are addressed."
+8. Display: "Starting PR monitor for `ORG/REPO#PR_NUMBER`. Initial wait: 2 minutes for reviewers to post comments."
+
+9. Sleep 2 minutes:
+
+```bash
+sleep 120
+```
 
 ### Step 2: Main Loop
 
-**Repeat the following steps (2a through 2h) continuously.** Do NOT stop unless an exit condition in Step 2b is met.
+**Repeat steps 2a through 2g continuously.** Do NOT stop unless an exit condition in Step 2b is met.
 
-#### Step 2a: Check CI Status
+#### Step 2a: Gather Data (Deterministic)
 
-Run the status check:
+Run both scripts to collect current state:
 
 ```bash
-bash "${PLUGIN_DIR}/scripts/pr-checks.sh" "${PR_URL}"
+CHECKS_JSON=$(bash "${PLUGIN_DIR}/scripts/pr-checks.sh" "${PR_URL}")
+CHECKS_EXIT=$?
+
+ADDRESSED=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" get addressed)
+COMMENTS_JSON=$(bash "${PLUGIN_DIR}/scripts/pr-comments.sh" "${PR_URL}" "${ADDRESSED}")
+COMMENTS_EXIT=$?
 ```
 
-Capture the JSON output. Increment the `cycle` counter in the state file.
+Increment the cycle counter:
+
+```bash
+export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" increment cycle)
+CYCLE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" get cycle)
+```
 
 Display a compact status line:
 
 ```text
 --- Cycle N | <timestamp> ---
-Jobs: X passed, Y failed, Z pending
+CI: X passed, Y failed, Z pending
+Comments: A new inline, B new PR-level
 ```
 
 #### Step 2b: Evaluate Exit Conditions
 
 Check these conditions IN ORDER:
 
-1. **PR closed or merged**: If `pr.state` is `CLOSED` or `MERGED`, report the state and STOP the loop entirely.
+1. **PR closed or merged**: Parse `CHECKS_JSON` for PR state. If `CLOSED` or `MERGED`, report and STOP.
 
-2. **All jobs passed AND no pending review comments** (checked in Step 2g): Report "All CI jobs passed and all review comments addressed. PR is ready." STOP the loop.
+2. **All CI green AND no new comments** (`CHECKS_EXIT == 0` and `COMMENTS_EXIT == 1`): Report "All CI jobs passed and no new comments. PR is ready." STOP.
 
-3. **All jobs passed BUT review comments pending**: Skip to Step 2g to address review comments. After addressing, the push will trigger new CI runs — continue the loop.
+3. **Has new comments OR has CI failures**: Continue to Step 2c.
 
-4. **Jobs still pending, none failed, no review comments to address**: Report "N jobs still running. Sleeping N minutes..." and skip to Step 2h (sleep).
+4. **Only pending CI jobs, no new comments**: Report "N jobs still running. Sleeping..." Skip to Step 2g.
 
-5. **One or more jobs failed**: Proceed to Step 2c.
+#### Step 2c: Dispatch Parallel Analysis
 
-#### Step 2c: Analyze Failed Jobs
+Launch TWO parallel Agent calls:
 
-For each failed job, compute its key as `<job-name>-<build-id>`. Read the state file and skip jobs already in `analyzed_jobs`.
+**Agent 1 — Comment Track** (only if new comments exist):
+- Read each inline comment from `COMMENTS_JSON`
+- For each CodeRabbit inline suggestion: read the referenced code, analyze the suggestion, propose a fix
+- For each human inline comment: read the referenced code, determine if it's actionable or needs discussion
+- Collect all proposed changes as diffs
+- Classify each change as trivial or non-trivial
 
-For each NEW failed job, route to the appropriate analysis skill:
+**Agent 2 — CI Track** (only if failed jobs exist):
+- Read each failed job from `CHECKS_JSON`
+- Check the `analyzed` list in state; skip already-analyzed jobs
+- For each NEW failed job, route to the appropriate analysis skill:
+  - Job name contains `install` → `ci:prow-job-analyze-install-failure`
+  - Job name contains `e2e`, `tests`, `conformance`, `serial`, `parallel`, `scenario` → `ci:prow-job-analyze-test-failure`
+  - Job name contains `images`, `build`, `verify`, `unit`, `lint` → fetch build-log.txt and analyze directly
+  - Default → `ci:prow-job-analyze-test-failure`
+- Classify each failure as **infrastructure** or **code**
+- For code failures: propose fixes as diffs, classify as trivial or non-trivial
+- For infrastructure failures: recommend retrigger
 
-- Job name contains `install` --> `ci:prow-job-analyze-install-failure`
-- Job name contains `e2e`, `tests`, `conformance`, `serial`, `parallel`, `scenario` --> `ci:prow-job-analyze-test-failure`
-- Job name contains `images`, `build`, `verify`, `unit`, `lint` --> fetch build-log.txt via GCS and analyze directly
-- Default --> `ci:prow-job-analyze-test-failure`
+Wait for both agents to complete.
 
-Classify each result as **infrastructure** or **code** failure. Update the state file.
+#### Step 2d: Apply Fixes
 
-#### Step 2d: Handle Infrastructure Failures
+Collect all proposed changes from both agents. For EACH proposed change:
 
-For infrastructure failures (AWS quota, image pull errors, CI infra): report the failure and offer to retrigger.
+1. **Security evaluation** — run ALL checks before applying:
+   - File pattern check: modified files vs security-sensitive patterns
+   - Credential introduction check: scan diff for secrets/keys/tokens
+   - Permission escalation check: RBAC, security contexts, privilege fields
+   - Command injection check: shell commands, exec, eval
+   - Dependency change check: go.mod, package.json, etc.
+   - Scope check: changes outside the failing component
 
-Ask the user:
+   If ANY check fails: refuse the change, report which check failed, skip it.
 
-```text
-Infrastructure failure detected. Post /retest to retrigger? (yes/no)
-```
+2. **Trivial changes** (style, naming, linting, imports, assertions):
+   - Apply the change directly
+   - Add to a batch for auto-push
 
-If yes:
+3. **Non-trivial changes** (logic, new files, API changes, multi-package):
+   - Display the diff and security summary
+   - Ask: "Apply this change? (yes/no)"
+   - If yes: add to the batch
+   - If no: skip
 
-```bash
-gh pr comment "${PR_NUMBER}" --repo "${ORG}/${REPO}" --body "/retest"
-```
+4. **Infrastructure failures**:
+   - Ask: "Post /retest to retrigger failed infrastructure jobs? (yes/no)"
+   - If yes: `gh pr comment "${PR_NUMBER}" --repo "${ORG}/${REPO}" --body "/retest"`
 
-Continue to Step 2h (sleep and wait for retrigger results).
-
-#### Step 2e: Handle Code Failures — Propose Fix
-
-For code/test failures:
-
-1. Check `fix_iterations` in state file. If `>= max_fix_iterations` (2): report "Max fix attempts reached. Manual intervention needed." Skip to Step 2h.
-
-2. Check org allowlist. If `ORG` not in `openshift`, `openshift-eng`: report "Analysis-only mode — org not in allowlist." Skip to Step 2h.
-
-3. Analyze the error and propose a fix.
-
-4. **Security evaluation — run BEFORE showing the diff to the user.** Evaluate the proposed changes against ALL of the following checks. If ANY check fails, refuse the fix, explain which check failed, and skip to Step 2h.
-
-   - **File pattern check:** Do any modified files match the security-sensitive file patterns listed above? If yes, refuse: "Fix would modify security-sensitive file(s): `<files>`. Refusing auto-fix."
-   - **Credential introduction check:** Scan the diff for hardcoded secrets, API keys, tokens, passwords, or credential-like strings (AWS keys, bearer tokens, base64-encoded certificates). If found, refuse: "Proposed fix introduces credential-like content. Refusing auto-fix."
-   - **Permission escalation check:** Does the diff modify RBAC roles, cluster roles, security contexts, service account bindings, or privilege-related fields (privileged, allowPrivilegeEscalation, hostNetwork, hostPID)? If yes, refuse.
-   - **Command injection check:** Does the diff add or modify shell commands, exec calls, subprocess invocations, eval, or template expressions that could enable injection? If yes, refuse.
-   - **Dependency change check:** Does the diff modify go.mod, go.sum, package.json, package-lock.json, requirements.txt, Pipfile, Cargo.toml, or similar dependency files? If yes, refuse: "Dependency changes require manual review."
-   - **Scope check:** Does the diff modify files outside the scope of the failing test or the reviewer's comment? If the fix touches unrelated code, refuse: "Fix scope exceeds the failing component. Refusing auto-fix."
-
-   If all checks pass, proceed.
-
-5. Display the proposed fix as a diff, along with a security summary:
-
-```text
-Security evaluation: PASSED
-- File patterns: clean
-- Credentials: none detected
-- Permission escalation: none
-- Command injection: none
-- Dependencies: unchanged
-- Scope: within failing component
-```
-
-1. **Confirmation gate — Push:**
-
-```text
-Push this fix to <remote>/<branch>? (yes/no)
-```
-
-1. If confirmed: verify fork remote, push, increment `fix_iterations` in state file.
-
-2. After push, retrigger failed jobs:
-
-```text
-Retrigger failed jobs after fix? (yes/no)
-```
-
-If yes: `gh pr comment "${PR_NUMBER}" --repo "${ORG}/${REPO}" --body "/retest"`
-
-Continue to Step 2h (sleep and wait for new CI results).
-
-#### Step 2f: Handle User Declining Fix
-
-If the user declines the fix or retrigger: report the analysis summary and continue monitoring. The next cycle will re-check status — if the user pushes a manual fix, the new CI run will be picked up automatically.
-
-#### Step 2g: Check and Address PR Review Comments
-
-Fetch PR review data:
+After processing all changes, if any were batched:
 
 ```bash
-gh pr view "${PR_NUMBER}" --repo "${ORG}/${REPO}" --json reviews,comments,reviewDecision
+PUSH_RESULT=$(bash "${PLUGIN_DIR}/scripts/pr-push.sh" "${BRANCH}" "fix: address PR review feedback and CI failures")
 ```
 
-Also fetch review threads to find unresolved comments:
+If push succeeded, update state with addressed comment IDs and analyzed job keys:
 
 ```bash
-gh api "repos/${ORG}/${REPO}/pulls/${PR_NUMBER}/comments" --paginate
+for id in <addressed_ids>; do
+    export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" add-addressed "${id}")
+done
+for key in <analyzed_keys>; do
+    export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" add-analyzed "${key}")
+done
 ```
 
-Identify unresolved review comments (comments not yet addressed). Cross-reference with `addressed_comments` in the state file to skip already-handled comments.
+#### Step 2e: Handle No-Action Cycle
 
-For each NEW unresolved comment:
+If no changes were proposed and no retrigger was posted:
+- If comments existed but none were actionable: report "N comments reviewed, none actionable. Monitoring for new activity."
+- Update state with comment IDs as addressed (so they're not re-analyzed).
 
-1. Read the comment body and the code it references (file path, line numbers)
-2. Analyze what change the reviewer is requesting
-3. If the change is actionable: propose the fix as a diff
-4. If the change is unclear or requires discussion: report "Review comment requires human discussion" and skip it
+#### Step 2f: Determine Wait Time
 
-After collecting all proposed changes, if any were made:
+Classify pending jobs by expected duration:
 
-1. **Security evaluation — same checks as Step 2e.4.** Run the full security evaluation against all proposed review comment fixes as a batch. Evaluate file patterns, credential introduction, permission escalation, command injection, dependency changes, and scope. Display the security summary. If ANY check fails, refuse the entire batch and report which changes were blocked and why.
+| Pattern in job name | Category | Base wait |
+|---------------------|----------|-----------|
+| `unit`, `verify`, `lint`, `images`, `build` | fast | 5 min |
+| `e2e`, `conformance` | medium | 15 min |
+| `install`, `serial`, `scenario` | slow | 30 min |
 
-2. Display each proposed change as a diff with its corresponding review comment.
+Rules:
+- If changes were just pushed: wait for the **shortest** pending job category (minimum 5 min)
+- If no push but jobs are pending: wait 10 min (check for new comments while CI runs)
+- If no push, no pending jobs, all green: wait 5 min (final comment check before exit)
+- If only slow jobs pending and no new comments: wait 15 min
 
-3. **Confirmation gate:** "Push review comment fixes to `<remote>/<branch>`? (yes/no)"
-
-4. If confirmed: commit with `fix: address PR review feedback`, push, add comment IDs to `addressed_comments` in state file, and retrigger.
-
-#### Step 2h: Sleep and Continue
-
-Report current status summary:
+Display:
 
 ```text
-Status: X passed, Y failed, Z pending | Fixes: N/2 | Reviews: M addressed
+Status: X passed, Y failed, Z pending | Comments: M addressed
 Next check in N minutes...
 ```
+
+#### Step 2g: Sleep and Continue
 
 Sleep for the determined interval:
 
@@ -261,15 +259,26 @@ Then go back to Step 2a.
 The loop STOPS only when:
 
 1. **PR closed or merged** — nothing more to do
-2. **All CI jobs pass AND all review comments addressed** — PR is ready
-3. **Max fix iterations reached AND user declines manual intervention** — escalate to user
+2. **All CI jobs pass AND no new comments in last cycle** — PR is ready
 
 The loop CONTINUES when:
 
 - Jobs are still pending
-- Jobs failed and were analyzed/fixed/retriggered
-- Review comments were addressed and new CI is running
-- User declined a fix but wants to keep monitoring
+- New comments appeared
+- Changes were pushed and CI is re-running
+- Infrastructure jobs were retriggered
+
+## Restart Behavior
+
+If the session stops unexpectedly (Ctrl+C, context limit, crash):
+
+1. The stop hook fires and runs `pr-stop-check.sh`
+2. If `PR_MONITOR_STATE` is unset: hook exits silently (not a pr-monitor session)
+3. If conditions are met (CI green, no comments): hook cleans up and exits
+4. If conditions are NOT met and `restart_count < 3`: hook spawns a new session with updated `PR_MONITOR_STATE`
+5. If `restart_count >= 3`: hook exits without restarting (max restarts reached)
+
+State is carried entirely via the `PR_MONITOR_STATE` environment variable — no state files.
 
 ## Prerequisites
 
@@ -280,10 +289,10 @@ The loop CONTINUES when:
 
 ## Examples
 
-### Monitor Until Green
+### Monitor a New PR
 
 ```text
 /pr-monitor:watch https://github.com/openshift/microshift/pull/4321
 ```
 
-Monitors CI, fixes failures, addresses review comments, and loops until the PR is fully green.
+Waits 2 minutes for reviewers, then enters the comment+CI monitoring loop until the PR is fully green with no outstanding review feedback.

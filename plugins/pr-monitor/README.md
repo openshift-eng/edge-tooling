@@ -1,7 +1,9 @@
 # pr-monitor
 
-Autonomous PR CI lifecycle manager -- invoke once, and it monitors Prow jobs, analyzes
-failures, fixes issues, addresses PR review comments, and loops until the PR is green.
+Comment-driven PR lifecycle monitor -- invoke after creating a PR, and it
+monitors for review comments (human and CodeRabbit), addresses inline
+suggestions, investigates CI failures, pushes fixes, and loops until no new
+comments appear and all CI jobs pass.
 
 ## Installation
 
@@ -18,30 +20,35 @@ Install via Claude Code's plugin system:
 /pr-monitor:watch https://github.com/openshift/microshift/pull/6519
 ```
 
-Invoke once. The plugin takes over: it polls CI jobs every 3-5 minutes, analyzes
-failures via CI skills, proposes and pushes fixes (with your confirmation),
-addresses PR review comments, retriggers failed jobs, and loops until all CI
-jobs pass and all review feedback is resolved. You do not need to run anything
-else -- just approve or decline when prompted.
+Invoke once after creating a PR. The plugin takes over:
 
-## How It Works
+1. Waits 2 minutes for reviewers to post initial comments
+2. Fetches new review comments and CI job statuses (deterministic scripts)
+3. Dispatches parallel analysis for comments (Track A) and CI failures (Track B)
+4. Auto-pushes trivial fixes (style, naming, linting, imports, assertions)
+5. Asks for confirmation on non-trivial changes (logic, API, structural)
+6. Refuses security-sensitive changes (RBAC, credentials, dependencies)
+7. Adapts wait time based on pending job types (5-30 min)
+8. Loops until no new comments and all CI green
 
-1. Extracts PR metadata and CI job statuses via `gh` CLI
-2. Filters for Prow CI jobs (ignores GitHub Actions and other CI systems)
-3. Routes failed jobs to appropriate analysis skills based on job type
-4. Classifies failures as infrastructure (non-actionable) or code (actionable)
-5. For code failures: proposes fixes with explicit user confirmation before push
-6. Retriggers failed jobs via `/retest` comment (with user confirmation)
-7. Fetches PR review comments and addresses actionable reviewer feedback
-8. Loops continuously until all CI passes and reviews are resolved
+## Auto-Restart
 
-## Safety Features
+If the session stops unexpectedly (Ctrl+C, context limit), a stop hook
+evaluates whether the PR is fully resolved. If not, it restarts the monitor
+automatically -- up to 3 times. State is carried via the `PR_MONITOR_STATE`
+environment variable (no state files).
 
-- User confirmation required before any git push or job retrigger
-- Fork remote validation ensures pushes go to your fork, not upstream
-- Organization allowlist restricts auto-push to trusted repos (openshift, openshift-eng)
-- Max 2 fix iterations per monitoring session
-- Security-sensitive files are excluded from auto-fix proposals
+## Scripts
+
+All GitHub/CI data gathering is handled by deterministic bash scripts:
+
+| Script | Purpose |
+|--------|---------|
+| `pr-checks.sh` | Fetch PR metadata and Prow CI job statuses |
+| `pr-comments.sh` | Fetch unresolved review comments (human + CodeRabbit) |
+| `pr-state.sh` | Read/write monitor state via env var |
+| `pr-push.sh` | Validate fork remote and push changes |
+| `pr-stop-check.sh` | Evaluate restart conditions for stop hook |
 
 ## Requirements
 
