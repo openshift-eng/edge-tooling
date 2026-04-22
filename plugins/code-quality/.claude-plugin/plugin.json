@@ -1,0 +1,8 @@
+{
+  "name": "code-quality",
+  "description": "Code convention enforcement — commit messages, attribution, and Coderabbit configuration",
+  "version": "1.0.0",
+  "author": { "name": "jeff-roche" },
+  "homepage": "https://github.com/openshift-eng/edge-tooling",
+  "license": "Apache-2.0"
+}

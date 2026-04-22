@@ -1,0 +1,43 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/check-commit-message.sh",
+            "timeout": 2,
+            "statusMessage": "Validating commit message..."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/check-attribution.sh",
+            "timeout": 3,
+            "statusMessage": "Checking attribution..."
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/check-coderabbit-config.sh",
+            "timeout": 5,
+            "statusMessage": "Checking Coderabbit config..."
+          }
+        ]
+      }
+    ]
+  }
+}
