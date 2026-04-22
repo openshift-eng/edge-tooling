@@ -1,14 +1,30 @@
 ---
 name: two-node:create-rhel-stories
+argument-hint: [--dry-run] <RHEL ticket keys or JQL>
 description: Create OCPEDGE stories for TNF RHEL verification tickets, link them, and set components
-argument-hint: "[--dry-run] <RHEL ticket keys or JQL>"
 user-invocable: true
-allowed-tools: Bash, Read, Glob, Grep, Agent, AskUserQuestion, mcp__mcp-atlassian__jira_search, mcp__mcp-atlassian__jira_get_issue, mcp__mcp-atlassian__jira_create_issue, mcp__mcp-atlassian__jira_create_issue_link
+allowed-tools: Bash, Read, Glob, Grep, Agent, AskUserQuestion, mcp__mcp-atlassian__jira_search, mcp__mcp-atlassian__jira_get_issue, mcp__mcp-atlassian__jira_create_issue, mcp__mcp-atlassian__jira_create_issue_link, mcp__mcp-atlassian__jira_search_fields
 ---
 
-# Create OCPEDGE Stories for TNF RHEL Verification Tickets
+# two-node:create-rhel-stories
+
+## Synopsis
+
+```bash
+/two-node:create-rhel-stories [--dry-run] [RHEL-XXXXX ...] [jql:<JQL query>]
+```
+
+## Description
 
 Create OCPEDGE stories for groups of related TNF RHEL verification tickets that don't already have a corresponding story on the OCPEDGE backlog. Link the RHEL tickets to the new story and add the required components.
+
+## Arguments
+
+- `$ARGUMENTS` (optional): One of the following input formats, optionally preceded by `--dry-run`
+  - **Specific ticket keys** (e.g., `RHEL-12345 RHEL-12346 RHEL-12347`): Process these tickets directly
+  - **JQL query** (e.g., `jql:project = RHEL AND component = "resource-agents"`): Search for tickets matching the query
+  - **No arguments** (or only `--dry-run`): Auto-discover untested TNF resource-agents tickets using the default JQL
+  - `--dry-run` (optional): Preview the plan without creating or modifying anything in Jira
 
 ## Prerequisites
 
@@ -19,10 +35,18 @@ This command requires the `mcp-atlassian` MCP server for Jira access. This plugi
 
 If the `mcp__mcp-atlassian__jira_search` tool is not available when the command runs, stop and show these setup instructions instead of proceeding.
 
+## Scripts Directory
+
+All scripts are run relative to the plugin directory:
+
+```bash
+SCRIPTS_DIR=${PLUGIN_DIR}/scripts
+```
+
 ## Helper Script
 
 This command uses a helper script for deterministic operations. The script is at:
-`${PLUGIN_DIR}/ocpedge_rhel_helper.py`
+`${SCRIPTS_DIR}/ocpedge_rhel_helper.py`
 
 Available subcommands:
 - `parse-args <arguments>` — Parse input into `{mode, jql?, tickets?}`
@@ -35,24 +59,12 @@ Available subcommands:
 All subcommands accept/return JSON. Use Bash to call them.
 Pass `-` as the argument to read JSON from stdin (avoids ARG_MAX limits with large payloads):
 ```bash
-echo '<large_json>' | python3 "${PLUGIN_DIR}/ocpedge_rhel_helper.py" group-tickets -
+echo '<large_json>' | python3 "${SCRIPTS_DIR}/ocpedge_rhel_helper.py" group-tickets -
 ```
 
-## Input Formats
+## Auto-Discover Default JQL
 
-### Option 1: Specific RHEL ticket keys
-```
-/two-node:create-rhel-stories RHEL-12345 RHEL-12346 RHEL-12347
-```
-
-### Option 2: JQL query
-
-```text
-/two-node:create-rhel-stories jql:project = RHEL AND component = "resource-agents" AND status != Closed ORDER BY created DESC
-```
-
-### Option 3: No arguments (auto-discover)
-If no arguments are provided (or only `--dry-run`), automatically search for TNF resource-agents tickets that need testing using the default JQL:
+When no arguments are provided (or only `--dry-run`), automatically search for TNF resource-agents tickets that need testing using this default JQL:
 ```
 project = RHEL AND summary ~ "\\[TNF\\]" AND component = "resource-agents" AND ("Preliminary Testing" = Requested AND "Test Coverage" is EMPTY) AND (fixVersion in unreleasedVersions() OR fixVersion is EMPTY) ORDER BY created DESC
 ```
@@ -62,20 +74,21 @@ This aligns with the OCPEDGE RHEL Verification board (board 11551) filter, which
 
 If `$ARGUMENTS` contains `--dry-run`, the command runs Steps 0–5 (read-only operations and plan presentation) but **does NOT execute Steps 6–7** (no issues created, no links added, no subtasks created). Instead, after presenting the plan, it shows what *would* be created and exits. This is useful for testing the grouping logic and verifying the plan against real Jira data without modifying anything.
 
-## Step 0: Parse Arguments
+## Implementation Steps
+
+### Step 0: Parse Arguments
 
 Run the helper to parse the input:
+
 ```bash
-python3 "${PLUGIN_DIR}/ocpedge_rhel_helper.py" parse-args $ARGUMENTS
+python3 "${SCRIPTS_DIR}/ocpedge_rhel_helper.py" parse-args $ARGUMENTS
 ```
 
 This returns JSON with `mode` ("jql", "tickets", or "interactive"), `dry_run` (boolean), and the parsed values.
-- If `mode` is "interactive", use auto-discover mode: search with the default JQL for untested resource-agents tickets (see Option 3 above).
+- If `mode` is "interactive", use auto-discover mode: search with the default JQL for untested resource-agents tickets (see Auto-Discover Default JQL above).
 - If `mode` is "jql", use the `jql` field in Step 1.
 - If `mode` is "tickets", use the `tickets` list in Step 2.
 - If `dry_run` is true, stop after Step 5 (the plan) — do not create or modify anything in Jira.
-
-## Instructions
 
 ### Step 1: Collect RHEL Tickets
 
@@ -101,7 +114,7 @@ The JQL filter may only return a subset of clones for a given issue (e.g. only t
 
 Run the helper to find missing clones:
 ```bash
-python3 "${PLUGIN_DIR}/ocpedge_rhel_helper.py" find-missing-clones '<tickets_json>'
+python3 "${SCRIPTS_DIR}/ocpedge_rhel_helper.py" find-missing-clones '<tickets_json>'
 ```
 
 This returns a JSON array of ticket keys that are referenced via clone links but weren't in the search results. For each missing key, fetch it with `jira_get_issue` and add it to the ticket set. Then run `find-missing-clones` again on the expanded set — repeat until no new clones are found (this walks the full clone tree via the parent).
@@ -135,7 +148,7 @@ Extract from each ticket:
 Run the helper script to group tickets deterministically:
 
 ```bash
-python3 "${PLUGIN_DIR}/ocpedge_rhel_helper.py" group-tickets '<tickets_json>'
+python3 "${SCRIPTS_DIR}/ocpedge_rhel_helper.py" group-tickets '<tickets_json>'
 ```
 
 Pass a JSON array of ticket objects (each with `key`, `summary`, `issuelinks`, and optionally `description` fields from Step 2).
@@ -222,8 +235,8 @@ Accommodate any adjustments before proceeding.
 For each group that needs a new story, use the helper to generate the summary and description:
 
 ```bash
-python3 "${PLUGIN_DIR}/ocpedge_rhel_helper.py" generate-summary "<base_summary>"
-python3 "${PLUGIN_DIR}/ocpedge_rhel_helper.py" generate-description '["RHEL-111", "RHEL-222"]'
+python3 "${SCRIPTS_DIR}/ocpedge_rhel_helper.py" generate-summary "<base_summary>"
+python3 "${SCRIPTS_DIR}/ocpedge_rhel_helper.py" generate-description '["RHEL-111", "RHEL-222"]'
 ```
 
 Then create the issue:
@@ -316,7 +329,49 @@ After all operations complete, present a summary:
 - If a create fails, report the error and continue with remaining groups
 - Never silently skip errors — always report them in the results
 
-## Important Notes
+## Examples
+
+### Example 1: Auto-Discover Untested Tickets (Default)
+
+```bash
+/two-node:create-rhel-stories
+```
+
+Searches for untested TNF resource-agents RHEL tickets using the default JQL and creates OCPEDGE stories.
+
+### Example 2: Dry Run
+
+```bash
+/two-node:create-rhel-stories --dry-run
+```
+
+Previews the plan without creating or modifying anything in Jira.
+
+### Example 3: Specific Tickets
+
+```bash
+/two-node:create-rhel-stories RHEL-12345 RHEL-12346 RHEL-12347
+```
+
+Processes only the specified RHEL tickets.
+
+### Example 4: JQL Query
+
+```bash
+/two-node:create-rhel-stories jql:project = RHEL AND component = "resource-agents" AND status != Closed ORDER BY created DESC
+```
+
+Searches for tickets matching the JQL query.
+
+### Example 5: Dry Run with Specific Tickets
+
+```bash
+/two-node:create-rhel-stories --dry-run RHEL-12345 RHEL-12346
+```
+
+Previews what would be created for specific tickets without modifying Jira.
+
+## Notes
 
 - **Always confirm with the user before creating stories** — the plan step is mandatory
 - **Use Markdown** in descriptions — the MCP tool converts Markdown to Jira wiki markup automatically

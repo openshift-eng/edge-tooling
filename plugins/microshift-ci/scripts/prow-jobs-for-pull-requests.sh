@@ -185,7 +185,7 @@ mode_detail() {
     rm -f "${output_tmp}"
 }
 
-# Approve mode: add /lgtm to PRs where all jobs pass
+# Approve mode: add /verified to PRs where all jobs pass
 mode_approve() {
     local filter="${1:-}" author="${2:-}" execute="${3:-false}"
     local pr_data
@@ -223,7 +223,7 @@ mode_approve() {
         fi
 
         if [[ "${success}" -eq "${total}" ]]; then
-            local comment=$'/lgtm\n/verified by ci\n'
+            local comment=$'/verified by ci\n'
             comment+="${SIGNATURE}"
             echo "PR #${pr_number}: All ${total} jobs passed, approving..."
             if ${execute}; then

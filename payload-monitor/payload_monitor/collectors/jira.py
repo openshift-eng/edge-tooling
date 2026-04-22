@@ -1,5 +1,7 @@
 """Search JIRA for existing bugs related to edge topology failures."""
 
+from __future__ import annotations
+
 import logging
 import os
 import urllib.parse
@@ -20,14 +22,19 @@ SEARCH_URL = f"{JIRA_BASE}/rest/api/3/search"
 _session = create_session()
 
 
-def _get_headers() -> dict:
-    """Get request headers with auth if available.
+def _get_auth() -> Optional[tuple[str, str]]:
+    """Return (username, token) for Basic auth, or None if Bearer should be used."""
+    username = os.environ.get("JIRA_USERNAME")
+    token = os.environ.get("JIRA_TOKEN")
+    if username and token:
+        return (username, token)
+    return None
 
-    Uses JIRA_TOKEN as a Bearer token (Atlassian Cloud PAT).
-    """
+
+def _get_headers() -> dict:
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     token = os.environ.get("JIRA_TOKEN")
-    if token:
+    if token and not os.environ.get("JIRA_USERNAME"):
         headers["Authorization"] = f"Bearer {token}"
     return headers
 
@@ -49,7 +56,7 @@ def search_bugs(
 
     # Search by job name in summary or description
     # Escape special JQL characters
-    escaped = job_name.replace('"', '\\"')
+    escaped = job_name.replace('\\', '\\\\').replace('"', '\\"')
     component = config.jira_component_for(topology) if topology else ""
     component_clause = f'AND component = "{component}" ' if component else ""
     jql = (
@@ -60,21 +67,21 @@ def search_bugs(
         f'ORDER BY updated DESC'
     )
 
-    try:
-        resp = _session.get(
-            SEARCH_URL,
-            params={"jql": jql, "maxResults": max_results, "fields": "summary,status,assignee,priority,components"},
-            headers=_get_headers(),
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    except requests.RequestException as e:
-        logger.warning(f"JIRA search failed for {job_name}: {e}")
-        return []
+    resp = _session.get(
+        SEARCH_URL,
+        params={"jql": jql, "maxResults": max_results, "fields": "summary,status,assignee,priority,components"},
+        headers=_get_headers(),
+        auth=_get_auth(),
+        timeout=15,
+    )
+    resp.raise_for_status()
+    data = resp.json()
 
     bugs = []
     for issue in data.get("issues", []):
+        key = issue.get("key")
+        if not key:
+            continue
         fields = issue.get("fields", {})
         assignee = fields.get("assignee") or {}
         status = fields.get("status") or {}
@@ -82,12 +89,12 @@ def search_bugs(
         components = fields.get("components", [])
 
         bugs.append(JiraBug(
-            key=issue["key"],
+            key=key,
             summary=fields.get("summary", ""),
             status=status.get("name", ""),
             assignee=assignee.get("displayName", "Unassigned"),
             priority=priority.get("name", ""),
-            url=f"{JIRA_BASE}/browse/{issue['key']}",
+            url=f"{JIRA_BASE}/browse/{key}",
             component=components[0].get("name", "") if components else "",
         ))
 
@@ -98,29 +105,39 @@ def search_bugs_for_jobs(
     failing_jobs: list[JobRun],
     config: Config,
     max_workers: int = 4,
-) -> dict[str, list[JiraBug]]:
+) -> tuple[dict[str, list[JiraBug]], list[str]]:
     """Search JIRA for bugs matching each failing job.
 
-    Returns a dict mapping job name -> list of matching bugs.
+    Returns (results, errors) where results maps job name -> list of
+    matching bugs and errors is a list of human-readable error strings
+    for jobs whose JIRA searches failed.
     """
     if not has_auth():
         logger.info("JIRA_TOKEN not set — JIRA bug matching disabled")
-        return {}
+        return {}, []
 
     results = {}
+    errors: list[str] = []
 
     def _search(job: JobRun) -> tuple[str, list[JiraBug]]:
         return job.name, search_bugs(job.name, config, topology=job.topology)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = [pool.submit(_search, job) for job in failing_jobs]
+        futures = {pool.submit(_search, job): job for job in failing_jobs}
         for future in as_completed(futures):
-            name, bugs = future.result()
+            job = futures[future]
+            try:
+                name, bugs = future.result()
+            except (requests.RequestException, ValueError) as e:
+                msg = f"JIRA search failed for {job.name}: {e}"
+                logger.warning(msg)
+                errors.append(msg)
+                continue
             if bugs:
                 logger.info(f"  Found {len(bugs)} JIRA bugs for {name}")
                 results[name] = bugs
 
-    return results
+    return results, errors
 
 
 def create_bug_url(

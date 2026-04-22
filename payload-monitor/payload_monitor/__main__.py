@@ -1,4 +1,6 @@
-"""CLI entry point for Edge Enablement Payload Monitor."""
+"""CLI entry point for Edge OCP Payload Monitor."""
+
+from __future__ import annotations
 
 import logging
 import re
@@ -78,7 +80,7 @@ def main(
     open_browser, verbose, skip_prow, skip_sippy, with_timing,
     merge_analysis_path,
 ):
-    """Edge Enablement Payload Monitor — monitor OpenShift nightly payloads for edge topology failures."""
+    """Edge OCP Payload Monitor — monitor OpenShift nightly payloads for edge topology failures."""
     _setup_logging(verbose)
     logger = logging.getLogger("payload_monitor")
 
@@ -133,7 +135,7 @@ def main(
             raise SystemExit(1)
         config.versions = parsed
 
-    logger.info("Starting Edge Enablement Payload Monitor")
+    logger.info("Starting Edge OCP Payload Monitor")
 
     # Step 1: Discover versions and resolve stream names
     logger.info("Step 1: Discovering active versions...")
@@ -218,15 +220,17 @@ def main(
         skip_timing=not with_timing,
         timing_report=timing_report,
         data_errors=data_errors,
+        recurring_threshold=config.recurring_threshold,
+        persistent_threshold=config.persistent_threshold,
     )
 
     # Step 4: Analyze and find JIRA matches
-    # TODO: JIRA integration is temporarily disabled (work in progress).
-    # Uncomment the lines below to re-enable:
-    # logger.info("Step 4: Analyzing failures and searching JIRA...")
-    # analyze(report, config)
-    report.skip_jira = True
-    logger.info("Step 4: Skipping JIRA analysis (temporarily disabled — work in progress)")
+    logger.info("Step 4: Analyzing failures and searching JIRA...")
+    try:
+        analyze(report, config)
+    except Exception as e:
+        logger.error(f"Analysis failed: {e}")
+        data_errors.append(f"Analysis: {e}")
 
     # Generate HTML report
     generate_html(report, html_path)

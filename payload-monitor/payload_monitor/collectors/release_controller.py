@@ -1,5 +1,7 @@
 """Fetch nightly payload data from the amd64 release controller."""
 
+from __future__ import annotations
+
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
@@ -180,7 +182,7 @@ def _collect_stream(stream: str, config: Config) -> StreamReport:
     return StreamReport(stream=stream, version=version, payloads=payloads)
 
 
-def collect(config: Config, streams: list[str] | None = None) -> list[StreamReport]:
+def collect(config: Config, streams: Optional[list[str]] = None) -> list[StreamReport]:
     """Collect payload data for all configured streams in parallel."""
     if streams is None:
         streams = discover_streams(config)

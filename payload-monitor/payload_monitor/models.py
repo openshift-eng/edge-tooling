@@ -123,6 +123,7 @@ class ComponentRegression:
     version: str
     variants: dict = field(default_factory=dict)
     status: int = 0
+    comparison: str = ""  # Which topology is compared against HA (e.g., "SNO", "TNF")
     sample_success: int = 0
     sample_failure: int = 0
     sample_pass_rate: float = 0.0
@@ -184,6 +185,15 @@ class StreamReport:
 
 
 @dataclass
+class EscalationRisk:
+    job_name: str
+    topology: str
+    version: str
+    consecutive_failures: int
+    sippy_url: str = ""
+
+
+@dataclass
 class MonitorReport:
     generated_at: str = ""
     streams: list[StreamReport] = field(default_factory=list)
@@ -195,7 +205,14 @@ class MonitorReport:
     skip_jira: bool = False
     skip_timing: bool = False
     timing_report: Optional[TimingReport] = None
+    escalation_risks: list[EscalationRisk] = field(default_factory=list)
+    cross_topology: dict[str, list[str]] = field(default_factory=dict)
     data_errors: list[str] = field(default_factory=list)
+    jira_errors: list[str] = field(default_factory=list)
+    failure_counts: dict[str, int] = field(default_factory=dict)
+    jira_matches: dict[str, list[JiraBug]] = field(default_factory=dict)
+    recurring_threshold: int = 2
+    persistent_threshold: int = 3
 
 
 @dataclass

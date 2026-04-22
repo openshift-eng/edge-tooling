@@ -43,6 +43,8 @@ Analyze MicroShift CI failures, produce HTML reports, and create JIRA bugs.
 - `gh` CLI (authenticated with access to openshift/microshift)
 - Jira MCP server configured (for bug correlation)
 - Python 3
+- `pcp-export-pcp2json` (for PCP performance graphs)
+- `matplotlib` Python package (for PCP graph plotting)
 - **Category:** ci-cd
 
 ## Author

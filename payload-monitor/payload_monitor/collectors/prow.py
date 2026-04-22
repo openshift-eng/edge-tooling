@@ -1,5 +1,7 @@
 """Fetch job details and failing tests from Prow CI artifacts."""
 
+from __future__ import annotations
+
 import logging
 import re
 import subprocess

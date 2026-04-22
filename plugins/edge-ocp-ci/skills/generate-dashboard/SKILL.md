@@ -1,11 +1,11 @@
 ---
-name: ee-payload-monitor
-description: Edge Enablement Payload Monitor — monitor OpenShift nightly payloads for edge topology (SNO/TNA/TNF) failures with AI-enriched analysis
-argument-hint: [--versions 4.18,4.19,4.20,4.21,4.22,4.23,5.0] [--skip-prow] [--skip-sippy] [--with-timing]
+name: edge-ocp-ci:generate-dashboard
+description: "Edge OCP Payload Monitor — monitor OpenShift nightly payloads for edge topology (SNO/TNA/TNF) failures with AI-enriched analysis"
+argument-hint: "[--versions 4.18,4.19,4.20,4.21,4.22,4.23,5.0] [--skip-prow] [--skip-sippy] [--with-timing]"
 user-invocable: true
 ---
 
-# Edge Enablement Payload Monitor Skill
+# Edge OCP Payload Monitor Skill
 
 You are helping a developer monitor OpenShift nightly payload health for edge topologies (SNO, TNA, TNF). This skill orchestrates the `payload-monitor` Python tool and existing marketplace CI skills to generate an interactive HTML dashboard report with AI-powered root cause analysis for blocking job failures.
 
@@ -59,10 +59,14 @@ Parse `$ARGUMENTS` to determine options:
 
 ### Step 2: Install Prerequisites (if needed)
 
-The tool uses a virtual environment at `payload-monitor/.venv`. Create it and install dependencies if not already present:
+The tool uses a virtual environment at `$TOOL_DIR/.venv`. Create it and install dependencies if not already present:
+
+PLUGIN_DIR is the directory containing this skill file (i.e., plugins/edge-ocp-ci/skills/generate-dashboard).
+
+TOOL_DIR="$(git -C "$PLUGIN_DIR" rev-parse --show-toplevel)/payload-monitor"
 
 ```bash
-cd payload-monitor && (test -d .venv || python3 -m venv .venv) && .venv/bin/python -c "import requests, jinja2, click" 2>/dev/null || .venv/bin/pip install -r requirements.txt
+cd "$TOOL_DIR" && (test -d .venv || python3 -m venv .venv) && .venv/bin/python -c "import requests, jinja2, click" 2>/dev/null || .venv/bin/pip install -r requirements.txt
 ```
 
 This avoids re-creating the venv or re-running `pip install` on every invocation when the environment is already set up.
@@ -72,7 +76,7 @@ This avoids re-creating the venv or re-running `pip install` on every invocation
 Run the payload monitor Python tool to collect data and generate the base report:
 
 ```bash
-cd payload-monitor && .venv/bin/python -m payload_monitor --output reports/report-$(date +%Y-%m-%d).html [OPTIONS]
+cd "$TOOL_DIR" && .venv/bin/python -m payload_monitor --output reports/report-$(date +%Y-%m-%d).html [OPTIONS]
 ```
 
 Pass through any relevant flags (`--versions`, `--skip-prow`, `--skip-sippy`, `--with-timing`).
@@ -179,7 +183,7 @@ This file is intentionally small — it contains only the AI analysis results, n
 Patch the analysis directly into the existing HTML report. Use the actual report path from Step 3:
 
 ```bash
-cd payload-monitor && .venv/bin/python -m payload_monitor \
+cd "$TOOL_DIR" && .venv/bin/python -m payload_monitor \
   --merge-analysis reports/<actual-analysis>.json \
   --output reports/<actual-report>.html
 ```
@@ -193,7 +197,7 @@ If there were no blocking failures (no analysis file), skip this step entirely �
 After successfully patching the analysis into the HTML report, delete the intermediate analysis JSON file:
 
 ```bash
-rm payload-monitor/reports/<actual-analysis>.json
+rm "$TOOL_DIR/reports/<actual-analysis>.json"
 ```
 
 This file has served its purpose — the analysis is now embedded in the HTML report.
@@ -203,13 +207,15 @@ This file has served its purpose — the analysis is now embedded in the HTML re
 Do NOT duplicate the report data or findings summary — the HTML dashboard already contains all of that. Present only a brief confirmation:
 
 ```
-## Edge Enablement Payload Monitor Report Generated
+## Edge OCP Payload Monitor Report Generated
 
-Report: `payload-monitor/reports/report-{date}.html`
+Report: `<actual report path captured from Step 3>`
 
 Analyzed {N} blocking job failure(s) with AI root cause analysis.
 Open the HTML report for the full interactive dashboard with findings summary, suggested actions, and detailed analysis.
 ```
+
+Use the actual report file path captured from the tool's `Report:` log line in Step 3 — do NOT hardcode a date-based path.
 
 Offer follow-up actions the user can take from this session:
 - **Create JIRA bugs** for untracked failures
@@ -222,7 +228,7 @@ Offer follow-up actions the user can take from this session:
 
 ## Important Notes
 
-- The Python tool must be run from the `payload-monitor/` directory
+- The Python tool must be run from the `$TOOL_DIR` directory
 - Dependencies are checked and installed automatically in Step 2
 - JIRA features require a `JIRA_TOKEN` environment variable with **read-only** permissions — the tool only searches for existing bugs, never creates or modifies issues
 - Prow artifact fetching requires `gsutil` (Google Cloud SDK)
@@ -230,7 +236,10 @@ Offer follow-up actions the user can take from this session:
 - Do NOT duplicate report data in your output — the HTML dashboard is the primary output, keep your response brief
 - Deep analysis runs automatically for **blocking jobs only** — informing jobs get a Claude suggestion instead
 - Prioritize blocking failures over informing failures in all analysis
-- Flag recurring failures prominently — 2+ payload recurrence strongly suggests a real regression, not a flake
+- The dashboard automatically detects **recurring** (2+ payloads) and **persistent** (3+ payloads) failures — highlight these in your summary
+- **Unstable** jobs are informing jobs failing in 3+ consecutive payloads — these are consistently failing and need attention
+- **Cross-topology correlation** ("Also in: SNO/TNA/TNF" hints) surfaces shared platform issues — when you see these, investigate the shared root cause rather than each topology independently
+- Every finding in the dashboard has a next step (JIRA link, Claude command, triage URL, or create-bug button) — reference these in your follow-up suggestions
 - For TNF/TNA failures, pay special attention to etcd, Pacemaker, and fencing-related errors
 - For SNO failures, check for single-node-specific issues like workload partitioning, resource constraints
 - When multiple edge topologies fail in the same payload, investigate whether it's a shared platform issue vs topology-specific

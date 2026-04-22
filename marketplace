@@ -8,7 +8,7 @@
 set -euo pipefail
 
 # Constants
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd -P)"
 PLUGINS_DIR="${SCRIPT_DIR}/plugins"
 MARKETPLACE_FILE="${SCRIPT_DIR}/.claude-plugin/marketplace.json"
 TEMPLATES_DIR="${PLUGINS_DIR}/.templates"
@@ -75,6 +75,136 @@ json_get() {
     jq -r "$query // empty" "$file" 2>/dev/null || echo ""
 }
 
+# Generate bash completion script
+_generate_bash_completion() {
+    local escaped_dir="${PLUGINS_DIR//\'/\'\\\'\'}"
+    echo "_MARKETPLACE_PLUGINS_DIR='${escaped_dir}'"
+    cat <<'BASH_COMP'
+_marketplace_completions() {
+    local cur prev commands plugin_cmds flag_cmds
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    commands="list ls search show info validate new create add catalog-update completion help"
+    plugin_cmds="show info validate add"
+    flag_cmds="new create add"
+
+    if [[ $COMP_CWORD -eq 1 ]]; then
+        COMPREPLY=($(compgen -W "$commands" -- "$cur"))
+        return
+    fi
+
+    local cmd="${COMP_WORDS[1]}"
+
+    # Complete plugin names for commands that take them
+    for pc in $plugin_cmds; do
+        if [[ "$cmd" == "$pc" && $COMP_CWORD -eq 2 ]]; then
+            local names=""
+            if [[ -d "$_MARKETPLACE_PLUGINS_DIR" ]]; then
+                local dir
+                for dir in "$_MARKETPLACE_PLUGINS_DIR"/*/; do
+                    [[ ! -d "$dir" ]] && continue
+                    local name
+                    name=$(basename "$dir")
+                    [[ "$name" == ".templates" || "$name" == "docs" ]] && continue
+                    [[ -f "$dir/.claude-plugin/plugin.json" ]] && names+="$name "
+                done
+            fi
+            COMPREPLY=($(compgen -W "$names" -- "$cur"))
+            return
+        fi
+    done
+
+    # Complete flags for new/create/add
+    for fc in $flag_cmds; do
+        if [[ "$cmd" == "$fc" && "$cur" == --* ]]; then
+            COMPREPLY=($(compgen -W "--skill --hook --mcp --agent" -- "$cur"))
+            return
+        fi
+    done
+
+    # Complete shell name for completion command
+    if [[ "$cmd" == "completion" && $COMP_CWORD -eq 2 ]]; then
+        COMPREPLY=($(compgen -W "bash zsh" -- "$cur"))
+        return
+    fi
+}
+
+complete -F _marketplace_completions marketplace
+BASH_COMP
+}
+
+# Generate zsh completion script
+_generate_zsh_completion() {
+    local escaped_dir="${PLUGINS_DIR//\'/\'\\\'\'}"
+    echo "_MARKETPLACE_PLUGINS_DIR='${escaped_dir}'"
+    cat <<'ZSH_COMP'
+#compdef marketplace
+
+_marketplace_plugin_names() {
+    [[ ! -d "$_MARKETPLACE_PLUGINS_DIR" ]] && return
+
+    local -a names
+    local dir
+    for dir in "$_MARKETPLACE_PLUGINS_DIR"/*/; do
+        [[ ! -d "$dir" ]] && continue
+        local name="${dir:t}"
+        [[ "$name" == ".templates" || "$name" == "docs" ]] && continue
+        [[ -f "$dir/.claude-plugin/plugin.json" ]] && names+=("$name")
+    done
+    compadd -a names
+}
+
+_marketplace() {
+    local -a commands
+    commands=(
+        'list:List all available plugins'
+        'ls:List all available plugins'
+        'search:Search plugins by name or description'
+        'show:Show detailed information about a plugin'
+        'info:Show detailed information about a plugin'
+        'validate:Validate plugin structure and metadata'
+        'new:Create new plugin from template'
+        'create:Create new plugin from template'
+        'add:Add components to an existing plugin'
+        'catalog-update:Rebuild marketplace catalog'
+        'completion:Generate shell completion script'
+        'help:Show help text'
+    )
+
+    _arguments -C \
+        '1:command:->command' \
+        '*::arg:->args'
+
+    case $state in
+        command)
+            _describe 'command' commands
+            ;;
+        args)
+            case ${words[1]} in
+                show|info|validate)
+                    _marketplace_plugin_names
+                    ;;
+                add|new|create)
+                    _arguments \
+                        '1:plugin-name:' \
+                        '--skill[Include a skill]' \
+                        '--hook[Include hooks]' \
+                        '--mcp[Include MCP server config]' \
+                        '--agent[Include agent definition]'
+                    ;;
+                completion)
+                    _values 'shell' bash zsh
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+compdef _marketplace marketplace
+ZSH_COMP
+}
+
 # Update catalog: scan plugins and generate .claude-plugin/marketplace.json
 update_catalog() {
     info "Scanning plugins directory..."
@@ -127,7 +257,7 @@ update_catalog() {
         --arg owner_name "brandisher" \
         --arg owner_email "chad@redhat.com" \
         --argjson plugins "$plugins_json" \
-        '{"name": $name, "description": $desc, "owner": {"name": $owner_name, "email": $owner_email}, "plugins": $plugins}' \
+        '{"name": $name, "description": $desc, "owner": {"name": $owner_name, "email": $owner_email}, "plugins": ($plugins | sort_by(.name))}' \
         > "$MARKETPLACE_FILE"
 
     success "Catalog updated: $plugin_count plugin(s) found"
@@ -612,6 +742,14 @@ main() {
         catalog-update)
             update_catalog
             ;;
+        completion)
+            local shell="${1:-bash}"
+            case "$shell" in
+                bash) _generate_bash_completion ;;
+                zsh)  _generate_zsh_completion ;;
+                *)    error "Unsupported shell: $shell (supported: bash, zsh)" ;;
+            esac
+            ;;
         help|--help|-h)
             cat <<EOF
 ${BOLD}Plugin Marketplace CLI${NC} (Developer Tool)
@@ -627,6 +765,7 @@ ${BOLD}Commands:${NC}
   ${CYAN}new${NC} <name> [flags]         Create new plugin from template
   ${CYAN}add${NC} <name> [flags]         Add components to an existing plugin
   ${CYAN}catalog-update${NC}             Rebuild .claude-plugin/marketplace.json
+  ${CYAN}completion${NC} <shell>         Generate shell completion (bash, zsh)
 
 ${BOLD}Component Flags for 'new' / 'add':${NC}
   --skill                    Include a skill (SKILL.md)
@@ -642,6 +781,8 @@ ${BOLD}Examples:${NC}
   marketplace new my-plugin                     # Create plugin (interactive)
   marketplace add my-plugin --hook              # Add a hook to an existing plugin
   marketplace catalog-update                    # Rebuild marketplace catalog
+  marketplace completion bash                   # Output bash completion script
+  source <(marketplace completion bash)         # Enable completion in current shell
 
 ${BOLD}User Installation:${NC}
   /plugin marketplace add openshift-eng/edge-tooling

@@ -1,5 +1,7 @@
 """Generate HTML for the Install & Upgrade Timing dashboard section."""
 
+from __future__ import annotations
+
 import html
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -75,47 +77,107 @@ def render_summary_table(report: TimingReport) -> str:
     all_groups = _group_runs(all_runs)
     success_groups = _group_runs(runs) if runs else {}
 
+    # Build per-version index for detail rows
+    version_success: dict[tuple[str, str, str], list] = defaultdict(list)
+    for r in runs:
+        version_success[(r.topology, r.run_type, r.release)].append(r)
+    version_all: dict[tuple[str, str, str], list] = defaultdict(list)
+    for r in all_runs:
+        version_all[(r.topology, r.run_type, r.release)].append(r)
+
     rows = []
     for (topo, rtype) in sorted(all_groups.keys()):
         total = len(all_groups[(topo, rtype)])
+        # Aggregate row — visible by default, hidden when a version filter is active
         if (topo, rtype) in success_groups:
             stats = compute_stats(success_groups[(topo, rtype)])
             rows.append(
-                f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}">'
+                f'<tr class="timing-row timing-aggregate" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}"'
+                f' title="Aggregated across all collected versions">'
                 f'<td><span class="badge {topo.lower()}">{html.escape(topo)}</span></td>'
                 f'<td>{html.escape(rtype.capitalize())}</td>'
+                f'<td style="color:var(--text-muted);font-style:italic">all</td>'
                 f'<td>{stats["count"]}</td>'
                 f'<td>{_fmt_duration(stats["avg"])}</td>'
                 f'<td>{_fmt_duration(stats["median"])}</td>'
                 f'<td>{_fmt_duration(stats["p90"])}</td>'
                 f'<td>{_fmt_duration(stats["p95"])}</td>'
                 f'<td>{_fmt_duration(stats["p99"])}</td>'
-                f'<td>{_fmt_duration(stats["min"])}</td>'
-                f'<td>{_fmt_duration(stats["max"])}</td>'
                 f'<td>{stats["cv"]}%</td>'
                 f'</tr>'
             )
         else:
             rows.append(
-                f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}" style="opacity:0.6">'
+                f'<tr class="timing-row timing-aggregate" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}" style="opacity:0.6"'
+                f' title="Aggregated across all collected versions">'
                 f'<td><span class="badge {topo.lower()}">{html.escape(topo)}</span></td>'
                 f'<td>{html.escape(rtype.capitalize())}</td>'
+                f'<td style="color:var(--text-muted);font-style:italic">all</td>'
                 f'<td>0 / {total}</td>'
-                f'<td colspan="8" style="color:var(--text-muted);font-style:italic">'
+                f'<td colspan="6" style="color:var(--text-muted);font-style:italic">'
                 f'{total} run{"s" if total != 1 else ""} collected but none successful'
                 f'</td>'
                 f'</tr>'
             )
 
+        # Per-version rows — hidden by default, shown when a version filter is active
+        versions_for_group = sorted(set(
+            r.release for r in all_groups[(topo, rtype)]
+        ))
+        for ver in versions_for_group:
+            ver_success = version_success.get((topo, rtype, ver), [])
+            ver_total = len(version_all.get((topo, rtype, ver), []))
+            if ver_success:
+                ver_stats = compute_stats(ver_success)
+                rows.append(
+                    f'<tr class="timing-row timing-version-detail" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}"'
+                    f' data-tversion="{html.escape(ver)}" style="display:none">'
+                    f'<td><span class="badge {topo.lower()}">{html.escape(topo)}</span></td>'
+                    f'<td>{html.escape(rtype.capitalize())}</td>'
+                    f'<td>{html.escape(ver)}</td>'
+                    f'<td>{ver_stats["count"]}</td>'
+                    f'<td>{_fmt_duration(ver_stats["avg"])}</td>'
+                    f'<td>{_fmt_duration(ver_stats["median"])}</td>'
+                    f'<td>{_fmt_duration(ver_stats["p90"])}</td>'
+                    f'<td>{_fmt_duration(ver_stats["p95"])}</td>'
+                    f'<td>{_fmt_duration(ver_stats["p99"])}</td>'
+                    f'<td>{ver_stats["cv"]}%</td>'
+                    f'</tr>'
+                )
+            else:
+                rows.append(
+                    f'<tr class="timing-row timing-version-detail" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}"'
+                    f' data-tversion="{html.escape(ver)}" style="display:none;opacity:0.6">'
+                    f'<td><span class="badge {topo.lower()}">{html.escape(topo)}</span></td>'
+                    f'<td>{html.escape(rtype.capitalize())}</td>'
+                    f'<td>{html.escape(ver)}</td>'
+                    f'<td>0 / {ver_total}</td>'
+                    f'<td colspan="6" style="color:var(--text-muted);font-style:italic">'
+                    f'{ver_total} run{"s" if ver_total != 1 else ""} collected but none successful'
+                    f'</td>'
+                    f'</tr>'
+                )
+
+    all_versions = sorted(set(r.release for r in all_runs))
+    version_list = ", ".join(all_versions)
+    legend = (
+        f'<div style="font-size:11px;color:var(--text-muted);margin-top:4px">'
+        f'Version <em>all</em> = aggregated across {len(all_versions)} '
+        f'version{"s" if len(all_versions) != 1 else ""} ({version_list}). '
+        f'Use the version filter to see per-version statistics.'
+        f'</div>'
+    )
+
     return (
         '<table class="timing-summary">'
         '<thead><tr>'
-        '<th>Topology</th><th>Type</th><th>Runs</th>'
+        '<th>Topology</th><th>Type</th><th>Version</th><th>Runs</th>'
         '<th>Avg</th><th>Median</th><th>P90</th><th>P95</th><th>P99</th>'
-        '<th>Min</th><th>Max</th><th>CV</th>'
+        '<th>CV</th>'
         '</tr></thead>'
         '<tbody>' + "\n".join(rows) + '</tbody>'
         '</table>'
+        + legend
     )
 
 
@@ -135,15 +197,24 @@ def render_variant_table(report: TimingReport) -> str:
     if len(variant_groups) <= 1:
         return ""
 
+    # Per-version index for detail rows
+    version_variant: dict[tuple[str, str, str, str], list[TimingRun]] = defaultdict(list)
+    for r in runs:
+        vk = _variant_key(r)
+        version_variant[(r.topology, r.run_type, vk, r.release)].append(r)
+
     rows = []
     for (topo, rtype, vk) in sorted(variant_groups.keys()):
         group = variant_groups[(topo, rtype, vk)]
         stats = compute_stats(group)
+        # Aggregate row — visible by default, hidden when version filter active
         rows.append(
-            f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}">'
+            f'<tr class="timing-row timing-aggregate" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}"'
+            f' title="Aggregated across all collected versions">'
             f'<td><span class="badge {topo.lower()}">{html.escape(topo)}</span></td>'
             f'<td>{html.escape(rtype.capitalize())}</td>'
             f'<td style="font-size:13px;color:var(--text-muted)">{html.escape(vk)}</td>'
+            f'<td style="color:var(--text-muted);font-style:italic">all</td>'
             f'<td>{stats["count"]}</td>'
             f'<td>{_fmt_duration(stats["avg"])}</td>'
             f'<td>{_fmt_duration(stats["median"])}</td>'
@@ -151,16 +222,46 @@ def render_variant_table(report: TimingReport) -> str:
             f'<td>{stats["cv"]}%</td>'
             f'</tr>'
         )
+        # Per-version rows — hidden by default, shown when version filter active
+        for ver in sorted(set(r.release for r in group)):
+            ver_runs = version_variant.get((topo, rtype, vk, ver), [])
+            if ver_runs:
+                ver_stats = compute_stats(ver_runs)
+                rows.append(
+                    f'<tr class="timing-row timing-version-detail" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}"'
+                    f' data-tversion="{html.escape(ver)}" style="display:none">'
+                    f'<td><span class="badge {topo.lower()}">{html.escape(topo)}</span></td>'
+                    f'<td>{html.escape(rtype.capitalize())}</td>'
+                    f'<td style="font-size:13px;color:var(--text-muted)">{html.escape(vk)}</td>'
+                    f'<td>{html.escape(ver)}</td>'
+                    f'<td>{ver_stats["count"]}</td>'
+                    f'<td>{_fmt_duration(ver_stats["avg"])}</td>'
+                    f'<td>{_fmt_duration(ver_stats["median"])}</td>'
+                    f'<td>{_fmt_duration(ver_stats["p95"])}</td>'
+                    f'<td>{ver_stats["cv"]}%</td>'
+                    f'</tr>'
+                )
+
+    all_versions = sorted(set(r.release for r in runs))
+    version_list = ", ".join(all_versions)
+    legend = (
+        f'<div style="font-size:11px;color:var(--text-muted);margin-top:4px">'
+        f'Version <em>all</em> = aggregated across {len(all_versions)} '
+        f'version{"s" if len(all_versions) != 1 else ""} ({version_list}). '
+        f'Use the version filter to see per-version statistics.'
+        f'</div>'
+    )
 
     return (
         '<h3>Infrastructure Variant Comparison</h3>'
         '<table class="timing-variants">'
         '<thead><tr>'
-        '<th>Topology</th><th>Type</th><th>Variant</th><th>Runs</th>'
+        '<th>Topology</th><th>Type</th><th>Variant</th><th>Version</th><th>Runs</th>'
         '<th>Avg</th><th>Median</th><th>P95</th><th>CV</th>'
         '</tr></thead>'
         '<tbody>' + "\n".join(rows) + '</tbody>'
         '</table>'
+        + legend
     )
 
 
@@ -393,6 +494,15 @@ def render_dow_heatmap(report: TimingReport) -> str:
 
     overall_avg = sum(all_avgs) / len(all_avgs)
 
+    # Per-combo average weighted by actual run count (not equal-weight per day)
+    combo_avgs: dict[tuple[str, str], float] = {}
+    for topo, rtype in combos:
+        all_durations = [
+            d for (t, rt, dow), durs in dow_groups.items() if t == topo and rt == rtype for d in durs
+        ]
+        if all_durations:
+            combo_avgs[(topo, rtype)] = sum(all_durations) / len(all_durations)
+
     def cell_color(val: float) -> str:
         """Return CSS color based on how far from overall average."""
         if overall_avg == 0:
@@ -426,6 +536,18 @@ def render_dow_heatmap(report: TimingReport) -> str:
                 cells += '<td style="color:var(--text-muted)">—</td>'
         rows.append(f"<tr>{cells}</tr>")
 
+    # Average reference row
+    avg_cells = '<td style="font-weight:600;color:var(--text-muted)">Avg</td>'
+    for topo, rtype in combos:
+        val = combo_avgs.get((topo, rtype))
+        if val is not None:
+            avg_cells += (
+                f'<td style="font-weight:600;color:var(--text-muted)">'
+                f'{_fmt_duration(val)}</td>'
+            )
+        else:
+            avg_cells += '<td style="color:var(--text-muted)">—</td>'
+
     return (
         '<h3>Day-of-Week Heatmap</h3>'
         '<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">'
@@ -435,7 +557,9 @@ def render_dow_heatmap(report: TimingReport) -> str:
         '</div>'
         '<table class="timing-phases">'
         f'<thead><tr>{header_cells}</tr></thead>'
-        '<tbody>' + "\n".join(rows) + '</tbody>'
+        '<tbody>' + "\n".join(rows)
+        + f'<tr style="border-top:2px solid var(--border)">{avg_cells}</tr>'
+        '</tbody>'
         '</table>'
     )
 
@@ -486,7 +610,8 @@ def render_version_comparison(report: TimingReport) -> str:
             else:
                 cells += '<td style="color:var(--text-muted)">—</td><td>—</td>'
                 prev_avg = None
-        rows.append(f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}">{cells}</tr>')
+        combo_versions = " ".join(sorted(v for v in versions if ver_groups.get((topo, rtype, v))))
+        rows.append(f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}" data-tversion="{html.escape(combo_versions)}">{cells}</tr>')
 
     # Build header
     header = "<th>Topology</th><th>Type</th>"
@@ -495,6 +620,11 @@ def render_version_comparison(report: TimingReport) -> str:
 
     return (
         '<h3>Version-over-Version Comparison</h3>'
+        '<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">'
+        'Percentage shows change vs. previous version: '
+        '<span style="color:var(--red)">+N% slower</span>, '
+        '<span style="color:var(--green)">-N% faster</span>.'
+        '</div>'
         '<table class="timing-variants">'
         f'<thead><tr>{header}</tr></thead>'
         '<tbody>' + "\n".join(rows) + '</tbody>'
@@ -527,10 +657,12 @@ def render_anomaly_flags(report: TimingReport) -> str:
     # Sort by excess percentage descending
     anomalies.sort(key=lambda x: -x[4])
 
+    initial_visible = 10
     rows = []
-    for r, topo, rtype, p95, excess in anomalies:
+    for i, (r, topo, rtype, p95, excess) in enumerate(anomalies):
+        collapsed = ' collapsed-row' if i >= initial_visible else ''
         rows.append(
-            f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}" data-tversion="{html.escape(r.release)}">'
+            f'<tr class="timing-row anomaly-row{collapsed}" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}" data-tversion="{html.escape(r.release)}">'
             f'<td><span class="badge {topo.lower()}">{html.escape(topo)}</span></td>'
             f'<td>{html.escape(rtype.capitalize())}</td>'
             f'<td style="font-size:12px">{html.escape(r.job_name)}</td>'
@@ -539,6 +671,14 @@ def render_anomaly_flags(report: TimingReport) -> str:
             f'<td style="color:var(--red);font-weight:600">+{excess:.0f}%</td>'
             f'<td style="font-size:12px;color:var(--text-muted)">{html.escape(r.start_time[:10])}</td>'
             f'</tr>'
+        )
+
+    expand_btn = ""
+    if len(anomalies) > initial_visible:
+        expand_btn = (
+            f'<button class="expand-btn" id="expand-anomalies-btn" '
+            f'onclick="expandSection(\'anomalies\')">'
+            f'Show all {len(anomalies)} anomalies</button>'
         )
 
     return (
@@ -553,6 +693,7 @@ def render_anomaly_flags(report: TimingReport) -> str:
         '</tr></thead>'
         '<tbody>' + "\n".join(rows) + '</tbody>'
         '</table>'
+        + expand_btn
     )
 
 
@@ -595,20 +736,19 @@ def _render_filter_bar(report: TimingReport) -> str:
             f'{html.escape(rtype.capitalize())}</button>'
         )
 
-    if len(versions) > 1:
-        parts.append('<span style="margin:0 4px"></span>')
+    parts.append('<span style="margin:0 4px"></span>')
 
-        # Version filter
+    # Version filter (always shown)
+    parts.append(
+        '<button class="filter-btn active" '
+        'data-group="tversion" data-value="all">All Versions</button>'
+    )
+    for ver in versions:
         parts.append(
-            '<button class="filter-btn active" '
-            'data-group="tversion" data-value="all">All Versions</button>'
+            f'<button class="filter-btn" '
+            f'data-group="tversion" data-value="{html.escape(ver)}">'
+            f'{html.escape(ver)}</button>'
         )
-        for ver in versions:
-            parts.append(
-                f'<button class="filter-btn" '
-                f'data-group="tversion" data-value="{html.escape(ver)}">'
-                f'{html.escape(ver)}</button>'
-            )
 
     parts.append('</div>')
     return "\n".join(parts)

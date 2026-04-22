@@ -9,6 +9,7 @@ Usage:
     create-report.py [--workdir DIR] <release1,release2,...>
 """
 
+import base64
 import json
 import sys
 import os
@@ -103,7 +104,17 @@ CSS = """\
         .ftype-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 700; text-transform: uppercase; }
         .ftype-test { background: #cce5ff; color: #004085; }
         .ftype-build { background: #e2d5f1; color: #4a235a; }
-        .ftype-infra { background: #fde2cc; color: #7d4e24; }"""
+        .ftype-infra { background: #fde2cc; color: #7d4e24; }
+        .graph-source { font-size: 0.8em; color: #6c757d; font-style: italic; margin-bottom: 4px; }
+        .graph-toggle { cursor: pointer; text-decoration: none; font-size: 1em; margin-left: 4px; }
+        .graph-toggle:hover { opacity: 0.7; }
+        .perf-graphs { margin: 6px 0 6px 0; padding: 8px 12px; background: #f8f9fa; border-left: 3px solid #6c757d; }
+        .perf-graphs img { max-width: 100%; height: auto; border: 1px solid #dee2e6; border-radius: 4px; }
+        .graph-tabs { display: flex; gap: 0; margin: 4px 0 0 0; border-bottom: 2px solid #dee2e6; }
+        .graph-tab-btn { padding: 4px 14px; border: 1px solid #dee2e6; border-bottom: none; border-radius: 4px 4px 0 0; background: #e9ecef; color: #495057; font-size: 0.82em; font-weight: 600; cursor: pointer; margin-bottom: -2px; }
+        .graph-tab-btn.active { background: #fff; border-bottom: 2px solid #fff; color: #212529; }
+        .graph-pane { display: none; padding: 6px 0; }
+        .graph-pane.active { display: block; }"""
 
 JS = """\
 function showTab(e, name) {
@@ -124,7 +135,18 @@ document.querySelectorAll('.col-title').forEach(function(el) {
             row.classList.toggle('show');
         }
     });
-});"""
+});
+function toggleGraph(id) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+function showGraphTab(btn, paneId) {
+    var container = btn.closest('.perf-graphs');
+    container.querySelectorAll('.graph-tab-btn').forEach(function(b) { b.classList.remove('active'); });
+    container.querySelectorAll('.graph-pane').forEach(function(p) { p.classList.remove('active'); });
+    btn.classList.add('active');
+    document.getElementById(paneId).classList.add('active');
+}"""
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +276,104 @@ def _e(text):
     return html_mod.escape(str(text)) if text else ""
 
 
+# Graph workdir — set by main() before rendering
+_GRAPHS_DIR = None
+
+
+def _extract_build_id(url):
+    """Extract build_id (last numeric path component) from a Prow job URL."""
+    if not url:
+        return None
+    m = re.search(r"/(\d+)/?$", url)
+    return m.group(1) if m else None
+
+
+_graph_counter = 0
+
+# Cache of loaded graph data: build_id -> list of (label, b64)
+_graph_cache = {}
+
+
+def _load_job_graphs(build_id):
+    """Load and cache base64-encoded graphs for a build_id."""
+    if build_id in _graph_cache:
+        return _graph_cache[build_id]
+    graphs = []
+    if _GRAPHS_DIR:
+        graph_dir = os.path.join(_GRAPHS_DIR, build_id)
+        if os.path.isdir(graph_dir):
+            for png in sorted(glob_mod.glob(os.path.join(graph_dir, "*.png"))):
+                try:
+                    label = re.sub(r"^\d+_", "", os.path.splitext(os.path.basename(png))[0]).replace("_", " ").title()
+                    with open(png, "rb") as f:
+                        b64 = base64.b64encode(f.read()).decode("ascii")
+                    graphs.append((label, b64))
+                except Exception as e:
+                    print(f"WARNING: skipping {png}: {e}", file=sys.stderr)
+    _graph_cache[build_id] = graphs
+    return graphs
+
+
+def _render_job_with_graphs(job):
+    """Render a single job list item with optional graph icon and inline graphs."""
+    global _graph_counter
+    date_str = f'<span class="job-date">[{_e(job["date"])}]</span>'
+    url = job.get("url", "")
+    name = _e(job["name"])
+
+    if url:
+        job_link = f'{date_str} <a href="{_e(url)}" target="_blank">{name}</a>'
+    else:
+        job_link = f'{date_str} {name}'
+
+    bid = _extract_build_id(url)
+    if not bid:
+        return f"<li>{job_link}</li>"
+
+    graphs = _load_job_graphs(bid)
+    if not graphs:
+        return f"<li>{job_link}</li>"
+
+    _graph_counter += 1
+    gid = f"gp{_graph_counter}"
+
+    icon = f' <a class="graph-toggle" onclick="toggleGraph(\'{gid}\')" title="Host performance graphs">&#x1F4CA;</a>'
+
+    # Build tabbed graph panel (hidden by default)
+    header = '<div class="graph-source">Host metrics (PCP)</div>'
+    if len(graphs) == 1:
+        label, b64 = graphs[0]
+        panel = (
+            f'<div id="{gid}" class="perf-graphs" style="display:none">'
+            f'{header}'
+            f'<img src="data:image/png;base64,{b64}" alt="{_e(label)}"/>'
+            f'</div>'
+        )
+    else:
+        tabs = []
+        panes = []
+        for i, (label, b64) in enumerate(graphs):
+            active = " active" if i == 0 else ""
+            tid = f"{gid}-{i}"
+            tabs.append(
+                f'<button class="graph-tab-btn{active}" onclick="showGraphTab(this,\'{tid}\')">{_e(label)}</button>'
+            )
+            panes.append(
+                f'<div id="{tid}" class="graph-pane{active}">'
+                f'<img src="data:image/png;base64,{b64}" alt="{_e(label)}"/>'
+                f'</div>'
+            )
+        panel = (
+            f'<div id="{gid}" class="perf-graphs" style="display:none">'
+            f'{header}'
+            f'<div class="graph-tabs">{"".join(tabs)}</div>'
+            + "".join(panes)
+            + '</div>'
+        )
+
+    return f"<li>{job_link}{icon}{panel}</li>"
+
+
 def _badge_class(total_failed, has_critical=False):
     if total_failed == 0:
         return "badge-ok"
@@ -351,10 +471,7 @@ def render_release_section(version, rdata, bug_candidates):
         if issue.get("affected_jobs"):
             lines.append("                <p><strong>Affected Jobs:</strong></p><ul>")
             for job in issue["affected_jobs"]:
-                if job.get("url"):
-                    lines.append(f'                    <li><span class="job-date">[{_e(job["date"])}]</span> <a href="{_e(job["url"])}" target="_blank">{_e(job["name"])}</a></li>')
-                else:
-                    lines.append(f'                    <li><span class="job-date">[{_e(job["date"])}]</span> {_e(job["name"])}</li>')
+                lines.append(f"                    {_render_job_with_graphs(job)}")
             lines.append("                </ul>")
         if issue.get("next_steps"):
             lines.append(f"                <p><em>Next Steps:</em> {_e(issue['next_steps'])}</p>")
@@ -503,10 +620,7 @@ def render_pr_section(pr_data, all_pr_bugs, pr_status):
                 if issue.get("affected_jobs"):
                     lines.append("                <p><strong>Affected Jobs:</strong></p><ul>")
                     for job in issue["affected_jobs"]:
-                        if job.get("url"):
-                            lines.append(f'                    <li><span class="job-date">[{_e(job["date"])}]</span> <a href="{_e(job["url"])}" target="_blank">{_e(job["name"])}</a></li>')
-                        else:
-                            lines.append(f'                    <li><span class="job-date">[{_e(job["date"])}]</span> {_e(job["name"])}</li>')
+                        lines.append(f"                    {_render_job_with_graphs(job)}")
                     lines.append("                </ul>")
                 if issue.get("next_steps"):
                     lines.append(f"                <p><em>Next Steps:</em> {_e(issue['next_steps'])}</p>")
@@ -709,6 +823,12 @@ def main():
     pr_status = load_json(pr_entry["status"])
 
     all_pr_bugs = _index_pr_bugs(pr_entry["bugs"])
+
+    # Set graphs directory for rendering
+    global _GRAPHS_DIR
+    graphs_dir = os.path.join(workdir, "graphs")
+    if os.path.isdir(graphs_dir):
+        _GRAPHS_DIR = graphs_dir
 
     # Generate HTML
     timestamp = datetime.now(timezone.utc)

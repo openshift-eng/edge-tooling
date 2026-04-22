@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const crRows = document.querySelectorAll('.cr-row');
   const regressionRows = document.querySelectorAll('.regression-row');
   const timingRows = document.querySelectorAll('.timing-row');
+  const anomalyRows = document.querySelectorAll('.anomaly-row');
 
   // Track active filters per group
   const activeFilters = {};
@@ -60,11 +61,11 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   });
 
-  // Collapse rows beyond top 5 for jobs table and failure details
   const INITIAL_VISIBLE = 5;
-  const sectionsCollapsed = { jobs: true, details: true, regressions: true, cr: true };
-  const sectionSelectors = { jobs: '.job-row', details: '.detail-row', regressions: '.regression-row', cr: '.cr-row' };
-  const sectionLabels = { jobs: ' failing jobs', details: ' failure details', regressions: ' regressions', cr: ' component regressions' };
+  const sectionVisibleLimit = { anomalies: 10 };
+  const sectionsCollapsed = { jobs: true, details: true, regressions: true, cr: true, anomalies: true };
+  const sectionSelectors = { jobs: '.job-row', details: '.detail-row', regressions: '.regression-row', cr: '.cr-row', anomalies: '.anomaly-row' };
+  const sectionLabels = { jobs: ' failing jobs', details: ' failure details', regressions: ' regressions', cr: ' component regressions', anomalies: ' anomalies' };
 
   // Count rows that pass the current filter (inline style.display is set by filters,
   // collapsed-row class is separate — so style.display !== 'none' means "passes filter")
@@ -86,7 +87,8 @@ document.addEventListener('DOMContentLoaded', function() {
           return;
         }
         visibleIdx++;
-        if (sectionsCollapsed[section] && visibleIdx > INITIAL_VISIBLE) {
+        const limit = sectionVisibleLimit[section] || INITIAL_VISIBLE;
+        if (sectionsCollapsed[section] && visibleIdx > limit) {
           row.classList.add('collapsed-row');
         } else {
           row.classList.remove('collapsed-row');
@@ -99,16 +101,16 @@ document.addEventListener('DOMContentLoaded', function() {
     Object.entries(sectionSelectors).forEach(([section, selector]) => {
       const btn = document.getElementById('expand-' + section + '-btn');
       if (!btn) return;
+      const limit = sectionVisibleLimit[section] || INITIAL_VISIBLE;
       const filtered = countFiltered(selector);
-      if (filtered <= INITIAL_VISIBLE) {
-        // Not enough rows to need expand/collapse — hide the button
+      if (filtered <= limit) {
         btn.style.display = 'none';
         return;
       }
       btn.style.display = '';
       btn.textContent = sectionsCollapsed[section]
         ? 'Show all ' + filtered + (sectionLabels[section] || '')
-        : 'Show top ' + INITIAL_VISIBLE + ' only';
+        : 'Show top ' + limit + ' only';
     });
   }
 
@@ -116,7 +118,9 @@ document.addEventListener('DOMContentLoaded', function() {
     function isVisible(row) {
       for (const [group, values] of Object.entries(activeFilters)) {
         const rowValue = row.dataset[group];
-        if (rowValue && !values.has(rowValue)) {
+        if (!rowValue) continue;
+        const rowValues = rowValue.split(' ');
+        if (!rowValues.some(v => values.has(v))) {
           return false;
         }
       }
@@ -139,18 +143,20 @@ document.addEventListener('DOMContentLoaded', function() {
       row.style.display = isVisible(row) ? '' : 'none';
     });
 
+    const hasVersionFilter = activeFilters.hasOwnProperty('tversion');
     timingRows.forEach(row => {
-      row.style.display = isVisible(row) ? '' : 'none';
+      if (row.classList.contains('timing-aggregate')) {
+        row.style.display = hasVersionFilter ? 'none' : (isVisible(row) ? '' : 'none');
+      } else if (row.classList.contains('timing-version-detail')) {
+        row.style.display = hasVersionFilter ? (isVisible(row) ? '' : 'none') : 'none';
+      } else {
+        row.style.display = isVisible(row) ? '' : 'none';
+      }
     });
 
-    // When filters are active, expand all to show filtered results
-    const hasFilters = Object.keys(activeFilters).length > 0;
-    if (hasFilters) {
-      sectionsCollapsed.jobs = false;
-      sectionsCollapsed.details = false;
-      sectionsCollapsed.regressions = false;
-      sectionsCollapsed.cr = false;
-    }
+    anomalyRows.forEach(row => {
+      row.style.display = isVisible(row) ? '' : 'none';
+    });
 
     applyCollapse();
     updateExpandButtons();
@@ -460,6 +466,15 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     container.appendChild(wrapper);
+
+    // Hide the plain inline job list only when ALL blocking jobs have AI analysis
+    var inlineJobs = container.closest('.fs-section-critical')?.querySelector('.fs-inline-jobs');
+    if (inlineJobs) {
+        var inlineCount = inlineJobs.querySelectorAll('.fs-blocking-row').length;
+        if (items.length >= inlineCount) {
+            inlineJobs.style.display = 'none';
+        }
+    }
   })();
 
   // Copy full bug description to clipboard

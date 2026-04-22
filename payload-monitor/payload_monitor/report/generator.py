@@ -1,5 +1,10 @@
 """Generate HTML dashboard report from monitor data."""
 
+from __future__ import annotations
+
+from typing import Optional
+
+
 import html
 import json
 import logging
@@ -13,6 +18,7 @@ from jinja2 import Environment, FileSystemLoader
 from ..models import (
     ComponentRegression,
     DeepAnalysis,
+    EscalationRisk,
     FailingTest,
     JobResult,
     JobRun,
@@ -25,6 +31,7 @@ from ..models import (
     StreamReport,
     SuggestedBug,
 )
+import dataclasses
 from .timing_section import render_timing_section
 
 logger = logging.getLogger(__name__)
@@ -61,8 +68,33 @@ def _build_template_context(report: MonitorReport) -> dict:
                 if job.failing_tests:
                     failure_details.append(item)
 
-    # Sort blocking jobs first
-    all_failing.sort(key=lambda x: (0 if x["job"].job_type == JobType.BLOCKING else 1))
+    # Sort: blocking first, then escalation-risk (unstable), then the rest
+    escalation_risk_names = {er.job_name for er in report.escalation_risks}
+
+    def _fail_sort_key(x):
+        if x["job"].job_type == JobType.BLOCKING:
+            return 0
+        if x["job"].name in escalation_risk_names:
+            return 1
+        return 2
+
+    all_failing.sort(key=_fail_sort_key)
+
+    # Build blocking job summaries: versions, test names, topology per unique job
+    blocking_job_versions: dict[str, list[str]] = {}
+    blocking_job_tests: dict[str, list[str]] = {}
+    for item in all_failing:
+        if item["job"].job_type == JobType.BLOCKING:
+            name = item["job"].name
+            ver = item["version"]
+            if name not in blocking_job_versions:
+                blocking_job_versions[name] = []
+                blocking_job_tests[name] = []
+            if ver not in blocking_job_versions[name]:
+                blocking_job_versions[name].append(ver)
+            for ft in item["job"].failing_tests:
+                if ft.name not in blocking_job_tests[name]:
+                    blocking_job_tests[name].append(ft.name)
 
     # Collect all regressions
     all_regressions = []
@@ -83,6 +115,13 @@ def _build_template_context(report: MonitorReport) -> dict:
     if report.timing_report and not report.skip_timing:
         timing_html = render_timing_section(report.timing_report)
 
+    # Map blocking job name -> first index in all_failing for stable detail links
+    blocking_job_first_idx = {}
+    for idx, item in enumerate(all_failing, 1):
+        if item["job"].job_type == JobType.BLOCKING:
+            if item["job"].name not in blocking_job_first_idx:
+                blocking_job_first_idx[item["job"].name] = idx
+
     return {
         "report": report,
         "all_failing": all_failing,
@@ -102,6 +141,10 @@ def _build_template_context(report: MonitorReport) -> dict:
         "cr_versions": sorted(set(
             cr.version for cr in report.component_regressions
         )),
+        "cr_comparisons": sorted(set(
+            cr.comparison for cr in report.component_regressions
+            if cr.comparison
+        )),
         "topologies": topologies,
         "versions": versions,
         "reg_topologies": sorted(set(
@@ -111,10 +154,22 @@ def _build_template_context(report: MonitorReport) -> dict:
             r.version for r in all_regressions if r.version
         )),
         "timing_html": timing_html,
+        "failure_counts": report.failure_counts,
+        "persistent_count": sum(1 for c in report.failure_counts.values() if c >= report.persistent_threshold),
+        "recurring_threshold": report.recurring_threshold,
+        "persistent_threshold": report.persistent_threshold,
+        "escalation_risks": report.escalation_risks,
+        "escalation_risk_jobs": set(er.job_name for er in report.escalation_risks),
+        "cross_topology": report.cross_topology,
+        "jira_matches_by_job": report.jira_matches,
+        "suggested_bugs_by_job": {b.job_name: b for b in report.suggested_bugs},
+        "blocking_job_versions": blocking_job_versions,
+        "blocking_job_tests": blocking_job_tests,
+        "blocking_job_first_idx": blocking_job_first_idx,
     }
 
 
-def generate_html(report: MonitorReport, output_path: Path | None = None) -> str:
+def generate_html(report: MonitorReport, output_path: Optional[Path] = None) -> str:
     """Generate a self-contained HTML report.
 
     Returns the HTML content as a string. If output_path is provided,
@@ -152,6 +207,16 @@ def generate_json(report: MonitorReport, output_path: Path) -> None:
         "jira_bugs": [asdict(b) for b in report.jira_bugs],
         "suggested_bugs": [asdict(b) for b in report.suggested_bugs],
         "component_regressions": [asdict(cr) for cr in report.component_regressions],
+        "failure_counts": report.failure_counts,
+        "jira_matches": {
+            name: [asdict(b) for b in bugs]
+            for name, bugs in report.jira_matches.items()
+        },
+        "escalation_risks": [asdict(er) for er in report.escalation_risks],
+        "cross_topology": report.cross_topology,
+        "jira_errors": report.jira_errors,
+        "recurring_threshold": report.recurring_threshold,
+        "persistent_threshold": report.persistent_threshold,
     }
 
     for stream in report.streams:
@@ -232,7 +297,7 @@ def _render_analysis_card(da: dict) -> str:
         parts.append('    </ul>')
         parts.append('  </div>')
     parts.extend([
-        '  <div class="da-field">',
+        '  <div class="da-field da-recommendation">',
         '    <span class="da-label">Recommendation:</span>',
         f'    <span>{e(da.get("recommendation", ""))}</span>',
         '  </div>',
@@ -297,7 +362,7 @@ def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
         old_status = (
             '<span style="color:var(--text-muted)">○ Data only</span>'
             '\n      <span style="margin-left:4px">— run '
-            '<code style="font-size:12px;color:var(--accent)">/ee-payload-monitor</code>'
+            '<code style="font-size:12px;color:var(--accent)">/edge-ocp-ci:generate-dashboard</code>'
             ' for AI analysis</span>'
         )
         new_status = '<span style="color:var(--green)">● AI-enriched via Claude</span>'
@@ -343,6 +408,13 @@ def merge_analysis(report: MonitorReport, analysis_path: Path) -> None:
                     merged += 1
 
     logger.info(f"Merged deep analysis for {merged} job(s)")
+
+
+def _safe_dataclass_init(cls, data: dict):
+    """Create a dataclass instance, ignoring unknown keys for forward compatibility."""
+    field_names = {f.name for f in dataclasses.fields(cls)}
+    filtered = {k: v for k, v in data.items() if k in field_names}
+    return cls(**filtered)
 
 
 def load_json(json_path: Path) -> MonitorReport:
@@ -413,13 +485,23 @@ def load_json(json_path: Path) -> MonitorReport:
         ))
 
     jira_bugs = [
-        JiraBug(**b) for b in data.get("jira_bugs", [])
+        _safe_dataclass_init(JiraBug, b) for b in data.get("jira_bugs", [])
     ]
     suggested_bugs = [
-        SuggestedBug(**b) for b in data.get("suggested_bugs", [])
+        _safe_dataclass_init(SuggestedBug, b) for b in data.get("suggested_bugs", [])
     ]
     comp_regressions = [
-        ComponentRegression(**cr) for cr in data.get("component_regressions", [])
+        _safe_dataclass_init(ComponentRegression, cr) for cr in data.get("component_regressions", [])
+    ]
+
+    # Deserialize jira_matches (job_name -> list[JiraBug])
+    jira_matches = {}
+    for name, bugs_raw in data.get("jira_matches", {}).items():
+        jira_matches[name] = [_safe_dataclass_init(JiraBug, b) for b in bugs_raw]
+
+    # Deserialize escalation_risks
+    escalation_risks = [
+        _safe_dataclass_init(EscalationRisk, er) for er in data.get("escalation_risks", [])
     ]
 
     return MonitorReport(
@@ -428,4 +510,11 @@ def load_json(json_path: Path) -> MonitorReport:
         jira_bugs=jira_bugs,
         suggested_bugs=suggested_bugs,
         component_regressions=comp_regressions,
+        failure_counts=data.get("failure_counts", {}),
+        jira_matches=jira_matches,
+        escalation_risks=escalation_risks,
+        cross_topology=data.get("cross_topology", {}),
+        jira_errors=data.get("jira_errors", []),
+        recurring_threshold=data.get("recurring_threshold", 2),
+        persistent_threshold=data.get("persistent_threshold", 3),
     )

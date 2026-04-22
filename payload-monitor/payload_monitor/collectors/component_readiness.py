@@ -1,10 +1,13 @@
-"""Fetch Component Readiness data from Sippy (HA vs Single Node)."""
+"""Fetch Component Readiness data from Sippy (HA vs edge topologies)."""
+
+from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
+from ..config import CR_VIEWS
 from ..models import ComponentRegression
 from .http import create_session
 
@@ -16,13 +19,10 @@ CR_API_URL = f"{BASE_URL}/api/component_readiness"
 # Status codes from Sippy Component Readiness
 STATUS_REGRESSION = -400
 
-# Only these versions have ha-vs-single views in Sippy
-VIEW_PATTERN = "{version}-ha-vs-single"
-
 _session = create_session()
 
 
-def _test_detail_url(version: str, test_id: str, links: dict) -> str:
+def _test_detail_url(view: str, test_id: str, links: dict) -> str:
     """Build the Sippy UI URL for a component readiness test detail.
 
     The API returns an 'test_details' link pointing to the API endpoint.
@@ -36,19 +36,20 @@ def _test_detail_url(version: str, test_id: str, links: dict) -> str:
         parsed = urlparse(api_url)
         return f"{BASE_URL}/sippy-ng/component_readiness/test_details?{parsed.query}"
     if test_id:
-        view = VIEW_PATTERN.format(version=version)
         return f"{BASE_URL}/sippy-ng/component_readiness/test_details?view={view}&testId={test_id}"
     return ""
 
 
-def fetch_component_regressions(version: str) -> list[ComponentRegression]:
-    """Fetch component readiness regressions for HA vs Single Node.
+def fetch_component_regressions(
+    version: str, view_pattern: str, comparison: str,
+) -> list[ComponentRegression]:
+    """Fetch component readiness regressions for HA vs a specific topology.
 
-    Uses the pre-defined Sippy view '{version}-ha-vs-single' which compares
-    HA topology (base) against Single Node topology (sample) to find
-    components that regress on SNO compared to standard HA clusters.
+    Uses a Sippy view (e.g., '{version}-ha-vs-single') which compares
+    HA topology (base) against the given topology (sample) to find
+    components that regress compared to standard HA clusters.
     """
-    view = VIEW_PATTERN.format(version=version)
+    view = view_pattern.format(version=version)
     logger.info(f"Fetching component readiness for {view}")
 
     try:
@@ -56,7 +57,7 @@ def fetch_component_regressions(version: str) -> list[ComponentRegression]:
         resp.raise_for_status()
         data = resp.json()
     except requests.RequestException as e:
-        logger.warning(f"Component readiness fetch failed for {version}: {e}")
+        logger.warning(f"Component readiness fetch failed for {view}: {e}")
         return []
 
     regressions = []
@@ -97,6 +98,7 @@ def fetch_component_regressions(version: str) -> list[ComponentRegression]:
                     version=version,
                     variants=test.get("variants", variants),
                     status=test.get("status", status),
+                    comparison=comparison,
                     sample_success=sample_success,
                     sample_failure=sample_failure,
                     sample_pass_rate=sample_rate,
@@ -105,30 +107,39 @@ def fetch_component_regressions(version: str) -> list[ComponentRegression]:
                     base_pass_rate=base_rate,
                     fisher_exact=test.get("fisher_exact", 0.0),
                     last_failure=test.get("last_failure", ""),
-                    detail_url=_test_detail_url(version, test.get("test_id", ""), links),
+                    detail_url=_test_detail_url(view, test.get("test_id", ""), links),
                     explanation=explanations[0] if explanations else "",
                 ))
 
-    logger.info(f"  {version}: {len(regressions)} component regression(s) on SNO vs HA")
+    logger.info(f"  {version}: {len(regressions)} component regression(s) on {comparison} vs HA")
     return regressions
 
 
 def collect(versions: list[str]) -> list[ComponentRegression]:
-    """Collect component readiness regressions for all versions.
+    """Collect component readiness regressions for all versions and views.
 
-    Only versions with a Sippy ha-vs-single view will return data.
+    Fetches all configured CR_VIEWS (e.g., HA vs SNO, HA vs TNF) for
+    each version. Views that don't exist in Sippy return empty results.
     """
+    tasks = [
+        (version, view_def["pattern"], view_def["topology"])
+        for version in versions
+        for view_def in CR_VIEWS
+    ]
+    if not tasks:
+        return []
+
     all_regressions = []
-    with ThreadPoolExecutor(max_workers=min(len(versions) or 1, 10)) as pool:
+    with ThreadPoolExecutor(max_workers=min(len(tasks), 10)) as pool:
         futures = {
-            pool.submit(fetch_component_regressions, version): version
-            for version in versions
+            pool.submit(fetch_component_regressions, v, pattern, topo): (v, topo)
+            for v, pattern, topo in tasks
         }
         for future in as_completed(futures):
-            version = futures[future]
+            v, topo = futures[future]
             try:
                 all_regressions.extend(future.result())
-            except Exception as e:
-                logger.error(f"Failed to fetch component readiness for {version}: {e}")
+            except Exception:
+                logger.exception(f"Failed to fetch component readiness for {v} ({topo})")
                 continue
     return all_regressions

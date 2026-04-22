@@ -112,6 +112,35 @@ class TestRenderSummaryTable:
         assert "TNA" in html
         assert "Install" in html
 
+    def test_aggregate_rows_have_no_data_tversion(self):
+        report = TimingReport(runs={
+            "1": _make_run(duration=2400, release="4.21"),
+            "2": _make_run(duration=3600, release="4.22"),
+        })
+        result = render_summary_table(report)
+        assert "timing-aggregate" in result
+        assert 'data-tversion' not in result.split("timing-aggregate")[1].split("</tr>")[0]
+
+    def test_version_detail_rows_hidden_by_default(self):
+        report = TimingReport(runs={
+            "1": _make_run(duration=2400, release="4.21"),
+            "2": _make_run(duration=3600, release="4.22"),
+        })
+        result = render_summary_table(report)
+        assert "timing-version-detail" in result
+        assert 'data-tversion="4.21"' in result
+        assert 'data-tversion="4.22"' in result
+        for line in result.split("\n"):
+            if "timing-version-detail" in line:
+                assert 'display:none' in line
+
+    def test_version_column_present(self):
+        report = TimingReport(runs={
+            "1": _make_run(duration=2400),
+        })
+        result = render_summary_table(report)
+        assert "<th>Version</th>" in result
+
     def test_zero_successes_shows_note(self):
         report = TimingReport(runs={
             "1": _make_run(duration=2400, result="F", topology="TNF"),

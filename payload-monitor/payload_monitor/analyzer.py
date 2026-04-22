@@ -1,12 +1,17 @@
 """Analyze collected payload data to identify patterns and suggest actions."""
 
+from __future__ import annotations
+
 import logging
+import re
 from collections import defaultdict
 
 from .config import Config
 from .models import (
+    EscalationRisk,
     JobResult,
     JobRun,
+    JobType,
     MonitorReport,
     StreamReport,
 )
@@ -51,6 +56,120 @@ def _find_unmatched_jobs(
     return list(by_name.values())
 
 
+def _find_escalation_risks(
+    streams: list[StreamReport],
+    config: Config,
+) -> list[EscalationRisk]:
+    """Find informing jobs with consecutive recent failures (unstable jobs).
+
+    Iterates payloads from newest to oldest per stream. Counts consecutive
+    failures starting from the most recent payload. A job that is absent
+    from a payload breaks the streak.
+    """
+    risks: list[EscalationRisk] = []
+    for stream in streams:
+        # Payloads are stored oldest-first; reverse to get newest-first
+        reversed_payloads = list(reversed(stream.payloads))
+
+        # Collect all unique informing job names seen in this stream
+        informing_jobs: dict[str, str] = {}  # name -> topology
+        for payload in stream.payloads:
+            for job in payload.jobs:
+                if job.job_type == JobType.INFORMING and job.topology:
+                    informing_jobs[job.name] = job.topology
+
+        for job_name, topology in informing_jobs.items():
+            consecutive = 0
+            for payload in reversed_payloads:
+                job_in_payload = None
+                for job in payload.jobs:
+                    if job.name == job_name:
+                        job_in_payload = job
+                        break
+                if job_in_payload is None:
+                    # Job absent from this payload breaks the streak
+                    break
+                if job_in_payload.result == JobResult.FAILURE:
+                    consecutive += 1
+                else:
+                    break
+
+            if consecutive >= config.escalation_threshold:
+                sippy_url = f"https://sippy.dptools.openshift.org/sippy-ng/jobs/{job_name}"
+                risks.append(EscalationRisk(
+                    job_name=job_name,
+                    topology=topology,
+                    version=stream.version,
+                    consecutive_failures=consecutive,
+                    sippy_url=sippy_url,
+                ))
+
+    return risks
+
+
+def _normalize_job_name(name: str, config: Config) -> str:
+    """Normalize a job name by replacing topology-specific patterns with a placeholder.
+
+    Uses the topology patterns from config to identify and replace topology
+    markers. This groups jobs that differ only in their topology segment.
+    """
+    result = name
+    name_lower = name.lower()
+    for topo in config.topologies:
+        if any(p in name_lower for p in topo.exclude_patterns):
+            continue
+        for pattern in topo.job_patterns:
+            replaced = re.sub(
+                rf'(?:^|(?<=[-_])){re.escape(pattern)}(?=[-_]|$)',
+                '__TOPO__',
+                result,
+                flags=re.IGNORECASE,
+            )
+            if replaced != result:
+                return replaced
+    return result
+
+
+def _correlate_cross_topology(
+    streams: list[StreamReport],
+    config: Config,
+) -> dict[str, list[str]]:
+    """Find jobs that fail across multiple topologies within the same version.
+
+    Returns dict mapping job_name -> list of other topologies with the same
+    base failure. Only includes jobs where 2+ topologies share the failure.
+    """
+    cross: dict[str, list[str]] = {}
+
+    for stream in streams:
+        # Collect all unique failing edge jobs in this stream (version)
+        failing_jobs: dict[str, str] = {}  # job_name -> topology
+        for payload in stream.payloads:
+            for job in payload.failing_edge_jobs:
+                if job.name not in failing_jobs and job.topology:
+                    failing_jobs[job.name] = job.topology
+
+        # Group by normalized name
+        groups: dict[str, list[tuple[str, str]]] = defaultdict(list)
+        for job_name, topology in failing_jobs.items():
+            normalized = _normalize_job_name(job_name, config)
+            groups[normalized].append((job_name, topology))
+
+        # For groups with 2+ different topologies, map each job to others
+        for normalized, members in groups.items():
+            unique_topos = set(topo for _, topo in members)
+            if len(unique_topos) < 2:
+                continue
+            for job_name, topology in members:
+                other_topos = sorted(
+                    t for t in unique_topos if t != topology
+                )
+                if other_topos:
+                    cross[job_name] = other_topos
+
+    return cross
+
+
 def analyze(
     report: MonitorReport,
     config: Config,
@@ -72,8 +191,10 @@ def analyze(
 
     # Count recurring failures
     failure_counts = _find_recurring_failures(report.streams)
+    report.failure_counts = failure_counts
     recurring = {
-        name: count for name, count in failure_counts.items() if count > 1
+        name: count for name, count in failure_counts.items()
+        if count >= config.recurring_threshold
     }
     if recurring:
         logger.info("Recurring edge failures (appeared in >1 payload):")
@@ -82,9 +203,13 @@ def analyze(
 
     # Search JIRA for existing bugs
     unique_failing = {j.name: j for j in all_failing}
-    jira_matches = jira_collector.search_bugs_for_jobs(
+    jira_matches, jira_errors = jira_collector.search_bugs_for_jobs(
         list(unique_failing.values()), config
     )
+    report.jira_errors = jira_errors
+
+    # Store raw JIRA matches on the report for per-job inline display
+    report.jira_matches = jira_matches
 
     # Flatten JIRA bugs into the report
     seen_keys = set()
@@ -107,3 +232,17 @@ def analyze(
         f"Analysis complete: {len(report.jira_bugs)} existing JIRA bugs, "
         f"{len(report.suggested_bugs)} suggested new bugs"
     )
+
+    try:
+        report.escalation_risks = _find_escalation_risks(report.streams, config)
+    except Exception as e:
+        logger.error(f"Escalation risk analysis failed: {e}")
+        report.escalation_risks = []
+        report.data_errors.append(f"Escalation risk analysis: {e}")
+
+    try:
+        report.cross_topology = _correlate_cross_topology(report.streams, config)
+    except Exception as e:
+        logger.error(f"Cross-topology correlation failed: {e}")
+        report.cross_topology = {}
+        report.data_errors.append(f"Cross-topology correlation: {e}")

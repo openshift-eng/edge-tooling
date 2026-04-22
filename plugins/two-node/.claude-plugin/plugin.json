@@ -2,7 +2,9 @@
   "name": "two-node",
   "description": "Two-node topology (TNA/TNF) workflow automation — RHEL verification, Jira integration, and more",
   "version": "1.0.0",
-  "author": { "name": "lucaconsalvi" },
+  "author": {
+    "name": "lucaconsalvi"
+  },
   "homepage": "https://github.com/openshift-eng/edge-tooling",
   "license": "Apache-2.0"
 }

@@ -63,6 +63,22 @@ WORKDIR=/tmp/microshift-ci-claude-workdir.$(date +%y%m%d)
 - If `$ARGUMENTS` is empty, show usage and stop
 - If a release has no failed jobs, its jobs JSON will be an empty array — skip analysis for that release
 
+### Step 1b: Generate PCP Performance Graphs
+
+**Goal**: Generate performance graphs from PCP archives for all jobs that have pmlogs.
+
+**Actions**:
+1. Run the graphs script (this is deterministic, no LLM needed):
+   ```bash
+   bash ${SCRIPTS_DIR}/doctor.sh graphs --workdir ${WORKDIR}
+   ```
+2. The script finds PCP archives in downloaded artifacts and generates PNG graphs at `${WORKDIR}/graphs/<build_id>/`:
+   - `1_cpu_usage.png` — CPU usage (user, system, I/O wait)
+   - `2_mem_usage.png` — Memory usage (used, cached)
+   - `3_disk_io.png` — Disk I/O (read/write OPS, await)
+   - `4_disk_usage.png` — Disk usage by partition (% fill)
+3. If prerequisites are missing (`pcp2json`, `matplotlib`), the script errors and stops.
+
 ### Step 2: Analyze Each Job Using /microshift-ci:prow-job
 
 **Goal**: Get detailed root cause analysis for each failed job using pre-downloaded artifacts.
@@ -92,11 +108,11 @@ WORKDIR=/tmp/microshift-ci-claude-workdir.$(date +%y%m%d)
 3. Launch **ALL** agents (all releases + PRs) in a single message using `run_in_background: true`
 4. After launching, say "Analyzing N jobs in parallel..." and STOP.
 5. As agent completion notifications arrive, respond with only "." (a single period) — no summaries, no status updates.
-6. Only after ALL agents are confirmed complete, produce a single brief count and proceed to Step 3.
+6. **CRITICAL**: After ALL agents are confirmed complete, you MUST immediately proceed to Step 3. Do NOT end your turn with a dot. Do NOT stop. The task is NOT complete until the HTML report is generated in Step 4.
 
 ### Step 3: Run Bug Correlation (Dry-Run)
 
-**Goal**: Search Jira for existing bugs matching each failure.
+**Goal**: Search Jira for existing bugs matching each failure. Results are embedded in the HTML report.
 
 **Actions**:
 1. **IMPORTANT**: Wait until ALL analysis agents from Step 2 are confirmed complete
@@ -111,11 +127,14 @@ WORKDIR=/tmp/microshift-ci-claude-workdir.$(date +%y%m%d)
 4. Launch all create-bugs agents **in parallel** with `run_in_background: true`
 5. Respond with only "." for each intermediate completion notification. Wait until all complete.
 6. Each agent produces `${WORKDIR}/analyze-ci-bugs-<source>.json`
+7. **CRITICAL**: After ALL bug correlation agents complete, you MUST immediately proceed to Step 4. Do NOT stop.
 
 **Error Handling**:
 - If create-bugs fails for a release, note the failure but do not block other releases or HTML generation
 
 ### Step 4: Finalize — Aggregate and Generate HTML Report
+
+**IMPORTANT**: This step is MANDATORY. The task is incomplete without it. You MUST run this even if previous steps produced errors.
 
 **Goal**: Deterministically aggregate results and generate the HTML report.
 
@@ -173,6 +192,8 @@ HTML report generated: ${WORKDIR}/microshift-ci-doctor-report.html
 - MCP Jira server must be configured (for bug correlation)
 - Internet access to fetch job data from Prow/GCS
 - Bash shell, Python 3
+- `pcp-export-pcp2json` — for PCP graph generation
+- `matplotlib` Python package — for PCP graph plotting
 
 ## Related Skills
 

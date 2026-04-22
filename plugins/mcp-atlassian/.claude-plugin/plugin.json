@@ -1,0 +1,8 @@
+{
+  "name": "mcp-atlassian",
+  "description": "Atlassian Jira MCP server for Claude Code — provides Jira tools via the mcp-atlassian container image",
+  "version": "1.0.0",
+  "author": { "name": "jeff-roche" },
+  "homepage": "https://github.com/openshift-eng/edge-tooling",
+  "license": "Apache-2.0"
+}

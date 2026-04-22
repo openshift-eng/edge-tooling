@@ -1,3 +1,9 @@
+---
+name: {{AGENT_NAME}}
+description: "{{DESCRIPTION}}"
+allowed-tools: Read, Write
+---
+
 # {{PLUGIN_NAME}} Agent
 
 ## Purpose

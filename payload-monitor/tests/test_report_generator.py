@@ -10,6 +10,7 @@ import pytest
 from payload_monitor.models import (
     ComponentRegression,
     DeepAnalysis,
+    EscalationRisk,
     FailingTest,
     JobResult,
     JobRun,
@@ -26,6 +27,7 @@ from payload_monitor.report.generator import (
     _build_template_context,
     _extract_date,
     _render_analysis_card,
+    _safe_dataclass_init,
     _safe_urls,
     generate_html,
     generate_json,
@@ -109,6 +111,30 @@ class TestBuildTemplateContext:
         assert ctx["all_regressions"][0].test_name == "t1"
 
 
+class TestFailureCountsContext:
+    def test_context_includes_failure_counts(self):
+        job = JobRun("j", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")
+        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(
+            generated_at="now",
+            streams=[stream],
+            failure_counts={"j": 3, "k": 1},
+        )
+        ctx = _build_template_context(report)
+        assert ctx["failure_counts"] == {"j": 3, "k": 1}
+        assert ctx["recurring_threshold"] == 2
+        assert ctx["persistent_threshold"] == 3
+
+    def test_persistent_count_calculation(self):
+        report = MonitorReport(
+            generated_at="now",
+            failure_counts={"a": 3, "b": 4, "c": 1},
+        )
+        ctx = _build_template_context(report)
+        assert ctx["persistent_count"] == 2
+
+
 class TestRenderAnalysisCard:
     def test_basic_card(self):
         da = {
@@ -151,7 +177,7 @@ class TestRenderAnalysisCard:
 class TestGenerateHtml:
     def test_generates_html(self, sample_report):
         html = generate_html(sample_report)
-        assert "Edge Enablement Payload Monitor" in html
+        assert "Edge OCP Payload Monitor" in html
         assert "4.19" in html
 
     def test_writes_to_file(self, sample_report, tmp_path):
@@ -159,7 +185,7 @@ class TestGenerateHtml:
         generate_html(sample_report, out)
         assert out.exists()
         content = out.read_text()
-        assert "Edge Enablement Payload Monitor" in content
+        assert "Edge OCP Payload Monitor" in content
 
     def test_creates_parent_dirs(self, sample_report, tmp_path):
         out = tmp_path / "sub" / "dir" / "report.html"
@@ -332,3 +358,192 @@ class TestLoadJson:
         loaded = load_json(json_path)
         prs = loaded.streams[0].payloads[0].jobs[0].deep_analysis.suspect_prs
         assert prs == ["https://github.com/pr/1"]
+
+
+class TestCrComparisonsContext:
+    def test_context_includes_cr_comparisons(self):
+        cr_sno = ComponentRegression(
+            component="c1", test_name="t1", test_suite="s",
+            test_id="id1", capability="", version="4.22",
+            comparison="SNO",
+        )
+        cr_tnf = ComponentRegression(
+            component="c2", test_name="t2", test_suite="s",
+            test_id="id2", capability="", version="4.22",
+            comparison="TNF",
+        )
+        report = MonitorReport(
+            generated_at="now",
+            streams=[],
+            component_regressions=[cr_sno, cr_tnf],
+        )
+        ctx = _build_template_context(report)
+        assert ctx["cr_comparisons"] == ["SNO", "TNF"]
+
+
+class TestEscalationRisksContext:
+    def test_context_includes_escalation_risks(self):
+        er = EscalationRisk(
+            job_name="j1", topology="SNO", version="4.19",
+            consecutive_failures=3, sippy_url="https://sippy/j1",
+        )
+        job = JobRun("j1", "url", JobResult.FAILURE, JobType.INFORMING, "SNO")
+        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(
+            generated_at="now",
+            streams=[stream],
+            escalation_risks=[er],
+        )
+        ctx = _build_template_context(report)
+        assert ctx["escalation_risks"] == [er]
+        assert "j1" in ctx["escalation_risk_jobs"]
+
+
+class TestCrossTopologyContext:
+    def test_context_includes_cross_topology(self):
+        job = JobRun("j1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")
+        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(
+            generated_at="now",
+            streams=[stream],
+            cross_topology={"j1": ["TNA"]},
+        )
+        ctx = _build_template_context(report)
+        assert ctx["cross_topology"] == {"j1": ["TNA"]}
+
+
+class TestJiraMatchesContext:
+    def test_context_includes_jira_matches(self):
+        bug = JiraBug(key="OCPBUGS-1", summary="bug", status="New", url="https://issues.redhat.com/browse/OCPBUGS-1")
+        job = JobRun("j1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")
+        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(
+            generated_at="now",
+            streams=[stream],
+            jira_matches={"j1": [bug]},
+        )
+        ctx = _build_template_context(report)
+        assert "jira_matches_by_job" in ctx
+        assert ctx["jira_matches_by_job"] == {"j1": [bug]}
+
+    def test_context_includes_suggested_bugs_by_job(self):
+        suggested = SuggestedBug(
+            title="Bug", description="desc", job_name="j2",
+            topology="SNO", versions=["4.19"],
+            create_url="https://issues.redhat.com/create",
+        )
+        job = JobRun("j2", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")
+        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(
+            generated_at="now",
+            streams=[stream],
+            suggested_bugs=[suggested],
+        )
+        ctx = _build_template_context(report)
+        assert "suggested_bugs_by_job" in ctx
+        assert ctx["suggested_bugs_by_job"]["j2"] is suggested
+
+
+class TestJsonRoundTripNewFields:
+    def test_failure_counts_round_trip(self, tmp_path):
+        report = MonitorReport(
+            generated_at="now",
+            failure_counts={"j1": 3, "j2": 1},
+        )
+        out = tmp_path / "report.json"
+        generate_json(report, out)
+        loaded = load_json(out)
+        assert loaded.failure_counts == {"j1": 3, "j2": 1}
+
+    def test_jira_matches_round_trip(self, tmp_path):
+        bug = JiraBug(key="OCPBUGS-1", summary="b", status="New")
+        report = MonitorReport(
+            generated_at="now",
+            jira_matches={"j1": [bug]},
+        )
+        out = tmp_path / "report.json"
+        generate_json(report, out)
+        loaded = load_json(out)
+        assert "j1" in loaded.jira_matches
+        assert loaded.jira_matches["j1"][0].key == "OCPBUGS-1"
+
+    def test_escalation_risks_round_trip(self, tmp_path):
+        er = EscalationRisk(
+            job_name="j1", topology="SNO", version="4.19",
+            consecutive_failures=3, sippy_url="https://sippy/j1",
+        )
+        report = MonitorReport(generated_at="now", escalation_risks=[er])
+        out = tmp_path / "report.json"
+        generate_json(report, out)
+        loaded = load_json(out)
+        assert len(loaded.escalation_risks) == 1
+        assert loaded.escalation_risks[0].job_name == "j1"
+        assert loaded.escalation_risks[0].consecutive_failures == 3
+
+    def test_cross_topology_round_trip(self, tmp_path):
+        report = MonitorReport(
+            generated_at="now",
+            cross_topology={"j1": ["TNA"], "j2": ["SNO", "TNF"]},
+        )
+        out = tmp_path / "report.json"
+        generate_json(report, out)
+        loaded = load_json(out)
+        assert loaded.cross_topology == {"j1": ["TNA"], "j2": ["SNO", "TNF"]}
+
+    def test_thresholds_round_trip(self, tmp_path):
+        report = MonitorReport(
+            generated_at="now",
+            recurring_threshold=5,
+            persistent_threshold=10,
+        )
+        out = tmp_path / "report.json"
+        generate_json(report, out)
+        loaded = load_json(out)
+        assert loaded.recurring_threshold == 5
+        assert loaded.persistent_threshold == 10
+
+    def test_jira_errors_round_trip(self, tmp_path):
+        report = MonitorReport(
+            generated_at="now",
+            jira_errors=["JIRA search failed for j1: timeout", "JIRA search failed for j2: 403"],
+        )
+        out = tmp_path / "report.json"
+        generate_json(report, out)
+        loaded = load_json(out)
+        assert loaded.jira_errors == ["JIRA search failed for j1: timeout", "JIRA search failed for j2: 403"]
+
+
+class TestSafeDataclassInit:
+    def test_ignores_unknown_keys(self):
+        result = _safe_dataclass_init(JiraBug, {
+            "key": "X-1", "summary": "s", "status": "New",
+            "unknown_field": "should be ignored",
+        })
+        assert result.key == "X-1"
+        assert not hasattr(result, "unknown_field")
+
+    def test_uses_defaults_for_missing_optional(self):
+        result = _safe_dataclass_init(JiraBug, {
+            "key": "X-1", "summary": "s", "status": "New",
+        })
+        assert result.assignee == ""
+
+
+class TestBlockingJobFirstIdx:
+    def test_blocking_job_first_idx(self):
+        blocking = JobRun("b1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")
+        informing = JobRun("i1", "url", JobResult.FAILURE, JobType.INFORMING, "SNO")
+        blocking2 = JobRun("b1", "url2", JobResult.FAILURE, JobType.BLOCKING, "SNO")
+        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED,
+                          jobs=[informing, blocking, blocking2])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        # blocking is sorted first, so b1 should be at index 1
+        assert "blocking_job_first_idx" in ctx
+        assert "b1" in ctx["blocking_job_first_idx"]

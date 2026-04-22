@@ -10,15 +10,20 @@ set -euo pipefail
 #     - Downloads all artifacts in parallel
 #     - Writes per-release and PR jobs JSON files
 #
+#   doctor.sh graphs --workdir DIR [--timezone TZ]
+#     - Generates PCP performance graphs for all jobs with pmlogs
+#     - Outputs PNG files to ${WORKDIR}/graphs/<build_id>/
+#
 #   doctor.sh finalize --workdir DIR <releases>
 #     - Runs aggregate.py for each release and PRs
-#     - Runs create-report.py to generate HTML
+#     - Runs create-report.py to generate HTML (embeds graphs if present)
 #
 # Usage from doctor skill:
 #   1. doctor.sh prepare --workdir $WORKDIR 4.18,4.19,4.20,main --rebase
-#   2. (LLM launches prow-job agents for all jobs)
-#   3. (LLM launches create-bugs agents for Jira search)
-#   4. doctor.sh finalize --workdir $WORKDIR 4.18,4.19,4.20,main
+#   2. doctor.sh graphs --workdir $WORKDIR
+#   3. (LLM launches prow-job agents for all jobs)
+#   4. (LLM launches create-bugs agents for Jira search)
+#   5. doctor.sh finalize --workdir $WORKDIR 4.18,4.19,4.20,main
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKDIR=""
@@ -252,15 +257,54 @@ cmd_finalize() {
 }
 
 # ---------------------------------------------------------------------------
+# graphs
+# ---------------------------------------------------------------------------
+
+cmd_graphs() {
+    local timezone="UTC"
+
+    while [[ ${#} -gt 0 ]]; do
+        case "${1}" in
+            --workdir) WORKDIR="${2}"; shift 2 ;;
+            --timezone) timezone="${2}"; shift 2 ;;
+            -*) echo "Unknown option: ${1}" >&2; return 1 ;;
+            *) echo "Unknown argument: ${1}" >&2; return 1 ;;
+        esac
+    done
+
+    WORKDIR="${WORKDIR:-/tmp/microshift-ci-claude-workdir.$(date +%y%m%d)}"
+
+    if [[ ! -d "${WORKDIR}/artifacts" ]]; then
+        echo "No artifacts found in ${WORKDIR}, skipping graph generation." >&2
+        return 0
+    fi
+
+    # Check prerequisites
+    if ! command -v pcp2json >/dev/null 2>&1; then
+        echo "Error: pcp2json not found. Install pcp-export-pcp2json." >&2
+        return 1
+    fi
+    if ! python3 -c "import matplotlib" 2>/dev/null; then
+        echo "Error: matplotlib not installed. Run: pip install matplotlib" >&2
+        return 1
+    fi
+
+    echo "=== Generating PCP graphs ===" >&2
+    bash "${SCRIPT_DIR}/pcp-graphs/generate-graphs.sh" \
+        --workdir "${WORKDIR}" --timezone "${timezone}"
+}
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
 usage() {
-    echo "Usage: $(basename "$0") <command> [--workdir DIR] <releases> [options]" >&2
+    echo "Usage: $(basename "$0") <command> [--workdir DIR] [options]" >&2
     echo "" >&2
     echo "Commands:" >&2
-    echo "  prepare [--workdir DIR] <releases> [--rebase]  Collect jobs and download artifacts" >&2
-    echo "  finalize [--workdir DIR] <releases>            Aggregate results and generate HTML" >&2
+    echo "  prepare  [--workdir DIR] <releases> [--rebase]  Collect jobs and download artifacts" >&2
+    echo "  graphs   [--workdir DIR] [--timezone TZ]        Generate PCP performance graphs" >&2
+    echo "  finalize [--workdir DIR] <releases>             Aggregate results and generate HTML" >&2
     echo "" >&2
     echo "  <releases>: comma-separated release versions (e.g., 4.18,4.19,4.20,main)" >&2
     echo "  --workdir DIR: work directory (default: /tmp/microshift-ci-claude-workdir.YYMMDD)" >&2
@@ -277,6 +321,7 @@ main() {
 
     case "${cmd}" in
         prepare)  cmd_prepare "${@}" ;;
+        graphs)   cmd_graphs "${@}" ;;
         finalize) cmd_finalize "${@}" ;;
         *) echo "Unknown command: ${cmd}" >&2; usage ;;
     esac

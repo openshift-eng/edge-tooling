@@ -1,3 +1,10 @@
+---
+name: release-health-analysis
+description: Analyze release health data and produce assessment
+allowed-tools: Read, Write, Bash, mcp__plugin_mcp-atlassian_mcp-atlassian__jira_search
+user-invocable: false
+---
+
 # release-health: Analysis
 
 ## Purpose
@@ -63,13 +70,13 @@ Update the `features_spike_on_epic` count in memory (do not rewrite `spikes.json
 
 ### 3. Fetch Child Issues
 
-Split `epic_keys_csv` from `epics.json` into batches of ~20. For each batch, paginate with `startAt=0`, `limit=50` until all results are fetched:
+Split `epic_keys_csv` from `epics.json` into batches of ~20. For each batch, paginate with `page_token`, `limit=50` until all results are fetched:
 
 ```jql
 project in (OCPEDGE, USHIFT, OCPBUGS) AND "Epic Link" in ({batch_csv}) ORDER BY priority ASC
 ```
 
-Also fetch unlinked OCPBUGS bugs (use components from Laws). Paginate with `startAt=0`, `limit=50` until all results are fetched:
+Also fetch unlinked OCPBUGS bugs (use components from Laws). Paginate with `page_token`, `limit=50` until all results are fetched:
 
 ```jql
 project = OCPBUGS

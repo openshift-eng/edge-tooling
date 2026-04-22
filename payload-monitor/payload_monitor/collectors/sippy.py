@@ -1,5 +1,7 @@
 """Fetch test and job health data from Sippy."""
 
+from __future__ import annotations
+
 import logging
 import requests
 

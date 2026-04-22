@@ -21,6 +21,11 @@ reviews:
   path_filters:
     - "!two-node-toolbox/**"
 
+  path_instructions:
+    - path: "**"
+      instructions: |
+        Review all changes against the guidelines in CONTRIBUTING.md. Flag any violations as severity level "medium".
+
   tools:
     shellcheck:
       enabled: true

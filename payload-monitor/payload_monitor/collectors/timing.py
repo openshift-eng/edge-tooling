@@ -1,5 +1,8 @@
 """Collect install/upgrade timing data from Sippy APIs and GCS artifacts."""
 
+from __future__ import annotations
+
+from typing import Optional
 import json
 import logging
 import math
@@ -253,7 +256,7 @@ def fetch_job_runs(job_name: str, release: str) -> list[dict]:
     return rows if isinstance(rows, list) else []
 
 
-def fetch_run_summary(run_id: str) -> dict | None:
+def fetch_run_summary(run_id: str) -> Optional[dict]:
     """Fetch job run summary from Sippy. Returns None on error."""
     try:
         resp = _session.get(
@@ -296,7 +299,7 @@ _STEP_PATTERNS = [
 ]
 
 
-def _classify_step(step_name: str) -> str | None:
+def _classify_step(step_name: str) -> Optional[str]:
     """Map a junit_operator testcase name to a logical step key."""
     name_lower = step_name.lower()
     # Phase totals (e.g. "Run multi-stage test pre phase")
@@ -417,7 +420,7 @@ def collect(
     # Stage 3: Fetch summaries + step durations for all new runs in parallel
     if new_run_tasks:
         logger.info("Timing: fetching summaries + step durations...")
-        summaries: dict[str, dict | None] = {}
+        summaries: dict[str, Optional[dict]] = {}
         step_results: dict[str, dict[str, float]] = {}
 
         with ThreadPoolExecutor(max_workers=8) as pool:
