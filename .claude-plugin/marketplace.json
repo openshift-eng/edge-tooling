@@ -61,6 +61,12 @@
       "version": "1.1.0"
     },
     {
+      "name": "security-review",
+      "source": "./plugins/security-review",
+      "description": "Security guards for credential protection and destructive command prevention",
+      "version": "1.0.0"
+    },
+    {
       "name": "two-node",
       "source": "./plugins/two-node",
       "description": "Two-node topology (TNA/TNF) workflow automation — RHEL verification, Jira integration, and more",
