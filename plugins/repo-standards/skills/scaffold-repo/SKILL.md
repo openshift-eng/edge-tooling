@@ -47,8 +47,9 @@ Use `AskUserQuestion` to collect the following. Do not assume defaults for any o
 1. **Project name** --- human-readable name for the project
 2. **Primary language** --- Go, Python, Shell, etc.
 3. **Team name** --- team that owns this repository
-4. **Upstream relationship** --- does this repo interact with an upstream project? (y/n)
-5. **Brief project description** --- 2--3 sentences describing what the project does
+4. **Multiple components** --- does this repository contain multiple components? (y/n)
+5. **Upstream relationship** --- does this repo interact with an upstream project? (y/n)
+6. **Brief project description** --- 2--3 sentences describing what the project does
 
 ---
 
@@ -72,7 +73,7 @@ For each missing artifact, generate the file using templates from the Laws and c
 - Add path_filters appropriate for the project language
 - Include basic review instructions
 
-#### docs/architecture.md (if missing and repo has multiple components)
+#### docs/architecture.md (if missing and multiple components confirmed)
 - Follow Law 05 recommendations
 - Create a skeleton with section headers for the team to fill in
 

@@ -77,7 +77,7 @@ Perform these checks by reading files directly:
 
 Output a compliance table:
 
-```
+```text
 | Check | Status | Detail |
 |-------|--------|--------|
 | README.md | PASS | Present |
