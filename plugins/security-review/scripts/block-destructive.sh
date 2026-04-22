@@ -20,11 +20,25 @@ if [[ -z "$COMMAND" ]]; then
     exit 0
 fi
 
-# rm -rf targeting root, home — handles sudo, --, and dangerous path anywhere in args
-if echo "$COMMAND" | grep -qE '(^|[[:space:]])(sudo[[:space:]]+)?rm[[:space:]]+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*([[:space:]]+--)?([[:space:]]+|$)' && \
-   echo "$COMMAND" | grep -qE '([[:space:]]|/)(/|~|\$HOME)([[:space:]]|$)'; then
-    echo "Blocked: \`rm -rf /\` (or ~ / \$HOME) would delete critical filesystem content." >&2
-    exit 1
+# rm with recursive+force targeting root or home
+# Detect rm, then check for both -r and -f (in any order, combined or separate),
+# then check for dangerous target paths
+if echo "$COMMAND" | grep -qE '(^|[[:space:]])(sudo[[:space:]]+)?rm[[:space:]]'; then
+    HAS_R=false
+    HAS_F=false
+    echo "$COMMAND" | grep -qE '[[:space:]]+-[a-zA-Z]*r' && HAS_R=true
+    echo "$COMMAND" | grep -qE '[[:space:]]+-[a-zA-Z]*f' && HAS_F=true
+    echo "$COMMAND" | grep -qE '[[:space:]]+--recursive' && HAS_R=true
+    echo "$COMMAND" | grep -qE '[[:space:]]+--force' && HAS_F=true
+
+    if [[ "$HAS_R" = true && "$HAS_F" = true ]]; then
+        # Check for dangerous targets: standalone /, ~, ~/, $HOME, $HOME/
+        if echo "$COMMAND" | grep -qE '([[:space:]]|/)(/|~|\$HOME)([[:space:]]|$)' || \
+           echo "$COMMAND" | grep -qE '[[:space:]](~/|\$HOME/)([[:space:]]|$)'; then
+            echo "Blocked: \`rm -rf /\` (or ~ / \$HOME) would delete critical filesystem content." >&2
+            exit 1
+        fi
+    fi
 fi
 
 # git push --force / -f (but not --force-with-lease)
@@ -43,10 +57,16 @@ if echo "$COMMAND" | grep -qE 'git[[:space:]]+reset[[:space:]]+--hard'; then
     exit 1
 fi
 
-# git clean -fd / -fdx
-if echo "$COMMAND" | grep -qE 'git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*f[a-zA-Z]*d'; then
-    echo "Blocked: \`git clean -fd\` permanently deletes untracked files. Use \`git stash --include-untracked\` instead." >&2
-    exit 1
+# git clean with both -f and -d flags (any order, combined or separate)
+if echo "$COMMAND" | grep -qE 'git[[:space:]]+clean[[:space:]]'; then
+    CLEAN_HAS_F=false
+    CLEAN_HAS_D=false
+    echo "$COMMAND" | grep -qE '[[:space:]]+-[a-zA-Z]*f' && CLEAN_HAS_F=true
+    echo "$COMMAND" | grep -qE '[[:space:]]+-[a-zA-Z]*d' && CLEAN_HAS_D=true
+    if [[ "$CLEAN_HAS_F" = true && "$CLEAN_HAS_D" = true ]]; then
+        echo "Blocked: \`git clean -fd\` permanently deletes untracked files. Use \`git stash --include-untracked\` instead." >&2
+        exit 1
+    fi
 fi
 
 # git checkout -- . (discard all changes)

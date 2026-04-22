@@ -6,7 +6,7 @@ parse_json_field() {
     local input="$1"
     local field="$2"
     if command -v jq &>/dev/null; then
-        echo "$input" | jq -r "$field"
+        echo "$input" | jq -r "($field) // empty"
     elif command -v python3 &>/dev/null; then
         echo "$input" | python3 -c "
 import sys, json, functools
@@ -31,6 +31,10 @@ fi
 
 FOUND=""
 
+# Credential value character class: reject $, {, quotes, and whitespace as first char
+# This skips env var refs ($VAR, ${VAR}), templates ({{ }}), and quoted vars ("$VAR")
+CRED_REJECT='[^${"'"'"'{}[:space:]]'
+
 # AWS access key
 if echo "$CONTENT" | grep -qE 'AKIA[0-9A-Z]{16}'; then
     FOUND="${FOUND}\n- AWS access key (AKIA...) detected"
@@ -41,28 +45,28 @@ if echo "$CONTENT" | grep -qE 'BEGIN (RSA )?PRIVATE KEY|BEGIN OPENSSH PRIVATE KE
     FOUND="${FOUND}\n- Private key detected"
 fi
 
-# Password assignments — skip env var refs ($VAR, ${VAR}) and templates ({{ }})
-if echo "$CONTENT" | grep -qiE '(export[[:space:]]+)?password[[:space:]]*[:=][[:space:]]*[^${[:space:]]'; then
+# Password assignments
+if echo "$CONTENT" | grep -qiE "(export[[:space:]]+)?password[[:space:]]*[:=][[:space:]]*${CRED_REJECT}"; then
     FOUND="${FOUND}\n- Hardcoded password detected"
 fi
 
 # Token assignments
-if echo "$CONTENT" | grep -qiE '(export[[:space:]]+)?token[[:space:]]*[:=][[:space:]]*[^${[:space:]]'; then
+if echo "$CONTENT" | grep -qiE "(export[[:space:]]+)?token[[:space:]]*[:=][[:space:]]*${CRED_REJECT}"; then
     FOUND="${FOUND}\n- Hardcoded token detected"
 fi
 
 # Secret assignments
-if echo "$CONTENT" | grep -qiE '(export[[:space:]]+)?secret[[:space:]]*[:=][[:space:]]*[^${[:space:]]'; then
+if echo "$CONTENT" | grep -qiE "(export[[:space:]]+)?secret[[:space:]]*[:=][[:space:]]*${CRED_REJECT}"; then
     FOUND="${FOUND}\n- Hardcoded secret detected"
 fi
 
 # API key assignments
-if echo "$CONTENT" | grep -qiE '(export[[:space:]]+)?api_key[[:space:]]*[:=][[:space:]]*[^${[:space:]]'; then
+if echo "$CONTENT" | grep -qiE "(export[[:space:]]+)?api_key[[:space:]]*[:=][[:space:]]*${CRED_REJECT}"; then
     FOUND="${FOUND}\n- Hardcoded API key detected"
 fi
 
 # Database connection strings with embedded passwords (skip variable refs in password position)
-if echo "$CONTENT" | grep -qiE '(mysql|postgres|postgresql|mongodb|redis)://[^:]+:[^${[:space:]@][^@]*@'; then
+if echo "$CONTENT" | grep -qiE '(mysql|postgres|postgresql|mongodb|redis)://[^:]+:[^${"'"'"'{}[:space:]@][^@]*@'; then
     FOUND="${FOUND}\n- Database connection string with embedded password detected"
 fi
 
