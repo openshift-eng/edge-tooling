@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # PostToolUse(Bash) hook — warns if AI attribution trailers are missing after commits
 set -euo pipefail
 

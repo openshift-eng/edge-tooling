@@ -33,7 +33,7 @@ Repos should have a `.coderabbit.yaml` with `auto_review`, `path_filters`/`path_
 
 ## Installation
 
-```
+```bash
 /plugin marketplace add openshift-eng/edge-tooling code-quality
 ```
 

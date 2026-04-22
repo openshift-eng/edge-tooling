@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # SessionStart hook — validates .coderabbit.yaml presence and structure
 set -euo pipefail
 
@@ -35,15 +35,15 @@ fi
 # Validate config structure
 MISSING=()
 
-if ! grep -q 'auto_review' "$CONFIG"; then
+if ! grep -qE '^[[:space:]]*auto_review[[:space:]]*:' "$CONFIG"; then
     MISSING+=("auto_review")
 fi
 
-if ! grep -qE 'path_filters|path_instructions' "$CONFIG"; then
+if ! grep -qE '^[[:space:]]*(path_filters|path_instructions)[[:space:]]*:' "$CONFIG"; then
     MISSING+=("path_filters or path_instructions")
 fi
 
-if ! grep -q 'instructions' "$CONFIG"; then
+if ! grep -qE '^[[:space:]]*instructions[[:space:]]*:' "$CONFIG"; then
     MISSING+=("instructions")
 fi
 

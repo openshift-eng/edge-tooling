@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # PreToolUse(Bash) hook — validates conventional commits format on git commit commands
 set -euo pipefail
 
