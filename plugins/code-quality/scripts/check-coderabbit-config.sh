@@ -13,6 +13,10 @@ if [ -z "$CWD" ]; then
     exit 0
 fi
 
+if [ ! -d "$CWD/.git" ] && ! git -C "$CWD" rev-parse --git-dir &>/dev/null; then
+    exit 0
+fi
+
 CONFIG="$CWD/.coderabbit.yaml"
 
 # Check if config exists
