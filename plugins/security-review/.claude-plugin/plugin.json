@@ -1,0 +1,8 @@
+{
+  "name": "security-review",
+  "description": "Security guards for credential protection and destructive command prevention",
+  "version": "1.0.0",
+  "author": { "name": "jeff-roche" },
+  "homepage": "https://github.com/openshift-eng/edge-tooling",
+  "license": "Apache-2.0"
+}
