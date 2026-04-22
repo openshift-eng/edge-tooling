@@ -1,0 +1,43 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ticket-mention.sh",
+            "timeout": 15,
+            "statusMessage": "Checking for Jira ticket references..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "create_pull_request|mcp__plugin_github_github__create_pull_request",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/pr-title-check.sh",
+            "timeout": 5,
+            "statusMessage": "Validating PR title format..."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/plan-to-jira.sh",
+            "timeout": 5,
+            "statusMessage": "Checking for Jira ticket opportunities..."
+          }
+        ]
+      }
+    ]
+  }
+}

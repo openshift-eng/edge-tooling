@@ -37,6 +37,12 @@
       "version": "1.0.0"
     },
     {
+      "name": "jira-helpers",
+      "source": "./plugins/jira-helpers",
+      "description": "Developer-focused Jira workflow integration — ticket validation, management, convention enforcement, and sprint planning",
+      "version": "1.0.0"
+    },
+    {
       "name": "lvms",
       "source": "./plugins/lvms",
       "description": "LVMS (Logical Volume Manager Storage) release, QE, and operational workflows",
