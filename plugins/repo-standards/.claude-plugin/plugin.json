@@ -1,0 +1,8 @@
+{
+  "name": "repo-standards",
+  "description": "Repository compliance checking and scaffolding for agentic development standards",
+  "version": "1.0.0",
+  "author": { "name": "jeff-roche" },
+  "homepage": "https://github.com/openshift-eng/edge-tooling",
+  "license": "Apache-2.0"
+}
