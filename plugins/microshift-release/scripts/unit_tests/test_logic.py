@@ -154,6 +154,7 @@ class TestComputeRecommendation(unittest.TestCase):
             "cve_impact": {"impact": "must_release", "details": [{"cve": "CVE-2026-1"}]},
             "commits": 5,
             "days_since": 10,
+            "ocp_status": "available",
         }
         rec, reason = compute_recommendation(evaluation)
         self.assertEqual(rec, "ASK ART TO CREATE ARTIFACTS")
@@ -164,6 +165,7 @@ class TestComputeRecommendation(unittest.TestCase):
             "cve_impact": {"impact": "none"},
             "commits": 3,
             "days_since": 95,
+            "ocp_status": "available",
         }
         rec, reason = compute_recommendation(evaluation)
         self.assertEqual(rec, "ASK ART TO CREATE ARTIFACTS")
@@ -213,6 +215,89 @@ class TestComputeRecommendation(unittest.TestCase):
         }
         rec, _ = compute_recommendation(evaluation)
         self.assertEqual(rec, "SKIP")
+
+    def test_ocpbugs_triggers_needs_review(self):
+        evaluation = {
+            "cve_impact": {"impact": "none"},
+            "commits": 5,
+            "days_since": 30,
+            "ocp_status": "available",
+            "ocpbugs": {"count": 3, "bugs": [], "skipped": False, "release_required": 0, "release_not_required": 0, "needs_review": 3},
+        }
+        rec, reason = compute_recommendation(evaluation)
+        self.assertEqual(rec, "NEEDS REVIEW")
+        self.assertIn("OCPBUGS", reason)
+
+    def test_ocpbugs_needs_review_no_ocp(self):
+        evaluation = {
+            "cve_impact": {"impact": "none"},
+            "commits": 5,
+            "days_since": 30,
+            "ocp_status": "not_available",
+            "ocpbugs": {"count": 2, "bugs": [], "skipped": False, "release_required": 0, "release_not_required": 0, "needs_review": 2},
+        }
+        rec, reason = compute_recommendation(evaluation)
+        self.assertEqual(rec, "NEEDS REVIEW")
+        self.assertIn("OCPBUGS", reason)
+
+    def test_no_ocpbugs_still_skip(self):
+        evaluation = {
+            "cve_impact": {"impact": "none"},
+            "commits": 5,
+            "days_since": 30,
+            "ocp_status": "available",
+            "ocpbugs": {"count": 0, "bugs": [], "skipped": False},
+        }
+        rec, _ = compute_recommendation(evaluation)
+        self.assertEqual(rec, "SKIP")
+
+    def test_90_day_overrides_release_not_required(self):
+        evaluation = {
+            "cve_impact": {"impact": "none"},
+            "commits": 5,
+            "days_since": 95,
+            "ocp_status": "available",
+            "ocpbugs": {"count": 1, "bugs": [], "skipped": False, "release_required": 0, "release_not_required": 1, "needs_review": 0},
+        }
+        rec, reason = compute_recommendation(evaluation)
+        self.assertEqual(rec, "ASK ART TO CREATE ARTIFACTS")
+        self.assertIn("90-day", reason)
+
+    def test_release_required_label(self):
+        evaluation = {
+            "cve_impact": {"impact": "none"},
+            "commits": 5,
+            "days_since": 30,
+            "ocp_status": "available",
+            "ocpbugs": {"count": 2, "bugs": [], "skipped": False, "release_required": 1, "release_not_required": 1, "needs_review": 0},
+        }
+        rec, reason = compute_recommendation(evaluation)
+        self.assertEqual(rec, "ASK ART TO CREATE ARTIFACTS")
+        self.assertIn("release-required", reason)
+
+    def test_release_not_required_label_skips(self):
+        evaluation = {
+            "cve_impact": {"impact": "none"},
+            "commits": 5,
+            "days_since": 30,
+            "ocp_status": "available",
+            "ocpbugs": {"count": 1, "bugs": [], "skipped": False, "release_required": 0, "release_not_required": 1, "needs_review": 0},
+        }
+        rec, reason = compute_recommendation(evaluation)
+        self.assertEqual(rec, "SKIP")
+        self.assertIn("release-not-required", reason)
+
+    def test_cve_takes_priority_over_ocpbugs(self):
+        evaluation = {
+            "cve_impact": {"impact": "must_release", "details": [{"cve": "CVE-2026-1"}]},
+            "commits": 5,
+            "days_since": 10,
+            "ocp_status": "available",
+            "ocpbugs": {"count": 3, "bugs": [], "skipped": False},
+        }
+        rec, reason = compute_recommendation(evaluation)
+        self.assertEqual(rec, "ASK ART TO CREATE ARTIFACTS")
+        self.assertIn("CVE fix", reason)
 
 
 class TestNightlyFormatText(unittest.TestCase):
@@ -377,17 +462,6 @@ class TestXyzFormatTextShort(unittest.TestCase):
         self.assertIn("[OCP: available]", result)
         self.assertIn("no CVEs", result)
 
-    def test_eol_lifecycle(self):
-        evals = [{
-            "version": "4.14.50",
-            "recommendation": "SKIP",
-            "ocp_status": "available",
-            "lifecycle_status": "End of life",
-            "lifecycle_end_date": "2025-10-31",
-        }]
-        result = format_text_short(evals)
-        self.assertIn("End of life", result)
-
     def test_ask_art(self):
         evals = [{
             "version": "4.21.9",
@@ -419,6 +493,33 @@ class TestBuildReason(unittest.TestCase):
             "advisory_report": {"skipped": True, "error": "no VPN"},
         })
         self.assertIn("advisory report unavailable", result)
+
+    def test_ocpbugs_in_reason(self):
+        result = _build_reason({
+            "cve_impact": {"impact": "none"},
+            "ocpbugs": {"count": 3, "bugs": [], "skipped": False, "release_required": 1, "release_not_required": 2, "needs_review": 0},
+            "last_released": "4.21.7",
+            "days_since": 30,
+        })
+        self.assertIn("3 OCPBUGS", result)
+
+    def test_no_ocpbugs_in_reason(self):
+        result = _build_reason({
+            "cve_impact": {"impact": "none"},
+            "ocpbugs": {"count": 0, "bugs": [], "skipped": False},
+            "last_released": "4.21.7",
+            "days_since": 30,
+        })
+        self.assertIn("no OCPBUGS", result)
+
+    def test_ocpbugs_skipped_not_shown(self):
+        result = _build_reason({
+            "cve_impact": {"impact": "none"},
+            "ocpbugs": {"count": 0, "bugs": [], "skipped": True},
+            "last_released": "4.21.7",
+            "days_since": 30,
+        })
+        self.assertNotIn("OCPBUGS", result)
 
 
 class TestJqlSanitization(unittest.TestCase):

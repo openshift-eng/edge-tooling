@@ -218,22 +218,12 @@ def main():
     else:
         streams = git_ops.list_release_branches()
 
-    # Step 3: Split into active vs inactive streams
+    # Step 3: Filter to active streams only (skip EOL/EUS)
     results = []
-    active_streams = []
-
-    for stream in streams:
-        lc = lifecycle.get_lifecycle_status(stream, lifecycle_data)
-        if lc and not lc["active"]:
-            results.append({
-                "stream": stream,
-                "branch": f"release-{stream}",
-                "status": "EOL" if lc["phase"] == "End of life" else "EUS",
-                "lifecycle_phase": lc["phase"],
-                "end_date": lc.get("end_date", ""),
-            })
-        else:
-            active_streams.append(stream)
+    active_streams = [
+        s for s in streams
+        if not (lc := lifecycle.get_lifecycle_status(s, lifecycle_data)) or lc["active"]
+    ]
 
     # Step 4: Fetch Brew builds only if there are active streams to check
     brew_builds = {}
