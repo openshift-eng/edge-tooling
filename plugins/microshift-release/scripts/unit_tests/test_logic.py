@@ -8,6 +8,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from precheck_xyz import compute_recommendation, interpret_cves, format_text_short, _build_reason  # noqa: E402
+from lib.ocpbugs import _issue_to_dict  # noqa: E402
 from precheck_ecrc import parse_ecrc_version, format_text as ecrc_format_text  # noqa: E402
 from precheck_nightly import classify_gap, format_gap, format_text as nightly_format_text  # noqa: E402
 
@@ -287,6 +288,18 @@ class TestComputeRecommendation(unittest.TestCase):
         self.assertEqual(rec, "SKIP")
         self.assertIn("release-not-required", reason)
 
+    def test_release_required_no_ocp(self):
+        evaluation = {
+            "cve_impact": {"impact": "none"},
+            "commits": 5,
+            "days_since": 30,
+            "ocp_status": "not_available",
+            "ocpbugs": {"count": 1, "bugs": [], "skipped": False, "release_required": 1, "release_not_required": 0, "needs_review": 0},
+        }
+        rec, reason = compute_recommendation(evaluation)
+        self.assertEqual(rec, "NEEDS REVIEW")
+        self.assertIn("OCP payload not yet available", reason)
+
     def test_cve_takes_priority_over_ocpbugs(self):
         evaluation = {
             "cve_impact": {"impact": "must_release", "details": [{"cve": "CVE-2026-1"}]},
@@ -502,6 +515,8 @@ class TestBuildReason(unittest.TestCase):
             "days_since": 30,
         })
         self.assertIn("3 OCPBUGS", result)
+        self.assertIn("1 release-required", result)
+        self.assertIn("2 release-not-required", result)
 
     def test_no_ocpbugs_in_reason(self):
         result = _build_reason({
@@ -520,6 +535,75 @@ class TestBuildReason(unittest.TestCase):
             "days_since": 30,
         })
         self.assertNotIn("OCPBUGS", result)
+
+
+class TestIssueToDict(unittest.TestCase):
+    """Tests for _issue_to_dict label-triage logic in ocpbugs.py."""
+
+    @staticmethod
+    def _make_issue(key, summary, status, labels=None):
+        """Build a minimal mock Jira issue."""
+        from types import SimpleNamespace
+        fields = SimpleNamespace(
+            summary=summary,
+            status=status,
+            labels=labels or [],
+        )
+        return SimpleNamespace(key=key, fields=fields)
+
+    def test_release_required_label(self):
+        issue = self._make_issue(
+            "OCPBUGS-111", "fix crash", "Verified",
+            labels=["release-required"],
+        )
+        result = _issue_to_dict(issue, "fixVersion")
+        self.assertEqual(result["release_action"], "release_required")
+        self.assertEqual(result["source"], "fixVersion")
+
+    def test_release_not_required_label(self):
+        issue = self._make_issue(
+            "OCPBUGS-222", "minor tweak", "Closed",
+            labels=["release-not-required"],
+        )
+        result = _issue_to_dict(issue, "commit")
+        self.assertEqual(result["release_action"], "release_not_required")
+        self.assertEqual(result["source"], "commit")
+
+    def test_no_labels_needs_review(self):
+        issue = self._make_issue(
+            "OCPBUGS-333", "unlabeled bug", "MODIFIED",
+        )
+        result = _issue_to_dict(issue, "fixVersion")
+        self.assertEqual(result["release_action"], "needs_review")
+
+    def test_both_labels_needs_review(self):
+        issue = self._make_issue(
+            "OCPBUGS-444", "conflicting labels", "ON_QA",
+            labels=["release-required", "release-not-required"],
+        )
+        result = _issue_to_dict(issue, "fixVersion")
+        self.assertEqual(result["release_action"], "needs_review")
+
+    def test_extra_labels_ignored(self):
+        issue = self._make_issue(
+            "OCPBUGS-555", "extra labels", "Verified",
+            labels=["team/microshift", "release-required", "priority/high"],
+        )
+        result = _issue_to_dict(issue, "fixVersion")
+        self.assertEqual(result["release_action"], "release_required")
+        self.assertIn("team/microshift", result["labels"])
+
+    def test_basic_fields_extracted(self):
+        issue = self._make_issue(
+            "OCPBUGS-666", "test summary", "Closed",
+        )
+        result = _issue_to_dict(issue, "commit")
+        self.assertEqual(result["key"], "OCPBUGS-666")
+        self.assertEqual(result["summary"], "test summary")
+        self.assertEqual(result["status"], "Closed")
+        self.assertEqual(result["release_note"], "")
+        self.assertEqual(result["release_note_type"], "")
+        self.assertEqual(result["release_note_status"], "")
 
 
 class TestJqlSanitization(unittest.TestCase):

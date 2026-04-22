@@ -66,12 +66,7 @@ def _query_bugs_by_fixversion(client, version):
         f"ORDER BY status ASC"
     )
 
-    try:
-        issues = client.search_issues(jql, maxResults=50, fields=_JIRA_FIELDS)
-    except Exception as e:
-        logger.warning("OCPBUGS fixVersion query failed: %s", e)
-        return []
-
+    issues = client.search_issues(jql, maxResults=50, fields=_JIRA_FIELDS)
     return [_issue_to_dict(issue, "fixVersion") for issue in issues]
 
 
@@ -95,12 +90,7 @@ def _query_bugs_by_keys(client, keys):
         f"ORDER BY status ASC"
     )
 
-    try:
-        issues = client.search_issues(jql, maxResults=50, fields=_JIRA_FIELDS)
-    except Exception as e:
-        logger.warning("OCPBUGS key lookup failed: %s", e)
-        return []
-
+    issues = client.search_issues(jql, maxResults=50, fields=_JIRA_FIELDS)
     return [_issue_to_dict(issue, "commit") for issue in issues]
 
 
@@ -174,12 +164,24 @@ def query_resolved_bugs(version, branch=None, since_version=None):
                         len(commit_bug_keys), ", ".join(sorted(commit_bug_keys)))
 
     # Source 1: fixVersion query
-    fixversion_bugs = _query_bugs_by_fixversion(client, version)
+    try:
+        fixversion_bugs = _query_bugs_by_fixversion(client, version)
+    except Exception as e:
+        logger.warning("OCPBUGS fixVersion query failed for %s: %s", version, e)
+        return {"count": 0, "bugs": [], "skipped": True,
+                "release_required": 0, "release_not_required": 0,
+                "needs_review": 0, "error": f"fixVersion query failed: {e}"}
     seen_keys = {b["key"] for b in fixversion_bugs}
 
     # Source 2: commit-referenced bugs not already found via fixVersion
     commit_only_keys = commit_bug_keys - seen_keys
-    commit_bugs = _query_bugs_by_keys(client, commit_only_keys)
+    try:
+        commit_bugs = _query_bugs_by_keys(client, commit_only_keys)
+    except Exception as e:
+        logger.warning("OCPBUGS key lookup failed for %s: %s", version, e)
+        return {"count": 0, "bugs": [], "skipped": True,
+                "release_required": 0, "release_not_required": 0,
+                "needs_review": 0, "error": f"key lookup failed: {e}"}
 
     # Merge: fixVersion bugs first, then commit-only bugs
     all_bugs = fixversion_bugs + commit_bugs

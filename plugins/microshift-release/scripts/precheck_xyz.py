@@ -200,7 +200,6 @@ def compute_recommendation(evaluation):
     if ocpbugs_count > 0:
         release_required = ocpbugs_data.get("release_required", 0)
         needs_review_bugs = ocpbugs_data.get("needs_review", 0)
-        release_not_required = ocpbugs_data.get("release_not_required", 0)
 
         if release_required > 0:
             bug_summary = f"{release_required} OCPBUGS labeled release-required"
@@ -417,7 +416,7 @@ def _build_reason(e):
         if needs_rev > 0:
             label_parts.append(f"{needs_rev} unlabeled")
         parts.append(f"{ocpbugs_count} OCPBUGS ({', '.join(label_parts)})")
-    elif not ocpbugs_data.get("skipped", False) and ocpbugs_data:
+    elif ocpbugs_data and not ocpbugs_data.get("skipped", False):
         parts.append("no OCPBUGS")
 
     # Last released
@@ -554,10 +553,13 @@ def format_text_full(output):
     )
     if has_ocpbugs:
         sections.append("\n## Resolved OCPBUGS\n")
-        sections.append("| Version | Bug | Status | Source | Release Action | Release Note Type | Release Note Status | Summary |")
-        sections.append("|---------|-----|--------|--------|----------------|-------------------|---------------------|---------|")
+        header = ("| Version | Bug | Status | Source | Release Action "
+                  "| Release Note Type | Release Note Status | Summary |")
+        separator = ("|---------|-----|--------|--------|----------------"
+                     "|-------------------|---------------------|---------|")
+        sections.append(header)
+        sections.append(separator)
         bugs_with_rn = 0
-        bugs_total = 0
         for e in evaluations:
             v = e.get("version", "?")
             for bug in e.get("ocpbugs", {}).get("bugs", []):
@@ -568,8 +570,10 @@ def format_text_full(output):
                 rn_type = bug.get("release_note_type", "") or "--"
                 rn_status = bug.get("release_note_status", "") or "--"
                 summary = bug.get("summary", "").replace("|", "\\|").replace("\n", " ")
-                sections.append(f"| {v} | {key} | {status} | {source} | {release_action} | {rn_type} | {rn_status} | {summary} |")
-                bugs_total += 1
+                row = (f"| {v} | {key} | {status} | {source} "
+                       f"| {release_action} | {rn_type} | {rn_status} "
+                       f"| {summary} |")
+                sections.append(row)
                 rn_text = bug.get("release_note", "")
                 if rn_text and rn_type != "Release Note Not Required":
                     bugs_with_rn += 1
