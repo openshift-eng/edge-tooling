@@ -22,9 +22,9 @@ SHOULD exclude non-code paths from review:
 reviews:
   path_filters:
     - "!docs/**"
-    - "!*.md"
     - "!vendor/**"
     - "!**/testdata/**"
+    - "!CHANGELOG.md"
 ```
 
 ### Instructions

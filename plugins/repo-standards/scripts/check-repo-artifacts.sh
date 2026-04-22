@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # Check repository for required agentic development artifacts
 # SessionStart hook — outputs hookSpecificOutput JSON if artifacts are missing
 
@@ -42,6 +42,8 @@ SYMLINK_WARN=""
 if [ -f "AGENTS.md" ] && [ -f "CLAUDE.md" ]; then
     if [ ! -L "CLAUDE.md" ]; then
         SYMLINK_WARN="CLAUDE.md exists but is not a symlink to AGENTS.md. Convention requires: ln -s AGENTS.md CLAUDE.md"
+    elif [ "$(readlink CLAUDE.md)" != "AGENTS.md" ]; then
+        SYMLINK_WARN="CLAUDE.md is a symlink but does not point to AGENTS.md (points to: $(readlink CLAUDE.md)). Convention requires: ln -sf AGENTS.md CLAUDE.md"
     fi
 elif [ -f "CLAUDE.md" ] && [ ! -f "AGENTS.md" ]; then
     SYMLINK_WARN="CLAUDE.md exists without AGENTS.md. Convention requires AGENTS.md as the primary file with CLAUDE.md as a symlink."

@@ -66,8 +66,8 @@ Parse the JSON output for `exists`, `auto_review`, `path_filters`, `instructions
 
 Perform these checks by reading files directly:
 
-1. **CLAUDE.md symlink** --- verify CLAUDE.md is a symlink to AGENTS.md (not a copy)
-2. **CONTRIBUTING.md sections** --- verify required section headers exist (Getting Started, Development Workflow, Branch Naming, Commit Messages, Testing, Code Review, Code Style)
+1. **CLAUDE.md symlink** --- use Bash to verify CLAUDE.md is a symlink pointing to AGENTS.md: `test -L CLAUDE.md && readlink CLAUDE.md` should return `AGENTS.md`. A regular file or a symlink to a different target is non-compliant.
+2. **CONTRIBUTING.md sections** --- verify required section headers exist (case-insensitive match): Getting Started, Development Workflow, Branch Naming, Commit Messages, Testing, Code Review, Code Style
 3. **docs/architecture.md** --- check if it exists (recommended, not required)
 4. **docs/upstream.md** --- check if it exists (recommended, not required)
 

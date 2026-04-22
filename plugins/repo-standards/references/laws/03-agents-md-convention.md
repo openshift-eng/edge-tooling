@@ -2,7 +2,7 @@
 
 ## Standard
 
-AGENTS.md is the vendor-neutral AI agent instruction standard, established by the Linux Foundation / Agentic AI Foundation and supported by 23+ AI coding tools.
+AGENTS.md is the vendor-neutral AI agent instruction standard. Originally released by OpenAI in August 2025, it was contributed to the Agentic AI Foundation (a directed fund under the Linux Foundation) in December 2025. See the [supported tools list](https://github.com/agentsmd/agents.md#supported-tools) for current tool coverage.
 
 Every repository MUST use `AGENTS.md` as the primary agent instruction file.
 

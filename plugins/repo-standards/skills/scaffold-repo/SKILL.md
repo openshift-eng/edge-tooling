@@ -84,11 +84,15 @@ For each missing artifact, generate the file using templates from the Laws and c
 
 ### Step 4: Create CLAUDE.md Symlink
 
-If CLAUDE.md does not exist or is not a symlink to AGENTS.md:
+If CLAUDE.md does not exist or is not a symlink to AGENTS.md, and AGENTS.md exists (either pre-existing or generated in Step 3):
 
 ```bash
-ln -sf AGENTS.md CLAUDE.md
+if [ -f AGENTS.md ]; then
+    ln -sf AGENTS.md CLAUDE.md
+fi
 ```
+
+If AGENTS.md does not exist, do NOT create the symlink. Report that AGENTS.md must be created first.
 
 ---
 

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # Check AGENTS.md (or CLAUDE.md) line count against 200-line limit
 # SessionStart hook — outputs hookSpecificOutput JSON if over limit
 
@@ -32,7 +32,7 @@ else
     exit 0
 fi
 
-LINE_COUNT=$(wc -l < "$TARGET")
+LINE_COUNT=$(wc -l < "$TARGET" | awk '{print $1}')
 
 if [ "$LINE_COUNT" -le "$LINE_LIMIT" ]; then
     exit 0

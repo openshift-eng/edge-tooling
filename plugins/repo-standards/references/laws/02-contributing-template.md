@@ -23,7 +23,9 @@ MUST describe the standard flow:
 
 ### Branch Naming
 
-MUST use the pattern: `type/short-description`
+SHOULD use the pattern: `type/short-description`
+
+This convention is configurable per repository. Override via repository-specific branch protection rules or CONTRIBUTING.md customization.
 
 Valid types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`
 
