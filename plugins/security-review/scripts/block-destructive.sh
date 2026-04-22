@@ -1,23 +1,33 @@
-#!/bin/bash
+#!/usr/bin/bash
 # PreToolUse(Bash) hook — block dangerous commands
 set -euo pipefail
 
-if ! command -v jq &>/dev/null; then
-    exit 0  # Fail open if jq is missing
-fi
+parse_command() {
+    if command -v jq &>/dev/null; then
+        echo "$1" | jq -r '.toolInput.command // empty'
+    elif command -v python3 &>/dev/null; then
+        echo "$1" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("toolInput",{}).get("command",""))'
+    else
+        echo "security-review: neither jq nor python3 available — cannot parse hook input" >&2
+        exit 1
+    fi
+}
 
 INPUT=$(cat)
-COMMAND=$(echo "$INPUT" | jq -r '.toolInput.command // empty')
+COMMAND=$(parse_command "$INPUT")
 
 if [[ -z "$COMMAND" ]]; then
     exit 0
 fi
 
-# rm -rf targeting root, home, or bare /
-if echo "$COMMAND" | grep -qE 'rm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+(/|~|\$HOME)\s*$' || \
-   echo "$COMMAND" | grep -qE 'rm\s+-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\s+(/|~|\$HOME)\s*$'; then
-    echo "Blocked: \`rm -rf /\` (or ~ / \$HOME) would delete critical filesystem content." >&2
-    exit 1
+# rm -rf targeting root, home — handles sudo, --, and path as non-final token
+if echo "$COMMAND" | grep -qE '(^|\s)(sudo\s+)?rm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*(\s+--)?(\s+|$)' && \
+   echo "$COMMAND" | grep -qE '(\s|/)(/|~|\$HOME)(\s|$)'; then
+    # Exclude safe relative paths like ./build, ../tmp
+    if ! echo "$COMMAND" | grep -qE 'rm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+\./'; then
+        echo "Blocked: \`rm -rf /\` (or ~ / \$HOME) would delete critical filesystem content." >&2
+        exit 1
+    fi
 fi
 
 # git push --force / -f (but not --force-with-lease)

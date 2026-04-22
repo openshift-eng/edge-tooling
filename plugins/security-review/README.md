@@ -7,10 +7,12 @@ Security guards for credential protection and destructive command prevention. Ho
 Automatic PreToolUse hooks fire on every relevant tool invocation:
 
 ### Bash hooks
+
 - **check-secrets.sh** -- Scans `git diff --cached` for credentials before `git commit` or `git add` runs. Detects AWS keys, private keys, hardcoded passwords/tokens/secrets/API keys, and `.env` files.
 - **block-destructive.sh** -- Blocks dangerous commands: `rm -rf /`, `git push --force`, `git reset --hard`, `git clean -fd`, `git checkout -- .`, `git restore .`, `chmod -R 777`. Suggests safer alternatives.
 
 ### Write hooks
+
 - **check-file-secrets.sh** -- Scans file content for credential patterns before writing. Detects the same credential types as check-secrets.sh plus database connection strings with embedded passwords.
 
 ## Detected Patterns
@@ -30,6 +32,6 @@ If a hook blocks a legitimate action, Claude Code will present the block reason 
 
 ## Installation
 
-```
+```bash
 /plugin marketplace add openshift-eng/edge-tooling security-review
 ```

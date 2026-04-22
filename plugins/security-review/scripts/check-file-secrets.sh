@@ -1,22 +1,35 @@
-#!/bin/bash
+#!/usr/bin/bash
 # PreToolUse(Write) hook — scan file content for credentials before writing
 set -euo pipefail
 
-if ! command -v jq &>/dev/null; then
-    exit 0  # Fail open if jq is missing
-fi
+parse_json_field() {
+    local input="$1"
+    local field="$2"
+    if command -v jq &>/dev/null; then
+        echo "$input" | jq -r "$field"
+    elif command -v python3 &>/dev/null; then
+        echo "$input" | python3 -c "
+import sys, json, functools
+data = json.load(sys.stdin)
+keys = '$field'.strip('.').split('.')
+val = functools.reduce(lambda d, k: d.get(k, '') if isinstance(d, dict) else '', keys, data)
+print(val if val else '')
+"
+    else
+        echo "security-review: neither jq nor python3 available — cannot parse hook input" >&2
+        exit 1
+    fi
+}
 
 INPUT=$(cat)
-FILE_PATH=$(echo "$INPUT" | jq -r '.toolInput.file_path // empty')
-CONTENT=$(echo "$INPUT" | jq -r '.toolInput.content // empty')
+FILE_PATH=$(parse_json_field "$INPUT" '.toolInput.file_path')
+CONTENT=$(parse_json_field "$INPUT" '.toolInput.content')
 
 if [[ -z "$CONTENT" ]]; then
     exit 0
 fi
 
 FOUND=""
-
-# Scan content for credential patterns
 
 # AWS access key
 if echo "$CONTENT" | grep -qE 'AKIA[0-9A-Z]{16}'; then
@@ -28,23 +41,23 @@ if echo "$CONTENT" | grep -qE 'BEGIN (RSA )?PRIVATE KEY|BEGIN OPENSSH PRIVATE KE
     FOUND="${FOUND}\n- Private key detected"
 fi
 
-# Password assignments
-if echo "$CONTENT" | grep -qiE 'password\s*[:=]\s*['\''"][^'\''"]+['\''"]'; then
+# Password assignments (quoted and unquoted, with optional export)
+if echo "$CONTENT" | grep -qiE '(export\s+)?password\s*[:=]\s*\S'; then
     FOUND="${FOUND}\n- Hardcoded password detected"
 fi
 
 # Token assignments
-if echo "$CONTENT" | grep -qiE 'token\s*[:=]\s*['\''"][^'\''"]+['\''"]'; then
+if echo "$CONTENT" | grep -qiE '(export\s+)?token\s*[:=]\s*\S'; then
     FOUND="${FOUND}\n- Hardcoded token detected"
 fi
 
 # Secret assignments
-if echo "$CONTENT" | grep -qiE 'secret\s*[:=]\s*['\''"][^'\''"]+['\''"]'; then
+if echo "$CONTENT" | grep -qiE '(export\s+)?secret\s*[:=]\s*\S'; then
     FOUND="${FOUND}\n- Hardcoded secret detected"
 fi
 
 # API key assignments
-if echo "$CONTENT" | grep -qiE 'api_key\s*[:=]\s*['\''"][^'\''"]+['\''"]'; then
+if echo "$CONTENT" | grep -qiE '(export\s+)?api_key\s*[:=]\s*\S'; then
     FOUND="${FOUND}\n- Hardcoded API key detected"
 fi
 
