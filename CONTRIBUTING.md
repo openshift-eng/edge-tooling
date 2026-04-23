@@ -64,6 +64,10 @@ chore(submodule): update two-node-toolbox (abc1234 -> def5678, 5 commits)
 - No hardcoded credentials — use environment variables
 - Self-documenting code over comments
 - First-pass code review is automated by CodeRabbit on all PRs to `main`
+- Name accuracy: component names (tools, plugins, hooks, scripts) must describe what the component actually does — not what it aspires to or tangentially relates to
+- Reuse before creating: check [ai-helpers](https://github.com/openshift-eng/ai-helpers) and existing repo components before writing new implementations
+- Test validation logic: regex patterns, parsing rules, and validation functions require tests with positive and negative cases
+- Avoid redundant checks: don't repeatedly validate things that rarely change (e.g., config file existence) — one-time setup belongs in documentation, not runtime checks
 
 ## Adding a Tool
 
@@ -90,6 +94,28 @@ Plugin components serve different roles. Choosing the right one matters.
 **Use an agent** when a skill needs to break work into parallel, isolated subtasks. Agents communicate with their parent skill through files (typically JSON). They don't interact with the user.
 
 **Use a hook** when behavior should trigger automatically on an event (session start, before/after tool use).
+
+### Hooks: Repo-Level vs Plugin
+
+Not all hooks belong in plugins. The delivery mechanism determines who gets the protection.
+
+| Mechanism | Location | Scope | Use when |
+|-----------|----------|-------|----------|
+| **Repo-level hook** | `.claude/settings.json` | All contributors automatically | Check is mandatory/protective (destructive command blocking, secret detection) |
+| **Plugin hook** | `plugins/<name>/hooks/` | Only users who install the plugin | Check is optional/workflow-specific |
+
+**Rule of thumb**: if skipping the check would be a security or data-loss risk, it belongs in `.claude/hooks` at the repo level — not in an optional plugin.
+
+### Lifecycle Placement
+
+Place each check at the right stage:
+
+| Stage | Example | Mechanism |
+|-------|---------|-----------|
+| **One-time setup** | CodeRabbit config, tool installation | Documentation only — verify once, not every session |
+| **Session start** | Submodule staleness, undocumented tools | Repo-level hook (`SessionStart`) |
+| **Pre-tool / post-tool** | Block destructive git commands, detect secrets in file writes | Repo-level hook (`PreToolUse` / `PostToolUse`) |
+| **Pre-commit** | Secret scanning, lint checks | Git pre-commit hook or repo-level `PreToolUse` on Bash matcher |
 
 ### CLI Tools vs MCP Servers
 
@@ -190,3 +216,9 @@ Plugins extend Claude Code capabilities for the team. For plugin contribution de
 - CodeRabbit provides automated review on PRs to `main`
 - `two-node-toolbox/` is excluded from CodeRabbit review (external submodule)
 - Reviewers check: code quality, security, documentation, and test coverage
+- Reviewers also verify architectural fit:
+  - Component name matches actual behavior
+  - Mandatory checks use repo-level hooks, not optional plugins
+  - No duplication of existing components (check ai-helpers and this repo)
+  - Validation logic (regex, parsers) has test coverage
+  - Check is placed at the correct lifecycle stage
