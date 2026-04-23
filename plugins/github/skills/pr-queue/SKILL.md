@@ -38,6 +38,10 @@ List open pull requests in a GitHub repository that are ready for attention. By 
 
    A PR may have multiple exclusion reasons (e.g., `draft, WIP`).
 
+   Validation examples:
+   - Excluded: title `WIP: refactor auth`, title `Fix bug [wip]`, label `do-not-merge/hold`
+   - Not excluded: title `swipe-fix`, title `ownership cleanup`
+
 5. Format output as a Markdown table:
 
    **Default (no `--all`)** — show only qualifying PRs:
