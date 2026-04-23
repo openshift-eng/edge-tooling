@@ -80,8 +80,10 @@ REPO="$(echo "${PR_URL}" | cut -d'/' -f5)"
 ```
 
 5. Check for `PR_MONITOR_STATE` env var. If set, this is a **restart**:
-   - Parse the state: `restart_count`, `cycle`, `addressed`, `analyzed` fields
+   - Parse the state: `restart_count`, `cycle`, `addressed`, `analyzed`, `notes` fields
+   - Read notes from previous session: `bash "${PLUGIN_DIR}/scripts/pr-state.sh" get notes`
    - Display: "Resuming PR monitor for `ORG/REPO#PR_NUMBER` (restart N/3, cycle M)."
+   - If notes exist, display: "Previous session: <notes>"
    - Skip to Step 2.
 
 6. If `PR_MONITOR_STATE` is NOT set, this is a **fresh start**:
@@ -139,7 +141,13 @@ Check these conditions IN ORDER:
 
 1. **PR closed or merged**: Parse `CHECKS_JSON` for PR state. If `CLOSED` or `MERGED`, report and STOP.
 
-2. **All CI green AND no new comments** (`CHECKS_EXIT == 0` and `COMMENTS_EXIT == 1`): Report "All CI jobs passed and no new comments. PR is ready." STOP.
+2. **All CI green AND no new comments** (`CHECKS_EXIT == 0` and `COMMENTS_EXIT == 1`): Set completion signal and STOP:
+
+```bash
+export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set-status complete)
+```
+
+Report "All CI jobs passed and no new comments. PR is ready."
 
 3. **Has new comments OR has CI failures**: Continue to Step 2c.
 
@@ -200,9 +208,14 @@ Collect all proposed changes from both agents. For EACH proposed change:
 
 After processing all changes, if any were batched:
 
+1. Build the expected file list from all applied changes (comma-separated paths).
+2. Push with file verification:
+
 ```bash
-PUSH_RESULT=$(bash "${PLUGIN_DIR}/scripts/pr-push.sh" "${BRANCH}" "fix: address PR review feedback and CI failures")
+PUSH_RESULT=$(bash "${PLUGIN_DIR}/scripts/pr-push.sh" "${BRANCH}" "fix: address PR review feedback and CI failures" --expected-files "${EXPECTED_FILES}")
 ```
+
+If the push script returns exit code 2 (file mismatch), report the mismatch and ask the user to confirm before retrying without the `--expected-files` flag.
 
 If push succeeded, update state with addressed comment IDs and analyzed job keys:
 
@@ -244,7 +257,15 @@ Status: X passed, Y failed, Z pending | Comments: M addressed
 Next check in N minutes...
 ```
 
-#### Step 2g: Sleep and Continue
+#### Step 2g: Update Notes and Sleep
+
+Before sleeping, update the notes field with a brief summary of what happened this cycle. This ensures the stop hook can carry context to the next session if a restart occurs.
+
+```bash
+export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set-notes "<brief summary of cycle actions>")
+```
+
+Example notes: "Addressed 2 coderabbit comments, 1 linting fix pushed, e2e job still pending"
 
 Sleep for the determined interval:
 
@@ -274,11 +295,12 @@ If the session stops unexpectedly (Ctrl+C, context limit, crash):
 
 1. The stop hook fires and runs `pr-stop-check.sh`
 2. If `PR_MONITOR_STATE` is unset: hook exits silently (not a pr-monitor session)
-3. If conditions are met (CI green, no comments): hook cleans up and exits
-4. If conditions are NOT met and `restart_count < 3`: hook spawns a new session with updated `PR_MONITOR_STATE`
-5. If `restart_count >= 3`: hook exits without restarting (max restarts reached)
+3. If `status=complete` in state: hook exits without restarting (normal completion)
+4. If conditions are met (CI green, no comments): hook exits without restarting
+5. If conditions are NOT met and `restart_count < 3`: hook spawns a new session with updated `PR_MONITOR_STATE` (including notes from the previous session)
+6. If `restart_count >= 3`: hook exits without restarting (max restarts reached)
 
-State is carried entirely via the `PR_MONITOR_STATE` environment variable — no state files.
+State is carried entirely via the `PR_MONITOR_STATE` environment variable — no state files. The `notes` field carries a brief summary from the previous session so restarted sessions can pick up context without re-analyzing everything.
 
 ## Prerequisites
 

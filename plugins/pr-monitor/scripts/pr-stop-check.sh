@@ -31,6 +31,14 @@ main() {
     restart_count="${restart_count:-0}"
     max_restarts="${max_restarts:-3}"
 
+    # Check explicit completion signal first — no API calls needed
+    local status
+    status=$(echo "${state}" | tr ';' '\n' | grep '^status=' | cut -d'=' -f2- || true)
+    if [[ "${status}" == "complete" ]]; then
+        log "PR monitor completed successfully. Not restarting."
+        exit 1
+    fi
+
     if [[ "${restart_count}" -ge "${max_restarts}" ]]; then
         log "Max restarts reached (${restart_count}/${max_restarts})"
         exit 1
@@ -74,7 +82,10 @@ main() {
     local new_state
     new_state=$(echo "${state}" | sed "s/restart_count=${restart_count}/restart_count=${new_restart_count}/")
 
+    local notes
+    notes=$(echo "${state}" | tr ';' '\n' | grep '^notes=' | cut -d'=' -f2- || true)
     log "Restarting (${new_restart_count}/${max_restarts}): ${reason}"
+    [[ -n "${notes}" ]] && log "Previous session notes: ${notes}"
 
     # Spawn new claude session in background
     PR_MONITOR_STATE="${new_state}" nohup claude -p "/pr-monitor:watch ${pr_url}" \

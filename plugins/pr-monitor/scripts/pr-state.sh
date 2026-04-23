@@ -33,7 +33,12 @@ set_field() {
 
 init_state() {
     local pr_url="$1"
-    echo "pr_url=${pr_url};restart_count=0;cycle=0;addressed=;analyzed=;max_restarts=3"
+    echo "pr_url=${pr_url};restart_count=0;cycle=0;addressed=;analyzed=;max_restarts=3;status=running;notes="
+}
+
+sanitize_notes() {
+    local raw="$1"
+    echo "${raw}" | tr ';' ',' | tr '%' '_'
 }
 
 add_to_list() {
@@ -122,6 +127,18 @@ main() {
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") increment <field>"
             require_state
             increment_field "${PR_MONITOR_STATE}" "$1"
+            ;;
+        set-notes)
+            [[ $# -lt 1 ]] && die "Usage: $(basename "$0") set-notes <text>"
+            require_state
+            local sanitized
+            sanitized=$(sanitize_notes "$1")
+            set_field "${PR_MONITOR_STATE}" "notes" "${sanitized}"
+            ;;
+        set-status)
+            [[ $# -lt 1 ]] && die "Usage: $(basename "$0") set-status <running|complete>"
+            require_state
+            set_field "${PR_MONITOR_STATE}" "status" "$1"
             ;;
         decode)
             require_state

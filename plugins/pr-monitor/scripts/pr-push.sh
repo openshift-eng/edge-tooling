@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Validate the fork remote and push changes.
-# Exit codes: 0=success, 1=nothing to push, 3=error
+# Usage: pr-push.sh <branch> [commit-message] [--expected-files file1,file2,...]
+# Exit codes: 0=success, 1=nothing to push, 2=file mismatch, 3=error
 
 die() {
     echo "Error: $1" >&2
@@ -69,11 +70,53 @@ validate_not_upstream() {
     fi
 }
 
-main() {
-    [[ $# -lt 1 ]] && die "Usage: $(basename "$0") <branch> [commit-message]"
+verify_staged_files() {
+    local expected_csv="$1"
 
-    local branch="$1"
-    local commit_message="${2:-}"
+    local expected_sorted
+    expected_sorted=$(echo "${expected_csv}" | tr ',' '\n' | sort)
+
+    local staged_sorted
+    staged_sorted=$(git diff --cached --name-only | sort)
+
+    if [[ "${expected_sorted}" != "${staged_sorted}" ]]; then
+        local only_expected only_staged
+        only_expected=$(comm -23 <(echo "${expected_sorted}") <(echo "${staged_sorted}"))
+        only_staged=$(comm -13 <(echo "${expected_sorted}") <(echo "${staged_sorted}"))
+
+        echo "Error: staged files do not match expected files" >&2
+        [[ -n "${only_expected}" ]] && echo "  Expected but not staged:" >&2 && echo "${only_expected}" | sed 's/^/    /' >&2
+        [[ -n "${only_staged}" ]] && echo "  Staged but not expected:" >&2 && echo "${only_staged}" | sed 's/^/    /' >&2
+        echo '{"pushed": false, "reason": "file mismatch", "expected": "'"${expected_csv}"'", "staged": "'"$(git diff --cached --name-only | tr '\n' ',')"'"}'
+        exit 2
+    fi
+}
+
+main() {
+    [[ $# -lt 1 ]] && die "Usage: $(basename "$0") <branch> [commit-message] [--expected-files file1,file2,...]"
+
+    local branch="" commit_message="" expected_files=""
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --expected-files)
+                [[ $# -lt 2 ]] && die "--expected-files requires a value"
+                expected_files="$2"
+                shift 2
+                ;;
+            *)
+                if [[ -z "${branch}" ]]; then
+                    branch="$1"
+                elif [[ -z "${commit_message}" ]]; then
+                    commit_message="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    [[ -z "${branch}" ]] && die "Usage: $(basename "$0") <branch> [commit-message] [--expected-files file1,file2,...]"
 
     check_dependencies
 
@@ -86,6 +129,12 @@ main() {
             exit 1
         fi
         git add -A
+
+        # Verify staged files match expected list (if provided)
+        if [[ -n "${expected_files}" ]]; then
+            verify_staged_files "${expected_files}"
+        fi
+
         git commit -m "${commit_message}"
     fi
 
