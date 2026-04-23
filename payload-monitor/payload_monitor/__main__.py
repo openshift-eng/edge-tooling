@@ -34,24 +34,24 @@ def _setup_logging(verbose: bool) -> None:
     )
 
 
-def _collect_blocking_jobs(report: MonitorReport) -> list[dict]:
-    """Collect blocking edge job failures from the report.
+def _collect_jobs_by_type(report: MonitorReport, job_type: JobType) -> list[dict]:
+    """Collect edge job failures of a given type from the report.
 
     Returns a list of dicts with keys: name, prow_url, topology, version, payload_tag.
     """
-    blocking = []
+    jobs = []
     for stream in report.streams:
         for payload in stream.payloads:
             for j in payload.edge_jobs:
-                if j.result == JobResult.FAILURE and j.job_type == JobType.BLOCKING:
-                    blocking.append({
+                if j.result == JobResult.FAILURE and j.job_type == job_type:
+                    jobs.append({
                         "name": j.name,
                         "prow_url": j.prow_url,
                         "topology": j.topology or "",
                         "version": stream.version,
                         "payload_tag": payload.tag,
                     })
-    return blocking
+    return jobs
 
 
 @click.command()
@@ -247,13 +247,20 @@ def main(
     logger.info(f"Done. {total_edge_failures} edge failures, {total_regressions} regressions")
     logger.info(f"Report: {html_path.resolve()}")
 
-    # Print blocking job summary to stdout for skill consumption
-    blocking = _collect_blocking_jobs(report)
+    # Print job summaries to stdout for skill consumption
+    blocking = _collect_jobs_by_type(report, JobType.BLOCKING)
     if blocking:
         print("BLOCKING_JOBS_START")
         for b in blocking:
             print(f"BLOCKING|{b['name']}|{b['prow_url']}|{b['topology']}|{b['version']}|{b['payload_tag']}")
         print("BLOCKING_JOBS_END")
+
+    informing = _collect_jobs_by_type(report, JobType.INFORMING)
+    if informing:
+        print("INFORMING_JOBS_START")
+        for i in informing:
+            print(f"INFORMING|{i['name']}|{i['prow_url']}|{i['topology']}|{i['version']}|{i['payload_tag']}")
+        print("INFORMING_JOBS_END")
 
     if open_browser:
         webbrowser.open(f"file://{html_path.resolve()}")
