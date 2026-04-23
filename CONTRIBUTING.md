@@ -65,7 +65,6 @@ chore(submodule): update two-node-toolbox (abc1234 -> def5678, 5 commits)
 - Self-documenting code over comments
 - First-pass code review is automated by CodeRabbit on all PRs to `main`
 - Name accuracy: component names (tools, plugins, hooks, scripts) must describe what the component actually does — not what it aspires to or tangentially relates to
-- Reuse before creating: check [ai-helpers](https://github.com/openshift-eng/ai-helpers) and existing repo components before writing new implementations
 - Test validation logic: regex patterns, parsing rules, and validation functions require tests with positive and negative cases
 - Avoid redundant checks: don't repeatedly validate things that rarely change (e.g., config file existence) — one-time setup belongs in documentation, not runtime checks
 
@@ -219,6 +218,6 @@ Plugins extend Claude Code capabilities for the team. For plugin contribution de
 - Reviewers also verify architectural fit:
   - Component name matches actual behavior
   - Mandatory checks use repo-level hooks, not optional plugins
-  - No duplication of existing components (check ai-helpers and this repo)
+  - No duplication of existing components in this repo
   - Validation logic (regex, parsers) has test coverage
   - Check is placed at the correct lifecycle stage
