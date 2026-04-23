@@ -25,10 +25,10 @@ List open pull requests in a GitHub repository that are ready for attention. By 
 2. Validate that `owner/repo` is present. If missing, report usage and stop.
 3. Fetch all open PRs:
 
-```bash
-gh pr list --repo <owner/repo> --state open --limit 200 \
-  --json number,title,author,url,isDraft,labels,createdAt
-```
+   ```bash
+   gh pr list --repo <owner/repo> --state open --limit 200 \
+     --json number,title,author,url,isDraft,labels,createdAt
+   ```
 
 4. Classify each PR. A PR is **excluded** if any of these are true:
    - `isDraft` is `true` — reason: `draft`
@@ -38,11 +38,11 @@ gh pr list --repo <owner/repo> --state open --limit 200 \
 
    A PR may have multiple exclusion reasons (e.g., `draft, WIP`).
 
-5. Format output as a markdown table:
+5. Format output as a Markdown table:
 
    **Default (no `--all`)** — show only qualifying PRs:
 
-   ```
+   ```markdown
    **N actionable PRs in `owner/repo`:**
 
    | Created | PR | Author | Title |
@@ -51,13 +51,14 @@ gh pr list --repo <owner/repo> --state open --limit 200 \
    ```
 
    If zero qualifying PRs, report:
-   ```
+
+   ```markdown
    No actionable PRs in `owner/repo`. N open PRs are excluded (use `--all` to see them).
    ```
 
    **With `--all`** — show all open PRs, with an Exclusion column:
 
-   ```
+   ```markdown
    **N open PRs in `owner/repo`** (M actionable, K excluded):
 
    | Created | PR | Author | Title | Exclusion |
