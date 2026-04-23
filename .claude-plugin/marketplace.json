@@ -27,8 +27,8 @@
     {
       "name": "github",
       "source": "./plugins/github",
-      "description": "GitHub workflow skills — PR automation and labeling",
-      "version": "1.0.0"
+      "description": "GitHub workflow skills — PR automation, labeling, and queue management",
+      "version": "1.1.0"
     },
     {
       "name": "hello-world",
