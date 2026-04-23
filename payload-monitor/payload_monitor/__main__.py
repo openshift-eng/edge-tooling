@@ -34,6 +34,16 @@ def _setup_logging(verbose: bool) -> None:
     )
 
 
+def _emit_job_section(label: str, jobs: list[dict]) -> None:
+    """Print a labeled section of pipe-delimited job entries to stdout."""
+    if not jobs:
+        return
+    print(f"{label}_JOBS_START")
+    for j in jobs:
+        print(f"{label}|{j['name']}|{j['prow_url']}|{j['topology']}|{j['version']}|{j['payload_tag']}")
+    print(f"{label}_JOBS_END")
+
+
 def _collect_jobs_by_type(report: MonitorReport, job_type: JobType) -> list[dict]:
     """Collect edge job failures of a given type from the report.
 
@@ -248,19 +258,8 @@ def main(
     logger.info(f"Report: {html_path.resolve()}")
 
     # Print job summaries to stdout for skill consumption
-    blocking = _collect_jobs_by_type(report, JobType.BLOCKING)
-    if blocking:
-        print("BLOCKING_JOBS_START")
-        for b in blocking:
-            print(f"BLOCKING|{b['name']}|{b['prow_url']}|{b['topology']}|{b['version']}|{b['payload_tag']}")
-        print("BLOCKING_JOBS_END")
-
-    informing = _collect_jobs_by_type(report, JobType.INFORMING)
-    if informing:
-        print("INFORMING_JOBS_START")
-        for i in informing:
-            print(f"INFORMING|{i['name']}|{i['prow_url']}|{i['topology']}|{i['version']}|{i['payload_tag']}")
-        print("INFORMING_JOBS_END")
+    _emit_job_section("BLOCKING", _collect_jobs_by_type(report, JobType.BLOCKING))
+    _emit_job_section("INFORMING", _collect_jobs_by_type(report, JobType.INFORMING))
 
     if open_browser:
         webbrowser.open(f"file://{html_path.resolve()}")
