@@ -105,9 +105,9 @@ The user argument is: $ARGUMENTS
 
 8. Display: "Starting PR monitor for `ORG/REPO#PR_NUMBER` (max iterations: N, 0=unlimited)."
 
-### Step 2: Main Loop
+### Step 2: Cycle
 
-**Repeat steps 2a through 2g continuously.** Do NOT stop unless an exit condition in Step 2b is met.
+This step runs exactly ONCE per invocation. Do NOT loop. Do NOT sleep.
 
 #### Step 2a: Gather Data (Deterministic)
 
@@ -127,23 +127,28 @@ Increment the cycle counter:
 ```bash
 export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" increment cycle)
 CYCLE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" get cycle)
+ITERATION=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" get iteration)
 ```
 
 Display a compact status line:
 
 ```text
---- Cycle N | <timestamp> ---
+--- Iteration N | <timestamp> ---
 CI: X passed, Y failed, Z pending
 Comments: A unresolved inline
 ```
 
-#### Step 2b: Evaluate Exit Conditions
+#### Step 2b: Evaluate Completion
 
 Check these conditions IN ORDER:
 
-1. **PR closed or merged**: Parse `CHECKS_JSON` for PR state. If `CLOSED` or `MERGED`, report and STOP.
+1. **PR closed or merged**: Parse `CHECKS_JSON` for PR state. If `CLOSED` or `MERGED`, report and STOP:
 
-2. **All CI green AND no new comments** (`CHECKS_EXIT == 0` and `COMMENTS_EXIT == 1`): Set completion signal and STOP:
+   ```bash
+   export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set-status complete)
+   ```
+
+2. **All CI green AND no new comments** (`CHECKS_EXIT == 0` and `COMMENTS_EXIT == 1`): STOP:
 
    ```bash
    export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set-status complete)
@@ -153,7 +158,7 @@ Check these conditions IN ORDER:
 
 3. **Has new comments OR has CI failures**: Continue to Step 2c.
 
-4. **Only pending CI jobs, no new comments**: Report "N jobs still running. Sleeping..." Skip to Step 2g.
+4. **Only pending CI jobs, no new comments**: Skip to Step 2f (set delay and exit).
 
 #### Step 2c: Dispatch Parallel Analysis
 
@@ -215,98 +220,96 @@ After processing all changes, if any were batched:
 1. Build the expected file list from all applied changes (comma-separated paths).
 2. Push with file verification:
 
-```bash
-PUSH_RESULT=$(bash "${PLUGIN_DIR}/scripts/pr-push.sh" "${BRANCH}" "fix: address PR review feedback and CI failures" --expected-files "${EXPECTED_FILES}")
-```
+   ```bash
+   PUSH_RESULT=$(bash "${PLUGIN_DIR}/scripts/pr-push.sh" "${BRANCH}" "fix: address PR review feedback and CI failures" --expected-files "${EXPECTED_FILES}")
+   ```
 
-If the push script returns exit code 2 (file mismatch), report the mismatch and ask the user to confirm before retrying without the `--expected-files` flag.
+3. If the push script returns exit code 2 (file mismatch), report the mismatch and ask the user to confirm before retrying without the `--expected-files` flag.
 
-If push succeeded, update state with addressed comment IDs and analyzed job keys:
+4. If push succeeded, update state:
 
-```bash
-for id in <addressed_ids>; do
-    export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" add-addressed "${id}")
-done
-for key in <analyzed_keys>; do
-    export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" add-analyzed "${key}")
-done
-```
+   ```bash
+   export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set last_push_cycle "${ITERATION}")
+   for id in <addressed_ids>; do
+       export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" add-addressed "${id}")
+   done
+   for key in <analyzed_keys>; do
+       export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" add-analyzed "${key}")
+   done
+   ```
 
 #### Step 2e: Handle No-Action Cycle
 
 If no changes were proposed and no retrigger was posted:
 
-- If comments existed but none were actionable: report "N comments reviewed, none actionable. Monitoring for new activity."
+- If comments existed but none were actionable: report "N comments reviewed, none actionable."
 - Update state with comment IDs as addressed (so they're not re-analyzed).
 
-#### Step 2f: Determine Wait Time
+#### Step 2f: Set Next Check Delay and Exit
 
-Classify pending jobs by expected duration:
+Determine the delay before the next cycle based on what happened:
 
-| Pattern in job name | Category | Base wait |
-|---------------------|----------|-----------|
-| `unit`, `verify`, `lint`, `images`, `build` | fast | 5 min |
-| `e2e`, `conformance` | medium | 15 min |
-| `install`, `serial`, `scenario` | slow | 30 min |
+**If new comments arrived** (CodeRabbit may still be posting):
 
-Rules:
+- `next_check_delay = 180` (3 minutes)
 
-- If changes were just pushed: wait for the **shortest** pending job category (minimum 5 min)
-- If no push but jobs are pending: wait 10 min (check for new comments while CI runs)
-- If no push, no pending jobs, all green: wait 5 min (final comment check before exit)
-- If only slow jobs pending and no new comments: wait 15 min
+**If changes were just pushed this cycle** (`last_push_cycle == current iteration`):
 
-Display:
+- Use the shortest pending job category (minimum 300s)
 
-```text
-Status: X passed, Y failed, Z pending | Comments: M addressed
-Next check in N minutes...
-```
+**If no push but jobs are pending:**
 
-#### Step 2g: Update Notes and Sleep
+- `next_check_delay = 600` (10 minutes)
 
-Before sleeping, update the notes field with a brief summary of what happened this cycle. This ensures the stop hook can carry context to the next session if a restart occurs.
+**If only slow jobs pending and no new comments:**
+
+- `next_check_delay = 900` (15 minutes)
+
+Job name classification for wait time:
+
+| Pattern in job name | Wait |
+|---------------------|------|
+| `unit`, `verify`, `lint`, `images`, `build` | 300s (5 min) |
+| `e2e`, `conformance` | 900s (15 min) |
+| `install`, `serial`, `scenario` | 1800s (30 min) |
+
+Update state and exit:
 
 ```bash
 export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set-notes "<brief summary of cycle actions>")
+export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set next_check_delay "<seconds>")
+export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set-status waiting)
 ```
 
-Example notes: "Addressed 2 coderabbit comments, 1 linting fix pushed, e2e job still pending"
+Display final status:
 
-Sleep for the determined interval:
-
-```bash
-sleep <interval_seconds>
+```text
+Iteration N complete. Next check in M minutes.
+Status: X passed, Y failed, Z pending | Comments: A addressed
 ```
 
-Then go back to Step 2a.
+**Then EXIT. Do NOT sleep. Do NOT loop back. The Stop hook reads
+`next_check_delay` from state, waits, and spawns a fresh session.**
 
-## Exit Conditions Summary
+## Lifecycle
 
-The loop STOPS only when:
+Each invocation performs exactly one cycle:
 
-1. **PR closed or merged** — nothing more to do
-2. **All CI jobs pass AND no new comments in last cycle** — PR is ready
+1. Read state from `PR_MONITOR_STATE` (or initialize fresh)
+2. Gather CI checks and review comments
+3. Analyze and fix issues
+4. Set `next_check_delay` and `status=waiting`, then exit
 
-The loop CONTINUES when:
+The Stop hook fires on exit and handles continuation:
 
-- Jobs are still pending
-- New comments appeared
-- Changes were pushed and CI is re-running
-- Infrastructure jobs were retriggered
+- `status=complete` → no restart (PR is done)
+- `status=waiting` → sleep `next_check_delay` seconds, then spawn new session
+- `status=running` → unexpected exit (crash), retry immediately
 
-## Restart Behavior
+State is carried entirely via `PR_MONITOR_STATE`. Each new session starts
+with fresh context — no conversation history accumulation.
 
-If the session stops unexpectedly (Ctrl+C, context limit, crash):
-
-1. The stop hook fires and runs `pr-stop-check.sh`
-2. If `PR_MONITOR_STATE` is unset: hook exits silently (not a pr-monitor session)
-3. If `status=complete` in state: hook exits without restarting (normal completion)
-4. If conditions are met (CI green, no comments): hook exits without restarting
-5. If conditions are NOT met and `restart_count < 3`: hook spawns a new session with updated `PR_MONITOR_STATE` (including notes from the previous session)
-6. If `restart_count >= 3`: hook exits without restarting (max restarts reached)
-
-State is carried entirely via the `PR_MONITOR_STATE` environment variable — no state files. The `notes` field carries a brief summary from the previous session so restarted sessions can pick up context without re-analyzing everything.
+Default: 3 iterations. Use `--infinite-loop` for unlimited.
 
 ## Prerequisites
 
@@ -317,10 +320,14 @@ State is carried entirely via the `PR_MONITOR_STATE` environment variable — no
 
 ## Examples
 
-### Monitor a New PR
+### Monitor a New PR (default 3 iterations)
 
 ```text
 /pr-monitor:watch https://github.com/openshift/microshift/pull/4321
 ```
 
-Waits 2 minutes for reviewers, then enters the comment+CI monitoring loop until the PR is fully green with no outstanding review feedback.
+### Monitor with unlimited iterations
+
+```text
+/pr-monitor:watch https://github.com/openshift/microshift/pull/4321 --infinite-loop
+```

@@ -139,7 +139,7 @@ main() {
             set_field "${PR_MONITOR_STATE}" "notes" "${sanitized}"
             ;;
         set-status)
-            [[ $# -lt 1 ]] && die "Usage: $(basename "$0") set-status <running|complete>"
+            [[ $# -lt 1 ]] && die "Usage: $(basename "$0") set-status <running|complete|waiting>"
             require_state
             case "$1" in
                 running|complete|waiting) ;;
