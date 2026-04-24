@@ -229,7 +229,7 @@ After processing all changes, if any were batched:
 4. If push succeeded, update state:
 
    ```bash
-   export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set last_push_cycle "${ITERATION}")
+   export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set last_push_cycle "${CYCLE}")
    for id in <addressed_ids>; do
        export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" add-addressed "${id}")
    done
@@ -253,7 +253,7 @@ Determine the delay before the next cycle based on what happened:
 
 - `next_check_delay = 180` (3 minutes)
 
-**If changes were just pushed this cycle** (`last_push_cycle == current iteration`):
+**If changes were just pushed this cycle** (`last_push_cycle == current cycle`):
 
 - Use the shortest pending job category (minimum 300s)
 

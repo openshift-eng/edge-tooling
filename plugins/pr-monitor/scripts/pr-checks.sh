@@ -44,9 +44,12 @@ fetch_pr_checks() {
     local org="$1" repo="$2" pr_number="$3"
     local checks_json
     checks_json=$(gh pr checks "${pr_number}" --repo "${org}/${repo}" \
-        --json name,state,link,bucket) \
-        || die "Failed to fetch PR checks for ${org}/${repo}#${pr_number}"
-    echo "${checks_json}"
+        --json name,state,link,bucket 2>/dev/null) || true
+    if [[ -z "${checks_json}" || "${checks_json}" == "null" ]]; then
+        echo "[]"
+    else
+        echo "${checks_json}"
+    fi
 }
 
 build_output() {
