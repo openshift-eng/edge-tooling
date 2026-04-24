@@ -72,36 +72,36 @@ The user argument is: $ARGUMENTS
 3. If invalid, report the error and stop.
 4. Extract variables:
 
-```bash
-PR_URL="<extracted url>"
-PR_NUMBER="$(echo "${PR_URL}" | grep -oP '[0-9]+$')"
-ORG="$(echo "${PR_URL}" | cut -d'/' -f4)"
-REPO="$(echo "${PR_URL}" | cut -d'/' -f5)"
-```
+   ```bash
+   PR_URL="<extracted url>"
+   PR_NUMBER="$(echo "${PR_URL}" | grep -oP '[0-9]+$')"
+   ORG="$(echo "${PR_URL}" | cut -d'/' -f4)"
+   REPO="$(echo "${PR_URL}" | cut -d'/' -f5)"
+   ```
 
 5. Check for `PR_MONITOR_STATE` env var. If set, this is a **restart**:
    - Parse the state: `restart_count`, `cycle`, `addressed`, `analyzed`, `notes` fields
    - Read notes from previous session: `bash "${PLUGIN_DIR}/scripts/pr-state.sh" get notes`
    - Display: "Resuming PR monitor for `ORG/REPO#PR_NUMBER` (restart N/3, cycle M)."
-   - If notes exist, display: "Previous session: <notes>"
+   - If notes exist, display: "Previous session: (notes value)"
    - Skip to Step 2.
 
 6. If `PR_MONITOR_STATE` is NOT set, this is a **fresh start**:
    - Initialize state:
 
-```bash
-export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" init "${PR_URL}")
-```
+   ```bash
+   export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" init "${PR_URL}")
+   ```
 
 7. Verify the org is in the trusted allowlist. If not, warn: "Org `ORG` is not in the trusted allowlist. Running in analysis-only mode — no auto-push."
 
-8. Display: "Starting PR monitor for `ORG/REPO#PR_NUMBER`. Initial wait: 2 minutes for reviewers to post comments."
+8. Display: "Starting PR monitor for `ORG/REPO#PR_NUMBER`. Initial wait: 2 minutes for bots/reviewers to post comments."
 
-9. Sleep 2 minutes:
+9. Sleep 2 minutes (MANDATORY - DO NOT SKIP):
 
-```bash
-sleep 120
-```
+   ```bash
+   sleep 120
+   ```
 
 ### Step 2: Main Loop
 
@@ -143,11 +143,11 @@ Check these conditions IN ORDER:
 
 2. **All CI green AND no new comments** (`CHECKS_EXIT == 0` and `COMMENTS_EXIT == 1`): Set completion signal and STOP:
 
-```bash
-export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set-status complete)
-```
+   ```bash
+   export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set-status complete)
+   ```
 
-Report "All CI jobs passed and no new comments. PR is ready."
+   Report "All CI jobs passed and no new comments. PR is ready."
 
 3. **Has new comments OR has CI failures**: Continue to Step 2c.
 
@@ -158,6 +158,7 @@ Report "All CI jobs passed and no new comments. PR is ready."
 Launch TWO parallel Agent calls:
 
 **Agent 1 — Comment Track** (only if new comments exist):
+
 - Read each inline comment from `COMMENTS_JSON`
 - For each CodeRabbit inline suggestion: read the referenced code, analyze the suggestion, propose a fix
 - For each human inline comment: read the referenced code, determine if it's actionable or needs discussion
@@ -165,6 +166,7 @@ Launch TWO parallel Agent calls:
 - Classify each change as trivial or non-trivial
 
 **Agent 2 — CI Track** (only if failed jobs exist):
+
 - Read each failed job from `CHECKS_JSON`
 - Check the `analyzed` list in state; skip already-analyzed jobs
 - For each NEW failed job, route to the appropriate analysis skill:
@@ -231,6 +233,7 @@ done
 #### Step 2e: Handle No-Action Cycle
 
 If no changes were proposed and no retrigger was posted:
+
 - If comments existed but none were actionable: report "N comments reviewed, none actionable. Monitoring for new activity."
 - Update state with comment IDs as addressed (so they're not re-analyzed).
 
@@ -245,6 +248,7 @@ Classify pending jobs by expected duration:
 | `install`, `serial`, `scenario` | slow | 30 min |
 
 Rules:
+
 - If changes were just pushed: wait for the **shortest** pending job category (minimum 5 min)
 - If no push but jobs are pending: wait 10 min (check for new comments while CI runs)
 - If no push, no pending jobs, all green: wait 5 min (final comment check before exit)

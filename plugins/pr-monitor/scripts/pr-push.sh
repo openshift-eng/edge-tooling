@@ -13,6 +13,7 @@ die() {
 check_dependencies() {
     command -v gh >/dev/null 2>&1 || die "gh CLI is not installed"
     command -v git >/dev/null 2>&1 || die "git is not installed"
+    command -v jq >/dev/null 2>&1 || die "jq is not installed"
     gh auth status >/dev/null 2>&1 || die "gh CLI is not authenticated — run 'gh auth login'"
 }
 
@@ -87,7 +88,10 @@ verify_staged_files() {
         echo "Error: staged files do not match expected files" >&2
         [[ -n "${only_expected}" ]] && echo "  Expected but not staged:" >&2 && echo "${only_expected}" | sed 's/^/    /' >&2
         [[ -n "${only_staged}" ]] && echo "  Staged but not expected:" >&2 && echo "${only_staged}" | sed 's/^/    /' >&2
-        echo '{"pushed": false, "reason": "file mismatch", "expected": "'"${expected_csv}"'", "staged": "'"$(git diff --cached --name-only | tr '\n' ',')"'"}'
+        local staged_csv
+        staged_csv=$(git diff --cached --name-only | tr '\n' ',' | sed 's/,$//')
+        jq -n --arg expected "${expected_csv}" --arg staged "${staged_csv}" \
+            '{"pushed": false, "reason": "file mismatch", "expected": $expected, "staged": $staged}'
         exit 2
     fi
 }
@@ -147,7 +151,8 @@ main() {
     local sha
     sha=$(git rev-parse --short HEAD)
 
-    echo "{\"pushed\": true, \"remote\": \"${remote}\", \"branch\": \"${branch}\", \"sha\": \"${sha}\"}"
+    jq -n --arg remote "${remote}" --arg branch "${branch}" --arg sha "${sha}" \
+        '{"pushed": true, "remote": $remote, "branch": $branch, "sha": $sha}'
 }
 
 main "$@"

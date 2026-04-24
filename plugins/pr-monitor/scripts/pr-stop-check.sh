@@ -63,6 +63,11 @@ main() {
         new_comments=$(echo "${comments_json}" | jq -r '.summary.total_new // 0' 2>/dev/null) || new_comments=0
     fi
 
+    if [[ "${checks_exit}" -eq 3 || "${comments_exit}" -eq 3 ]]; then
+        log "Unable to fetch current PR state reliably (checks_exit=${checks_exit}, comments_exit=${comments_exit}). Restarting to retry."
+        exit 0
+    fi
+
     # All green — no reason to restart
     if [[ "${failed}" -eq 0 && "${pending}" -eq 0 && "${new_comments}" -eq 0 ]]; then
         log "All CI green and no new comments. PR is ready."

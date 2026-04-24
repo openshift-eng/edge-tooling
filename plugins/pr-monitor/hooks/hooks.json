@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$PLUGIN_DIR/scripts/pr-stop-check.sh\"",
+            "command": "test -n \"${PR_MONITOR_STATE:-}\" && bash plugins/pr-monitor/scripts/pr-stop-check.sh || true",
             "timeout": 60
           }
         ]

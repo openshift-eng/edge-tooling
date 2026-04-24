@@ -138,6 +138,10 @@ main() {
         set-status)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") set-status <running|complete>"
             require_state
+            case "$1" in
+                running|complete) ;;
+                *) die "Invalid status: $1 (expected running|complete)" ;;
+            esac
             set_field "${PR_MONITOR_STATE}" "status" "$1"
             ;;
         decode)
