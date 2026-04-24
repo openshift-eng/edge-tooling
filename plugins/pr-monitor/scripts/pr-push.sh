@@ -21,14 +21,36 @@ find_fork_remote() {
     local gh_user
     gh_user=$(gh api user --jq '.login') || die "Failed to get GitHub username"
 
+    # Determine expected repo name from PR URL or git directory name
+    local expected_repo=""
+    local pr_url="${PR_MONITOR_PR_URL:-}"
+    if [[ -n "${pr_url}" ]]; then
+        expected_repo=$(echo "${pr_url}" | cut -d'/' -f5)
+    else
+        expected_repo=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)")
+    fi
+
     local remote
-    # Search for a push remote matching the GitHub username (case-insensitive)
-    remote=$(git remote -v \
-        | grep '(push)' \
-        | awk '{print $1, $2}' \
-        | grep -i "${gh_user}" \
-        | head -1 \
-        | awk '{print $1}')
+    # Search for a push remote matching both the GitHub username and repo name (case-insensitive)
+    if [[ -n "${expected_repo}" ]]; then
+        remote=$(git remote -v \
+            | grep '(push)' \
+            | awk '{print $1, $2}' \
+            | grep -i "${gh_user}" \
+            | grep -i "/${expected_repo}\\.git\|/${expected_repo}$" \
+            | head -1 \
+            | awk '{print $1}')
+    fi
+
+    # Fallback: match by username only if repo-specific match failed
+    if [[ -z "${remote:-}" ]]; then
+        remote=$(git remote -v \
+            | grep '(push)' \
+            | awk '{print $1, $2}' \
+            | grep -i "${gh_user}" \
+            | head -1 \
+            | awk '{print $1}')
+    fi
 
     if [[ -z "${remote}" ]]; then
         # Fallback: first push remote that is not named "upstream"

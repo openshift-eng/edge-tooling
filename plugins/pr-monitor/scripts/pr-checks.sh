@@ -68,7 +68,7 @@ build_output() {
 
     local jobs_block
     jobs_block=$(echo "${checks_json}" | jq -c '
-        [.[] | select(.name | startswith("ci/prow/")) |
+        [.[] | select(.name != "tide") |
         {
             name: (.name | sub("^ci/prow/"; "")),
             status: (if .bucket == "pass" then "pass"

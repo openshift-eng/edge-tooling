@@ -2,7 +2,11 @@
 set -euo pipefail
 
 # Stop hook decision script: check whether to restart a pr-monitor session.
-# Exit codes: 0=restarted, 1=done or max reached, 2=not a pr-monitor session, 3=internal error
+# Uses status field from PR_MONITOR_STATE to determine action:
+#   complete → exit (PR is done)
+#   waiting  → sleep next_check_delay, then spawn new session
+#   running  → unexpected exit (crash), respawn immediately up to max_iterations
+# Exit codes: 0=restarted, 1=done/max reached, 2=not a pr-monitor session, 3=internal error
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -15,88 +19,106 @@ log() {
     echo "[pr-monitor-stop] $1" >&2
 }
 
+get_field() {
+    local state="$1" field="$2"
+    local normalized=";${state}"
+    echo "${normalized}" | sed -n "s/.*;${field}=\([^;]*\).*/\1/p"
+}
+
+set_field() {
+    local state="$1" field="$2" value="$3"
+    # Escape sed-special characters in value: \ must be first, then & and the % delimiter
+    local escaped_value
+    escaped_value=$(printf '%s' "${value}" | sed 's/[\\&%]/\\&/g')
+    local normalized=";${state}"
+    if printf '%s' "${normalized}" | grep -qF ";${field}="; then
+        normalized=$(printf '%s' "${normalized}" | sed "s%;${field}=[^;]*%;${field}=${escaped_value}%")
+        echo "${normalized#;}"
+    else
+        echo "${state};${field}=${value}"
+    fi
+}
+
 main() {
     local state="${PR_MONITOR_STATE:-}"
     if [[ -z "${state}" ]]; then
         exit 2
     fi
 
-    # Parse fields from state string
-    local pr_url restart_count max_restarts addressed
-    pr_url=$(echo "${state}" | tr ';' '\n' | grep '^pr_url=' | cut -d'=' -f2-)
-    restart_count=$(echo "${state}" | tr ';' '\n' | grep '^restart_count=' | cut -d'=' -f2- || true)
-    max_restarts=$(echo "${state}" | tr ';' '\n' | grep '^max_restarts=' | cut -d'=' -f2- || true)
-    addressed=$(echo "${state}" | tr ';' '\n' | grep '^addressed=' | cut -d'=' -f2- || true)
+    local status pr_url iteration max_iterations notes next_check_delay
+    status=$(get_field "${state}" "status")
+    pr_url=$(get_field "${state}" "pr_url")
 
-    restart_count="${restart_count:-0}"
-    max_restarts="${max_restarts:-3}"
-
-    # Check explicit completion signal first — no API calls needed
-    local status
-    status=$(echo "${state}" | tr ';' '\n' | grep '^status=' | cut -d'=' -f2- || true)
     if [[ "${status}" == "complete" ]]; then
         log "PR monitor completed successfully. Not restarting."
         exit 1
     fi
 
-    if [[ "${restart_count}" -ge "${max_restarts}" ]]; then
-        log "Max restarts reached (${restart_count}/${max_restarts})"
-        exit 1
-    fi
+    if [[ "${status}" == "waiting" ]]; then
+        next_check_delay=$(get_field "${state}" "next_check_delay")
+        next_check_delay="${next_check_delay:-300}"
+        iteration=$(get_field "${state}" "iteration")
+        iteration="${iteration:-0}"
+        max_iterations=$(get_field "${state}" "max_iterations")
+        max_iterations="${max_iterations:-3}"
+        notes=$(get_field "${state}" "notes")
 
-    # Check current PR status via sibling scripts
-    local checks_json="" comments_json=""
-    local checks_exit=0 comments_exit=0
+        local new_iteration=$((iteration + 1))
 
-    checks_json=$(bash "${SCRIPT_DIR}/pr-checks.sh" "${pr_url}" 2>/dev/null) || checks_exit=$?
-    comments_json=$(bash "${SCRIPT_DIR}/pr-comments.sh" "${pr_url}" "${addressed}" 2>/dev/null) || comments_exit=$?
+        if [[ "${max_iterations}" -gt 0 && "${new_iteration}" -ge "${max_iterations}" ]]; then
+            log "Max iterations reached (${new_iteration}/${max_iterations}). Not restarting."
+            exit 1
+        fi
 
-    # Extract counts, defaulting to 0 on error
-    local failed=0 pending=0 new_comments=0
+        local new_state
+        new_state=$(set_field "${state}" "iteration" "${new_iteration}")
+        new_state=$(set_field "${new_state}" "status" "running")
 
-    if [[ "${checks_exit}" -eq 0 || "${checks_exit}" -eq 1 || "${checks_exit}" -eq 2 ]]; then
-        failed=$(echo "${checks_json}" | jq -r '.summary.failed // 0' 2>/dev/null) || failed=0
-        pending=$(echo "${checks_json}" | jq -r '.summary.pending // 0' 2>/dev/null) || pending=0
-    fi
+        log "Cycle complete. Next check in ${next_check_delay}s (iteration ${new_iteration})."
+        [[ -n "${notes}" ]] && log "Previous cycle: ${notes}"
 
-    if [[ "${comments_exit}" -eq 0 || "${comments_exit}" -eq 1 ]]; then
-        new_comments=$(echo "${comments_json}" | jq -r '.summary.total_new // 0' 2>/dev/null) || new_comments=0
-    fi
+        command -v claude >/dev/null 2>&1 || die "claude CLI is not installed"
 
-    if [[ "${checks_exit}" -eq 3 || "${comments_exit}" -eq 3 ]]; then
-        log "Unable to fetch current PR state reliably (checks_exit=${checks_exit}, comments_exit=${comments_exit}). Restarting to retry."
+        (
+            sleep "${next_check_delay}"
+            PR_MONITOR_STATE="${new_state}" claude -p "/pr-monitor:watch ${pr_url}" \
+                > "/tmp/pr-monitor-iter-${new_iteration}.log" 2>&1
+        ) &
+        disown
+
         exit 0
     fi
 
-    # All green — no reason to restart
-    if [[ "${failed}" -eq 0 && "${pending}" -eq 0 && "${new_comments}" -eq 0 ]]; then
-        log "All CI green and no new comments. PR is ready."
-        exit 1
+    if [[ "${status}" == "running" ]]; then
+        iteration=$(get_field "${state}" "iteration")
+        iteration="${iteration:-0}"
+        max_iterations=$(get_field "${state}" "max_iterations")
+        max_iterations="${max_iterations:-3}"
+        notes=$(get_field "${state}" "notes")
+
+        local new_iteration=$((iteration + 1))
+
+        if [[ "${max_iterations}" -gt 0 && "${new_iteration}" -ge "${max_iterations}" ]]; then
+            log "Max iterations reached during crash recovery (${new_iteration}/${max_iterations}). Not restarting."
+            exit 1
+        fi
+
+        local new_state
+        new_state=$(set_field "${state}" "iteration" "${new_iteration}")
+
+        log "Unexpected exit. Crash restart (iteration ${new_iteration})."
+        [[ -n "${notes}" ]] && log "Previous cycle: ${notes}"
+
+        command -v claude >/dev/null 2>&1 || die "claude CLI is not installed"
+
+        PR_MONITOR_STATE="${new_state}" nohup claude -p "/pr-monitor:watch ${pr_url}" \
+            > "/tmp/pr-monitor-crash-${new_iteration}.log" 2>&1 &
+
+        exit 0
     fi
 
-    # Build reason string from non-zero counts
-    local reasons=()
-    [[ "${failed}" -gt 0 ]] && reasons+=("${failed} failed checks")
-    [[ "${pending}" -gt 0 ]] && reasons+=("${pending} pending checks")
-    [[ "${new_comments}" -gt 0 ]] && reasons+=("${new_comments} new comments")
-    local reason
-    reason=$(IFS=', '; echo "${reasons[*]}")
-
-    # Increment restart count and update state
-    local new_restart_count=$((restart_count + 1))
-    local new_state
-    new_state=$(echo "${state}" | sed "s/restart_count=${restart_count}/restart_count=${new_restart_count}/")
-
-    local notes
-    notes=$(echo "${state}" | tr ';' '\n' | grep '^notes=' | cut -d'=' -f2- || true)
-    log "Restarting (${new_restart_count}/${max_restarts}): ${reason}"
-    [[ -n "${notes}" ]] && log "Previous session notes: ${notes}"
-
-    # Spawn new claude session in background
-    PR_MONITOR_STATE="${new_state}" nohup claude -p "/pr-monitor:watch ${pr_url}" \
-        > "/tmp/pr-monitor-restart-${new_restart_count}.log" 2>&1 &
-
-    exit 0
+    log "Unknown status: ${status}"
+    exit 3
 }
 
 main

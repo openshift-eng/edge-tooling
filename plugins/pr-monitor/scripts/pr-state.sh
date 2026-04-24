@@ -21,10 +21,13 @@ get_field() {
 
 set_field() {
     local state="$1" field="$2" value="$3"
+    # Escape sed-special characters in value: \ must be first, then & and the % delimiter
+    local escaped_value
+    escaped_value=$(printf '%s' "${value}" | sed 's/[\\&%]/\\&/g')
     # Add leading semicolon for uniform matching, then strip it after replacement
     local normalized=";${state}"
-    if echo "${normalized}" | grep -qF ";${field}="; then
-        normalized=$(echo "${normalized}" | sed "s%;${field}=[^;]*%;${field}=${value}%")
+    if printf '%s' "${normalized}" | grep -qF ";${field}="; then
+        normalized=$(printf '%s' "${normalized}" | sed "s%;${field}=[^;]*%;${field}=${escaped_value}%")
         echo "${normalized#;}"
     else
         echo "${state};${field}=${value}"
@@ -33,7 +36,7 @@ set_field() {
 
 init_state() {
     local pr_url="$1"
-    echo "pr_url=${pr_url};restart_count=0;cycle=0;addressed=;analyzed=;max_restarts=3;status=running;notes="
+    echo "pr_url=${pr_url};iteration=0;max_iterations=${2:-3};cycle=0;addressed=;analyzed=;status=running;notes=;next_check_delay=0;last_push_cycle=0"
 }
 
 sanitize_notes() {
@@ -100,8 +103,8 @@ main() {
 
     case "${subcommand}" in
         init)
-            [[ $# -lt 1 ]] && die "Usage: $(basename "$0") init <pr-url>"
-            init_state "$1"
+            [[ $# -lt 1 ]] && die "Usage: $(basename "$0") init <pr-url> [max-iterations]"
+            init_state "$1" "${2:-3}"
             ;;
         get)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") get <field>"
@@ -139,8 +142,8 @@ main() {
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") set-status <running|complete>"
             require_state
             case "$1" in
-                running|complete) ;;
-                *) die "Invalid status: $1 (expected running|complete)" ;;
+                running|complete|waiting) ;;
+                *) die "Invalid status: $1 (expected running|complete|waiting)" ;;
             esac
             set_field "${PR_MONITOR_STATE}" "status" "$1"
             ;;

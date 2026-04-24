@@ -1,7 +1,7 @@
 ---
 name: pr-monitor:watch
 argument-hint: <pr-url>
-description: "Comment-driven PR lifecycle monitor — loops until all review comments are addressed and CI jobs pass"
+description: "Comment-driven PR lifecycle monitor — single-cycle evaluation with automatic rescheduling via Stop hook"
 user-invocable: true
 allowed-tools: Skill, Bash, Read, Write, Edit, Glob, Grep, Agent
 ---
@@ -16,18 +16,24 @@ allowed-tools: Skill, Bash, Read, Write, Edit, Glob, Grep, Agent
 
 ## Description
 
-Comment-driven PR lifecycle monitor. Invoke after creating a PR. Waits for
-reviewers (human and CodeRabbit) to post comments, addresses inline code
-suggestions, investigates CI failures, pushes fixes, and loops until no new
-comments appear and all CI jobs pass.
+Comment-driven PR lifecycle monitor. Each invocation performs exactly ONE cycle:
+gather data, analyze comments and CI failures, apply fixes, then exit. The Stop
+hook automatically reschedules the next cycle after a delay. State is carried
+via `PR_MONITOR_STATE` — each cycle starts with fresh context.
 
 Trivial fixes (style, naming, linting, imports, simple assertions) are
 auto-pushed. Structural changes require confirmation. Security-sensitive
 changes are always refused.
 
+**IMPORTANT: Do NOT loop. Do NOT sleep. After completing one cycle, set
+`next_check_delay` and `status=waiting`, then exit. The Stop hook handles
+rescheduling.**
+
 ## Arguments
 
-- `$ARGUMENTS` (required): A GitHub pull request URL
+- `$ARGUMENTS` (required): A GitHub pull request URL, optionally followed by `--infinite-loop` for unlimited iterations
+
+The `--infinite-loop` flag sets `max_iterations=0` (no cap). Default is 3 iterations.
 
 ## Security
 
@@ -67,7 +73,7 @@ The user argument is: $ARGUMENTS
 
 ### Step 1: Validate and Initialize
 
-1. Extract the PR URL from `$ARGUMENTS`. Parse any flags if present.
+1. Extract the PR URL and flags from `$ARGUMENTS`. Check for `--infinite-loop` flag.
 2. The URL must match `https://github.com/<org>/<repo>/pull/<number>`.
 3. If invalid, report the error and stop.
 4. Extract variables:
@@ -77,31 +83,27 @@ The user argument is: $ARGUMENTS
    PR_NUMBER="$(echo "${PR_URL}" | grep -oP '[0-9]+$')"
    ORG="$(echo "${PR_URL}" | cut -d'/' -f4)"
    REPO="$(echo "${PR_URL}" | cut -d'/' -f5)"
+   LOOP_FLAG=false  # set to true if --infinite-loop is present
    ```
 
-5. Check for `PR_MONITOR_STATE` env var. If set, this is a **restart**:
-   - Parse the state: `restart_count`, `cycle`, `addressed`, `analyzed`, `notes` fields
-   - Read notes from previous session: `bash "${PLUGIN_DIR}/scripts/pr-state.sh" get notes`
-   - Display: "Resuming PR monitor for `ORG/REPO#PR_NUMBER` (restart N/3, cycle M)."
-   - If notes exist, display: "Previous session: (notes value)"
+5. Check for `PR_MONITOR_STATE` env var. If set, this is a **continuation**:
+   - Read state fields: `iteration`, `max_iterations`, `addressed`, `analyzed`, `notes`
+   - Set `status=running`: `export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set-status running)`
+   - Display: "Continuing PR monitor for `ORG/REPO#PR_NUMBER` (iteration N)."
+   - If notes exist, display: "Previous cycle: (notes value)"
    - Skip to Step 2.
 
 6. If `PR_MONITOR_STATE` is NOT set, this is a **fresh start**:
+   - Determine max_iterations: if `--infinite-loop` flag is present, use `0` (unlimited); otherwise default `3`.
    - Initialize state:
 
    ```bash
-   export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" init "${PR_URL}")
+   export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" init "${PR_URL}" "${MAX_ITERATIONS}")
    ```
 
 7. Verify the org is in the trusted allowlist. If not, warn: "Org `ORG` is not in the trusted allowlist. Running in analysis-only mode — no auto-push."
 
-8. Display: "Starting PR monitor for `ORG/REPO#PR_NUMBER`. Initial wait: 2 minutes for bots/reviewers to post comments."
-
-9. Sleep 2 minutes (MANDATORY - DO NOT SKIP):
-
-   ```bash
-   sleep 120
-   ```
+8. Display: "Starting PR monitor for `ORG/REPO#PR_NUMBER` (max iterations: N, 0=unlimited)."
 
 ### Step 2: Main Loop
 
