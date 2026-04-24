@@ -694,6 +694,19 @@ def main():
             print(f"ERROR: Git repo root not found: {e}")
         sys.exit(1)
 
+    # VPN check — required for Brew and advisory report access
+    if not brew.check_vpn():
+        msg = "VPN not connected. Connect to the Red Hat VPN and try again."
+        if args.json_output:
+            print(json.dumps({
+                "command": "precheck_xyz",
+                "error": msg,
+                "timestamp": datetime.now().isoformat(),
+            }, indent=2))
+        else:
+            print(f"ERROR: {msg}", file=sys.stderr)
+        sys.exit(1)
+
     # Step 2: Determine versions to evaluate
     if args.versions:
         versions = expand_versions(args.versions, lifecycle_data)
