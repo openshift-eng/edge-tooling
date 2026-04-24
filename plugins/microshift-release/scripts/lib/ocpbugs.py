@@ -14,7 +14,10 @@ _OCPBUGS_RE = re.compile(r"OCPBUGS-\d+")
 _RELEASE_NOTE_TEXT = "customfield_10783"     # Free-text release note content
 _RELEASE_NOTE_TYPE = "customfield_10785"     # Type: "Rebase", "Release Note Not Required", etc.
 _RELEASE_NOTE_STATUS = "customfield_10807"   # Status: "Done", "In Progress", "Not Required", etc.
-_JIRA_FIELDS = f"summary,status,labels,{_RELEASE_NOTE_TEXT},{_RELEASE_NOTE_TYPE},{_RELEASE_NOTE_STATUS}"
+_JIRA_FIELDS = (
+    f"summary,status,labels,"
+    f"{_RELEASE_NOTE_TEXT},{_RELEASE_NOTE_TYPE},{_RELEASE_NOTE_STATUS}"
+)
 
 
 def extract_bugs_from_commits(branch, since_version, since_commit=None):

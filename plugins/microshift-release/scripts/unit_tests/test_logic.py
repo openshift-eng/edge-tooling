@@ -7,10 +7,26 @@ import unittest
 # Add parent directory to path so we can import the modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from precheck_xyz import compute_recommendation, interpret_cves, format_text_short, _build_reason  # noqa: E402
+from precheck_xyz import (  # noqa: E402
+    compute_recommendation, interpret_cves, format_text_short, _build_reason,
+)
 from lib.ocpbugs import _issue_to_dict  # noqa: E402
-from precheck_ecrc import parse_ecrc_version, format_text as ecrc_format_text  # noqa: E402
-from precheck_nightly import classify_gap, format_gap, format_text as nightly_format_text  # noqa: E402
+from precheck_ecrc import (  # noqa: E402
+    parse_ecrc_version, format_text as ecrc_format_text,
+)
+from precheck_nightly import (  # noqa: E402
+    classify_gap, format_gap, format_text as nightly_format_text,
+)
+
+
+def _ocpbugs(count=0, required=0, not_required=0, review=0):
+    """Build an ocpbugs dict for test fixtures."""
+    return {
+        "count": count, "bugs": [], "skipped": False,
+        "release_required": required,
+        "release_not_required": not_required,
+        "needs_review": review,
+    }
 
 
 class TestClassifyGap(unittest.TestCase):
@@ -223,7 +239,7 @@ class TestComputeRecommendation(unittest.TestCase):
             "commits": 5,
             "days_since": 30,
             "ocp_status": "available",
-            "ocpbugs": {"count": 3, "bugs": [], "skipped": False, "release_required": 0, "release_not_required": 0, "needs_review": 3},
+            "ocpbugs": _ocpbugs(count=3, review=3),
         }
         rec, reason = compute_recommendation(evaluation)
         self.assertEqual(rec, "NEEDS REVIEW")
@@ -235,7 +251,7 @@ class TestComputeRecommendation(unittest.TestCase):
             "commits": 5,
             "days_since": 30,
             "ocp_status": "not_available",
-            "ocpbugs": {"count": 2, "bugs": [], "skipped": False, "release_required": 0, "release_not_required": 0, "needs_review": 2},
+            "ocpbugs": _ocpbugs(count=2, review=2),
         }
         rec, reason = compute_recommendation(evaluation)
         self.assertEqual(rec, "NEEDS REVIEW")
@@ -258,7 +274,7 @@ class TestComputeRecommendation(unittest.TestCase):
             "commits": 5,
             "days_since": 95,
             "ocp_status": "available",
-            "ocpbugs": {"count": 1, "bugs": [], "skipped": False, "release_required": 0, "release_not_required": 1, "needs_review": 0},
+            "ocpbugs": _ocpbugs(count=1, not_required=1),
         }
         rec, reason = compute_recommendation(evaluation)
         self.assertEqual(rec, "ASK ART TO CREATE ARTIFACTS")
@@ -270,7 +286,7 @@ class TestComputeRecommendation(unittest.TestCase):
             "commits": 5,
             "days_since": 30,
             "ocp_status": "available",
-            "ocpbugs": {"count": 2, "bugs": [], "skipped": False, "release_required": 1, "release_not_required": 1, "needs_review": 0},
+            "ocpbugs": _ocpbugs(count=2, required=1, not_required=1),
         }
         rec, reason = compute_recommendation(evaluation)
         self.assertEqual(rec, "ASK ART TO CREATE ARTIFACTS")
@@ -282,7 +298,7 @@ class TestComputeRecommendation(unittest.TestCase):
             "commits": 5,
             "days_since": 30,
             "ocp_status": "available",
-            "ocpbugs": {"count": 1, "bugs": [], "skipped": False, "release_required": 0, "release_not_required": 1, "needs_review": 0},
+            "ocpbugs": _ocpbugs(count=1, not_required=1),
         }
         rec, reason = compute_recommendation(evaluation)
         self.assertEqual(rec, "SKIP")
@@ -294,7 +310,7 @@ class TestComputeRecommendation(unittest.TestCase):
             "commits": 5,
             "days_since": 30,
             "ocp_status": "not_available",
-            "ocpbugs": {"count": 1, "bugs": [], "skipped": False, "release_required": 1, "release_not_required": 0, "needs_review": 0},
+            "ocpbugs": _ocpbugs(count=1, required=1),
         }
         rec, reason = compute_recommendation(evaluation)
         self.assertEqual(rec, "NEEDS REVIEW")
@@ -510,7 +526,7 @@ class TestBuildReason(unittest.TestCase):
     def test_ocpbugs_in_reason(self):
         result = _build_reason({
             "cve_impact": {"impact": "none"},
-            "ocpbugs": {"count": 3, "bugs": [], "skipped": False, "release_required": 1, "release_not_required": 2, "needs_review": 0},
+            "ocpbugs": _ocpbugs(count=3, required=1, not_required=2),
             "last_released": "4.21.7",
             "days_since": 30,
         })

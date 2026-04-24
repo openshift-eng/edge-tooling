@@ -191,8 +191,12 @@ def compute_recommendation(evaluation):
     # 90-day rule (hard policy constraint — evaluated before OCPBUGS labels)
     if days_since is not None and days_since >= 90 and commits > 0:
         if not ocp_available:
-            return "NEEDS REVIEW", f"90-day rule ({days_since}d, {commits} commits) — OCP payload not yet available"
-        return "ASK ART TO CREATE ARTIFACTS", f"90-day rule ({days_since}d since last release, {commits} commits)"
+            return ("NEEDS REVIEW",
+                    f"90-day rule ({days_since}d, {commits} commits)"
+                    " — OCP payload not yet available")
+        return ("ASK ART TO CREATE ARTIFACTS",
+                f"90-day rule ({days_since}d since last release,"
+                f" {commits} commits)")
 
     # Resolved OCPBUGS targeting this version
     ocpbugs_data = evaluation.get("ocpbugs", {})
@@ -225,7 +229,9 @@ def compute_recommendation(evaluation):
 
     # Skip: no changes
     if commits == 0:
-        days_str = f"{days_since}d since last release" if days_since is not None else "unknown last release"
+        days_str = (f"{days_since}d since last release"
+                    if days_since is not None
+                    else "unknown last release")
         return "SKIP", f"No commits ({days_str})"
 
     # Has commits but no CVEs and within 90 days
@@ -560,7 +566,8 @@ def format_text_full(output):
         commits = str(e.get("commits", 0))
         impact = e.get("cve_impact", {}).get("impact", "--")
         ocpbugs_data = e.get("ocpbugs", {})
-        ocpbugs_count = "skipped" if ocpbugs_data.get("skipped") else str(ocpbugs_data.get("count", 0))
+        ocpbugs_count = ("skipped" if ocpbugs_data.get("skipped")
+                         else str(ocpbugs_data.get("count", 0)))
         sections.append(f"| {v} | {last} | {days} | {commits} | {impact} | {ocpbugs_count} |")
 
     # Advisory Report table
@@ -589,7 +596,9 @@ def format_text_full(output):
                     for cve_id, cve_data in cves.items():
                         jira_ticket = cve_data.get("jira_ticket")
                         if jira_ticket:
-                            impact = f"{jira_ticket.get('id', '?')} ({jira_ticket.get('resolution', '?')})"
+                            jid = jira_ticket.get('id', '?')
+                            jres = jira_ticket.get('resolution', '?')
+                            impact = f"{jid} ({jres})"
                         else:
                             impact = "not affected"
                         sections.append(f"| {v} | {adv_name} | {adv_type} | {cve_id} | {impact} |")
