@@ -229,7 +229,8 @@ def find_latest_published_zstream_any(minor_version, pages=5):
         pages: Number of Pyxis pages to scan.
 
     Returns:
-        dict or None: {"version": "4.16.58", "z": 58} or None.
+        dict or None: {"version": "4.16.58", "z": 58, "date": "..."} or None.
+            The "date" key is present when sourced from errata.
     """
     result = find_latest_published_zstream(minor_version, pages)
     if result:
