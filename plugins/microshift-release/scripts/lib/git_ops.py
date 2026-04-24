@@ -235,7 +235,7 @@ def verify_commit_exists(commit_hash):
         ["git", "cat-file", "-t", commit_hash],
         cwd=repo, capture_output=True, text=True,
     )
-    return result.returncode == 0
+    return result.returncode == 0 and result.stdout.strip() == "commit"
 
 
 def commits_since(branch, since_version, since_commit=None):

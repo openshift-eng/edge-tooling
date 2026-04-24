@@ -269,6 +269,12 @@ def evaluate_version(version, lifecycle_data, repo_root):
         result["reason"] = "End of life"
         return result
 
+    # VPN check — required for Brew and advisory report access
+    if not brew.check_vpn():
+        result["recommendation"] = "NEEDS REVIEW"
+        result["reason"] = "VPN not connected"
+        return result
+
     # Already released check (Pyxis)
     logger.info("Checking if %s is already released...", version)
     try:
@@ -713,19 +719,6 @@ def main():
             }, indent=2))
         else:
             print(f"ERROR: Git repo root not found: {e}")
-        sys.exit(1)
-
-    # VPN check — required for Brew and advisory report access
-    if not brew.check_vpn():
-        msg = "VPN not connected. Connect to the Red Hat VPN and try again."
-        if args.json_output:
-            print(json.dumps({
-                "command": "precheck_xyz",
-                "error": msg,
-                "timestamp": datetime.now().isoformat(),
-            }, indent=2))
-        else:
-            print(f"ERROR: {msg}", file=sys.stderr)
         sys.exit(1)
 
     # Step 2: Determine versions to evaluate
