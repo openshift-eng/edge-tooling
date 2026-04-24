@@ -23,6 +23,19 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "scripts/lint-markdown.sh",
+            "timeout": 15,
+            "statusMessage": "Checking markdown files..."
+          }
+        ]
+      }
     ]
   }
 }

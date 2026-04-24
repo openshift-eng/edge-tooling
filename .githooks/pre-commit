@@ -1,0 +1,7 @@
+#!/bin/bash
+# Git pre-commit hook — validates staged markdown files with markdownlint
+#
+# Install: git config core.hooksPath .githooks
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+exec "$REPO_ROOT/scripts/lint-markdown.sh" --pre-commit

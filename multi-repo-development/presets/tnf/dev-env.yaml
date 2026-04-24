@@ -59,6 +59,12 @@ repos:
     category: troubleshooting
     summary: "Upstream HA cluster manager — reference only for debugging"
 
+  - name: fence-agents
+    url: https://github.com/ClusterLabs/fence-agents.git
+    branch: main
+    category: troubleshooting
+    summary: "Fence agents — STONITH scripts for BMC power control (fence_redfish, fence_virsh)"
+
   - name: openshift-docs
     url: https://github.com/openshift/openshift-docs.git
     branch: main

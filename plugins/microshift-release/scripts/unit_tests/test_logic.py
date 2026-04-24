@@ -8,6 +8,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from precheck_xyz import compute_recommendation, interpret_cves, format_text_short, _build_reason  # noqa: E402
+from lib.ocpbugs import _issue_to_dict  # noqa: E402
 from precheck_ecrc import parse_ecrc_version, format_text as ecrc_format_text  # noqa: E402
 from precheck_nightly import classify_gap, format_gap, format_text as nightly_format_text  # noqa: E402
 
@@ -154,6 +155,7 @@ class TestComputeRecommendation(unittest.TestCase):
             "cve_impact": {"impact": "must_release", "details": [{"cve": "CVE-2026-1"}]},
             "commits": 5,
             "days_since": 10,
+            "ocp_status": "available",
         }
         rec, reason = compute_recommendation(evaluation)
         self.assertEqual(rec, "ASK ART TO CREATE ARTIFACTS")
@@ -164,6 +166,7 @@ class TestComputeRecommendation(unittest.TestCase):
             "cve_impact": {"impact": "none"},
             "commits": 3,
             "days_since": 95,
+            "ocp_status": "available",
         }
         rec, reason = compute_recommendation(evaluation)
         self.assertEqual(rec, "ASK ART TO CREATE ARTIFACTS")
@@ -213,6 +216,101 @@ class TestComputeRecommendation(unittest.TestCase):
         }
         rec, _ = compute_recommendation(evaluation)
         self.assertEqual(rec, "SKIP")
+
+    def test_ocpbugs_triggers_needs_review(self):
+        evaluation = {
+            "cve_impact": {"impact": "none"},
+            "commits": 5,
+            "days_since": 30,
+            "ocp_status": "available",
+            "ocpbugs": {"count": 3, "bugs": [], "skipped": False, "release_required": 0, "release_not_required": 0, "needs_review": 3},
+        }
+        rec, reason = compute_recommendation(evaluation)
+        self.assertEqual(rec, "NEEDS REVIEW")
+        self.assertIn("OCPBUGS", reason)
+
+    def test_ocpbugs_needs_review_no_ocp(self):
+        evaluation = {
+            "cve_impact": {"impact": "none"},
+            "commits": 5,
+            "days_since": 30,
+            "ocp_status": "not_available",
+            "ocpbugs": {"count": 2, "bugs": [], "skipped": False, "release_required": 0, "release_not_required": 0, "needs_review": 2},
+        }
+        rec, reason = compute_recommendation(evaluation)
+        self.assertEqual(rec, "NEEDS REVIEW")
+        self.assertIn("OCPBUGS", reason)
+
+    def test_no_ocpbugs_still_skip(self):
+        evaluation = {
+            "cve_impact": {"impact": "none"},
+            "commits": 5,
+            "days_since": 30,
+            "ocp_status": "available",
+            "ocpbugs": {"count": 0, "bugs": [], "skipped": False},
+        }
+        rec, _ = compute_recommendation(evaluation)
+        self.assertEqual(rec, "SKIP")
+
+    def test_90_day_overrides_release_not_required(self):
+        evaluation = {
+            "cve_impact": {"impact": "none"},
+            "commits": 5,
+            "days_since": 95,
+            "ocp_status": "available",
+            "ocpbugs": {"count": 1, "bugs": [], "skipped": False, "release_required": 0, "release_not_required": 1, "needs_review": 0},
+        }
+        rec, reason = compute_recommendation(evaluation)
+        self.assertEqual(rec, "ASK ART TO CREATE ARTIFACTS")
+        self.assertIn("90-day", reason)
+
+    def test_release_required_label(self):
+        evaluation = {
+            "cve_impact": {"impact": "none"},
+            "commits": 5,
+            "days_since": 30,
+            "ocp_status": "available",
+            "ocpbugs": {"count": 2, "bugs": [], "skipped": False, "release_required": 1, "release_not_required": 1, "needs_review": 0},
+        }
+        rec, reason = compute_recommendation(evaluation)
+        self.assertEqual(rec, "ASK ART TO CREATE ARTIFACTS")
+        self.assertIn("release-required", reason)
+
+    def test_release_not_required_label_skips(self):
+        evaluation = {
+            "cve_impact": {"impact": "none"},
+            "commits": 5,
+            "days_since": 30,
+            "ocp_status": "available",
+            "ocpbugs": {"count": 1, "bugs": [], "skipped": False, "release_required": 0, "release_not_required": 1, "needs_review": 0},
+        }
+        rec, reason = compute_recommendation(evaluation)
+        self.assertEqual(rec, "SKIP")
+        self.assertIn("release-not-required", reason)
+
+    def test_release_required_no_ocp(self):
+        evaluation = {
+            "cve_impact": {"impact": "none"},
+            "commits": 5,
+            "days_since": 30,
+            "ocp_status": "not_available",
+            "ocpbugs": {"count": 1, "bugs": [], "skipped": False, "release_required": 1, "release_not_required": 0, "needs_review": 0},
+        }
+        rec, reason = compute_recommendation(evaluation)
+        self.assertEqual(rec, "NEEDS REVIEW")
+        self.assertIn("OCP payload not yet available", reason)
+
+    def test_cve_takes_priority_over_ocpbugs(self):
+        evaluation = {
+            "cve_impact": {"impact": "must_release", "details": [{"cve": "CVE-2026-1"}]},
+            "commits": 5,
+            "days_since": 10,
+            "ocp_status": "available",
+            "ocpbugs": {"count": 3, "bugs": [], "skipped": False},
+        }
+        rec, reason = compute_recommendation(evaluation)
+        self.assertEqual(rec, "ASK ART TO CREATE ARTIFACTS")
+        self.assertIn("CVE fix", reason)
 
 
 class TestNightlyFormatText(unittest.TestCase):
@@ -377,17 +475,6 @@ class TestXyzFormatTextShort(unittest.TestCase):
         self.assertIn("[OCP: available]", result)
         self.assertIn("no CVEs", result)
 
-    def test_eol_lifecycle(self):
-        evals = [{
-            "version": "4.14.50",
-            "recommendation": "SKIP",
-            "ocp_status": "available",
-            "lifecycle_status": "End of life",
-            "lifecycle_end_date": "2025-10-31",
-        }]
-        result = format_text_short(evals)
-        self.assertIn("End of life", result)
-
     def test_ask_art(self):
         evals = [{
             "version": "4.21.9",
@@ -419,6 +506,104 @@ class TestBuildReason(unittest.TestCase):
             "advisory_report": {"skipped": True, "error": "no VPN"},
         })
         self.assertIn("advisory report unavailable", result)
+
+    def test_ocpbugs_in_reason(self):
+        result = _build_reason({
+            "cve_impact": {"impact": "none"},
+            "ocpbugs": {"count": 3, "bugs": [], "skipped": False, "release_required": 1, "release_not_required": 2, "needs_review": 0},
+            "last_released": "4.21.7",
+            "days_since": 30,
+        })
+        self.assertIn("3 OCPBUGS", result)
+        self.assertIn("1 release-required", result)
+        self.assertIn("2 release-not-required", result)
+
+    def test_no_ocpbugs_in_reason(self):
+        result = _build_reason({
+            "cve_impact": {"impact": "none"},
+            "ocpbugs": {"count": 0, "bugs": [], "skipped": False},
+            "last_released": "4.21.7",
+            "days_since": 30,
+        })
+        self.assertIn("no OCPBUGS", result)
+
+    def test_ocpbugs_skipped_not_shown(self):
+        result = _build_reason({
+            "cve_impact": {"impact": "none"},
+            "ocpbugs": {"count": 0, "bugs": [], "skipped": True},
+            "last_released": "4.21.7",
+            "days_since": 30,
+        })
+        self.assertNotIn("OCPBUGS", result)
+
+
+class TestIssueToDict(unittest.TestCase):
+    """Tests for _issue_to_dict label-triage logic in ocpbugs.py."""
+
+    @staticmethod
+    def _make_issue(key, summary, status, labels=None):
+        """Build a minimal mock Jira issue."""
+        from types import SimpleNamespace
+        fields = SimpleNamespace(
+            summary=summary,
+            status=status,
+            labels=labels or [],
+        )
+        return SimpleNamespace(key=key, fields=fields)
+
+    def test_release_required_label(self):
+        issue = self._make_issue(
+            "OCPBUGS-111", "fix crash", "Verified",
+            labels=["release-required"],
+        )
+        result = _issue_to_dict(issue, "fixVersion")
+        self.assertEqual(result["release_action"], "release_required")
+        self.assertEqual(result["source"], "fixVersion")
+
+    def test_release_not_required_label(self):
+        issue = self._make_issue(
+            "OCPBUGS-222", "minor tweak", "Closed",
+            labels=["release-not-required"],
+        )
+        result = _issue_to_dict(issue, "commit")
+        self.assertEqual(result["release_action"], "release_not_required")
+        self.assertEqual(result["source"], "commit")
+
+    def test_no_labels_needs_review(self):
+        issue = self._make_issue(
+            "OCPBUGS-333", "unlabeled bug", "MODIFIED",
+        )
+        result = _issue_to_dict(issue, "fixVersion")
+        self.assertEqual(result["release_action"], "needs_review")
+
+    def test_both_labels_needs_review(self):
+        issue = self._make_issue(
+            "OCPBUGS-444", "conflicting labels", "ON_QA",
+            labels=["release-required", "release-not-required"],
+        )
+        result = _issue_to_dict(issue, "fixVersion")
+        self.assertEqual(result["release_action"], "needs_review")
+
+    def test_extra_labels_ignored(self):
+        issue = self._make_issue(
+            "OCPBUGS-555", "extra labels", "Verified",
+            labels=["team/microshift", "release-required", "priority/high"],
+        )
+        result = _issue_to_dict(issue, "fixVersion")
+        self.assertEqual(result["release_action"], "release_required")
+        self.assertIn("team/microshift", result["labels"])
+
+    def test_basic_fields_extracted(self):
+        issue = self._make_issue(
+            "OCPBUGS-666", "test summary", "Closed",
+        )
+        result = _issue_to_dict(issue, "commit")
+        self.assertEqual(result["key"], "OCPBUGS-666")
+        self.assertEqual(result["summary"], "test summary")
+        self.assertEqual(result["status"], "Closed")
+        self.assertEqual(result["release_note"], "")
+        self.assertEqual(result["release_note_type"], "")
+        self.assertEqual(result["release_note_status"], "")
 
 
 class TestJqlSanitization(unittest.TestCase):

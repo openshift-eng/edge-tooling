@@ -1,0 +1,8 @@
+{
+  "name": "github",
+  "description": "GitHub workflow skills — PR automation and labeling",
+  "version": "1.0.0",
+  "author": { "name": "brandisher" },
+  "homepage": "https://github.com/openshift-eng/edge-tooling",
+  "license": "Apache-2.0"
+}

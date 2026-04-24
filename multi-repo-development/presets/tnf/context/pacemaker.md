@@ -1,4 +1,4 @@
-<!-- Supplemental context for TNF dev environment. Repo's native CLAUDE.md (if any) takes priority. -->
+<!-- TNF context: repo's role in the TNF ecosystem. Always distributed as TNF-CONTEXT.md. -->
 
 # pacemaker — TNF Context
 

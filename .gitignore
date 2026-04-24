@@ -3,3 +3,6 @@
 !plugins/**/.mcp.json
 .DS_Store
 .worktrees
+*.pyc
+__pycache__/
+gh-notifier/pr-dashboard.html

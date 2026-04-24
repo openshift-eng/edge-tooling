@@ -21,6 +21,25 @@ sudo stonith_admin -l          # List STONITH devices
 sudo stonith_admin -H          # Show fence history
 ```
 
+### Fence Agent Debugging
+
+```bash
+sudo pcs stonith config              # Show configured fence device and agent
+sudo pcs stonith show <device-name>  # Detailed config for a specific device
+
+# Test fence agent manually (safe — queries status only)
+sudo fence_redfish --ip=<bmc-ip> --username=<user> --password=<pass> --action=status
+
+# View agent metadata (parameters, actions)
+fence_redfish -o metadata
+
+# Test with verbose output
+sudo fence_redfish --ip=<bmc-ip> --username=<user> --password=<pass> --action=status --verbose
+
+# For dev-scripts (libvirt) environments
+sudo fence_virsh --ip=<hypervisor> --login=<user> --plug=<vm-name> --action=status --use-sudo
+```
+
 ### Cluster Configuration (Low-Level)
 
 ```bash

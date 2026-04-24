@@ -18,6 +18,7 @@ All source repositories are cloned into the `repos/` folder. Use `/dev-env-setup
 1. **Always look at repos in this workspace FIRST** before using internal knowledge or web searches
 2. If a component has a repo here, that repo is the **authoritative source of truth**
 3. Code in `repos/` reflects the latest development state, which may differ from public documentation
+4. Repos may contain a **`TNF-CONTEXT.md`** alongside their `CLAUDE.md` — this file describes the repo's role in the TNF ecosystem, key paths for TNF work, and cross-repo relationships. **Always read both files** when working in a repo
 
 ## Fork Model
 
@@ -42,9 +43,17 @@ All repositories use a fork model for contributions:
 | `/dev-env-setup` | Initialize or refresh dev environment | Set up from preset or custom repos |
 | `/project:new` | Create a new project workspace | Structured workspace for a specific task |
 | `/project:resume` | Resume an existing project | Reload context and continue work |
+| `/project:close` | Close a completed project | Mark as done, add closing notes |
+| `/critique` | Adversarial hypothesis review | Challenge a theory with counter-evidence and experiments |
+| `/vet-review` | Skeptical review follow-up | Filter noise from `/review-pr` findings — vet one by one |
+| `/qc:setup` | Configure Quarterly Connection | Company, profile, GitHub, Jira setup |
+| `/qc:log` | Log a work achievement | Auto-categorized quarterly log entry |
+| `/qc:report` | Generate quarterly report | Full narrative + HTML with GitHub/Jira data |
+| `/qc:help` | Show all QC commands | Full command list for quarterly reviews |
 
 ## Preset Docs
 
 For architecture details, debugging commands, and domain concepts, see the active preset's docs under `presets/<name>/`:
 - `presets/<name>/docs/` — Architecture diagrams, debugging guides, domain concepts
-- `presets/<name>/context/<repo>.md` — Per-repo context files (loaded on demand by `/project:resume`)
+- `presets/<name>/context/<repo>.md` — TNF context files (always distributed as `TNF-CONTEXT.md`)
+- `presets/<name>/supplemental/<repo>.md` — Supplemental `CLAUDE.md` for repos that don't have their own

@@ -35,8 +35,14 @@
 +-------------------+          +-----------+-----------+          +-------------------+
                                            |
                                +-----------v-----------+
-                               |     BMC Fencing       |
-                               |     (Redfish)         |
+                               |    fence-agents        |
+                               |  (fence_redfish,       |
+                               |   fence_virsh, ...)    |
+                               +-----------+-----------+
+                                           |
+                               +-----------v-----------+
+                               |     BMC / Hypervisor  |
+                               |   (Redfish, libvirt)  |
                                +-----------------------+
 ```
 
@@ -44,7 +50,7 @@
 
 - **C-quorum**: Quorum as determined by Corosync membership
 - **E-quorum**: Quorum as determined by etcd membership
-- **Fencing**: Powering off unresponsive nodes via BMC to prevent split-brain
+- **Fencing**: Powering off unresponsive nodes via BMC to prevent split-brain. Pacemaker's `fenced` daemon invokes a *fence agent* (e.g., `fence_redfish`) that talks to the BMC API
 - **force-new-cluster**: etcd flag to restart as cluster-of-one after peer failure
 - **Learner node**: etcd node waiting to become a full voting member
 - **STONITH**: "Shoot The Other Node In The Head" — fencing mechanism
@@ -80,4 +86,5 @@
 | E2E tests | `origin` | TNF topology, recovery, degraded tests |
 | CI/CD | `release` | Prow jobs, step registry workflows |
 | User docs | `openshift-docs` | Installation and operation guides |
+| Fence agents | `fence-agents` | STONITH scripts (fence_redfish, fence_virsh) |
 | HA reference | `pacemaker` | Upstream Pacemaker (troubleshooting only) |

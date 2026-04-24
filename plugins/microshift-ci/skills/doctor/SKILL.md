@@ -108,11 +108,11 @@ WORKDIR=/tmp/microshift-ci-claude-workdir.$(date +%y%m%d)
 3. Launch **ALL** agents (all releases + PRs) in a single message using `run_in_background: true`
 4. After launching, say "Analyzing N jobs in parallel..." and STOP.
 5. As agent completion notifications arrive, respond with only "." (a single period) — no summaries, no status updates.
-6. Only after ALL agents are confirmed complete, produce a single brief count and proceed to Step 3.
+6. **CRITICAL**: After ALL agents are confirmed complete, you MUST immediately proceed to Step 3. Do NOT end your turn with a dot. Do NOT stop. The task is NOT complete until the HTML report is generated in Step 4.
 
 ### Step 3: Run Bug Correlation (Dry-Run)
 
-**Goal**: Search Jira for existing bugs matching each failure.
+**Goal**: Search Jira for existing bugs matching each failure. Results are embedded in the HTML report.
 
 **Actions**:
 1. **IMPORTANT**: Wait until ALL analysis agents from Step 2 are confirmed complete
@@ -127,11 +127,14 @@ WORKDIR=/tmp/microshift-ci-claude-workdir.$(date +%y%m%d)
 4. Launch all create-bugs agents **in parallel** with `run_in_background: true`
 5. Respond with only "." for each intermediate completion notification. Wait until all complete.
 6. Each agent produces `${WORKDIR}/analyze-ci-bugs-<source>.json`
+7. **CRITICAL**: After ALL bug correlation agents complete, you MUST immediately proceed to Step 4. Do NOT stop.
 
 **Error Handling**:
 - If create-bugs fails for a release, note the failure but do not block other releases or HTML generation
 
 ### Step 4: Finalize — Aggregate and Generate HTML Report
+
+**IMPORTANT**: This step is MANDATORY. The task is incomplete without it. You MUST run this even if previous steps produced errors.
 
 **Goal**: Deterministically aggregate results and generate the HTML report.
 

@@ -17,7 +17,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from lib import art_jira, brew, git_ops, lifecycle, pyxis, release_controller
+from lib import art_jira, brew, git_ops, lifecycle, ocpbugs, pyxis, release_controller
 
 logging.basicConfig(
     level=logging.INFO,
@@ -188,11 +188,30 @@ def compute_recommendation(evaluation):
             return "NEEDS REVIEW", f"CVE fix: {cve_list} (OCP payload not yet available)"
         return "ASK ART TO CREATE ARTIFACTS", f"CVE fix: {cve_list}"
 
-    # 90-day rule
+    # 90-day rule (hard policy constraint — evaluated before OCPBUGS labels)
     if days_since is not None and days_since >= 90 and commits > 0:
         if not ocp_available:
             return "NEEDS REVIEW", f"90-day rule ({days_since}d, {commits} commits) — OCP payload not yet available"
         return "ASK ART TO CREATE ARTIFACTS", f"90-day rule ({days_since}d since last release, {commits} commits)"
+
+    # Resolved OCPBUGS targeting this version
+    ocpbugs_data = evaluation.get("ocpbugs", {})
+    ocpbugs_count = ocpbugs_data.get("count", 0)
+    if ocpbugs_count > 0:
+        release_required = ocpbugs_data.get("release_required", 0)
+        needs_review_bugs = ocpbugs_data.get("needs_review", 0)
+
+        if release_required > 0:
+            bug_summary = f"{release_required} OCPBUGS labeled release-required"
+            if not ocp_available:
+                return "NEEDS REVIEW", f"{bug_summary} (OCP payload not yet available)"
+            return "ASK ART TO CREATE ARTIFACTS", bug_summary
+        if needs_review_bugs > 0:
+            bug_summary = f"{ocpbugs_count} OCPBUGS ({needs_review_bugs} unlabeled, needs review)"
+            return "NEEDS REVIEW", bug_summary
+        # All bugs are release-not-required
+        bug_summary = f"{ocpbugs_count} OCPBUGS (all labeled release-not-required)"
+        return "SKIP", bug_summary
 
     # Needs review: CVE in progress
     if cve_impact == "needs_review":
@@ -235,32 +254,44 @@ def evaluate_version(version, lifecycle_data, repo_root):
     if lc:
         result["lifecycle_status"] = lc["phase"]
         result["lifecycle_end_date"] = lc.get("end_date", "")
-        if not lc["active"]:
-            result["recommendation"] = "SKIP"
-            result["reason"] = f"{lc['phase']} (until {lc.get('end_date', 'N/A')})"
-            return result
     else:
         result["lifecycle_status"] = "unknown"
 
     # Already released check (Pyxis)
     logger.info("Checking if %s is already released...", version)
-    if pyxis.is_version_published(version):
-        result["already_released"] = True
-        result["recommendation"] = "ALREADY RELEASED"
-        result["reason"] = "MicroShift errata published"
+    try:
+        if pyxis.is_version_published(version):
+            result["already_released"] = True
+            result["recommendation"] = "ALREADY RELEASED"
+            result["reason"] = "MicroShift errata published"
+            return result
+        result["already_released"] = False
+    except Exception as e:
+        logger.warning("Pyxis check failed for %s: %s", version, e)
+        result["already_released"] = None
+        result["recommendation"] = "NEEDS REVIEW"
+        result["reason"] = f"Pyxis check failed: {e}"
         return result
-    result["already_released"] = False
 
     # OCP payload status
     logger.info("Checking OCP payload for %s...", version)
-    result["ocp_status"] = release_controller.check_ocp_payload_accepted(version)
+    try:
+        result["ocp_status"] = release_controller.check_ocp_payload_accepted(version)
+    except Exception as e:
+        logger.warning("OCP payload check failed for %s: %s", version, e)
+        result["ocp_status"] = ""
 
     # ART ticket lookup
-    art_tickets = art_jira.query_art_releases_due(specific_version=version)
-    if art_tickets:
-        result["art_ticket"] = art_tickets[0]["key"]
-        result["due_date"] = art_tickets[0].get("due_date", "")
-    else:
+    try:
+        art_tickets = art_jira.query_art_releases_due(specific_version=version)
+        if art_tickets:
+            result["art_ticket"] = art_tickets[0]["key"]
+            result["due_date"] = art_tickets[0].get("due_date", "")
+        else:
+            result["art_ticket"] = None
+            result["due_date"] = ""
+    except Exception as e:
+        logger.warning("ART ticket lookup failed for %s: %s", version, e)
         result["art_ticket"] = None
         result["due_date"] = ""
 
@@ -282,13 +313,21 @@ def evaluate_version(version, lifecycle_data, repo_root):
     result["commits"] = len(commit_list)
     result["commit_list"] = commit_list
 
-    # 4b: Advisory publication report
+    # 4b: OCPBUGS resolved bugs (fixVersion + commit message references)
+    logger.info("Checking resolved OCPBUGS for %s...", version)
+    try:
+        result["ocpbugs"] = ocpbugs.query_resolved_bugs(version, branch, since_version)
+    except Exception as e:
+        logger.warning("OCPBUGS check failed for %s: %s", version, e)
+        result["ocpbugs"] = {"count": 0, "bugs": [], "skipped": True}
+
+    # 4c: Advisory publication report
     result["advisory_report"] = run_advisory_report(version, repo_root)
 
-    # 4c: Interpret CVEs
+    # 4d: Interpret CVEs
     result["cve_impact"] = interpret_cves(result["advisory_report"])
 
-    # 4d: 90-day rule — get date of last release from git tags
+    # 4e: 90-day rule — get date of last release from git tags
     if last_pub:
         release_date = git_ops.get_release_date(last_pub["version"])
         if release_date:
@@ -303,7 +342,7 @@ def evaluate_version(version, lifecycle_data, repo_root):
     else:
         result["days_since"] = None
 
-    # 4e: Recommendation
+    # 4f: Recommendation
     result["recommendation"], result["reason"] = compute_recommendation(result)
 
     return result
@@ -362,6 +401,24 @@ def _build_reason(e):
         else:
             parts.append("advisory unknown")
 
+    # OCPBUGS
+    ocpbugs_data = e.get("ocpbugs", {})
+    ocpbugs_count = ocpbugs_data.get("count", 0)
+    if ocpbugs_count > 0:
+        release_req = ocpbugs_data.get("release_required", 0)
+        needs_rev = ocpbugs_data.get("needs_review", 0)
+        not_req = ocpbugs_data.get("release_not_required", 0)
+        label_parts = []
+        if release_req > 0:
+            label_parts.append(f"{release_req} release-required")
+        if not_req > 0:
+            label_parts.append(f"{not_req} release-not-required")
+        if needs_rev > 0:
+            label_parts.append(f"{needs_rev} unlabeled")
+        parts.append(f"{ocpbugs_count} OCPBUGS ({', '.join(label_parts)})")
+    elif ocpbugs_data and not ocpbugs_data.get("skipped", False):
+        parts.append("no OCPBUGS")
+
     # Last released
     days = e.get("days_since")
     last = e.get("last_released", "")
@@ -408,12 +465,7 @@ def format_text_short(evaluations):
             ocp_str = "NOT available"
 
         # Build reason using pipe-separated format
-        lc = e.get("lifecycle_status", "")
-        if lc in ("End of life", "Extended Support"):
-            end = e.get("lifecycle_end_date", "N/A")
-            reason = f"{lc}, until {end}"
-        else:
-            reason = _build_reason(e)
+        reason = _build_reason(e)
 
         lines.append(f"{rec:<{REC_WIDTH}} {version} [OCP: {ocp_str}] [{reason}]")
 
@@ -449,8 +501,8 @@ def format_text_full(output):
 
     # Z-Stream Evaluation table
     sections.append("\n## Z-Stream Evaluation\n")
-    sections.append("| Version | Last Released | Days Since | Commits | CVE Impact |")
-    sections.append("|---------|--------------|------------|---------|------------|")
+    sections.append("| Version | Last Released | Days Since | Commits | CVE Impact | OCPBUGS |")
+    sections.append("|---------|--------------|------------|---------|------------|---------|")
     for e in evaluations:
         if e.get("already_released") or e.get("recommendation") == "ALREADY RELEASED":
             continue
@@ -459,7 +511,9 @@ def format_text_full(output):
         days = str(e.get("days_since", "--")) if e.get("days_since") is not None else "--"
         commits = str(e.get("commits", 0))
         impact = e.get("cve_impact", {}).get("impact", "--")
-        sections.append(f"| {v} | {last} | {days} | {commits} | {impact} |")
+        ocpbugs_data = e.get("ocpbugs", {})
+        ocpbugs_count = "skipped" if ocpbugs_data.get("skipped") else str(ocpbugs_data.get("count", 0))
+        sections.append(f"| {v} | {last} | {days} | {commits} | {impact} | {ocpbugs_count} |")
 
     # Advisory Report table
     has_advisories = any(
@@ -491,6 +545,66 @@ def format_text_full(output):
                         else:
                             impact = "not affected"
                         sections.append(f"| {v} | {adv_name} | {adv_type} | {cve_id} | {impact} |")
+
+    # OCPBUGS Details table
+    has_ocpbugs = any(
+        e.get("ocpbugs", {}).get("count", 0) > 0
+        for e in evaluations
+    )
+    if has_ocpbugs:
+        sections.append("\n## Resolved OCPBUGS\n")
+        header = ("| Version | Bug | Status | Source | Release Action "
+                  "| Release Note Type | Release Note Status | Summary |")
+        separator = ("|---------|-----|--------|--------|----------------"
+                     "|-------------------|---------------------|---------|")
+        sections.append(header)
+        sections.append(separator)
+        bugs_with_rn = 0
+        for e in evaluations:
+            v = e.get("version", "?")
+            for bug in e.get("ocpbugs", {}).get("bugs", []):
+                key = bug.get("key", "?")
+                status = bug.get("status", "?")
+                source = bug.get("source", "?")
+                release_action = bug.get("release_action", "needs_review")
+                rn_type = bug.get("release_note_type", "") or "--"
+                rn_status = bug.get("release_note_status", "") or "--"
+                summary = bug.get("summary", "").replace("|", "\\|").replace("\n", " ")
+                row = (f"| {v} | {key} | {status} | {source} "
+                       f"| {release_action} | {rn_type} | {rn_status} "
+                       f"| {summary} |")
+                sections.append(row)
+                rn_text = bug.get("release_note", "")
+                if rn_text and rn_type != "Release Note Not Required":
+                    bugs_with_rn += 1
+
+        # Release Note details (only if any bug has a release note)
+        has_rn_text = any(
+            bug.get("release_note", "")
+            for e in evaluations
+            for bug in e.get("ocpbugs", {}).get("bugs", [])
+        )
+        if has_rn_text:
+            sections.append("\n### Release Notes\n")
+            for e in evaluations:
+                for bug in e.get("ocpbugs", {}).get("bugs", []):
+                    rn_text = bug.get("release_note", "")
+                    if rn_text:
+                        rn_type = bug.get("release_note_type", "")
+                        sections.append(f"**{bug['key']}** ({rn_type}):")
+                        sections.append(f"> {rn_text}")
+                        sections.append("")
+
+        if bugs_with_rn > 0:
+            sections.append(
+                f"> **Note:** {bugs_with_rn} bug(s) have customer-facing Release Notes. "
+                "Use the per-version recommendation table above for the action."
+            )
+        else:
+            sections.append(
+                "> **Note:** No customer-facing Release Notes found — bug fixes may be "
+                "internal-only. Use the per-version recommendation table above for the action."
+            )
 
     # Recommendations table
     sections.append("\n## Recommendations\n")
@@ -559,6 +673,19 @@ def main():
                 versions.append(v)
         if not versions:
             logger.info("No ART releases due within 7 days")
+
+    # Filter out EOL versions (auto-discovered only; explicit versions always evaluated)
+    if not args.versions:
+        active_versions = []
+        for v in versions:
+            minor = ".".join(v.split(".")[:2])
+            if lifecycle.is_version_active(minor, lifecycle_data):
+                active_versions.append(v)
+            else:
+                lc = lifecycle.get_lifecycle_status(minor, lifecycle_data)
+                phase = lc["phase"] if lc else "unknown"
+                logger.info("Skipping %s (%s)", v, phase)
+        versions = active_versions
 
     # Step 3: Evaluate each version (parallel when multiple)
     evaluations = []

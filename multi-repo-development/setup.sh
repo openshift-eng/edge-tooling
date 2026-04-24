@@ -183,12 +183,21 @@ clone_repo() {
 
     log_success "Cloned $dir (branch: $branch)"
 
-    # Distribute preset context file if available and no native CLAUDE.md exists
+    # Always distribute TNF context file as TNF-CONTEXT.md
+    for ctx in "$PRESETS_DIR"/*/context/"$dir".md; do
+        if [[ -f "$ctx" ]]; then
+            cp "$ctx" "$target/TNF-CONTEXT.md"
+            log_info "  Added TNF-CONTEXT.md"
+            break
+        fi
+    done
+
+    # Distribute supplemental CLAUDE.md only if repo has no native one
     if [[ ! -f "$target/CLAUDE.md" ]]; then
-        for ctx in "$PRESETS_DIR"/*/context/"$dir".md; do
-            if [[ -f "$ctx" ]]; then
-                cp "$ctx" "$target/CLAUDE.md"
-                log_info "  Added supplemental CLAUDE.md from $(basename "$(dirname "$(dirname "$ctx")")")"
+        for sup in "$PRESETS_DIR"/*/supplemental/"$dir".md; do
+            if [[ -f "$sup" ]]; then
+                cp "$sup" "$target/CLAUDE.md"
+                log_info "  Added supplemental CLAUDE.md"
                 break
             fi
         done

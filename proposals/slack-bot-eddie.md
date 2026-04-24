@@ -10,7 +10,7 @@
 
 Slack app management UI: [Eddie — Slack API app](https://api.slack.com/apps/A0A9S7P1SQ4).
 
-**Known consumer in this repo:** [EC2 Watchman](ec2-watchman.md) optionally sends shutdown notices to a webhook URL supplied at deploy time; that URL can be issued through Eddie.
+**Known consumers in this repo:** [EC2 Watchman](ec2-watchman.md) optionally sends shutdown notices to a webhook URL supplied at deploy time; [gh-notifier](gh-notifier.md) posts PR digests from CI using `SLACK_WEBHOOK_URL`. Both can use webhooks issued through Eddie.
 
 ## Goals and non-goals
 

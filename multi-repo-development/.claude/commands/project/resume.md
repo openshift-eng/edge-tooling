@@ -24,7 +24,7 @@ for the numbered "📂 Recent projects" table produced by the SessionStart
 hook. Pick the project name on row N from that table. This avoids an
 unnecessary shell call since the hook output is already in context.
 If the table is not in context (e.g., session was cleared), fall back to
-running `scripts/recent-projects.sh --names` and pick the Nth line.
+running `scripts/recent-projects.py --names` and pick the Nth line.
 If N is out of range, show an error like "Only M projects exist." and
 fall through to Case C (interactive picker).
 

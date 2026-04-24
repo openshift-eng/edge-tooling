@@ -25,8 +25,8 @@ When a time range is provided (e.g., "this week"), it queries Red Hat Product Pa
 | Requirement | Needed for | Mandatory? |
 |---|---|---|
 | VPN | Brew RPM checks (nightly, EC/RC), advisory report | Yes for nightly/ecrc — xyz degrades gracefully (skips advisory, 90-day rule) |
-| `ATLASSIAN_API_TOKEN` | ART Jira queries, advisory report | No — scripts degrade gracefully, but advisory/CVE analysis is skipped |
-| `ATLASSIAN_EMAIL` | ART Jira queries, advisory report | No — same as above |
+| `ATLASSIAN_API_TOKEN` | ART Jira queries, advisory report, OCPBUGS check | No — scripts degrade gracefully, but advisory/CVE/OCPBUGS analysis is skipped |
+| `ATLASSIAN_EMAIL` | ART Jira queries, advisory report, OCPBUGS check | No — same as above |
 | `GITLAB_API_TOKEN` | Advisory report for 4.20+ (shipment MR data) | No — advisory skipped for 4.20+ without it |
 | Product Pages MCP | Time range lookups (e.g., "this week") | Only when using time ranges — not needed for explicit versions |
 
@@ -108,6 +108,8 @@ Stderr contains progress messages — only display it if the script exits non-ze
 ### Step 4: Display Output
 
 Display the script output **verbatim** — do not reformat, add tables, or change the layout. The scripts produce deterministic pre-formatted text. Do NOT add any commentary, explanation, or summary after the output.
+
+**OCPBUGS follow-up**: If any version shows OCPBUGS in the output (e.g., `1 OCPBUGS`), automatically re-run the command with `--verbose` to list the specific bugs. Only do this once — do not re-run if `--verbose` was already passed.
 
 ### Step 5: Handle Errors
 
