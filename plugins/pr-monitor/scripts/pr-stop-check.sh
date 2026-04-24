@@ -35,7 +35,7 @@ set_field() {
         normalized=$(printf '%s' "${normalized}" | sed "s%;${field}=[^;]*%;${field}=${escaped_value}%")
         echo "${normalized#;}"
     else
-        echo "${state};${field}=${value}"
+        echo "${state};${field}=${escaped_value}"
     fi
 }
 

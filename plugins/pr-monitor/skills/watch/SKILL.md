@@ -232,7 +232,14 @@ After processing all changes, if any were batched:
 
 3. If the push script returns exit code 2 (file mismatch), report the mismatch and ask the user to confirm before retrying without the `--expected-files` flag.
 
-4. If push succeeded, update state:
+4. If push succeeded, reply to each addressed review comment:
+
+   ```bash
+   gh api "repos/${ORG}/${REPO}/pulls/${PR_NUMBER}/comments/<comment_id>/replies" \
+       -f body="Fixed by using Claude Code pr-monitor plugin."
+   ```
+
+5. Update state:
 
    ```bash
    export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set last_push_cycle "${CYCLE}")
