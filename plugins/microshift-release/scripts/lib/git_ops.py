@@ -218,6 +218,7 @@ def build_revision_range(branch, since_version=None, since_commit=None):
         return f"{tag}..origin/{branch}"
     if since_commit:
         return f"{since_commit}..origin/{branch}"
+    logger.warning("No tag or commit baseline for %s — using full branch history", branch)
     return f"origin/{branch}"
 
 

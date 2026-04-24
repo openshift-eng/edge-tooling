@@ -200,7 +200,7 @@ def _find_latest_from_errata(minor_version):
         return None
 
     pattern = re.compile(
-        rf"{re.escape(minor_version)}\.(\d+)"
+        rf"\b{re.escape(minor_version)}\.(\d+)\b"
     )
     for doc in data.get("response", {}).get("docs", []):
         synopsis = doc.get("portal_synopsis", "")
