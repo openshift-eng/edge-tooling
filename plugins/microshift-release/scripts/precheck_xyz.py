@@ -241,6 +241,47 @@ def compute_recommendation(evaluation):
     return "SKIP", f"{commits} commits, no CVEs"
 
 
+def _resolve_range_base(version, minor, z):
+    """Resolve the git range base for counting commits since a release.
+
+    Tries three strategies in order:
+    1. Exact git tag for the version.
+    2. Brew NVR commit hash (embedded in the RPM build metadata).
+    3. Nearest previous z-stream tag.
+
+    Args:
+        version: Published version string, e.g., "4.21.11".
+        minor: Minor version, e.g., "4.21".
+        z: Z-stream number of the published version.
+
+    Returns:
+        tuple[str|None, str|None]: (since_version, since_commit).
+            Exactly one will be set, or both None if nothing found.
+    """
+    # Strategy 1: exact tag
+    if git_ops.find_version_tag(version):
+        return version, None
+
+    # Strategy 2: Brew NVR commit hash
+    logger.warning("Git tag not found for %s, trying Brew NVR...", version)
+    commit = brew.extract_commit_from_nvr(version)
+    if commit and git_ops.verify_commit_exists(commit):
+        logger.info("Using Brew commit %s for %s", commit, version)
+        return None, commit
+    if commit:
+        logger.warning("Brew commit %s for %s not found in local clone",
+                       commit, version)
+
+    # Strategy 3: nearest previous tag
+    logger.warning("Brew commit not found, searching for nearest tag...")
+    nearest_ver, _ = git_ops.find_nearest_version_tag(minor, z - 1)
+    if nearest_ver:
+        logger.info("Using nearest available tag: %s", nearest_ver)
+        return nearest_ver, None
+
+    return None, None
+
+
 def evaluate_version(version, lifecycle_data, repo_root):
     """Run full evaluation pipeline for one version.
 
@@ -320,37 +361,13 @@ def evaluate_version(version, lifecycle_data, repo_root):
     git_ops.fetch_branch(branch)
 
     last_pub = pyxis.find_latest_published_zstream_any(minor)
-    since_commit = None  # Brew commit hash fallback when tag is missing
     if last_pub:
         result["last_released"] = last_pub["version"]
-        # Use exact tag if available; otherwise try the Brew NVR commit hash,
-        # then fall back to the nearest previous tag as a last resort
-        if git_ops.find_version_tag(last_pub["version"]):
-            since_version = last_pub["version"]
-        else:
-            logger.warning("Git tag not found for %s, trying Brew NVR...",
-                           last_pub["version"])
-            since_commit = brew.extract_commit_from_nvr(last_pub["version"])
-            if since_commit and git_ops.verify_commit_exists(since_commit):
-                logger.info("Using Brew commit %s for %s",
-                            since_commit, last_pub["version"])
-                since_version = None  # no tag — since_commit is the range base
-            else:
-                if since_commit:
-                    logger.warning(
-                        "Brew commit %s for %s not found in local clone",
-                        since_commit, last_pub["version"])
-                    since_commit = None
-                logger.warning("Brew commit not found, searching for nearest tag...")
-                nearest_ver, _ = git_ops.find_nearest_version_tag(minor, last_pub["z"] - 1)
-                if nearest_ver:
-                    logger.info("Using nearest available tag: %s", nearest_ver)
-                    since_version = nearest_ver
-                else:
-                    since_version = None
+        since_version, since_commit = _resolve_range_base(
+            last_pub["version"], minor, last_pub["z"])
     else:
         result["last_released"] = f"{minor}.0"
-        since_version = None
+        since_version, since_commit = None, None
 
     commit_list = git_ops.commits_since(branch, since_version, since_commit=since_commit)
     result["commits"] = len(commit_list)
@@ -513,6 +530,12 @@ def format_text_short(evaluations):
 
         if e.get("lifecycle_status") == "End of life":
             lines.append(f"{rec:<{REC_WIDTH}} {version} [End of life]")
+            continue
+
+        if e.get("reason") == "VPN not connected":
+            lines.append(
+                f"{rec:<{REC_WIDTH}} {version}"
+                " [VPN not connected]")
             continue
 
         # OCP status

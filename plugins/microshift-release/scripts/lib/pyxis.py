@@ -89,7 +89,9 @@ def is_version_published(version, pages=5):
                 logger.warning("Pyxis page fetch failed: %s", e)
 
     # Fallback: check errata for pre-bootc versions.
-    # Assumes z-streams are published sequentially (no skips).
+    # Uses target_z <= latest_z as a heuristic. Some z-streams are
+    # skipped (e.g., 4.20.7), so this can produce false positives for
+    # skipped versions — safe because it only triggers ALREADY RELEASED.
     minor = ".".join(version.split(".")[:2])
     errata = _find_latest_from_errata(minor)
     if errata:
