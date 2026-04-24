@@ -8,8 +8,6 @@ set -euo pipefail
 #   running  → unexpected exit (crash), respawn immediately up to max_iterations
 # Exit codes: 0=restarted, 1=done/max reached, 2=not a pr-monitor session, 3=internal error
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 die() {
     echo "Error: $1" >&2
     exit 3

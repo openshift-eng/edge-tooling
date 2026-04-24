@@ -1,7 +1,7 @@
 ---
 name: pr-monitor:watch
 argument-hint: <pr-url>
-description: "Comment-driven PR lifecycle monitor — single-cycle evaluation with automatic rescheduling via Stop hook"
+description: "Comment-driven PR lifecycle monitor — single-cycle evaluation with automatic rescheduling via CronCreate"
 user-invocable: true
 allowed-tools: Skill, Bash, Read, Write, Edit, Glob, Grep, Agent
 ---
@@ -17,17 +17,17 @@ allowed-tools: Skill, Bash, Read, Write, Edit, Glob, Grep, Agent
 ## Description
 
 Comment-driven PR lifecycle monitor. Each invocation performs exactly ONE cycle:
-gather data, analyze comments and CI failures, apply fixes, then exit. The Stop
-hook automatically reschedules the next cycle after a delay. State is carried
-via `PR_MONITOR_STATE` — each cycle starts with fresh context.
+gather data, analyze comments and CI failures, apply fixes, then schedule the
+next cycle. Uses `CronCreate` (one-shot) to automatically reschedule within the
+same session. State is persisted to a file so it survives across cycles.
 
 Trivial fixes (style, naming, linting, imports, simple assertions) are
 auto-pushed. Structural changes require confirmation. Security-sensitive
 changes are always refused.
 
-**IMPORTANT: Do NOT loop. Do NOT sleep. After completing one cycle, set
-`next_check_delay` and `status=waiting`, then exit. The Stop hook handles
-rescheduling.**
+**IMPORTANT: Do NOT loop. Do NOT sleep. After completing one cycle, save state
+to file, use `CronCreate` to schedule the next cycle, then exit. The CronCreate
+job fires the next cycle within the same session.**
 
 ## Arguments
 
@@ -93,7 +93,18 @@ The user argument is: $ARGUMENTS
    - If notes exist, display: "Previous cycle: (notes value)"
    - Skip to Step 2.
 
-6. If `PR_MONITOR_STATE` is NOT set, this is a **fresh start**:
+6. If `PR_MONITOR_STATE` is NOT set, check for a **state file** (written by a previous cycle's CronCreate):
+
+   ```bash
+   STATE_FILE="/tmp/pr-monitor-${PR_NUMBER}.state"
+   if [[ -f "${STATE_FILE}" ]]; then
+       export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" load "${PR_NUMBER}")
+   fi
+   ```
+
+   If the state file exists, treat this as a continuation (same as step 5 above).
+
+7. If neither env var nor state file exists, this is a **fresh start**:
    - Determine max_iterations: if `--infinite-loop` flag is present, use `0` (unlimited); otherwise default `3`.
    - Initialize state:
 
@@ -106,9 +117,9 @@ The user argument is: $ARGUMENTS
    export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" init "${PR_URL}" "${MAX_ITERATIONS}")
    ```
 
-7. Verify the org is in the trusted allowlist. If not, warn: "Org `ORG` is not in the trusted allowlist. Running in analysis-only mode — no auto-push."
+8. Verify the org is in the trusted allowlist. If not, warn: "Org `ORG` is not in the trusted allowlist. Running in analysis-only mode — no auto-push."
 
-8. Display: "Starting PR monitor for `ORG/REPO#PR_NUMBER` (max iterations: N, 0=unlimited)."
+9. Display: "Starting PR monitor for `ORG/REPO#PR_NUMBER` (max iterations: N, 0=unlimited)."
 
 ### Step 2: Cycle
 
@@ -152,12 +163,14 @@ Check these conditions IN ORDER:
 
    ```bash
    export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set-status complete)
+   bash "${PLUGIN_DIR}/scripts/pr-state.sh" clean "${PR_NUMBER}"
    ```
 
 2. **All CI green AND no new comments** (`CHECKS_EXIT == 0` and `COMMENTS_EXIT == 1`): STOP:
 
    ```bash
    export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set-status complete)
+   bash "${PLUGIN_DIR}/scripts/pr-state.sh" clean "${PR_NUMBER}"
    ```
 
    Report "All CI jobs passed and no new comments. PR is ready."
@@ -177,6 +190,7 @@ Launch TWO parallel Agent calls:
 - For each human inline comment: read the referenced code, determine if it's actionable or needs discussion
 - Collect all proposed changes as diffs
 - Classify each change as trivial or non-trivial
+- For non-actionable comments, return the comment ID and a brief reason why it's not actionable (e.g., "already fixed in commit X", "architectural disagreement — hook placement is correct per plugin marketplace design", "non-trivial — deferred to follow-up")
 
 **Agent 2 — CI Track** (only if failed jobs exist):
 
@@ -251,12 +265,29 @@ After processing all changes, if any were batched:
    done
    ```
 
+6. Reply to each **non-actionable** comment with the reason:
+
+   ```bash
+   gh api "repos/${ORG}/${REPO}/pulls/${PR_NUMBER}/comments/<comment_id>/replies" \
+       -f body="<reason>
+
+   ---
+   *This comment was automatically generated using [Claude Code](https://claude.ai/code) pr-monitor plugin.*"
+   ```
+
+   Where `<reason>` is a brief explanation of why the comment was not addressed (e.g.,
+   "Already fixed in a previous commit.", "This is an architectural decision — the plugin
+   marketplace model requires hooks to be plugin-scoped, not repo-scoped.",
+   "Non-trivial change — deferred to a follow-up PR.").
+
+   Mark these comment IDs as addressed in state.
+
 #### Step 2e: Handle No-Action Cycle
 
 If no changes were proposed and no retrigger was posted:
 
-- If comments existed but none were actionable: report "N comments reviewed, none actionable."
-- Update state with comment IDs as addressed (so they're not re-analyzed).
+- For each comment that was not actionable, reply on the PR with the reason (same format as Step 2d.6 above).
+- Update state with all comment IDs as addressed (so they're not re-analyzed).
 
 #### Step 2f: Set Next Check Delay and Exit
 
@@ -286,13 +317,30 @@ Job name classification for wait time:
 | `e2e`, `conformance` | 900s (15 min) |
 | `install`, `serial`, `scenario` | 1800s (30 min) |
 
-Update state and exit:
+Update state, save to file, and schedule next cycle:
 
 ```bash
 export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set-notes "<brief summary of cycle actions>")
 export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set next_check_delay "<seconds>")
 export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set-status waiting)
+export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" save "${PR_NUMBER}")
 ```
+
+Then schedule the next cycle using `CronCreate`:
+
+1. Calculate the target time: current time + `next_check_delay` seconds.
+2. Convert to a cron expression: `M H DoM Month *` (pinned to the exact minute).
+3. Build the prompt: `/pr-monitor:watch <PR_URL>` (append `--infinite-loop` if `max_iterations == 0`).
+4. Create the job:
+
+   ```json
+   CronCreate({
+       cron: "<calculated cron expression>",
+       prompt: "/pr-monitor:watch <PR_URL> [--infinite-loop]",
+       recurring: false,
+       durable: false
+   })
+   ```
 
 Display final status:
 
@@ -301,26 +349,34 @@ Iteration N complete. Next check in M minutes.
 Status: X passed, Y failed, Z pending | Comments: A addressed
 ```
 
-**Then EXIT. Do NOT sleep. Do NOT loop back. The Stop hook reads
-`next_check_delay` from state, waits, and spawns a fresh session.**
+**Then EXIT. Do NOT sleep. Do NOT loop back. The CronCreate job will
+fire the next cycle automatically within this session.**
 
 ## Lifecycle
 
 Each invocation performs exactly one cycle:
 
-1. Read state from `PR_MONITOR_STATE` (or initialize fresh)
+1. Read state from file `/tmp/pr-monitor-<PR_NUMBER>.state` (or env var, or initialize fresh)
 2. Gather CI checks and review comments
 3. Analyze and fix issues
-4. Set `next_check_delay` and `status=waiting`, then exit
+4. Save state to file, schedule next cycle via `CronCreate`, then exit
 
-The Stop hook fires on exit and handles continuation:
+### In-session continuation (primary)
+
+At the end of each cycle, a one-shot `CronCreate` job schedules the next
+cycle within the same interactive session. State is persisted to
+`/tmp/pr-monitor-<PR_NUMBER>.state` so it survives across CronCreate-fired
+prompts. The user stays in the same terminal and can see all output,
+approve non-trivial changes, and interact between cycles.
+
+### Headless continuation (fallback)
+
+When run via `claude -p` (non-interactive), the Stop hook fires on session
+exit and handles continuation by spawning a new `claude -p` process:
 
 - `status=complete` → no restart (PR is done)
 - `status=waiting` → sleep `next_check_delay` seconds, then spawn new session
 - `status=running` → unexpected exit (crash), retry immediately
-
-State is carried entirely via `PR_MONITOR_STATE`. Each new session starts
-with fresh context — no conversation history accumulation.
 
 Default: 3 iterations. Use `--infinite-loop` for unlimited.
 

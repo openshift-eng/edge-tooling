@@ -106,6 +106,22 @@ main() {
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") init <pr-url> [max-iterations]"
             init_state "$1" "${2:-3}"
             ;;
+        save)
+            [[ $# -lt 1 ]] && die "Usage: $(basename "$0") save <pr-number>"
+            require_state
+            printf '%s' "${PR_MONITOR_STATE}" > "/tmp/pr-monitor-$1.state"
+            echo "${PR_MONITOR_STATE}"
+            ;;
+        load)
+            [[ $# -lt 1 ]] && die "Usage: $(basename "$0") load <pr-number>"
+            local state_file="/tmp/pr-monitor-$1.state"
+            [[ -f "${state_file}" ]] || die "No state file found at ${state_file}"
+            cat "${state_file}"
+            ;;
+        clean)
+            [[ $# -lt 1 ]] && die "Usage: $(basename "$0") clean <pr-number>"
+            rm -f "/tmp/pr-monitor-$1.state"
+            ;;
         get)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") get <field>"
             require_state
