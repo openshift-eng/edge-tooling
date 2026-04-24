@@ -25,6 +25,7 @@ reviews:
     - path: "**"
       instructions: |
         Review all changes against the guidelines in CONTRIBUTING.md. Flag any violations as severity level "medium".
+        When a finding is a violation of CONTRIBUTING.md, explicitly state that in the comment (e.g., "Per CONTRIBUTING.md: ...") and quote or reference the specific guideline being violated.
 
   tools:
     shellcheck:
