@@ -319,11 +319,16 @@ def evaluate_version(version, lifecycle_data, repo_root):
             logger.warning("Git tag not found for %s, trying Brew NVR...",
                            last_pub["version"])
             since_commit = brew.extract_commit_from_nvr(last_pub["version"])
-            if since_commit:
+            if since_commit and git_ops.verify_commit_exists(since_commit):
                 logger.info("Using Brew commit %s for %s",
                             since_commit, last_pub["version"])
-                since_version = last_pub["version"]
+                since_version = None  # no tag — since_commit is the range base
             else:
+                if since_commit:
+                    logger.warning(
+                        "Brew commit %s for %s not found in local clone",
+                        since_commit, last_pub["version"])
+                    since_commit = None
                 logger.warning("Brew commit not found, searching for nearest tag...")
                 nearest_ver, _ = git_ops.find_nearest_version_tag(minor, last_pub["z"] - 1)
                 if nearest_ver:
@@ -358,19 +363,23 @@ def evaluate_version(version, lifecycle_data, repo_root):
     # 4e: 90-day rule — get date of last release from git tags
     if last_pub:
         release_date = git_ops.get_release_date(last_pub["version"])
+        if not release_date and last_pub.get("date"):
+            release_date = last_pub["date"]
+            logger.info("Using errata date for %s: %s",
+                        last_pub["version"], release_date)
         if not release_date:
-            # Fallback: use errata date if available, then Pyxis
-            release_date = last_pub.get("date")
-        if not release_date:
-            logger.info("Git tag date not found for %s, trying Pyxis...",
-                        last_pub["version"])
+            logger.info("Git tag/errata date not found for %s, "
+                        "trying Pyxis...", last_pub["version"])
             release_date = pyxis.get_publish_date(last_pub["version"])
         if release_date:
             try:
                 build_date = datetime.strptime(release_date, "%Y-%m-%d")
                 result["days_since"] = (datetime.now() - build_date).days
                 result["last_release_date"] = release_date
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as e:
+                logger.warning("Failed to parse release date '%s' "
+                               "for %s: %s",
+                               release_date, last_pub["version"], e)
                 result["days_since"] = None
         else:
             result["days_since"] = None

@@ -5,7 +5,7 @@ import re
 import subprocess
 
 from lib.art_jira import create_jira_client, _sanitize_jql_value
-from lib.git_ops import ensure_microshift_repo, find_version_tag
+from lib.git_ops import ensure_microshift_repo, build_revision_range
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +31,7 @@ def extract_bugs_from_commits(branch, since_version, since_commit=None):
     Returns:
         set[str]: Unique OCPBUGS keys found in commits, e.g., {"OCPBUGS-12345"}.
     """
-    tag = find_version_tag(since_version) if since_version else None
-    if tag:
-        revision = f"{tag}..origin/{branch}"
-    elif since_commit:
-        revision = f"{since_commit}..origin/{branch}"
-    else:
-        revision = f"origin/{branch}"
+    revision = build_revision_range(branch, since_version, since_commit)
 
     repo = ensure_microshift_repo()
     try:

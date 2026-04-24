@@ -88,15 +88,17 @@ def is_version_published(version, pages=5):
             except requests.RequestException as e:
                 logger.warning("Pyxis page fetch failed: %s", e)
 
-    # Fallback: check errata for pre-bootc versions
+    # Fallback: check errata for pre-bootc versions.
+    # Assumes z-streams are published sequentially (no skips).
     minor = ".".join(version.split(".")[:2])
     errata = _find_latest_from_errata(minor)
     if errata:
         try:
             target_z = int(version.split(".")[2])
             return target_z <= errata["z"]
-        except (IndexError, ValueError):
-            pass
+        except (IndexError, ValueError) as e:
+            logger.warning("Failed to parse version '%s' for errata "
+                           "comparison: %s", version, e)
 
     return False
 
@@ -159,7 +161,7 @@ def get_publish_date(version, pages=5):
                             )
                             if date_str:
                                 return date_str[:10]  # YYYY-MM-DD
-        except (requests.RequestException, json.JSONDecodeError, KeyError) as e:
+        except (requests.RequestException, json.JSONDecodeError) as e:
             logger.warning("Pyxis date lookup failed on page %d: %s", page, e)
 
     return None
@@ -192,7 +194,7 @@ def _find_latest_from_errata(minor_version):
         resp = requests.get(url, params=params, timeout=15)
         resp.raise_for_status()
         data = resp.json()
-    except (requests.RequestException, ValueError) as e:
+    except (requests.RequestException, json.JSONDecodeError) as e:
         logger.warning("Hydra errata search failed for %s: %s",
                        minor_version, e)
         return None

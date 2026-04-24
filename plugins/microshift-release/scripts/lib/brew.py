@@ -156,10 +156,13 @@ def extract_commit_from_nvr(version):
     """
     rpms = find_zstream_rpms(version)
     if not rpms.get("found"):
+        logger.debug("No Brew RPM found for %s", version)
         return None
 
     nvr = rpms["nvr"]
     match = re.search(r"\.g([0-9a-f]{7,})\.", nvr)
     if match:
         return match.group(1)
+    logger.warning("Brew NVR for %s has no commit hash: %s",
+                   version, nvr)
     return None

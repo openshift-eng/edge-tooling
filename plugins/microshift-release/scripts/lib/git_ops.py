@@ -199,6 +199,45 @@ def find_nearest_version_tag(minor_version, max_z):
     return None, None
 
 
+def build_revision_range(branch, since_version=None, since_commit=None):
+    """Build a git revision range for log/diff commands.
+
+    Resolves the best available range base: version tag first, then
+    since_commit hash, then the full branch.
+
+    Args:
+        branch: Branch name, e.g., "release-4.21".
+        since_version: Version string to look up a tag for, or None.
+        since_commit: Git commit hash fallback when no tag exists.
+
+    Returns:
+        str: Revision range, e.g., "tag..origin/branch" or "origin/branch".
+    """
+    tag = find_version_tag(since_version) if since_version else None
+    if tag:
+        return f"{tag}..origin/{branch}"
+    if since_commit:
+        return f"{since_commit}..origin/{branch}"
+    return f"origin/{branch}"
+
+
+def verify_commit_exists(commit_hash):
+    """Check if a commit hash exists in the local MicroShift clone.
+
+    Args:
+        commit_hash: Short or full git commit hash.
+
+    Returns:
+        bool: True if the commit exists.
+    """
+    repo = ensure_microshift_repo()
+    result = subprocess.run(
+        ["git", "cat-file", "-t", commit_hash],
+        cwd=repo, capture_output=True, text=True,
+    )
+    return result.returncode == 0
+
+
 def commits_since(branch, since_version, since_commit=None):
     """Get commits on origin/<branch> since a version tag or commit.
 
@@ -216,13 +255,7 @@ def commits_since(branch, since_version, since_commit=None):
     Returns:
         list[dict]: Each dict has keys: sha, subject, date.
     """
-    tag = find_version_tag(since_version) if since_version else None
-    if tag:
-        revision = f"{tag}..origin/{branch}"
-    elif since_commit:
-        revision = f"{since_commit}..origin/{branch}"
-    else:
-        revision = f"origin/{branch}"
+    revision = build_revision_range(branch, since_version, since_commit)
 
     repo = ensure_microshift_repo()
     result = subprocess.run(

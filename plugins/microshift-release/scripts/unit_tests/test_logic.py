@@ -667,5 +667,137 @@ class TestExtractCommitFromNvr(unittest.TestCase):
         self.assertIsNone(self._call_with_mock(rpms))
 
 
+class TestFindLatestFromErrata(unittest.TestCase):
+    """Tests for pyxis._find_latest_from_errata Hydra API parsing."""
+
+    def _call_with_mock(self, json_response=None, exc=None):
+        from unittest.mock import patch, MagicMock
+        mock_resp = MagicMock()
+        if exc:
+            with patch("lib.pyxis.requests.get", side_effect=exc):
+                from lib.pyxis import _find_latest_from_errata
+                return _find_latest_from_errata("4.16")
+        mock_resp.json.return_value = json_response
+        mock_resp.raise_for_status.return_value = None
+        with patch("lib.pyxis.requests.get", return_value=mock_resp):
+            from lib.pyxis import _find_latest_from_errata
+            return _find_latest_from_errata("4.16")
+
+    def test_happy_path(self):
+        data = {"response": {"docs": [
+            {"portal_synopsis": "Red Hat build of MicroShift 4.16.58 security update",
+             "portal_publication_date": "2026-03-19T00:00:00Z"},
+        ]}}
+        result = self._call_with_mock(data)
+        self.assertEqual(result["version"], "4.16.58")
+        self.assertEqual(result["z"], 58)
+        self.assertEqual(result["date"], "2026-03-19")
+
+    def test_no_matching_synopsis(self):
+        data = {"response": {"docs": [
+            {"portal_synopsis": "OpenShift Container Platform update",
+             "portal_publication_date": "2026-03-19T00:00:00Z"},
+        ]}}
+        self.assertIsNone(self._call_with_mock(data))
+
+    def test_empty_docs(self):
+        data = {"response": {"docs": []}}
+        self.assertIsNone(self._call_with_mock(data))
+
+    def test_network_failure(self):
+        import requests
+        self.assertIsNone(self._call_with_mock(
+            exc=requests.RequestException("timeout")))
+
+
+class TestIsVersionPublishedErrataFallback(unittest.TestCase):
+    """Tests for the errata fallback in is_version_published."""
+
+    def _call(self, version, errata_result):
+        from unittest.mock import patch
+        # Pyxis returns nothing (all pages empty)
+        with patch("lib.pyxis._fetch_page", return_value="{}"):
+            with patch("lib.pyxis._find_latest_from_errata",
+                       return_value=errata_result):
+                from lib.pyxis import is_version_published
+                return is_version_published(version, pages=1)
+
+    def test_version_before_latest(self):
+        errata = {"version": "4.16.58", "z": 58, "date": "2026-03-19"}
+        self.assertTrue(self._call("4.16.57", errata))
+
+    def test_version_equals_latest(self):
+        errata = {"version": "4.16.58", "z": 58, "date": "2026-03-19"}
+        self.assertTrue(self._call("4.16.58", errata))
+
+    def test_version_after_latest(self):
+        errata = {"version": "4.16.58", "z": 58, "date": "2026-03-19"}
+        self.assertFalse(self._call("4.16.60", errata))
+
+    def test_no_errata(self):
+        self.assertFalse(self._call("4.16.60", None))
+
+
+class TestEolSkipFormatting(unittest.TestCase):
+    """Tests for EOL version display in format_text_short."""
+
+    def test_eol_version(self):
+        evals = [{
+            "version": "4.14.30",
+            "recommendation": "SKIP",
+            "lifecycle_status": "End of life",
+        }]
+        result = format_text_short(evals)
+        self.assertIn("End of life", result)
+        self.assertIn("SKIP", result)
+        # Should not contain OCP status or advisory info
+        self.assertNotIn("OCP:", result)
+
+    def test_eol_mixed_with_active(self):
+        evals = [
+            {"version": "4.15.63", "recommendation": "SKIP",
+             "lifecycle_status": "End of life"},
+            {"version": "4.21.12", "recommendation": "SKIP",
+             "ocp_status": "available",
+             "cve_impact": {"impact": "none"},
+             "days_since": 2, "last_released": "4.21.11"},
+        ]
+        result = format_text_short(evals)
+        lines = result.strip().split("\n")
+        self.assertEqual(len(lines), 2)
+        self.assertIn("End of life", lines[0])
+        self.assertIn("OCP:", lines[1])
+
+
+class TestBuildRevisionRange(unittest.TestCase):
+    """Tests for git_ops.build_revision_range priority ordering."""
+
+    def test_tag_wins_over_commit(self):
+        """When a tag exists, since_commit is ignored."""
+        from unittest.mock import patch
+        with patch("lib.git_ops.find_version_tag",
+                   return_value="4.21.7-202603230928.p0"):
+            from lib.git_ops import build_revision_range
+            rev = build_revision_range(
+                "release-4.21", "4.21.7", "abc1234")
+            self.assertIn("4.21.7-202603230928.p0", rev)
+            self.assertNotIn("abc1234", rev)
+
+    def test_commit_used_when_no_tag(self):
+        from unittest.mock import patch
+        with patch("lib.git_ops.find_version_tag", return_value=None):
+            from lib.git_ops import build_revision_range
+            rev = build_revision_range(
+                "release-4.21", "4.21.11", "7f7539e")
+            self.assertEqual(rev, "7f7539e..origin/release-4.21")
+
+    def test_full_branch_when_nothing(self):
+        from unittest.mock import patch
+        with patch("lib.git_ops.find_version_tag", return_value=None):
+            from lib.git_ops import build_revision_range
+            rev = build_revision_range("release-4.21", None, None)
+            self.assertEqual(rev, "origin/release-4.21")
+
+
 if __name__ == "__main__":
     unittest.main()
