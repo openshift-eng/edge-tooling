@@ -98,6 +98,11 @@ The user argument is: $ARGUMENTS
    - Initialize state:
 
    ```bash
+   if [[ "${LOOP_FLAG}" == "true" ]]; then
+     MAX_ITERATIONS=0
+   else
+     MAX_ITERATIONS=3
+   fi
    export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" init "${PR_URL}" "${MAX_ITERATIONS}")
    ```
 
@@ -116,6 +121,7 @@ Run both scripts to collect current state:
 ```bash
 CHECKS_JSON=$(bash "${PLUGIN_DIR}/scripts/pr-checks.sh" "${PR_URL}")
 CHECKS_EXIT=$?
+BRANCH=$(echo "${CHECKS_JSON}" | jq -r '.pr.branch')
 
 ADDRESSED=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" get addressed)
 COMMENTS_JSON=$(bash "${PLUGIN_DIR}/scripts/pr-comments.sh" "${PR_URL}" "${ADDRESSED}")
