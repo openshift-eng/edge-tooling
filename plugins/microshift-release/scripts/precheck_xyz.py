@@ -257,6 +257,12 @@ def evaluate_version(version, lifecycle_data, repo_root):
     else:
         result["lifecycle_status"] = "unknown"
 
+    # Skip EOL versions immediately
+    if result["lifecycle_status"] == "End of life":
+        result["recommendation"] = "SKIP"
+        result["reason"] = "End of life"
+        return result
+
     # Already released check (Pyxis)
     logger.info("Checking if %s is already released...", version)
     try:
@@ -301,22 +307,44 @@ def evaluate_version(version, lifecycle_data, repo_root):
     logger.info("Fetching commits on %s...", branch)
     git_ops.fetch_branch(branch)
 
-    last_pub = pyxis.find_latest_published_zstream(minor)
+    last_pub = pyxis.find_latest_published_zstream_any(minor)
+    since_commit = None  # Brew commit hash fallback when tag is missing
     if last_pub:
         result["last_released"] = last_pub["version"]
-        since_version = last_pub["version"]
+        # Use exact tag if available; otherwise try the Brew NVR commit hash,
+        # then fall back to the nearest previous tag as a last resort
+        if git_ops.find_version_tag(last_pub["version"]):
+            since_version = last_pub["version"]
+        else:
+            logger.warning("Git tag not found for %s, trying Brew NVR...",
+                           last_pub["version"])
+            since_commit = brew.extract_commit_from_nvr(last_pub["version"])
+            if since_commit:
+                logger.info("Using Brew commit %s for %s",
+                            since_commit, last_pub["version"])
+                since_version = last_pub["version"]
+            else:
+                logger.warning("Brew commit not found, searching for nearest tag...")
+                nearest_ver, _ = git_ops.find_nearest_version_tag(minor, last_pub["z"] - 1)
+                if nearest_ver:
+                    logger.info("Using nearest available tag: %s", nearest_ver)
+                    since_version = nearest_ver
+                else:
+                    since_version = None
     else:
         result["last_released"] = f"{minor}.0"
         since_version = None
 
-    commit_list = git_ops.commits_since(branch, since_version)
+    commit_list = git_ops.commits_since(branch, since_version, since_commit=since_commit)
     result["commits"] = len(commit_list)
     result["commit_list"] = commit_list
 
     # 4b: OCPBUGS resolved bugs (fixVersion + commit message references)
     logger.info("Checking resolved OCPBUGS for %s...", version)
     try:
-        result["ocpbugs"] = ocpbugs.query_resolved_bugs(version, branch, since_version)
+        result["ocpbugs"] = ocpbugs.query_resolved_bugs(
+            version, branch, since_version, since_commit=since_commit,
+        )
     except Exception as e:
         logger.warning("OCPBUGS check failed for %s: %s", version, e)
         result["ocpbugs"] = {"count": 0, "bugs": [], "skipped": True}
@@ -330,6 +358,10 @@ def evaluate_version(version, lifecycle_data, repo_root):
     # 4e: 90-day rule — get date of last release from git tags
     if last_pub:
         release_date = git_ops.get_release_date(last_pub["version"])
+        if not release_date:
+            # Fallback: get publish date from Pyxis when git tag is missing
+            logger.info("Git tag date not found for %s, trying Pyxis...", last_pub["version"])
+            release_date = pyxis.get_publish_date(last_pub["version"])
         if release_date:
             try:
                 build_date = datetime.strptime(release_date, "%Y-%m-%d")
@@ -453,6 +485,10 @@ def format_text_short(evaluations):
 
         if rec == "ALREADY RELEASED":
             lines.append(f"{rec:<{REC_WIDTH}} {version}")
+            continue
+
+        if e.get("lifecycle_status") == "End of life":
+            lines.append(f"{rec:<{REC_WIDTH}} {version} [End of life]")
             continue
 
         # OCP status
