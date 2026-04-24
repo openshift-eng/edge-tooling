@@ -239,7 +239,11 @@ def find_latest_published_zstream_any(minor_version, pages=5):
     if errata:
         logger.info("Found %s from errata (published %s)",
                     errata["version"], errata.get("date", "?"))
-        return {"version": errata["version"], "z": errata["z"]}
+        return {
+            "version": errata["version"],
+            "z": errata["z"],
+            "date": errata.get("date"),
+        }
 
     return None
 

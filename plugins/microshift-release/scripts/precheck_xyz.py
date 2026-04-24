@@ -359,8 +359,11 @@ def evaluate_version(version, lifecycle_data, repo_root):
     if last_pub:
         release_date = git_ops.get_release_date(last_pub["version"])
         if not release_date:
-            # Fallback: get publish date from Pyxis when git tag is missing
-            logger.info("Git tag date not found for %s, trying Pyxis...", last_pub["version"])
+            # Fallback: use errata date if available, then Pyxis
+            release_date = last_pub.get("date")
+        if not release_date:
+            logger.info("Git tag date not found for %s, trying Pyxis...",
+                        last_pub["version"])
             release_date = pyxis.get_publish_date(last_pub["version"])
         if release_date:
             try:

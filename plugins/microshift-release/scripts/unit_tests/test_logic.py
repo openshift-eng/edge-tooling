@@ -624,5 +624,48 @@ class TestJqlSanitization(unittest.TestCase):
         self.assertIn("\\-", result)
 
 
+class TestExtractCommitFromNvr(unittest.TestCase):
+    """Tests for brew.extract_commit_from_nvr NVR parsing."""
+
+    def _call_with_mock(self, rpms_result):
+        """Call extract_commit_from_nvr with a mocked find_zstream_rpms."""
+        from unittest.mock import patch
+        with patch("lib.brew.find_zstream_rpms", return_value=rpms_result):
+            from lib.brew import extract_commit_from_nvr
+            return extract_commit_from_nvr("4.21.11")
+
+    def test_valid_nvr_with_commit(self):
+        """NVR with g<sha> suffix returns the commit hash."""
+        rpms = {
+            "found": True,
+            "nvr": "microshift-4.21.11-202604201054.p0.g7f7539e.assembly.4.21.11.el9",
+            "build_date": "2026-04-20",
+        }
+        self.assertEqual(self._call_with_mock(rpms), "7f7539e")
+
+    def test_valid_nvr_long_commit(self):
+        """NVR with a longer commit hash is also extracted."""
+        rpms = {
+            "found": True,
+            "nvr": "microshift-4.18.36-202603150930.p0.gabcdef0123.assembly.4.18.36.el9",
+            "build_date": "2026-03-15",
+        }
+        self.assertEqual(self._call_with_mock(rpms), "abcdef0123")
+
+    def test_nvr_without_commit_suffix(self):
+        """NVR without g<sha> suffix returns None."""
+        rpms = {
+            "found": True,
+            "nvr": "microshift-4.21.11-202604201054.p0.assembly.4.21.11.el9",
+            "build_date": "2026-04-20",
+        }
+        self.assertIsNone(self._call_with_mock(rpms))
+
+    def test_rpm_not_found(self):
+        """No matching RPM in Brew returns None."""
+        rpms = {"found": False}
+        self.assertIsNone(self._call_with_mock(rpms))
+
+
 if __name__ == "__main__":
     unittest.main()
