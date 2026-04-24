@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 set -euo pipefail
 
 REPOS=()
@@ -26,13 +26,10 @@ validate_args() {
         exit 1
     fi
     for repo in "${REPOS[@]}"; do
-        case "$repo" in
-            */*)  ;;
-            *)
-                echo "Error: Invalid repository format '$repo'. Expected owner/repo (e.g., openshift-eng/edge-tooling)." >&2
-                exit 1
-                ;;
-        esac
+        if [[ ! "$repo" =~ ^[^/]+/[^/]+$ ]]; then
+            echo "Error: Invalid repository format '$repo'. Expected owner/repo (e.g., openshift-eng/edge-tooling)." >&2
+            exit 1
+        fi
     done
 }
 
