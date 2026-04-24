@@ -132,7 +132,7 @@ Display a compact status line:
 ```text
 --- Cycle N | <timestamp> ---
 CI: X passed, Y failed, Z pending
-Comments: A new inline, B new PR-level
+Comments: A unresolved inline
 ```
 
 #### Step 2b: Evaluate Exit Conditions

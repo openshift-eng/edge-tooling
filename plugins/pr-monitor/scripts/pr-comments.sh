@@ -1,8 +1,9 @@
 #!/usr/bin/bash
 set -euo pipefail
 
-# Fetch unresolved PR review comments, output structured JSON.
-# Exit codes: 0=has new comments, 1=no new comments, 3=error
+# Fetch unresolved inline review comments, output structured JSON.
+# Uses GitHub GraphQL API to filter out resolved review threads.
+# Exit codes: 0=has unresolved comments, 1=no unresolved comments, 3=error
 
 URL_PATTERN='^https://github\.com/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+/pull/[0-9]+$'
 
@@ -40,14 +41,6 @@ fetch_review_comments() {
     echo "${comments_json}"
 }
 
-fetch_issue_comments() {
-    local org="$1" repo="$2" pr_number="$3"
-    local comments_json
-    comments_json=$(gh api "repos/${org}/${repo}/issues/${pr_number}/comments" --paginate \
-        | jq -s 'add // []') \
-        || die "Failed to fetch issue comments for ${org}/${repo}#${pr_number}"
-    echo "${comments_json}"
-}
 
 fetch_review_threads() {
     local org="$1" repo="$2" pr_number="$3"
@@ -58,8 +51,31 @@ fetch_review_threads() {
     echo "${review_json}"
 }
 
+fetch_resolved_comment_ids() {
+    local org="$1" repo="$2" pr_number="$3"
+    gh api graphql -f query='
+    query($owner: String!, $repo: String!, $number: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 100) {
+            nodes {
+              isResolved
+              comments(first: 100) {
+                nodes {
+                  databaseId
+                }
+              }
+            }
+          }
+        }
+      }
+    }' -f owner="${org}" -f repo="${repo}" -F number="${pr_number}" \
+        | jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved) | .comments.nodes[].databaseId]' \
+        || die "Failed to fetch resolved threads for ${org}/${repo}#${pr_number}"
+}
+
 build_output() {
-    local review_comments="$1" issue_comments="$2" review_threads="$3" addressed_ids="$4"
+    local review_comments="$1" review_threads="$2" addressed_ids="$3" resolved_ids="$4"
 
     local addressed_filter
     if [[ -n "${addressed_ids}" ]]; then
@@ -74,7 +90,11 @@ build_output() {
     local inline_block
     inline_block=$(echo "${review_comments}" | jq -c \
         --argjson addressed "${addressed_filter}" \
-        '[.[] | select(.id as $id | ($addressed | index($id)) | not) |
+        --argjson resolved "${resolved_ids}" \
+        '[.[] | select(
+            (.id as $id | ($addressed | index($id)) | not) and
+            (.id as $id | ($resolved | index($id)) | not)
+        ) |
         {
             id: .id,
             author: .user.login,
@@ -88,38 +108,18 @@ build_output() {
             in_reply_to_id: (.in_reply_to_id // null)
         }]')
 
-    local pr_level_block
-    pr_level_block=$(echo "${issue_comments}" | jq -c \
-        --argjson addressed "${addressed_filter}" \
-        '[.[] | select(.id as $id | ($addressed | index($id)) | not) |
-        {
-            id: .id,
-            author: .user.login,
-            body: .body,
-            is_coderabbit: (.user.login == "coderabbitai"),
-            created_at: .created_at
-        }]')
-
-    local inline_count pr_level_count total_count
+    local inline_count
     inline_count=$(echo "${inline_block}" | jq 'length')
-    pr_level_count=$(echo "${pr_level_block}" | jq 'length')
-    total_count=$((inline_count + pr_level_count))
 
     jq -nc \
         --argjson inline "${inline_block}" \
-        --argjson pr_level "${pr_level_block}" \
         --arg decision "${review_decision}" \
-        --argjson total "${total_count}" \
-        --argjson inline_count "${inline_count}" \
-        --argjson pr_level_count "${pr_level_count}" \
+        --argjson total "${inline_count}" \
         '{
             inline_comments: $inline,
-            pr_level_comments: $pr_level,
             review_decision: $decision,
             summary: {
-                total_new: $total,
-                inline: $inline_count,
-                pr_level: $pr_level_count
+                total_new: $total
             }
         }'
 }
@@ -134,13 +134,13 @@ main() {
     validate_url "${pr_url}"
     parse_url "${pr_url}"
 
-    local review_comments issue_comments review_threads
+    local review_comments review_threads resolved_ids
     review_comments=$(fetch_review_comments "${ORG}" "${REPO}" "${PR_NUMBER}")
-    issue_comments=$(fetch_issue_comments "${ORG}" "${REPO}" "${PR_NUMBER}")
     review_threads=$(fetch_review_threads "${ORG}" "${REPO}" "${PR_NUMBER}")
+    resolved_ids=$(fetch_resolved_comment_ids "${ORG}" "${REPO}" "${PR_NUMBER}")
 
     local output
-    output=$(build_output "${review_comments}" "${issue_comments}" "${review_threads}" "${addressed_ids}")
+    output=$(build_output "${review_comments}" "${review_threads}" "${addressed_ids}" "${resolved_ids}")
 
     echo "${output}"
 

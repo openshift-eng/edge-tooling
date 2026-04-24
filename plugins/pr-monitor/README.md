@@ -45,7 +45,7 @@ All GitHub/CI data gathering is handled by deterministic bash scripts:
 | Script | Purpose |
 |--------|---------|
 | `pr-checks.sh` | Fetch PR metadata and Prow CI job statuses |
-| `pr-comments.sh` | Fetch unresolved review comments (human + CodeRabbit) |
+| `pr-comments.sh` | Fetch unresolved inline review comments (human + CodeRabbit), filtering out resolved threads |
 | `pr-state.sh` | Read/write monitor state via env var |
 | `pr-push.sh` | Validate fork remote and push changes |
 | `pr-stop-check.sh` | Evaluate restart conditions for stop hook |
