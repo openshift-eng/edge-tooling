@@ -139,3 +139,27 @@ def find_zstream_rpms(version):
         dict: {"found": True, "nvr": "...", "build_date": "..."} or {"found": False}.
     """
     return _find_rpms(version)
+
+
+def extract_commit_from_nvr(version):
+    """Extract the git commit hash from a Brew NVR for a z-stream version.
+
+    Brew NVRs embed the source commit as a short hash prefixed with 'g',
+    e.g., microshift-4.21.11-202604201054.p0.g7f7539e.assembly.4.21.11.el9
+    contains commit 7f7539e.
+
+    Args:
+        version: e.g., "4.21.11".
+
+    Returns:
+        str or None: Short git commit hash, or None if not found.
+    """
+    rpms = find_zstream_rpms(version)
+    if not rpms.get("found"):
+        return None
+
+    nvr = rpms["nvr"]
+    match = re.search(r"\.g([0-9a-f]{7,})\.", nvr)
+    if match:
+        return match.group(1)
+    return None

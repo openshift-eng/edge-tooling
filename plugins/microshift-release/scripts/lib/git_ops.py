@@ -178,16 +178,40 @@ def find_version_tag(version):
     return tags[0]
 
 
-def commits_since(branch, since_version):
-    """Get commits on origin/<branch> since a version tag.
+def find_nearest_version_tag(minor_version, max_z):
+    """Find the nearest available version tag, searching from max_z down.
+
+    When the exact tag for a version doesn't exist (e.g., ART hasn't pushed
+    it yet), this tries previous z-stream versions until it finds one.
+
+    Args:
+        minor_version: e.g., "4.21".
+        max_z: Starting z-stream number to search from, e.g., 11.
+
+    Returns:
+        tuple[str, str] or tuple[None, None]: (version, tag) if found.
+    """
+    for z in range(max_z, -1, -1):
+        version = f"{minor_version}.{z}"
+        tag = find_version_tag(version)
+        if tag:
+            return version, tag
+    return None, None
+
+
+def commits_since(branch, since_version, since_commit=None):
+    """Get commits on origin/<branch> since a version tag or commit.
 
     Uses a tag-based range (tag..origin/branch) to count only commits
     after the specified version, rather than a time-based --since filter.
+    Falls back to since_commit if provided and no tag is found.
 
     Args:
         branch: Branch name, e.g., "release-4.21".
         since_version: Version string, e.g., "4.18.36", or None to get
             all commits on the branch.
+        since_commit: Git commit hash to use as range base when the
+            version tag is unavailable.
 
     Returns:
         list[dict]: Each dict has keys: sha, subject, date.
@@ -195,6 +219,8 @@ def commits_since(branch, since_version):
     tag = find_version_tag(since_version) if since_version else None
     if tag:
         revision = f"{tag}..origin/{branch}"
+    elif since_commit:
+        revision = f"{since_commit}..origin/{branch}"
     else:
         revision = f"origin/{branch}"
 
