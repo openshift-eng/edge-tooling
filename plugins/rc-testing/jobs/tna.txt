@@ -1,0 +1,14 @@
+periodic-ci-openshift-release-main-nightly-4.22-e2e-agent-ovn-two-node-arbiter
+periodic-ci-openshift-release-main-nightly-4.22-e2e-agent-ovn-two-node-arbiter-dualstack
+periodic-ci-openshift-release-main-nightly-4.22-e2e-agent-ovn-two-node-arbiter-ipv6
+periodic-ci-openshift-release-main-nightly-4.22-e2e-agent-ovn-two-node-arbiter-none-platform
+periodic-ci-openshift-release-main-nightly-4.22-e2e-metal-ovn-two-node-arbiter
+periodic-ci-openshift-release-main-nightly-4.22-e2e-metal-ovn-two-node-arbiter-openshift-test-private-tests
+periodic-ci-openshift-release-main-nightly-4.22-e2e-metal-ovn-two-node-arbiter-techpreview
+periodic-ci-openshift-release-main-nightly-4.22-e2e-metal-ovn-two-node-arbiter-upgrade
+periodic-ci-openshift-release-main-nightly-4.22-e2e-metal-ovn-two-node-arbiter-upgrade-day-2-workers
+periodic-ci-openshift-release-main-nightly-4.22-e2e-metal-ovn-two-node-arbiter-upgrade-workers
+periodic-ci-openshift-release-main-nightly-4.22-e2e-metal-ovn-two-node-arbiter-workload-partitioning
+cross-upgrade:periodic-ci-openshift-release-main-nightly-4.22-upgrade-from-stable-4.21-e2e-metal-ovn-two-node-arbiter-upgrade
+cross-upgrade:periodic-ci-openshift-release-main-nightly-4.22-upgrade-from-stable-4.21-e2e-metal-ovn-two-node-arbiter-upgrade-day-2-workers
+cross-upgrade:periodic-ci-openshift-release-main-nightly-4.22-upgrade-from-stable-4.21-e2e-metal-ovn-two-node-arbiter-upgrade-workers
