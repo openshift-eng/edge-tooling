@@ -1,43 +1,67 @@
-# gangway-cli-4.22
+# rc-testing
 
-RC candidate testing workflow for OCP 4.22 edge topologies (TNF, TNA, SNO 4vCPU).
+RC candidate testing plugin for OCP 4.22 edge topologies (TNF, TNA, SNO 4vCPU).
 
-Launches Prow CI jobs via [gangway-cli](https://github.com/openshift-eng/gangway-cli), tracks results, and reports status — per topology.
+Launches Prow CI jobs via [gangway-cli](https://github.com/openshift-eng/gangway-cli), tracks results, investigates failures, and reports to Jira — per topology.
 
-## Prerequisites
+## Setup
 
-- `gangway-cli` binary built at `~/Projects/gangway-cli/gangway-cli`
-- `MY_APPCI_TOKEN` environment variable set (get from [app.ci](https://console-openshift-console.apps.ci.l2s4.p1.openshiftapps.com))
-- `jq`, `curl`, `python3`
+### 1. Build gangway-cli
+
+[gangway-cli](https://github.com/openshift-eng/gangway-cli) is a Go CLI that submits jobs to the Prow Gangway API. It takes `--initial` and `--latest` release images, a `--job-name`, and writes tracking JSONs that `status.sh` reads.
+
+```bash
+git clone git@github.com:openshift-eng/gangway-cli.git ~/Projects/gangway-cli
+cd ~/Projects/gangway-cli
+go build .    # produces ./gangway-cli binary
+```
+
+Requires Go 1.20+.
+
+### 2. Get your app.ci token
+
+1. Log in to [app.ci console](https://console-openshift-console.apps.ci.l2s4.p1.openshiftapps.com)
+2. Click your username (top right) → **Copy login command** → **Display Token**
+3. Copy the token and export it:
+
+```bash
+export MY_APPCI_TOKEN="sha256~..."
+```
+
+### 3. System dependencies
+
+- `jq` — JSON parsing (status output, quay.io tag verification)
+- `curl` — API calls (Gangway, quay.io, GCS artifacts)
+- `python3` — Sippy URL encoding, junit XML parsing for `--logs`
 
 ## Quick start
 
 ```bash
 # List available TNF jobs
-./launch.sh tnf --list
+scripts/launch.sh tnf --list
 
 # Refresh job list from Sippy
-./launch.sh tnf --refresh
+scripts/launch.sh tnf --refresh
 
 # Launch all TNF jobs against an RC
-./launch.sh tnf 4.22.0-rc.0 --job all
+scripts/launch.sh tnf 4.22.0-rc.0 --job all
 
 # Launch specific jobs by number, list, or pattern
-./launch.sh tnf 4.22.0-rc.0 --job 3
-./launch.sh tnf 4.22.0-rc.0 --job 3,7,12
-./launch.sh tnf 4.22.0-rc.0 --job recovery
+scripts/launch.sh tnf 4.22.0-rc.0 --job 3
+scripts/launch.sh tnf 4.22.0-rc.0 --job 3,7,12
+scripts/launch.sh tnf 4.22.0-rc.0 --job recovery
 
 # Launch TNA jobs (cross-upgrade jobs need --initial for the source version)
-./launch.sh tna 4.22.0-rc.0 --job all --initial 4.21.0
+scripts/launch.sh tna 4.22.0-rc.0 --job all --initial 4.21.0
 
 # Preview without launching
-./launch.sh tnf 4.22.0-rc.0 --job all --dry-run
+scripts/launch.sh tnf 4.22.0-rc.0 --job all --dry-run
 
 # Check status
-./status.sh tnf                    # Table view
-./status.sh tnf --json             # Structured JSON
-./status.sh tnf --failed --logs    # Failures with root cause
-./status.sh tnf --report           # Jira-ready markdown
+scripts/status.sh tnf                    # Table view
+scripts/status.sh tnf --json             # Structured JSON
+scripts/status.sh tnf --failed --logs    # Failures with root cause
+scripts/status.sh tnf --report           # Jira-ready markdown
 ```
 
 Version tags are expanded automatically: `4.22.0-rc.0` becomes `quay.io/openshift-release-dev/ocp-release:4.22.0-rc.0-x86_64`.
@@ -45,27 +69,32 @@ Version tags are expanded automatically: `4.22.0-rc.0` becomes `quay.io/openshif
 ## Directory layout
 
 ```
-gangway-cli-4.22/
+rc-testing/
 ├── jobs/
-│   ├── tnf.txt          # TNF periodic jobs
-│   ├── tna.txt          # TNA periodic jobs (cross-upgrade prefixed)
-│   └── sno-4vcpu.txt    # SNO 4vCPU periodic jobs
-├── launch.sh            # Unified launcher
-├── status.sh            # Status checker, log fetcher, Jira reporter
-└── runs/                # Tracking output (created at launch time)
-    └── <date>/
-        ├── config.env   # Release image, timestamp
-        ├── tnf/         # One JSON per launched job
-        ├── tna/
-        └── sno-4vcpu/
+│   ├── tnf.txt              # TNF periodic jobs
+│   ├── tna.txt              # TNA periodic jobs (cross-upgrade prefixed)
+│   └── sno-4vcpu.txt        # SNO 4vCPU periodic jobs
+├── scripts/
+│   ├── launch.sh            # Unified launcher (wraps gangway-cli)
+│   └── status.sh            # Status, logs, and Jira reporting
+├── skills/
+│   └── rc-test/
+│       └── SKILL.md         # Claude Code skill definition
+├── runs/                    # Tracking output (created at launch time)
+│   └── <date>/
+│       ├── config.env       # Release image, timestamp
+│       ├── tnf/             # One JSON per launched job
+│       ├── tna/
+│       └── sno-4vcpu/
+└── README.md
 ```
 
 ## launch.sh
 
 ```
-Usage: ./launch.sh <topology> <version> --job <selector> [options]
-       ./launch.sh <topology> --list
-       ./launch.sh <topology> --refresh
+Usage: scripts/launch.sh <topology> <version> --job <selector> [options]
+       scripts/launch.sh <topology> --list
+       scripts/launch.sh <topology> --refresh
 ```
 
 | Flag | Description |
@@ -91,9 +120,9 @@ Before launching, the script verifies:
 Each `jobs/<topology>.txt` file lists one Prow job name per line. Use `--refresh` to update from Sippy:
 
 ```bash
-./launch.sh tnf --refresh        # Fetches nightly jobs matching "two-node-fencing"
-./launch.sh tna --refresh        # Fetches nightly jobs matching "two-node-arbiter"
-./launch.sh sno-4vcpu --refresh  # Fetches nightly jobs matching "-4vcpu"
+scripts/launch.sh tnf --refresh        # Fetches nightly jobs matching "two-node-fencing"
+scripts/launch.sh tna --refresh        # Fetches nightly jobs matching "two-node-arbiter"
+scripts/launch.sh sno-4vcpu --refresh  # Fetches nightly jobs matching "-4vcpu"
 ```
 
 Cross-version upgrade jobs (those with `upgrade-from-stable` in the name) are automatically prefixed with `cross-upgrade:` during refresh. These jobs require `--initial` to set a different source version.
@@ -113,7 +142,7 @@ Jobs are launched sequentially with a 10-second delay between each to avoid rate
 ## status.sh
 
 ```
-Usage: ./status.sh [topology] [--run <name>] [--json] [--failed] [--logs] [--report]
+Usage: scripts/status.sh [topology] [--run <name>] [--json] [--failed] [--logs] [--report]
 ```
 
 | Flag | Description |
@@ -184,15 +213,25 @@ Flags combine: `--report --failed` gives a Jira table of only failures.
 | TNA | [OCPEDGE-2593](https://redhat.atlassian.net/browse/OCPEDGE-2593) | 14 |
 | SNO 4vCPU | [OCPEDGE-2594](https://redhat.atlassian.net/browse/OCPEDGE-2594) | 4 |
 
-## Agentic workflow
+## Claude Code skill
 
-This directory is designed to be driven by Claude Code conversationally:
+The `/rc-test` skill enables conversational testing:
 
-1. **Refresh**: "refresh TNF jobs" → `./launch.sh tnf --refresh`
-2. **Launch**: "launch TNF against rc.0" → `./launch.sh tnf 4.22.0-rc.0 --job all`
-3. **Monitor**: "check TNF status" → `./status.sh tnf --json` → parse and summarize
-4. **Investigate**: "what failed?" → `./status.sh tnf --json --failed --logs` → failure reasons from Prow artifacts
-5. **Report**: "update the Jira ticket" → `./status.sh tnf --report` → post to OCPEDGE-2509 via MCP
-6. **Re-launch**: "re-launch the failures" → `./launch.sh tnf 4.22.0-rc.0 --job 5,12`
+```
+/rc-test launch tnf 4.22.0-rc.0
+/rc-test status tnf
+/rc-test report tna
+```
+
+Or just speak naturally — "launch TNF against rc.0", "check status", "what failed?", "update the Jira ticket".
+
+### Agentic workflow
+
+1. **Refresh**: "refresh TNF jobs" → updates job list from Sippy
+2. **Launch**: "launch TNF against rc.0" → runs all 43 jobs via gangway-cli
+3. **Monitor**: "check TNF status" → parses JSON, summarizes pass/fail
+4. **Investigate**: "what failed?" → fetches failure reasons from Prow artifacts
+5. **Report**: "update the Jira ticket" → generates markdown, posts to OCPEDGE ticket via MCP
+6. **Re-launch**: "re-launch the failures" → re-runs just the failed job numbers
 
 Each topology can be launched and tracked independently.
