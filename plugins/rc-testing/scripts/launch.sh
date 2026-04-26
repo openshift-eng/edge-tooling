@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-GANGWAY_BIN="GANGWAY_BIN="${GANGWAY_BIN:-$(command -v gangway-cli || true)}"
+GANGWAY_BIN="${GANGWAY_BIN:-$(command -v gangway-cli || true)}"
 GANGWAY_API="https://gangway-ci.apps.ci.l2s4.p1.openshiftapps.com"
 SIPPY_API="https://sippy.dptools.openshift.org/api/jobs"
 IMAGE_BASE="quay.io/openshift-release-dev/ocp-release"

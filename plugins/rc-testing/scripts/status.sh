@@ -133,7 +133,8 @@ except Exception:
 
 collect_topology() {
     local topo_dir="$1"
-    local topo_name="$(basename "$topo_dir")"
+    local topo_name
+    topo_name="$(basename "$topo_dir")"
     local results_file="$RESULTS_DIR/$topo_name.tsv"
     local json_files=("$topo_dir"/gangway_*.json)
 
