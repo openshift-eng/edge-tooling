@@ -45,6 +45,7 @@ bash ${CLAUDE_SKILL_DIR}/../../scripts/launch.sh <topology> <version> --job <sel
 - Always confirm with the user before launching without `--dry-run`
 
 **Example**: "launch TNF against rc.0" becomes:
+
 ```bash
 bash ${CLAUDE_SKILL_DIR}/../../scripts/launch.sh tnf 4.22.0-rc.0 --job all
 ```
@@ -54,16 +55,19 @@ bash ${CLAUDE_SKILL_DIR}/../../scripts/launch.sh tnf 4.22.0-rc.0 --job all
 **Triggers**: "status", "check", "how are the jobs", "results"
 
 For your own analysis, use JSON mode:
+
 ```bash
 bash ${CLAUDE_SKILL_DIR}/../../scripts/status.sh <topology> --json [--failed] [--logs]
 ```
 
 For showing the user a table:
+
 ```bash
 bash ${CLAUDE_SKILL_DIR}/../../scripts/status.sh <topology> [--failed] [--logs]
 ```
 
 Key flags:
+
 - `--json` — structured output you can parse programmatically
 - `--failed` — only show failed/aborted jobs
 - `--logs` — fetch failure reasons from Prow artifacts (junit_operator.xml)

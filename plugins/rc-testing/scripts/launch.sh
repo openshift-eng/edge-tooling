@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -81,7 +81,12 @@ while [[ $# -gt 0 ]]; do
                 echo "Error: --run requires a name argument"
                 exit 1
             fi
-            RUN_NAME="$2"; shift 2 ;;
+            RUN_NAME="$2"
+            if [[ ! "$RUN_NAME" =~ ^[A-Za-z0-9._-]+$ ]]; then
+                echo "Error: --run may contain only letters, numbers, dot, underscore, and dash"
+                exit 1
+            fi
+            shift 2 ;;
         --job)
             if [[ -z "${2:-}" || "$2" == -* ]]; then
                 echo "Error: --job requires a selector argument (all, number, list, or pattern)"
@@ -139,7 +144,7 @@ if $REFRESH; then
     # Extract nightly job names, sort, tag cross-upgrade jobs
     echo "$SIPPY_RESPONSE" \
         | jq -r '.[].name' 2>/dev/null \
-        | grep '^periodic-ci-openshift-release-main-nightly' \
+        | { grep '^periodic-ci-openshift-release-main-nightly' || true; } \
         | sort \
         | while IFS= read -r name; do
             if [[ "$name" == *"upgrade-from-stable"* ]]; then
@@ -159,7 +164,7 @@ fi
 
 if [[ ! -f "$JOB_FILE" ]]; then
     echo "Error: no job file for topology '$TOPOLOGY' at $JOB_FILE"
-    echo "Available: $(ls "$SCRIPT_DIR/jobs/" | sed 's/\.txt//' | tr '\n' ' ')"
+    echo "Available: $(find "$SCRIPT_DIR/jobs" -maxdepth 1 -type f -name '*.txt' -printf '%f\n' | sed 's/\.txt$//' | tr '\n' ' ')"
     echo ""
     echo "Run './launch.sh $TOPOLOGY --refresh' to fetch from Sippy"
     exit 1
@@ -228,7 +233,6 @@ if ! $DRY_RUN; then
     echo ""
 fi
 
-TOTAL=$(grep -cv '^\s*$' "$JOB_FILE" || true)
 LINE_NUM=0
 COUNT=0
 FAILED=0

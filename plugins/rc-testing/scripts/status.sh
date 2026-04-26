@@ -45,7 +45,12 @@ while [[ $# -gt 0 ]]; do
                 echo "Error: --run requires a name argument"
                 exit 1
             fi
-            RUN_NAME="$2"; shift 2 ;;
+            RUN_NAME="$2"
+            if [[ ! "$RUN_NAME" =~ ^[A-Za-z0-9._-]+$ ]]; then
+                echo "Error: --run may contain only letters, numbers, dot, underscore, and dash"
+                exit 1
+            fi
+            shift 2 ;;
         --json)   JSON_OUTPUT=true; shift ;;
         --failed) FAILED_ONLY=true; shift ;;
         --logs)   FETCH_LOGS=true; shift ;;

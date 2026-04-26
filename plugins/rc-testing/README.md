@@ -188,6 +188,7 @@ Exit code: `0` if all jobs passed or still running, `1` if any failed/aborted.
 ```
 
 **Jira report** (`--report`):
+
 ```markdown
 ## RC Testing: 2026-04-24 — tnf
 
@@ -216,7 +217,7 @@ Flags combine: `--report --failed` gives a Jira table of only failures.
 
 The `/rc-test` skill enables conversational testing:
 
-```
+```text
 /rc-test launch tnf 4.22.0-rc.0
 /rc-test status tnf
 /rc-test report tna
