@@ -68,7 +68,7 @@ Version tags are expanded automatically: `4.22.0-rc.0` becomes `quay.io/openshif
 
 ## Directory layout
 
-```
+```text
 rc-testing/
 ├── jobs/
 │   ├── tnf.txt              # TNF periodic jobs
@@ -91,7 +91,7 @@ rc-testing/
 
 ## launch.sh
 
-```
+```text
 Usage: scripts/launch.sh <topology> <version> --job <selector> [options]
        scripts/launch.sh <topology> --list
        scripts/launch.sh <topology> --refresh
@@ -111,6 +111,7 @@ Usage: scripts/launch.sh <topology> <version> --job <selector> [options]
 ### Pre-flight checks
 
 Before launching, the script verifies:
+
 1. `gangway-cli` binary exists and is executable (skipped for `--dry-run`)
 2. Release image tag exists on quay.io (via REST API)
 3. `MY_APPCI_TOKEN` is set and accepted by the Gangway API (skipped for `--dry-run`)
@@ -126,7 +127,7 @@ scripts/launch.sh tna --refresh        # Fetches nightly jobs matching "two-node
 
 Cross-version upgrade jobs (those with `upgrade-from-stable` in the name) are automatically prefixed with `cross-upgrade:` during refresh. These jobs require `--initial` to set a different source version.
 
-```
+```text
 # Regular job — both --initial and --latest use the release image
 periodic-ci-openshift-release-main-nightly-4.22-e2e-metal-ovn-two-node-fencing
 
@@ -140,7 +141,7 @@ Jobs are launched sequentially with a 10-second delay between each to avoid rate
 
 ## status.sh
 
-```
+```text
 Usage: scripts/status.sh [topology] [--run <name>] [--json] [--failed] [--logs] [--report]
 ```
 
@@ -158,7 +159,8 @@ Exit code: `0` if all jobs passed or still running, `1` if any failed/aborted.
 ### Output modes
 
 **Table** (default):
-```
+
+```text
 --- tnf ---
 #   Status       Job                                                             URL
     -------------------------------------------------------------------------------------------------------------------
@@ -171,6 +173,7 @@ Exit code: `0` if all jobs passed or still running, `1` if any failed/aborted.
 ```
 
 **JSON** (`--json`):
+
 ```json
 {
   "run": "2026-04-24",
