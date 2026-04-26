@@ -98,7 +98,7 @@ done
 if ! $DRY_RUN; then
     if [[ ! -x "$GANGWAY_BIN" ]]; then
         echo "Error: gangway-cli not found or not executable at $GANGWAY_BIN"
-        echo "Build it: cd ~/Projects/gangway-cli && go build -o gangway-cli ."
+        echo "Set GANGWAY_BIN or ensure gangway-cli is in PATH."
         exit 1
     fi
 fi
