@@ -1,6 +1,6 @@
 # rc-testing
 
-RC candidate testing plugin for OCP 4.22 edge topologies (TNF, TNA, SNO 4vCPU).
+Release candidate testing plugin for OCP edge topologies (TNF, TNA, SNO).
 
 Launches Prow CI jobs via [gangway-cli](https://github.com/openshift-eng/gangway-cli), tracks results, investigates failures, and reports to Jira — per topology.
 
@@ -73,7 +73,7 @@ rc-testing/
 ├── jobs/
 │   ├── tnf.txt              # TNF periodic jobs
 │   ├── tna.txt              # TNA periodic jobs (cross-upgrade prefixed)
-│   └── sno-4vcpu.txt        # SNO 4vCPU periodic jobs
+│   └── sno.txt        # SNO periodic jobs
 ├── scripts/
 │   ├── launch.sh            # Unified launcher (wraps gangway-cli)
 │   └── status.sh            # Status, logs, and Jira reporting
@@ -85,7 +85,7 @@ rc-testing/
 │       ├── config.env       # Release image, timestamp
 │       ├── tnf/             # One JSON per launched job
 │       ├── tna/
-│       └── sno-4vcpu/
+│       └── sno/
 └── README.md
 ```
 
@@ -99,7 +99,7 @@ Usage: scripts/launch.sh <topology> <version> --job <selector> [options]
 
 | Flag | Description |
 |------|-------------|
-| `<topology>` | `tnf`, `tna`, or `sno-4vcpu` |
+| `<topology>` | `tnf`, `tna`, or `sno` |
 | `<version>` | Version tag (e.g., `4.22.0-rc.0`) — not required for `--list` or `--refresh` |
 | `--job <selector>` | **Required.** `all`, number (`3`), list (`3,7,12`), or pattern (`recovery`) |
 | `--list` | List available jobs (numbered) and exit |
@@ -122,7 +122,6 @@ Each `jobs/<topology>.txt` file lists one Prow job name per line. Use `--refresh
 ```bash
 scripts/launch.sh tnf --refresh        # Fetches nightly jobs matching "two-node-fencing"
 scripts/launch.sh tna --refresh        # Fetches nightly jobs matching "two-node-arbiter"
-scripts/launch.sh sno-4vcpu --refresh  # Fetches nightly jobs matching "-4vcpu"
 ```
 
 Cross-version upgrade jobs (those with `upgrade-from-stable` in the name) are automatically prefixed with `cross-upgrade:` during refresh. These jobs require `--initial` to set a different source version.
@@ -147,7 +146,7 @@ Usage: scripts/status.sh [topology] [--run <name>] [--json] [--failed] [--logs] 
 
 | Flag | Description |
 |------|-------------|
-| `[topology]` | `tnf`, `tna`, or `sno-4vcpu` (omit for all topologies) |
+| `[topology]` | `tnf`, `tna`, or `sno` (omit for all topologies) |
 | `--json` | Structured JSON output (for agentic consumption) |
 | `--failed` | Show only failed/aborted jobs |
 | `--logs` | Fetch failure reasons from Prow artifacts (`junit_operator.xml`) |
@@ -211,7 +210,7 @@ Flags combine: `--report --failed` gives a Jira table of only failures.
 |----------|--------|------|
 | TNF | [OCPEDGE-2509](https://redhat.atlassian.net/browse/OCPEDGE-2509) | 43 |
 | TNA | [OCPEDGE-2593](https://redhat.atlassian.net/browse/OCPEDGE-2593) | 14 |
-| SNO 4vCPU | [OCPEDGE-2594](https://redhat.atlassian.net/browse/OCPEDGE-2594) | 4 |
+| SNO | [OCPEDGE-2594](https://redhat.atlassian.net/browse/OCPEDGE-2594) | 4 |
 
 ## Claude Code skill
 

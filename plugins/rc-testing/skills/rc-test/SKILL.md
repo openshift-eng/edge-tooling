@@ -1,9 +1,9 @@
 ---
 name: rc-test
-description: RC candidate testing for OCP edge topologies (TNF, TNA, SNO 4vCPU). Launch Prow CI jobs, monitor status, investigate failures, and report results to Jira.
+description: RC candidate testing for OCP edge topologies (TNF, TNA, SNO). Launch Prow CI jobs, monitor status, investigate failures, and report results to Jira.
 allowed-tools: Bash(bash *) Bash(cd *) Read
 arguments: [action]
-argument-hint: <action> [args...] — actions: launch, status, list, refresh, report
+argument-hint: <action> [args...] — actions: launch, status, list, refresh, report, investigate
 ---
 
 # RC Candidate Testing
@@ -22,7 +22,7 @@ Parse `$ARGUMENTS` to determine the action and arguments. The user may phrase re
 bash ${CLAUDE_SKILL_DIR}/../../scripts/launch.sh <topology> --list
 ```
 
-Topologies: `tnf`, `tna`, `sno-4vcpu`
+Topologies: `tnf`, `tna`, `sno`
 
 ### refresh — Update job list from Sippy
 
@@ -84,7 +84,7 @@ This outputs Jira-ready markdown. Post it to the appropriate ticket using the Ji
 |----------|-------------|
 | TNF | OCPEDGE-2509 |
 | TNA | OCPEDGE-2593 |
-| SNO 4vCPU | OCPEDGE-2594 |
+| SNO | OCPEDGE-2594 |
 
 ### investigate — Dig into failures
 

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-GANGWAY_BIN="/home/dhensel/Projects/gangway-cli/gangway-cli"
+GANGWAY_BIN="GANGWAY_BIN="${GANGWAY_BIN:-$(command -v gangway-cli || true)}"
 GANGWAY_API="https://gangway-ci.apps.ci.l2s4.p1.openshiftapps.com"
 SIPPY_API="https://sippy.dptools.openshift.org/api/jobs"
 IMAGE_BASE="quay.io/openshift-release-dev/ocp-release"
@@ -14,7 +14,7 @@ OCP_RELEASE="4.22"
 declare -A SIPPY_FILTER=(
     [tnf]="two-node-fencing"
     [tna]="two-node-arbiter"
-    [sno-4vcpu]="-4vcpu"
+    [sno]="-4vcpu"
 )
 
 to_image() {
@@ -26,7 +26,7 @@ usage() {
     echo "Usage: $0 <topology> <version> [options]"
     echo "       $0 <topology> --list"
     echo ""
-    echo "Topologies: tnf, tna, sno-4vcpu"
+    echo "Topologies: tnf, tna, sno"
     echo ""
     echo "Options:"
     echo "  --list              List available jobs (numbered) and exit (version not required)"
@@ -39,7 +39,6 @@ usage() {
     echo "Examples:"
     echo "  $0 tna --list                                # list TNA jobs"
     echo "  $0 tna --refresh                             # update TNA job list from Sippy"
-    echo "  $0 tnf 4.22.0-rc.0                          # launch all TNF jobs"
     echo "  $0 tnf 4.22.0-rc.0 --job all                 # launch all jobs"
     echo "  $0 tnf 4.22.0-rc.0 --job 3                  # launch job #3 only"
     echo "  $0 tnf 4.22.0-rc.0 --job 3,7,12             # launch jobs 3, 7, and 12"
@@ -71,9 +70,24 @@ JOB_FILTER=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --initial) INITIAL_IMAGE=$(to_image "$2"); shift 2 ;;
-        --run)     RUN_NAME="$1-$2"; shift 2 ;;
-        --job)     JOB_FILTER="$2"; shift 2 ;;
+        --initial)
+            if [[ -z "${2:-}" || "$2" == -* ]]; then
+                echo "Error: --initial requires a version argument"
+                exit 1
+            fi
+            INITIAL_IMAGE=$(to_image "$2"); shift 2 ;;
+        --run)
+            if [[ -z "${2:-}" || "$2" == -* ]]; then
+                echo "Error: --run requires a name argument"
+                exit 1
+            fi
+            RUN_NAME="$2"; shift 2 ;;
+        --job)
+            if [[ -z "${2:-}" || "$2" == -* ]]; then
+                echo "Error: --job requires a selector argument (all, number, list, or pattern)"
+                exit 1
+            fi
+            JOB_FILTER="$2"; shift 2 ;;
         --list)    LIST_ONLY=true; shift ;;
         --refresh) REFRESH=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
@@ -92,7 +106,8 @@ fi
 if [[ -n "$RELEASE_IMAGE" ]]; then
     RELEASE_TAG="${RELEASE_IMAGE#*:}"
     echo "Verifying image tag: $RELEASE_TAG"
-    TAG_EXISTS=$(curl -s "https://quay.io/api/v1/repository/openshift-release-dev/ocp-release/tag/?specificTag=${RELEASE_TAG}" \
+    TAG_EXISTS=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 20 \
+         "https://quay.io/api/v1/repository/openshift-release-dev/ocp-release/tag/?specificTag=${RELEASE_TAG}" \
         | jq -r '.tags | length' 2>/dev/null || echo "unknown")
     if [[ "$TAG_EXISTS" == "0" ]]; then
         echo "Error: tag '$RELEASE_TAG' not found on quay.io"
@@ -109,15 +124,17 @@ JOB_FILE="$SCRIPT_DIR/jobs/${TOPOLOGY}.txt"
 if $REFRESH; then
     SEARCH_TERM="${SIPPY_FILTER[$TOPOLOGY]:-}"
     if [[ -z "$SEARCH_TERM" ]]; then
-        echo "Error: no Sippy filter configured for topology '$TOPOLOGY'"
-        exit 1
+        echo "No Sippy filter configured for topology '$TOPOLOGY'."
+        echo "Manage $JOB_FILE manually (one job name per line)."
+        exit 0
     fi
 
     SIPPY_FILTER_JSON=$(printf '{"items":[{"columnField":"name","operatorValue":"contains","value":"%s"}],"linkOperator":"and"}' "$SEARCH_TERM")
-    ENCODED_FILTER=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$SIPPY_FILTER_JSON'))")
+    ENCODED_FILTER=$(printf '%s' "$SIPPY_FILTER_JSON" | jq -sRr '@uri')
 
     echo "Fetching $TOPOLOGY jobs from Sippy (release $OCP_RELEASE, filter: $SEARCH_TERM)..."
-    SIPPY_RESPONSE=$(curl -s "${SIPPY_API}?release=${OCP_RELEASE}&filter=${ENCODED_FILTER}&period=default&sortField=name&sort=asc")
+    SIPPY_RESPONSE=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 30 \
+         "${SIPPY_API}?release=${OCP_RELEASE}&filter=${ENCODED_FILTER}&period=default&sortField=name&sort=asc")
 
     # Extract nightly job names, sort, tag cross-upgrade jobs
     echo "$SIPPY_RESPONSE" \
@@ -197,7 +214,7 @@ fi
 
 if ! $DRY_RUN; then
     echo "Verifying token against Gangway API..."
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+    HTTP_CODE=$(curl --silent --show-error --connect-timeout 5 --max-time 20 -o /dev/null -w "%{http_code}" \
         -H "Authorization: Bearer ${MY_APPCI_TOKEN}" \
         "${GANGWAY_API}/v1/executions/" 2>/dev/null || echo "000")
     if [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "403" ]]; then

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -40,12 +40,18 @@ REPORT_MODE=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --run)    RUN_NAME="$2"; shift 2 ;;
+        --run)
+            if [[ -z "${2:-}" || "$2" == -* ]]; then
+                echo "Error: --run requires a name argument"
+                exit 1
+            fi
+            RUN_NAME="$2"; shift 2 ;;
         --json)   JSON_OUTPUT=true; shift ;;
         --failed) FAILED_ONLY=true; shift ;;
         --logs)   FETCH_LOGS=true; shift ;;
         --report) REPORT_MODE=true; FETCH_LOGS=true; shift ;;
         --help)   usage ;;
+        -*)       echo "Unknown option: $1"; usage ;;
         *)        TOPOLOGY="$1"; shift ;;
     esac
 done
@@ -54,7 +60,10 @@ done
 if [[ -n "$RUN_NAME" ]]; then
     RUN_DIR="$SCRIPT_DIR/runs/$RUN_NAME"
 else
-    RUN_DIR=$(ls -dt "$SCRIPT_DIR/runs/"*/ 2>/dev/null | head -1)
+    RUN_DIR=$(find "$SCRIPT_DIR/runs" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null \
+        | sort -nr \
+        | head -1 \
+        | cut -d' ' -f2- || true)
 fi
 
 if [[ -z "$RUN_DIR" || ! -d "$RUN_DIR" ]]; then
