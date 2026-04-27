@@ -27,6 +27,27 @@ reviews:
         Review all changes against the guidelines in CONTRIBUTING.md. Flag any violations as severity level "medium".
         When a finding is a violation of CONTRIBUTING.md, explicitly state that in the comment (e.g., "Per CONTRIBUTING.md: ...") and quote or reference the specific guideline being violated.
 
+    - path: ".githooks/**"
+      instructions: |
+        Pre-commit hooks are high-blast-radius — they affect every contributor on every commit.
+        Challenge any change that:
+        - Adds new verification steps beyond lint/secrets (per CONTRIBUTING.md "Review Principles")
+        - Could block commits unrelated to the changed subsystem
+        - Adds `set -euo pipefail` to an existing hook without explaining why failures were previously silent
+        - Introduces dependencies on scripts outside .githooks/
+        Flag as severity "high" if the PR description does not justify why this check must be pre-commit rather than CI or CodeRabbit.
+
+    - path: ".claude/skills/**"
+      instructions: |
+        The .claude/skills/ directory is high-blast-radius — skills here are loaded for every contributor.
+        Challenge any change that:
+        - Adds files that are symlinks, path references, or thin wrappers pointing to content elsewhere (e.g., plugins/)
+        - Introduces skills that require a sync script or external process to stay current
+        - Duplicates content that already exists in another location in the repo
+        - Adds derived state that can drift from its source
+        Flag as severity "high" if the skill could be better served as a plugin under plugins/.
+        Ask the PR author: "Would this be better served as a plugin skill under plugins/?"
+
   tools:
     shellcheck:
       enabled: true

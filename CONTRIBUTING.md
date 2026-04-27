@@ -220,6 +220,28 @@ Plugins extend Claude Code capabilities for the team. For plugin contribution de
 - [Plugin Contributing Guide](plugins/docs/CONTRIBUTING.md)
 - [Plugin Development Guide](plugins/docs/DEVELOPMENT.md)
 
+## Review Principles
+
+These principles apply to all PRs. CodeRabbit enforces them automatically; human reviewers should verify them as well.
+
+### Don't duplicate platform capabilities
+
+Before adding custom tooling, verify the platform doesn't already handle it. Don't build sync scripts, symlink managers, or wrapper layers when the functionality can live directly in a plugin. If you're unsure whether a capability exists, check the [Claude Code docs](https://docs.anthropic.com/en/docs/claude-code) or ask in the PR description.
+
+### Pre-commit hooks are high-blast-radius
+
+Changes to `.githooks/` affect every contributor on every commit. Pre-commit hooks must:
+
+- **Stay minimal** — only enforce checks that prevent broken commits (lint, secrets)
+- **Never block unrelated work** — a hook failure must be fixable by the commit author without understanding unrelated subsystems
+- **Fail fast with clear messages** — no silent failures, no ambiguous error output
+
+Adding new verification steps to pre-commit hooks requires explicit justification in the PR description explaining why the check can't be a CI job, a CodeRabbit rule, or a session-start hook instead.
+
+### Single source of truth — no derived state
+
+Don't maintain two copies of the same data with a sync script between them. If information lives in one place (e.g., plugin skill definitions), consume it from that location rather than syncing it elsewhere. Sync scripts create drift, add maintenance burden, and break when contributors skip steps.
+
 ## Review Process
 
 - All PRs require review from `edge-reviewers` (see `OWNERS_ALIASES`)
@@ -232,3 +254,6 @@ Plugins extend Claude Code capabilities for the team. For plugin contribution de
   - No duplication of existing components in this repo
   - Validation logic (regex, parsers) has test coverage
   - Check is placed at the correct lifecycle stage
+  - No sync scripts or derived state — single source of truth
+  - Pre-commit hook changes are minimal and justified
+  - New scripts include justification in the PR description
