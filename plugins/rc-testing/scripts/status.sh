@@ -3,6 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GCSWEB_BASE="gcsweb-ci.apps.ci.l2s4.p1.openshiftapps.com/gcs"
+SIPPY_API="https://sippy.dptools.openshift.org/api/jobs"
+
+ORIGINAL_ARGS=("$@")
 
 usage() {
     echo "Usage: $0 [topology] [--run <name>] [--json] [--failed] [--logs] [--report]"
@@ -14,7 +17,9 @@ usage() {
     echo "  --json      Output structured JSON (for agentic consumption)"
     echo "  --failed    Show only failed/aborted jobs"
     echo "  --logs      Fetch failure reasons from Prow artifacts (for FAIL/ABORT jobs)"
+    echo "  --classify  Classify failures using Sippy nightly pass rates (implies --logs)"
     echo "  --report    Output Jira-ready markdown (implies --logs)"
+    echo "  --watch [N] Poll every N seconds (default 120) until all jobs complete"
     echo "  --run NAME  Use a specific run directory (defaults to latest)"
     echo ""
     echo "Examples:"
@@ -24,8 +29,11 @@ usage() {
     echo "  $0 tnf --json   # JSON output for agentic workflow"
     echo "  $0 --failed     # Only show failures across all topologies"
     echo "  $0 tnf --failed --logs   # Failures with root cause"
+    echo "  $0 tnf --failed --classify  # Failures classified against nightly history"
     echo "  $0 tnf --report          # Jira-ready markdown for all jobs"
     echo "  $0 tnf --report --failed # Jira-ready markdown, failures only"
+    echo "  $0 tnf --watch           # Poll every 120s until all jobs complete"
+    echo "  $0 tnf --watch 60        # Poll every 60s"
     echo ""
     echo "Exit code: 0 if all jobs passed or still running, 1 if any failed/aborted"
     exit 1
@@ -36,7 +44,10 @@ RUN_NAME=""
 JSON_OUTPUT=false
 FAILED_ONLY=false
 FETCH_LOGS=false
+CLASSIFY=false
 REPORT_MODE=false
+WATCH_MODE=false
+WATCH_INTERVAL=120
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -54,12 +65,50 @@ while [[ $# -gt 0 ]]; do
         --json)   JSON_OUTPUT=true; shift ;;
         --failed) FAILED_ONLY=true; shift ;;
         --logs)   FETCH_LOGS=true; shift ;;
+        --classify) CLASSIFY=true; FETCH_LOGS=true; shift ;;
         --report) REPORT_MODE=true; FETCH_LOGS=true; shift ;;
+        --watch)
+            WATCH_MODE=true
+            if [[ -n "${2:-}" && "$2" =~ ^[0-9]+$ ]]; then
+                WATCH_INTERVAL="$2"; shift
+            fi
+            shift ;;
         --help)   usage ;;
         -*)       echo "Unknown option: $1"; usage ;;
         *)        TOPOLOGY="$1"; shift ;;
     esac
 done
+
+# Watch mode: re-exec without --watch in a loop
+if $WATCH_MODE; then
+    PASS_ARGS=()
+    prev_was_watch=false
+    for arg in "${ORIGINAL_ARGS[@]}"; do
+        if [[ "$arg" == "--watch" ]]; then
+            prev_was_watch=true
+            continue
+        fi
+        if $prev_was_watch && [[ "$arg" =~ ^[0-9]+$ ]]; then
+            prev_was_watch=false
+            continue
+        fi
+        prev_was_watch=false
+        PASS_ARGS+=("$arg")
+    done
+
+    while true; do
+        "$0" "${PASS_ARGS[@]}" || true
+        pending=$("$0" "${PASS_ARGS[@]}" --json 2>/dev/null \
+            | jq '[.topologies[].pending] | add // 0' 2>/dev/null || echo 0)
+        if [[ "$pending" -eq 0 ]]; then
+            echo "All jobs complete."
+            break
+        fi
+        echo "--- Next check in ${WATCH_INTERVAL}s (Ctrl-C to stop) ---"
+        sleep "$WATCH_INTERVAL"
+    done
+    exit 0
+fi
 
 # Find run directory
 if [[ -n "$RUN_NAME" ]]; then
@@ -79,18 +128,22 @@ fi
 RUN_DIR="${RUN_DIR%/}"
 RUN_LABEL="$(basename "$RUN_DIR")"
 
+load_config() {
+    local config_file="$1"
+    [[ ! -f "$config_file" ]] && return
+    RELEASE_IMAGE=$(grep -oP 'RELEASE_IMAGE_LATEST=\K.*' "$config_file" 2>/dev/null || true)
+    LAUNCHED=$(grep -oP 'LAUNCHED=\K.*' "$config_file" 2>/dev/null || true)
+}
+
 RELEASE_IMAGE=""
 LAUNCHED=""
-if [[ -f "$RUN_DIR/config.env" ]]; then
-    RELEASE_IMAGE=$(grep -oP 'RELEASE_IMAGE_LATEST=\K.*' "$RUN_DIR/config.env" 2>/dev/null || true)
-    LAUNCHED=$(grep -oP 'LAUNCHED=\K.*' "$RUN_DIR/config.env" 2>/dev/null || true)
-fi
+load_config "$RUN_DIR/config.env"
 
 HAS_FAILURES=false
 RESULTS_DIR=$(mktemp -d)
 trap 'rm -rf "$RESULTS_DIR"' EXIT
 
-# TSV columns: num, status, job_name, url, failure_reason
+# TSV columns: num, status, job_name, url, failure_reason, classification, pass_pct
 
 fetch_failure_reason() {
     local url="$1"
@@ -136,6 +189,44 @@ except Exception:
     echo "${reason:-unable to fetch logs}"
 }
 
+classify_job() {
+    local job_name="$1"
+    local release="$2"
+
+    local filter_json
+    filter_json=$(printf '{"items":[{"columnField":"name","operatorValue":"equals","value":"%s"}]}' "$job_name")
+    local encoded_filter
+    encoded_filter=$(printf '%s' "$filter_json" | jq -sRr '@uri')
+
+    local response
+    response=$(curl -s --max-time 10 \
+        "${SIPPY_API}?release=${release}&filter=${encoded_filter}" 2>/dev/null) || true
+
+    if [[ -z "$response" ]]; then
+        echo "UNKNOWN|0|0"
+        return
+    fi
+
+    local pass_pct runs
+    pass_pct=$(echo "$response" | jq -r '.[0].current_pass_percentage // 0' 2>/dev/null || echo "0")
+    runs=$(echo "$response" | jq -r '.[0].current_runs // 0' 2>/dev/null || echo "0")
+
+    local classification
+    if [[ "$runs" == "0" || "$runs" == "null" ]]; then
+        classification="NO-DATA"
+    elif [[ "$pass_pct" == "0" ]]; then
+        classification="KNOWN-FAIL"
+    elif (( $(echo "$pass_pct < 50" | bc -l) )); then
+        classification="FLAKY"
+    elif (( $(echo "$pass_pct < 85" | bc -l) )); then
+        classification="SOMETIMES-FAILS"
+    else
+        classification="REGRESSION"
+    fi
+
+    echo "${classification}|${pass_pct}|${runs}"
+}
+
 collect_topology() {
     local topo_dir="$1"
     local topo_name
@@ -175,7 +266,19 @@ collect_topology() {
             reason=$(fetch_failure_reason "$url")
         fi
 
-        printf '%d\t%s\t%s\t%s\t%s\n' "$count" "$status" "$job_name" "$url" "$reason" >> "$results_file"
+        local classification="" pass_pct=""
+        if $CLASSIFY && [[ "$status" == "FAIL" || "$status" == "ABORT" ]]; then
+            local release
+            release=$(echo "$job_name" | grep -oP 'nightly-\K[0-9]+\.[0-9]+' || true)
+            if [[ -n "$release" ]]; then
+                local classify_result
+                classify_result=$(classify_job "$job_name" "$release")
+                classification="${classify_result%%|*}"
+                pass_pct=$(echo "$classify_result" | cut -d'|' -f2)
+            fi
+        fi
+
+        printf '%d\t%s\t%s\t%s\t%s\t%s\t%s\n' "$count" "$status" "$job_name" "$url" "$reason" "$classification" "$pass_pct" >> "$results_file"
     done
 }
 
@@ -200,8 +303,14 @@ render_table() {
     echo "    $(printf '%.0s-' {1..120})"
 
     if [[ -s "$display_file" ]]; then
-        while IFS=$'\t' read -r num status job_name url reason; do
-            printf "%-3d %-12s %-80s %s\n" "$num" "$status" "$job_name" "$url"
+        while IFS=$'\t' read -r num status job_name url reason classification pass_pct; do
+            if $CLASSIFY && [[ -n "$classification" ]]; then
+                local pct_display
+                pct_display=$(printf '%.0f' "$pass_pct" 2>/dev/null || echo "?")
+                printf "%-3d %-12s %-20s %-70s %s\n" "$num" "$status" "${classification} (${pct_display}%)" "$job_name" "$url"
+            else
+                printf "%-3d %-12s %-80s %s\n" "$num" "$status" "$job_name" "$url"
+            fi
             if $FETCH_LOGS && [[ -n "$reason" ]]; then
                 printf "                 → %s\n" "$reason"
             fi
@@ -244,14 +353,22 @@ build_topology_json() {
 
     local jobs_json="[]"
     if [[ -s "$source_file" ]]; then
-        jobs_json=$(while IFS=$'\t' read -r num status job_name url reason; do
+        jobs_json=$(while IFS=$'\t' read -r num status job_name url reason classification pass_pct; do
+            local args=(--argjson num "$num" --arg status "$status" --arg job "$job_name" --arg url "$url")
+            local fields='number:$num, job:$job, status:$status, url:$url'
+
             if $FETCH_LOGS && [[ -n "$reason" ]]; then
-                jq -n --argjson num "$num" --arg status "$status" --arg job "$job_name" --arg url "$url" --arg reason "$reason" \
-                    '{number:$num, job:$job, status:$status, url:$url, failure_reason:$reason}'
-            else
-                jq -n --argjson num "$num" --arg status "$status" --arg job "$job_name" --arg url "$url" \
-                    '{number:$num, job:$job, status:$status, url:$url}'
+                args+=(--arg reason "$reason")
+                fields+=', failure_reason:$reason'
             fi
+            if $CLASSIFY && [[ -n "$classification" ]]; then
+                local pct_num
+                pct_num=$(printf '%.1f' "$pass_pct" 2>/dev/null || echo "0")
+                args+=(--arg classification "$classification" --argjson nightly_pass_rate "$pct_num")
+                fields+=', classification:$classification, nightly_pass_rate:$nightly_pass_rate'
+            fi
+
+            jq -n "${args[@]}" "{${fields}}"
         done < "$source_file" | jq -s '.')
     fi
 
@@ -281,14 +398,25 @@ render_report() {
         grep -E $'^[0-9]+\t(FAIL|ABORT)\t' "$results_file" > "$display_file" 2>/dev/null || true
     fi
 
-    echo "| # | Result | Job | Notes |"
-    echo "|---|--------|-----|-------|"
+    if $CLASSIFY; then
+        echo "| # | Result | Classification | Job | Notes |"
+        echo "|---|--------|---------------|-----|-------|"
+    else
+        echo "| # | Result | Job | Notes |"
+        echo "|---|--------|-----|-------|"
+    fi
 
     if [[ -s "$display_file" ]]; then
-        while IFS=$'\t' read -r num status job_name url reason; do
+        while IFS=$'\t' read -r num status job_name url reason classification pass_pct; do
             local job_link="[${job_name}](${url})"
             local note="${reason:-}"
-            echo "| ${num} | ${status} | ${job_link} | ${note} |"
+            if $CLASSIFY && [[ -n "$classification" ]]; then
+                local pct_display
+                pct_display=$(printf '%.0f' "$pass_pct" 2>/dev/null || echo "?")
+                echo "| ${num} | ${status} | ${classification} (${pct_display}%) | ${job_link} | ${note} |"
+            else
+                echo "| ${num} | ${status} | ${job_link} | ${note} |"
+            fi
         done < "$display_file"
     fi
 
@@ -322,6 +450,10 @@ fi
 
 # Collect results for all topologies
 for topo_name in "${TOPO_LIST[@]}"; do
+    # Per-topology config takes precedence over run-level config
+    if [[ -f "$RUN_DIR/$topo_name/config.env" ]]; then
+        load_config "$RUN_DIR/$topo_name/config.env"
+    fi
     collect_topology "$RUN_DIR/$topo_name"
 done
 

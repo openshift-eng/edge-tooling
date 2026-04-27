@@ -57,11 +57,17 @@ scripts/launch.sh tna 4.22.0-rc.0 --job all --initial 4.21.0
 # Preview without launching
 scripts/launch.sh tnf 4.22.0-rc.0 --job all --dry-run
 
+# Re-launch failed jobs from the latest run
+scripts/launch.sh tnf 4.22.0-rc.1 --relaunch-failed
+
 # Check status
 scripts/status.sh tnf                    # Table view
 scripts/status.sh tnf --json             # Structured JSON
 scripts/status.sh tnf --failed --logs    # Failures with root cause
+scripts/status.sh tnf --failed --classify # Failures classified against nightly history
 scripts/status.sh tnf --report           # Jira-ready markdown
+scripts/status.sh tnf --watch            # Poll every 120s until all jobs complete
+scripts/status.sh tnf --watch 60         # Poll every 60s
 ```
 
 Version tags are expanded automatically: `4.22.0-rc.0` becomes `quay.io/openshift-release-dev/ocp-release:4.22.0-rc.0-x86_64`.
@@ -82,8 +88,7 @@ rc-testing/
 │       └── SKILL.md         # Claude Code skill definition
 ├── runs/                    # Tracking output (created at launch time)
 │   └── <date>/
-│       ├── config.env       # Release image, timestamp
-│       ├── tnf/             # One JSON per launched job
+│       ├── tnf/             # One JSON per launched job + config.env
 │       ├── tna/
 │       └── sno/
 └── README.md
@@ -101,7 +106,8 @@ Usage: scripts/launch.sh <topology> <version> --job <selector> [options]
 |------|-------------|
 | `<topology>` | `tnf`, `tna`, or `sno` |
 | `<version>` | Version tag (e.g., `4.22.0-rc.0`) — not required for `--list` or `--refresh` |
-| `--job <selector>` | **Required.** `all`, number (`3`), list (`3,7,12`), or pattern (`recovery`) |
+| `--job <selector>` | **Required** (unless `--relaunch-failed`). `all`, number (`3`), list (`3,7,12`), or pattern (`recovery`) |
+| `--relaunch-failed` | Re-launch failed jobs from the latest run |
 | `--list` | List available jobs (numbered) and exit |
 | `--refresh` | Update job file from Sippy and exit |
 | `--initial <version>` | Set `RELEASE_IMAGE_INITIAL` for cross-upgrade jobs |
@@ -151,7 +157,9 @@ Usage: scripts/status.sh [topology] [--run <name>] [--json] [--failed] [--logs] 
 | `--json` | Structured JSON output (for agentic consumption) |
 | `--failed` | Show only failed/aborted jobs |
 | `--logs` | Fetch failure reasons from Prow artifacts (`junit_operator.xml`) |
+| `--classify` | Classify failures using Sippy nightly pass rates (implies `--logs`) |
 | `--report` | Jira-ready markdown output (implies `--logs`) |
+| `--watch [N]` | Poll every N seconds (default 120) until all jobs complete |
 | `--run <name>` | Use a specific run directory (defaults to latest) |
 
 Exit code: `0` if all jobs passed or still running, `1` if any failed/aborted.
@@ -208,6 +216,20 @@ Exit code: `0` if all jobs passed or still running, `1` if any failed/aborted.
 
 Flags combine: `--report --failed` gives a Jira table of only failures.
 
+### Failure classification (`--classify`)
+
+The `--classify` flag queries Sippy nightly pass rates for each failed job and tags it:
+
+| Pass Rate | Classification | Meaning |
+|-----------|---------------|---------|
+| No data | `NO-DATA` | Job not in Sippy (new job?) |
+| 0% | `KNOWN-FAIL` | Always failing in nightly — pre-existing |
+| < 50% | `FLAKY` | Fails more than half the time — noise |
+| 50-85% | `SOMETIMES-FAILS` | Intermittent, may or may not be RC-related |
+| >= 85% | `REGRESSION` | Usually passes but failed on RC — investigate |
+
+Works with all output modes: `--classify`, `--json --classify`, `--report --classify`.
+
 ## Jira tracking
 
 | Topology | Ticket | Jobs |
@@ -233,7 +255,7 @@ Or just speak naturally — "launch TNF against rc.0", "check status", "what fai
 1. **Refresh**: "refresh TNF jobs" → updates job list from Sippy
 2. **Launch**: "launch TNF against rc.0" → runs all 43 jobs via gangway-cli
 3. **Monitor**: "check TNF status" → parses JSON, summarizes pass/fail
-4. **Investigate**: "what failed?" → fetches failure reasons from Prow artifacts
+4. **Investigate**: "what failed?" → classifies failures against Sippy nightly history, groups by severity (regression vs known-fail vs flaky), recommends what to re-launch vs ignore
 5. **Report**: "update the Jira ticket" → generates markdown, posts to OCPEDGE ticket via MCP
 6. **Re-launch**: "re-launch the failures" → re-runs just the failed job numbers
 

@@ -41,6 +41,7 @@ bash ${CLAUDE_SKILL_DIR}/../../scripts/launch.sh <topology> <version> --job <sel
 ```
 
 - `--job` is required: `all`, a number (`3`), a list (`3,7,12`), or a pattern (`recovery`)
+- `--relaunch-failed` re-launches failed jobs from the latest run (no `--job` needed)
 - `--initial` is needed for TNA cross-upgrade jobs (e.g., `--initial 4.21.0`)
 - Always confirm with the user before launching without `--dry-run`
 
@@ -48,6 +49,12 @@ bash ${CLAUDE_SKILL_DIR}/../../scripts/launch.sh <topology> <version> --job <sel
 
 ```bash
 bash ${CLAUDE_SKILL_DIR}/../../scripts/launch.sh tnf 4.22.0-rc.0 --job all
+```
+
+**Example**: "re-launch the failures" becomes:
+
+```bash
+bash ${CLAUDE_SKILL_DIR}/../../scripts/launch.sh <topology> <version> --relaunch-failed
 ```
 
 ### status — Check job results
@@ -74,6 +81,12 @@ Key flags:
 
 After checking status, summarize: how many passed, how many failed, how many still running. If there are failures and `--logs` was used, include the failure reason for each.
 
+To watch until all jobs complete:
+
+```bash
+bash ${CLAUDE_SKILL_DIR}/../../scripts/status.sh <topology> --watch [interval]
+```
+
 ### report — Generate Jira-ready output
 
 **Triggers**: "report", "update jira", "post to jira", "update the ticket"
@@ -94,9 +107,23 @@ This outputs Jira-ready markdown. Post it to the appropriate ticket using the Ji
 
 **Triggers**: "what failed", "investigate", "why did it fail"
 
-1. Run `status.sh <topology> --json --failed --logs` to get failures with reasons
-2. Summarize each failure: job name, job number, and root cause
-3. Offer next steps: "Want me to re-launch these, or update the Jira ticket?"
+```bash
+bash ${CLAUDE_SKILL_DIR}/../../scripts/status.sh <topology> --json --failed --classify
+```
+
+1. Run `status.sh <topology> --json --failed --classify` to get failures with classification
+2. Group findings by classification:
+   - **REGRESSION** (>= 85% nightly pass rate): Needs investigation — usually passes but failed on RC
+   - **SOMETIMES-FAILS** (50-85%): Intermittent — may or may not be RC-related
+   - **FLAKY** (< 50%): Fails often in nightly — likely noise, not RC-specific
+   - **KNOWN-FAIL** (0%): Always failing — pre-existing, don't block RC
+   - **NO-DATA**: New job not yet tracked by Sippy — check manually
+3. **Cross-topology correlation**: If multiple topologies were tested, run `status.sh --json --failed --classify` (no topology filter) and look for patterns:
+   - Same failure reason across topologies → infra issue, not topology-specific
+   - Same job step failing everywhere (e.g., all `devscripts-setup` failures) → environment problem
+   - Failure only in one topology → likely topology-specific, worth investigating
+4. For REGRESSION failures, investigate root cause using the failure_reason
+5. Offer next steps: "Want me to re-launch the regressions, or update the Jira ticket?"
 
 ## Workflow
 
@@ -104,10 +131,10 @@ The typical flow for an RC test cycle:
 
 1. **Refresh** job lists from Sippy (if needed)
 2. **Launch** jobs against the RC build
-3. **Monitor** status periodically until all jobs complete
-4. **Investigate** any failures
+3. **Monitor** status with `--watch` until all jobs complete
+4. **Investigate** failures with `--classify` for cross-topology patterns
 5. **Report** results to Jira
-6. **Re-launch** failed jobs if they were infra failures
+6. **Re-launch** failed jobs with `--relaunch-failed`
 
 ## Important Notes
 
@@ -115,4 +142,4 @@ The typical flow for an RC test cycle:
 - Version tags are short form: `4.22.0-rc.0` (auto-expanded to full quay.io URL)
 - Exit code from status.sh: 0 = all pass or running, 1 = any failures
 - Cross-upgrade jobs (TNA only) require `--initial` to specify the source version
-- When re-launching failed jobs, use their job numbers from the status output with `--job`
+- Use `--relaunch-failed` to re-launch failed jobs, or `--job <numbers>` for specific jobs

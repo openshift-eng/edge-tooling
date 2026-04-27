@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GANGWAY_BIN="${GANGWAY_BIN:-$(command -v gangway-cli || true)}"
 GANGWAY_API="https://gangway-ci.apps.ci.l2s4.p1.openshiftapps.com"
+GCSWEB_BASE="gcsweb-ci.apps.ci.l2s4.p1.openshiftapps.com/gcs"
 SIPPY_API="https://sippy.dptools.openshift.org/api/jobs"
 IMAGE_BASE="quay.io/openshift-release-dev/ocp-release"
 ARCH="x86_64"
@@ -52,6 +53,7 @@ usage() {
     echo "  --list              List available jobs (numbered) and exit (version not required)"
     echo "  --refresh           Update job file from Sippy and exit (auto-detects release from existing jobs)"
     echo "  --job <selector>    Launch specific jobs: all, number (3), list (3,7,12), or pattern (recovery)"
+    echo "  --relaunch-failed   Re-launch failed jobs from the latest run"
     echo "  --initial <version> Set RELEASE_IMAGE_INITIAL for cross-upgrade jobs (e.g., upgrade-from-stable-4.21)"
     echo "  --run <name>        Custom run directory name (defaults to YYYY-MM-DD)"
     echo "  --dry-run           Print what would be launched without calling gangway-cli"
@@ -65,6 +67,7 @@ usage() {
     echo "  $0 tnf 4.22.0-rc.0 --job 3,7,12             # launch jobs 3, 7, and 12"
     echo "  $0 tnf 4.22.0-rc.0 --job recovery           # launch all jobs matching 'recovery'"
     echo "  $0 tna 4.22.0-rc.0 --initial 4.21.0         # TNA cross-upgrade jobs use 4.21 as initial"
+    echo "  $0 tnf 4.22.0-rc.1 --relaunch-failed        # re-launch failures from latest run"
     echo ""
     echo "The version is expanded to: ${IMAGE_BASE}:<version>-${ARCH}"
     exit 1
@@ -87,6 +90,7 @@ RUN_NAME="$(date +%Y-%m-%d)"
 DRY_RUN=false
 LIST_ONLY=false
 REFRESH=false
+RELAUNCH_FAILED=false
 JOB_FILTER=""
 
 while [[ $# -gt 0 ]]; do
@@ -116,6 +120,7 @@ while [[ $# -gt 0 ]]; do
             JOB_FILTER="$2"; shift 2 ;;
         --list)    LIST_ONLY=true; shift ;;
         --refresh) REFRESH=true; shift ;;
+        --relaunch-failed) RELAUNCH_FAILED=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
         *) echo "Unknown option: $1"; usage ;;
     esac
@@ -203,7 +208,7 @@ if ! $LIST_ONLY && [[ -z "$RELEASE_IMAGE" ]]; then
     exit 1
 fi
 
-if ! $LIST_ONLY && ! $REFRESH && [[ -n "$RELEASE_IMAGE" ]] && [[ -z "$JOB_FILTER" ]]; then
+if ! $LIST_ONLY && ! $REFRESH && ! $RELAUNCH_FAILED && [[ -n "$RELEASE_IMAGE" ]] && [[ -z "$JOB_FILTER" ]]; then
     echo "Error: --job is required. Use --job all to launch everything, or --job <selector> to pick."
     echo "       Run './launch.sh $TOPOLOGY --list' to see available jobs."
     exit 1
@@ -227,10 +232,54 @@ if $LIST_ONLY; then
     exit 0
 fi
 
+if $RELAUNCH_FAILED; then
+    PREV_RUN_DIR=$(find "$SCRIPT_DIR/runs" -mindepth 2 -maxdepth 2 -type d -name "$TOPOLOGY" -printf '%T@ %p\n' 2>/dev/null \
+        | sort -nr | head -1 | cut -d' ' -f2- || true)
+
+    if [[ -z "$PREV_RUN_DIR" || ! -d "$PREV_RUN_DIR" ]]; then
+        echo "Error: no previous run found for '$TOPOLOGY'"
+        exit 1
+    fi
+
+    echo "Scanning previous run: $(basename "$(dirname "$PREV_RUN_DIR")")"
+
+    FAILED_NUMS=""
+    for f in "$PREV_RUN_DIR"/gangway_*.json; do
+        [[ ! -e "$f" ]] && continue
+        prev_job=$(jq -r '.[0].JobName // "unknown"' "$f" 2>/dev/null)
+        prev_url=$(jq -r '.[0].JobURL // "no-url"' "$f" 2>/dev/null)
+
+        if [[ "$prev_url" != "no-url" && "$prev_url" != "null" ]]; then
+            prev_gcs="${prev_url/prow.ci.openshift.org\/view\/gs\//${GCSWEB_BASE}/}"
+            prev_result=$(curl -s --max-time 10 "${prev_gcs}/finished.json" 2>/dev/null \
+                | jq -r '.result // "unknown"' 2>/dev/null || echo "unknown")
+            if [[ "$prev_result" == "FAILURE" || "$prev_result" == "ABORTED" ]]; then
+                prev_num=0
+                while IFS= read -r line; do
+                    [[ -z "$line" ]] && continue
+                    prev_num=$((prev_num + 1))
+                    if [[ "${line#cross-upgrade:}" == "$prev_job" ]]; then
+                        FAILED_NUMS="${FAILED_NUMS:+$FAILED_NUMS,}$prev_num"
+                        break
+                    fi
+                done < "$JOB_FILE"
+            fi
+        fi
+    done
+
+    if [[ -z "$FAILED_NUMS" ]]; then
+        echo "No failures found in previous run — nothing to re-launch."
+        exit 0
+    fi
+
+    echo "Re-launching failed jobs: $FAILED_NUMS"
+    JOB_FILTER="$FAILED_NUMS"
+fi
+
 RUN_DIR="$SCRIPT_DIR/runs/${RUN_NAME}/${TOPOLOGY}"
 mkdir -p "$RUN_DIR"
 
-cat > "$SCRIPT_DIR/runs/${RUN_NAME}/config.env" <<EOF
+cat > "$RUN_DIR/config.env" <<EOF
 RELEASE_IMAGE_LATEST=$RELEASE_IMAGE
 RELEASE_IMAGE_INITIAL=${INITIAL_IMAGE:-same as latest}
 TOPOLOGY=$TOPOLOGY
