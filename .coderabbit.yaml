@@ -33,8 +33,6 @@ reviews:
         Challenge any change that:
         - Adds new verification steps beyond lint/secrets (per CONTRIBUTING.md "Review Principles")
         - Could block commits unrelated to the changed subsystem
-        - Adds `set -euo pipefail` to an existing hook without explaining why failures were previously silent
-        - Introduces dependencies on scripts outside .githooks/
         Flag as severity "high" if the PR description does not justify why this check must be pre-commit rather than CI or CodeRabbit.
 
     - path: ".claude/skills/**"
