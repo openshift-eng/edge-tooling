@@ -1,12 +1,12 @@
 #!/usr/bin/bash
 set -euo pipefail
 
-# Stop hook decision script: check whether to restart a pr-monitor session.
-# Uses status field from PR_MONITOR_STATE to determine action:
+# Stop hook decision script: check whether to restart a yolo-agent session.
+# Uses status field from PR_MONITOR_STATE (JSON) to determine action:
 #   complete → exit (PR is done)
 #   waiting  → sleep next_check_delay, then spawn new session
 #   running  → unexpected exit (crash), respawn immediately up to max_iterations
-# Exit codes: 0=restarted, 1=done/max reached, 2=not a pr-monitor session, 3=internal error
+# Exit codes: 0=restarted, 1=done/max reached, 2=not a yolo-agent session, 3=internal error
 
 die() {
     echo "Error: $1" >&2
@@ -14,52 +14,40 @@ die() {
 }
 
 log() {
-    echo "[pr-monitor-stop] $1" >&2
+    echo "[yolo-agent-stop] $1" >&2
 }
 
-get_field() {
-    local state="$1" field="$2"
-    local normalized=";${state}"
-    echo "${normalized}" | sed -n "s/.*;${field}=\([^;]*\).*/\1/p"
+jq_get() {
+    echo "${PR_MONITOR_STATE}" | jq -r --arg f "$1" '.[$f] // empty'
 }
 
-set_field() {
-    local state="$1" field="$2" value="$3"
-    # Escape sed-special characters in value: \ must be first, then & and the % delimiter
-    local escaped_value
-    escaped_value=$(printf '%s' "${value}" | sed 's/[\\&%]/\\&/g')
-    local normalized=";${state}"
-    if printf '%s' "${normalized}" | grep -qF ";${field}="; then
-        normalized=$(printf '%s' "${normalized}" | sed "s%;${field}=[^;]*%;${field}=${escaped_value}%")
-        echo "${normalized#;}"
-    else
-        echo "${state};${field}=${escaped_value}"
-    fi
+jq_set() {
+    PR_MONITOR_STATE=$(echo "${PR_MONITOR_STATE}" | jq -c --arg f "$1" --arg v "$2" '.[$f] = ($v | try tonumber // $v)')
 }
 
 main() {
-    local state="${PR_MONITOR_STATE:-}"
-    if [[ -z "${state}" ]]; then
+    if [[ -z "${PR_MONITOR_STATE:-}" ]]; then
         exit 2
     fi
 
-    local status pr_url iteration max_iterations notes next_check_delay
-    status=$(get_field "${state}" "status")
-    pr_url=$(get_field "${state}" "pr_url")
+    local status pr_url
+    status=$(jq_get "status")
+    pr_url=$(jq_get "pr_url")
 
     if [[ "${status}" == "complete" ]]; then
-        log "PR monitor completed successfully. Not restarting."
+        log "yolo-agent completed successfully. Not restarting."
         exit 1
     fi
 
     if [[ "${status}" == "waiting" ]]; then
-        next_check_delay=$(get_field "${state}" "next_check_delay")
+        local next_check_delay iteration max_iterations notes
+        next_check_delay=$(jq_get "next_check_delay")
         next_check_delay="${next_check_delay:-300}"
-        iteration=$(get_field "${state}" "iteration")
+        iteration=$(jq_get "iteration")
         iteration="${iteration:-0}"
-        max_iterations=$(get_field "${state}" "max_iterations")
+        max_iterations=$(jq_get "max_iterations")
         max_iterations="${max_iterations:-3}"
-        notes=$(get_field "${state}" "notes")
+        notes=$(jq_get "notes")
 
         local new_iteration=$((iteration + 1))
 
@@ -68,18 +56,20 @@ main() {
             exit 1
         fi
 
-        local new_state
-        new_state=$(set_field "${state}" "iteration" "${new_iteration}")
-        new_state=$(set_field "${new_state}" "status" "running")
+        jq_set "iteration" "${new_iteration}"
+        jq_set "status" "running"
 
         log "Cycle complete. Next check in ${next_check_delay}s (iteration ${new_iteration})."
         [[ -n "${notes}" ]] && log "Previous cycle: ${notes}"
 
         command -v claude >/dev/null 2>&1 || die "claude CLI is not installed"
 
+        local loop_flag=""
+        [[ "${max_iterations}" -eq 0 ]] && loop_flag=" --infinite-loop"
+
         (
             sleep "${next_check_delay}"
-            PR_MONITOR_STATE="${new_state}" claude -p "/pr-monitor:watch ${pr_url}" \
+            PR_MONITOR_STATE="${PR_MONITOR_STATE}" claude -p "/pr-review:yolo-agent ${pr_url}${loop_flag}" \
                 > "/tmp/pr-monitor-iter-${new_iteration}.log" 2>&1
         ) &
         disown
@@ -88,11 +78,12 @@ main() {
     fi
 
     if [[ "${status}" == "running" ]]; then
-        iteration=$(get_field "${state}" "iteration")
+        local iteration max_iterations notes
+        iteration=$(jq_get "iteration")
         iteration="${iteration:-0}"
-        max_iterations=$(get_field "${state}" "max_iterations")
+        max_iterations=$(jq_get "max_iterations")
         max_iterations="${max_iterations:-3}"
-        notes=$(get_field "${state}" "notes")
+        notes=$(jq_get "notes")
 
         local new_iteration=$((iteration + 1))
 
@@ -101,15 +92,17 @@ main() {
             exit 1
         fi
 
-        local new_state
-        new_state=$(set_field "${state}" "iteration" "${new_iteration}")
+        jq_set "iteration" "${new_iteration}"
 
         log "Unexpected exit. Crash restart (iteration ${new_iteration})."
         [[ -n "${notes}" ]] && log "Previous cycle: ${notes}"
 
         command -v claude >/dev/null 2>&1 || die "claude CLI is not installed"
 
-        PR_MONITOR_STATE="${new_state}" nohup claude -p "/pr-monitor:watch ${pr_url}" \
+        local loop_flag=""
+        [[ "${max_iterations}" -eq 0 ]] && loop_flag=" --infinite-loop"
+
+        PR_MONITOR_STATE="${PR_MONITOR_STATE}" nohup claude -p "/pr-review:yolo-agent ${pr_url}${loop_flag}" \
             > "/tmp/pr-monitor-crash-${new_iteration}.log" 2>&1 &
 
         exit 0

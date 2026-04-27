@@ -1,92 +1,12 @@
 #!/usr/bin/bash
 set -euo pipefail
 
-# Manage PR monitor state via the PR_MONITOR_STATE environment variable.
-# State format: key=value pairs separated by semicolons.
+# Manage PR monitor state as JSON via the PR_MONITOR_STATE environment variable.
 # Exit codes: 0=success, 3=error
 
 die() {
     echo "Error: $1" >&2
     exit 3
-}
-
-get_field() {
-    local state="$1" field="$2"
-    # Add leading semicolon so every key is preceded by one, simplifying the match
-    local normalized=";${state}"
-    local value
-    value=$(echo "${normalized}" | sed -n "s/.*;${field}=\([^;]*\).*/\1/p")
-    echo "${value}"
-}
-
-set_field() {
-    local state="$1" field="$2" value="$3"
-    # Escape sed-special characters in value: \ must be first, then & and the % delimiter
-    local escaped_value
-    escaped_value=$(printf '%s' "${value}" | sed 's/[\\&%]/\\&/g')
-    # Add leading semicolon for uniform matching, then strip it after replacement
-    local normalized=";${state}"
-    if printf '%s' "${normalized}" | grep -qF ";${field}="; then
-        normalized=$(printf '%s' "${normalized}" | sed "s%;${field}=[^;]*%;${field}=${escaped_value}%")
-        echo "${normalized#;}"
-    else
-        echo "${state};${field}=${escaped_value}"
-    fi
-}
-
-init_state() {
-    local pr_url="$1"
-    echo "pr_url=${pr_url};iteration=0;max_iterations=${2:-3};cycle=0;addressed=;analyzed=;status=running;notes=;next_check_delay=0;last_push_cycle=0"
-}
-
-sanitize_notes() {
-    local raw="$1"
-    echo "${raw}" | tr ';' ',' | tr '%' '_'
-}
-
-add_to_list() {
-    local state="$1" field="$2" item="$3"
-    local current
-    current=$(get_field "${state}" "${field}")
-    if [[ -z "${current}" ]]; then
-        set_field "${state}" "${field}" "${item}"
-    else
-        set_field "${state}" "${field}" "${current},${item}"
-    fi
-}
-
-increment_field() {
-    local state="$1" field="$2"
-    local current
-    current=$(get_field "${state}" "${field}")
-    if [[ -z "${current}" || ! "${current}" =~ ^[0-9]+$ ]]; then
-        die "Field '${field}' is not a valid integer"
-    fi
-    local new_value=$((current + 1))
-    set_field "${state}" "${field}" "${new_value}"
-}
-
-decode_state() {
-    local state="$1"
-    echo "${state}" | awk -F';' '{
-        printf "{\n"
-        for (i = 1; i <= NF; i++) {
-            split($i, kv, "=")
-            key = kv[1]
-            value = ""
-            for (j = 2; j <= length(kv); j++) {
-                if (j > 2) value = value "="
-                value = value kv[j]
-            }
-            gsub(/"/, "\\\"", value)
-            if (i < NF) {
-                printf "  \"%s\": \"%s\",\n", key, value
-            } else {
-                printf "  \"%s\": \"%s\"\n", key, value
-            }
-        }
-        printf "}\n"
-    }'
 }
 
 require_state() {
@@ -104,55 +24,56 @@ main() {
     case "${subcommand}" in
         init)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") init <pr-url> [max-iterations]"
-            init_state "$1" "${2:-3}"
+            jq -nc \
+                --arg url "$1" \
+                --argjson max "${2:-3}" \
+                '{pr_url:$url,iteration:0,max_iterations:$max,cycle:0,addressed:[],analyzed:[],status:"running",notes:"",next_check_delay:0,last_push_cycle:0}'
             ;;
         save)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") save <pr-number>"
             require_state
-            printf '%s' "${PR_MONITOR_STATE}" > "/tmp/pr-monitor-$1.state"
+            printf '%s' "${PR_MONITOR_STATE}" > "/tmp/pr-monitor-$1.json"
             echo "${PR_MONITOR_STATE}"
             ;;
         load)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") load <pr-number>"
-            local state_file="/tmp/pr-monitor-$1.state"
+            local state_file="/tmp/pr-monitor-$1.json"
             [[ -f "${state_file}" ]] || die "No state file found at ${state_file}"
             cat "${state_file}"
             ;;
         clean)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") clean <pr-number>"
-            rm -f "/tmp/pr-monitor-$1.state"
+            rm -f "/tmp/pr-monitor-$1.json"
             ;;
         get)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") get <field>"
             require_state
-            get_field "${PR_MONITOR_STATE}" "$1"
+            echo "${PR_MONITOR_STATE}" | jq -r --arg f "$1" '.[$f] // empty | if type == "array" then join(",") else tostring end'
             ;;
         set)
             [[ $# -lt 2 ]] && die "Usage: $(basename "$0") set <field> <value>"
             require_state
-            set_field "${PR_MONITOR_STATE}" "$1" "$2"
+            echo "${PR_MONITOR_STATE}" | jq -c --arg f "$1" --arg v "$2" '.[$f] = ($v | try tonumber // $v)'
             ;;
         add-addressed)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") add-addressed <comment-id>"
             require_state
-            add_to_list "${PR_MONITOR_STATE}" "addressed" "$1"
+            echo "${PR_MONITOR_STATE}" | jq -c --arg id "$1" '.addressed += [($id | try tonumber // $id)]'
             ;;
         add-analyzed)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") add-analyzed <job-key>"
             require_state
-            add_to_list "${PR_MONITOR_STATE}" "analyzed" "$1"
+            echo "${PR_MONITOR_STATE}" | jq -c --arg key "$1" '.analyzed += [$key]'
             ;;
         increment)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") increment <field>"
             require_state
-            increment_field "${PR_MONITOR_STATE}" "$1"
+            echo "${PR_MONITOR_STATE}" | jq -c --arg f "$1" 'if .[$f] | type != "number" then error("field is not numeric") else .[$f] += 1 end'
             ;;
         set-notes)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") set-notes <text>"
             require_state
-            local sanitized
-            sanitized=$(sanitize_notes "$1")
-            set_field "${PR_MONITOR_STATE}" "notes" "${sanitized}"
+            echo "${PR_MONITOR_STATE}" | jq -c --arg v "$1" '.notes = $v'
             ;;
         set-status)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") set-status <running|complete|waiting>"
@@ -161,11 +82,11 @@ main() {
                 running|complete|waiting) ;;
                 *) die "Invalid status: $1 (expected running|complete|waiting)" ;;
             esac
-            set_field "${PR_MONITOR_STATE}" "status" "$1"
+            echo "${PR_MONITOR_STATE}" | jq -c --arg v "$1" '.status = $v'
             ;;
         decode)
             require_state
-            decode_state "${PR_MONITOR_STATE}"
+            echo "${PR_MONITOR_STATE}" | jq .
             ;;
         *)
             die "Unknown subcommand: ${subcommand}"
