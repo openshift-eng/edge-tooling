@@ -1,14 +1,14 @@
 ---
 name: rc-test
-description: RC candidate testing for OCP edge topologies (TNF, TNA, SNO). Launch Prow CI jobs, monitor status, investigate failures, and report results to Jira.
+description: Release candidate testing for OCP edge topologies (TNF, TNA, SNO). Launch Prow CI jobs, monitor status, investigate failures, and report results to Jira.
 allowed-tools: Bash(bash *) Bash(cd *) Read
 arguments: [action]
 argument-hint: <action> [args...] — actions: launch, status, list, refresh, report, investigate
 ---
 
-# RC Candidate Testing
+# Release Candidate Testing
 
-You are orchestrating RC candidate testing for OCP 4.22 edge topologies. The scripts are at `${CLAUDE_SKILL_DIR}/../../scripts/`.
+You are orchestrating release candidate testing for OCP edge topologies. The scripts are at `${CLAUDE_SKILL_DIR}/../../scripts/`.
 
 ## Available Actions
 

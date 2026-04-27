@@ -8,7 +8,6 @@ SIPPY_API="https://sippy.dptools.openshift.org/api/jobs"
 IMAGE_BASE="quay.io/openshift-release-dev/ocp-release"
 ARCH="x86_64"
 DELAY=10
-OCP_RELEASE="4.22"
 
 # Sippy search terms per topology
 declare -A SIPPY_FILTER=(
@@ -22,6 +21,27 @@ to_image() {
     echo "${IMAGE_BASE}:${version}-${ARCH}"
 }
 
+detect_release() {
+    local job_file="$1"
+    local version_tag="${2:-}"
+
+    if [[ -f "$job_file" ]]; then
+        local from_jobs
+        from_jobs=$(grep -m1 -oP 'nightly-\K[0-9]+\.[0-9]+' "$job_file" || true)
+        if [[ -n "$from_jobs" ]]; then
+            echo "$from_jobs"
+            return
+        fi
+    fi
+
+    if [[ -n "$version_tag" && "$version_tag" =~ ^([0-9]+\.[0-9]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+        return
+    fi
+
+    echo ""
+}
+
 usage() {
     echo "Usage: $0 <topology> <version> [options]"
     echo "       $0 <topology> --list"
@@ -30,7 +50,7 @@ usage() {
     echo ""
     echo "Options:"
     echo "  --list              List available jobs (numbered) and exit (version not required)"
-    echo "  --refresh           Update job file from Sippy and exit (version not required)"
+    echo "  --refresh           Update job file from Sippy and exit (auto-detects release from existing jobs)"
     echo "  --job <selector>    Launch specific jobs: all, number (3), list (3,7,12), or pattern (recovery)"
     echo "  --initial <version> Set RELEASE_IMAGE_INITIAL for cross-upgrade jobs (e.g., upgrade-from-stable-4.21)"
     echo "  --run <name>        Custom run directory name (defaults to YYYY-MM-DD)"
@@ -38,7 +58,8 @@ usage() {
     echo ""
     echo "Examples:"
     echo "  $0 tna --list                                # list TNA jobs"
-    echo "  $0 tna --refresh                             # update TNA job list from Sippy"
+    echo "  $0 tna --refresh                             # update TNA job list (release from existing jobs)"
+    echo "  $0 tna 4.23.0-rc.0 --refresh                 # update TNA job list for a new release"
     echo "  $0 tnf 4.22.0-rc.0 --job all                 # launch all jobs"
     echo "  $0 tnf 4.22.0-rc.0 --job 3                  # launch job #3 only"
     echo "  $0 tnf 4.22.0-rc.0 --job 3,7,12             # launch jobs 3, 7, and 12"
@@ -100,8 +121,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if ! $DRY_RUN; then
-    if [[ ! -x "$GANGWAY_BIN" ]]; then
+if ! $DRY_RUN && ! $LIST_ONLY && ! $REFRESH; then
+    if [[ ! -f "$GANGWAY_BIN" || ! -x "$GANGWAY_BIN" ]]; then
         echo "Error: gangway-cli not found or not executable at $GANGWAY_BIN"
         echo "Set GANGWAY_BIN or ensure gangway-cli is in PATH."
         exit 1
@@ -132,6 +153,13 @@ if $REFRESH; then
         echo "No Sippy filter configured for topology '$TOPOLOGY'."
         echo "Manage $JOB_FILE manually (one job name per line)."
         exit 0
+    fi
+
+    OCP_RELEASE=$(detect_release "$JOB_FILE" "${RELEASE_IMAGE#*:}")
+    if [[ -z "$OCP_RELEASE" ]]; then
+        echo "Error: cannot detect OCP release version."
+        echo "Provide a version (e.g., ./launch.sh $TOPOLOGY 4.22.0-rc.0 --refresh)"
+        exit 1
     fi
 
     SIPPY_FILTER_JSON=$(printf '{"items":[{"columnField":"name","operatorValue":"contains","value":"%s"}],"linkOperator":"and"}' "$SEARCH_TERM")
