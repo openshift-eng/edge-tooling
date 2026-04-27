@@ -1,17 +1,17 @@
 ---
-name: pr-monitor:watch
+name: yolo-agent
 argument-hint: <pr-url>
-description: "Comment-driven PR lifecycle monitor — single-cycle evaluation with automatic rescheduling via CronCreate"
+description: "Autonomous PR lifecycle agent — monitors CI, triages review comments, auto-fixes trivial issues, and loops until the PR is ready"
 user-invocable: true
 allowed-tools: Skill, Bash, Read, Write, Edit, Glob, Grep, Agent
 ---
 
-# pr-monitor:watch
+# yolo-agent
 
 ## Synopsis
 
 ```text
-/pr-monitor:watch https://github.com/openshift/release/pull/77935
+/pr-review:yolo-agent https://github.com/openshift/release/pull/77935
 ```
 
 ## Description
@@ -89,7 +89,7 @@ The user argument is: $ARGUMENTS
 5. Check for `PR_MONITOR_STATE` env var. If set, this is a **continuation**:
    - Read state fields: `iteration`, `max_iterations`, `addressed`, `analyzed`, `notes`
    - Set `status=running`: `export PR_MONITOR_STATE=$(bash "${PLUGIN_DIR}/scripts/pr-state.sh" set-status running)`
-   - Display: "Continuing PR monitor for `ORG/REPO#PR_NUMBER` (iteration N)."
+   - Display: "Continuing yolo-agent for `ORG/REPO#PR_NUMBER` (iteration N)."
    - If notes exist, display: "Previous cycle: (notes value)"
    - Skip to Step 2.
 
@@ -119,7 +119,7 @@ The user argument is: $ARGUMENTS
 
 8. Verify the org is in the trusted allowlist. If not, warn: "Org `ORG` is not in the trusted allowlist. Running in analysis-only mode — no auto-push."
 
-9. Display: "Starting PR monitor for `ORG/REPO#PR_NUMBER` (max iterations: N, 0=unlimited)."
+9. Display: "Starting yolo-agent for `ORG/REPO#PR_NUMBER` (max iterations: N, 0=unlimited)."
 
 ### Step 2: Cycle
 
@@ -250,7 +250,7 @@ After processing all changes, if any were batched:
 
    ```bash
    gh api "repos/${ORG}/${REPO}/pulls/${PR_NUMBER}/comments/<comment_id>/replies" \
-       -f body="Fixed by using Claude Code pr-monitor plugin."
+       -f body="Fixed by using Claude Code pr-review yolo-agent."
    ```
 
 5. Update state:
@@ -272,7 +272,7 @@ After processing all changes, if any were batched:
        -f body="<reason>
 
    ---
-   *This comment was automatically generated using [Claude Code](https://claude.ai/code) pr-monitor plugin.*"
+   *This comment was automatically generated using [Claude Code](https://claude.ai/code) pr-review yolo-agent.*"
    ```
 
    Where `<reason>` is a brief explanation of why the comment was not addressed (e.g.,
@@ -330,13 +330,13 @@ Then schedule the next cycle using `CronCreate`:
 
 1. Calculate the target time: current time + `next_check_delay` seconds.
 2. Convert to a cron expression: `M H DoM Month *` (pinned to the exact minute).
-3. Build the prompt: `/pr-monitor:watch <PR_URL>` (append `--infinite-loop` if `max_iterations == 0`).
+3. Build the prompt: `/pr-review:yolo-agent <PR_URL>` (append `--infinite-loop` if `max_iterations == 0`).
 4. Create the job:
 
    ```json
    CronCreate({
        cron: "<calculated cron expression>",
-       prompt: "/pr-monitor:watch <PR_URL> [--infinite-loop]",
+       prompt: "/pr-review:yolo-agent <PR_URL> [--infinite-loop]",
        recurring: false,
        durable: false
    })
@@ -392,11 +392,11 @@ Default: 3 iterations. Use `--infinite-loop` for unlimited.
 ### Monitor a New PR (default 3 iterations)
 
 ```text
-/pr-monitor:watch https://github.com/openshift/microshift/pull/4321
+/pr-review:yolo-agent https://github.com/openshift/microshift/pull/4321
 ```
 
 ### Monitor with unlimited iterations
 
 ```text
-/pr-monitor:watch https://github.com/openshift/microshift/pull/4321 --infinite-loop
+/pr-review:yolo-agent https://github.com/openshift/microshift/pull/4321 --infinite-loop
 ```
