@@ -30,7 +30,7 @@ def unwrap_mcp_response(raw):
         if "result" in raw and isinstance(raw["result"], str):
             try:
                 inner = json.loads(raw["result"])
-            except (json.JSONDecodeError, Exception) as e:
+            except json.JSONDecodeError as e:
                 preview = raw["result"][:200]
                 print(f"Failed to parse MCP result JSON: {e}\nRaw (truncated): {preview}", file=sys.stderr)
                 return []
@@ -90,7 +90,10 @@ def transform_issue(issue, today):
     issue_type = fields.get("issuetype", {}).get("name", "")
 
     sp_raw = fields.get(FIELD_STORY_POINTS)
-    sp = int(sp_raw) if sp_raw is not None else 0
+    try:
+        sp = int(sp_raw) if sp_raw is not None else 0
+    except (ValueError, TypeError):
+        sp = 0
     if issue_type == "Bug":
         sp = 0
 
@@ -107,9 +110,12 @@ def transform_issue(issue, today):
     last_updated = None
     days_since_update = 0
     if updated_raw:
-        updated_dt = datetime.fromisoformat(updated_raw.replace("Z", "+00:00"))
-        last_updated = updated_dt.strftime("%Y-%m-%d")
-        days_since_update = (today - updated_dt.replace(tzinfo=timezone.utc)).days
+        try:
+            updated_dt = datetime.fromisoformat(updated_raw.replace("Z", "+00:00"))
+            last_updated = updated_dt.strftime("%Y-%m-%d")
+            days_since_update = (today - updated_dt.astimezone(timezone.utc)).days
+        except (ValueError, TypeError):
+            pass
 
     flagged_field = fields.get(FIELD_FLAGGED)
     flagged = bool(flagged_field)

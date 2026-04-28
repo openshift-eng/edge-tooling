@@ -1,5 +1,5 @@
 ---
-name: my-tickets
+name: jira-helpers:my-tickets
 description: >-
   View and filter Jira tickets assigned to the current user. Use when the user
   says "show my tickets", "what's on my plate", "what am I working on",
@@ -17,6 +17,10 @@ allowed-tools:
 
 ## Step 0: Resolve User Identity
 Read the `JIRA_USERNAME` environment variable using Bash: `echo "$JIRA_USERNAME"`. This is the user's Jira email address used for assignee queries.
+
+If `JIRA_USERNAME` is empty or unset, stop and tell the user:
+> `JIRA_USERNAME` is not set. Export it with your Jira email address:
+> `export JIRA_USERNAME="you@redhat.com"`
 
 ## Step 1: Build JQL Query
 Start with base JQL:

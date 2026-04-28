@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 set -euo pipefail
 
 command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 1; }
@@ -16,10 +16,13 @@ if [[ -z "$KEYS" ]]; then
     exit 0
 fi
 
-SESSION_FILE="/tmp/jira-helpers-seen-tickets-${PPID}"
+SESSION_DIR="/tmp/jira-helpers-${UID}"
+mkdir -p "$SESSION_DIR"
+chmod 700 "$SESSION_DIR"
+SESSION_FILE="${SESSION_DIR}/seen-tickets-${PPID}"
 
 SEEN=""
-if [[ -f "$SESSION_FILE" ]]; then
+if [[ -f "$SESSION_FILE" && ! -L "$SESSION_FILE" ]]; then
     SEEN=$(cat "$SESSION_FILE")
 fi
 

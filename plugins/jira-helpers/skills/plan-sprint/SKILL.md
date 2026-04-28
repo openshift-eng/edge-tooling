@@ -1,5 +1,5 @@
 ---
-name: plan-sprint
+name: jira-helpers:plan-sprint
 description: >-
   Analyze backlog and suggest a sprint plan targeting 8 SP capacity. Use when
   the user says "plan my sprint", "what should I pull into next sprint",
@@ -20,6 +20,8 @@ allowed-tools:
   - AskUserQuestion
   - Agent
 ---
+
+# Plan Sprint
 
 ## Step 0: Load Context
 1. Read the `JIRA_USERNAME` environment variable using Bash: `echo "$JIRA_USERNAME"`.
@@ -62,10 +64,10 @@ allowed-tools:
    - Prioritize by: priority field, epic progress (issues in epics with existing sprint work), dependencies (unblocked first)
    - Stop when cumulative SP reaches or exceeds the target
 3. Flag ticket quality gaps in the suggested set:
-   - ❌ Unpointed (no SP or SP = null) — can't plan without points
-   - ❌ Missing Epic Link (Story/Spike/Task without `customfield_10014`)
-   - ⚠️ Missing acceptance criteria in description
-   - ⚠️ Bug with non-zero SP (should be 0)
+   - [BLOCKER] Unpointed — no story points assigned, cannot plan without points
+   - [BLOCKER] Missing Epic Link — Story/Spike/Task without `customfield_10014`
+   - [WARNING] Missing acceptance criteria in description
+   - [WARNING] Bug has non-zero story points (should be 0)
 
 ## Step 5: Present Sprint Plan
 Display the proposed plan:

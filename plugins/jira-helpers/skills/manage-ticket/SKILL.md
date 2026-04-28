@@ -1,5 +1,5 @@
 ---
-name: manage-ticket
+name: jira-helpers:manage-ticket
 description: >-
   Create, update, transition, link, and comment on Jira tickets with Edge Scrum
   Law enforcement. Use when the user says "create a ticket", "update PROJ-XXX",
@@ -34,7 +34,9 @@ Read the following Edge Scrum Law files from `${CLAUDE_PLUGIN_ROOT}/../edge-scru
 - `07-workflow-states.md` (valid states and transitions)
 - `14-agent-conventions.md` (agent-specific rules)
 
-If edge-scrum plugin is not installed, skip law loading and apply only basic validation.
+## Prerequisites
+
+The **edge-scrum** plugin is optional but recommended. When installed, the Laws listed above provide field IDs, valid components, workflow states, and sprint policies. Without it, only basic field validation is applied (Fibonacci SP, non-blank required fields).
 
 ## Step 1: Parse Intent
 
