@@ -273,7 +273,7 @@ direct `jq` state manipulation, manual `git push`, or ad-hoc replacements.**
 - Replying to PR comments → `gh api` is allowed only for posting replies after fixes are applied
 
 State is a JSON string carried in `PR_MONITOR_STATE` env var and persisted
-to `/tmp/pr-monitor-<pr-number>.json`.
+to `/tmp/pr-review-yolo-agent-<pr-number>.json`.
 
 ## Prerequisites
 

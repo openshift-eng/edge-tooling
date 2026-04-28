@@ -32,18 +32,18 @@ main() {
         save)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") save <pr-number>"
             require_state
-            printf '%s' "${PR_MONITOR_STATE}" > "/tmp/pr-monitor-$1.json"
+            printf '%s' "${PR_MONITOR_STATE}" > "/tmp/pr-review-yolo-agent-$1.json"
             echo "${PR_MONITOR_STATE}"
             ;;
         load)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") load <pr-number>"
-            local state_file="/tmp/pr-monitor-$1.json"
+            local state_file="/tmp/pr-review-yolo-agent-$1.json"
             [[ -f "${state_file}" ]] || die "No state file found at ${state_file}"
             cat "${state_file}"
             ;;
         clean)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") clean <pr-number>"
-            rm -f "/tmp/pr-monitor-$1.json"
+            rm -f "/tmp/pr-review-yolo-agent-$1.json"
             ;;
         get)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") get <field>"

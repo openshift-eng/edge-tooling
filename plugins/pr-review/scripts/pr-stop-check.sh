@@ -70,7 +70,7 @@ main() {
         (
             sleep "${next_check_delay}"
             PR_MONITOR_STATE="${PR_MONITOR_STATE}" claude -p "/pr-review:yolo-agent ${pr_url}${loop_flag}" \
-                > "/tmp/pr-monitor-iter-${new_iteration}.log" 2>&1
+                > "/tmp/pr-review-yolo-agent-iter-${new_iteration}.log" 2>&1
         ) &
         disown
 
@@ -103,7 +103,7 @@ main() {
         [[ "${max_iterations}" -eq 0 ]] && loop_flag=" --infinite-loop"
 
         PR_MONITOR_STATE="${PR_MONITOR_STATE}" nohup claude -p "/pr-review:yolo-agent ${pr_url}${loop_flag}" \
-            > "/tmp/pr-monitor-crash-${new_iteration}.log" 2>&1 &
+            > "/tmp/pr-review-yolo-agent-crash-${new_iteration}.log" 2>&1 &
 
         exit 0
     fi
