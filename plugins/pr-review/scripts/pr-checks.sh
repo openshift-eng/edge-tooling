@@ -43,8 +43,12 @@ fetch_pr_metadata() {
 fetch_pr_checks() {
     local org="$1" repo="$2" pr_number="$3"
     local checks_json
+    local gh_exit=0
     checks_json=$(gh pr checks "${pr_number}" --repo "${org}/${repo}" \
-        --json name,state,link,bucket 2>/dev/null) || true
+        --json name,state,link,bucket 2>/dev/null) || gh_exit=$?
+    if [[ ${gh_exit} -gt 1 ]]; then
+        die "Failed to fetch CI checks for ${org}/${repo}#${pr_number} (gh exit ${gh_exit})"
+    fi
     if [[ -z "${checks_json}" || "${checks_json}" == "null" ]]; then
         echo "[]"
     else

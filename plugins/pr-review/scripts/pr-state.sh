@@ -24,6 +24,9 @@ main() {
     case "${subcommand}" in
         init)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") init <pr-url> [max-iterations]"
+            if [[ $# -ge 2 && ! "$2" =~ ^[0-9]+$ ]]; then
+                die "max-iterations must be a non-negative integer, got: $2"
+            fi
             jq -nc \
                 --arg url "$1" \
                 --argjson max "${2:-3}" \

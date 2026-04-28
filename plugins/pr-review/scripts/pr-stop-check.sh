@@ -71,7 +71,7 @@ main() {
         (
             sleep "${next_check_delay}"
             PR_MONITOR_STATE="${PR_MONITOR_STATE}" claude -p "/pr-review:yolo-agent ${pr_url}${loop_flag}${yolo_flag}" \
-                > "/tmp/pr-review-yolo-agent-iter-${new_iteration}.log" 2>&1
+                > "/tmp/pr-review-yolo-agent-pr$(echo "${pr_url}" | grep -oP '[0-9]+$')-iter-${new_iteration}.log" 2>&1
         ) &
         disown
 
@@ -105,7 +105,7 @@ main() {
         [[ "$(jq_get "yolo_mode")" == "true" ]] && yolo_flag=" --yolo"
 
         PR_MONITOR_STATE="${PR_MONITOR_STATE}" nohup claude -p "/pr-review:yolo-agent ${pr_url}${loop_flag}${yolo_flag}" \
-            > "/tmp/pr-review-yolo-agent-crash-${new_iteration}.log" 2>&1 &
+            > "/tmp/pr-review-yolo-agent-pr$(echo "${pr_url}" | grep -oP '[0-9]+$')-crash-${new_iteration}.log" 2>&1 &
 
         exit 0
     fi
