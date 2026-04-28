@@ -76,11 +76,14 @@ Comment analysis is routed through the team's standardized skills: bot comments 
 # Only process bot comments (skip human reviewers)
 /pr-review:yolo-agent https://github.com/org/repo/pull/123 --skip-users
 
+# Yolo mode — auto-push all changes without confirmation (security checks still apply)
+/pr-review:yolo-agent https://github.com/org/repo/pull/123 --yolo
+
 # Combine flags
-/pr-review:yolo-agent https://github.com/org/repo/pull/123 --infinite-loop --skip-users
+/pr-review:yolo-agent https://github.com/org/repo/pull/123 --infinite-loop --skip-users --yolo
 ```
 
-**Auto-push rules:** Trivial changes (style, naming, linting, imports, simple assertions) are pushed without confirmation. Non-trivial changes require explicit approval. Security-sensitive files are never modified.
+**Auto-push rules:** Trivial changes (style, naming, linting, imports, simple assertions) are pushed without confirmation. Non-trivial changes require explicit approval unless `--yolo` is active, which auto-pushes all changes. Security-sensitive files are never modified regardless of flags.
 
 ## Requirements
 

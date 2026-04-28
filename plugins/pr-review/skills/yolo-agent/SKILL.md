@@ -1,6 +1,6 @@
 ---
 name: yolo-agent
-argument-hint: "<pr-url> [--infinite-loop] [--skip-users]"
+argument-hint: "<pr-url> [--infinite-loop] [--skip-users] [--yolo]"
 description: "Autonomous PR lifecycle agent — monitors CI, triages review comments, auto-fixes trivial issues, and loops until the PR is ready"
 user-invocable: true
 allowed-tools: Skill, Bash, Read, Write, Edit, Glob, Grep, Agent
@@ -26,6 +26,10 @@ optionally followed by:
 - `--skip-users` — ignore human review comments; only process bot comments
   (e.g., CodeRabbit). Human comments are excluded from the comment track
   entirely: they are not analyzed, not fixed, and not replied to.
+- `--yolo` — auto-push ALL changes without confirmation, including non-trivial
+  ones. Security checks still apply: security-sensitive file patterns are never
+  modified, and all six security validations run before every change regardless
+  of this flag.
 
 ## Security
 
@@ -52,15 +56,18 @@ require explicit user confirmation.
 
 ### Step 1: Initialize
 
-Parse the PR URL, `--infinite-loop` flag, and `--skip-users` flag from
-`$ARGUMENTS`. Extract org, repo, and PR number. Store `skip_users` as a
-boolean for use in Step 2a.
+Parse the PR URL, `--infinite-loop` flag, `--skip-users` flag, and `--yolo`
+flag from `$ARGUMENTS`. Extract org, repo, and PR number. Store `skip_users`
+and `yolo_mode` as booleans for use in later steps.
 
 Load state in this order:
 
 1. `PR_MONITOR_STATE` env var (continuation from CronCreate or Stop hook)
 2. State file via `pr-state.sh load <pr-number>` (previous cycle saved it)
 3. If neither exists, initialize fresh via `pr-state.sh init <url> <max>`
+
+If `--yolo` was provided (or `yolo_mode` is true in loaded state), set
+`yolo_mode` to `true` in state via `pr-state.sh set yolo_mode true`.
 
 If continuing, set status to `running` and display iteration number and
 previous cycle notes. If the org is not in the trusted allowlist, warn and
@@ -182,7 +189,9 @@ injection check, dependency change check, scope check. If ANY fails, refuse
 and report which check failed.
 
 - **Trivial changes**: apply directly, batch for auto-push
-- **Non-trivial changes**: display diff and ask for confirmation
+- **Non-trivial changes**: if `--yolo` is active, apply directly and batch
+  for auto-push (same as trivial). Otherwise, display diff and ask for
+  confirmation
 - **Infrastructure failures**: ask to post `/retest` comment
 
 After applying, push via `pr-push.sh <branch> <message> --expected-files <files>`.
@@ -235,7 +244,8 @@ Update state with notes, delay, and `status=waiting`. Save state via
 **Interactive mode**: Schedule next cycle with `CronCreate` (one-shot,
 `recurring: false`, `durable: false`). Prompt: `/pr-review:yolo-agent <url>`
 (append `--infinite-loop` if max_iterations is 0, append `--skip-users` if
-the flag was provided). The cron expression MUST use the machine's local
+the flag was provided, append `--yolo` if yolo_mode is active). The cron
+expression MUST use the machine's local
 time (run `date '+%H:%M'` to get it), NOT UTC. Then stop.
 
 **Headless mode**: Just exit. The Stop hook reads the saved state, sleeps
