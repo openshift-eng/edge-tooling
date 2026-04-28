@@ -38,6 +38,8 @@ optionally followed by:
 - NEVER modify files matching: `**/rbac*`, `**/*secret*`, `**/*credential*`, `**/*token*`
 - Only these organizations are eligible for auto-push: `openshift`, `openshift-eng`
 - Untrusted orgs run in analysis-only mode — no auto-push
+- NEVER operate on a PR authored by someone other than the authenticated
+  GitHub user — refuse and stop immediately if the PR author does not match
 
 ## Trivial Change Classification
 
@@ -59,6 +61,18 @@ require explicit user confirmation.
 Parse the PR URL, `--infinite-loop` flag, `--skip-users` flag, and `--yolo`
 flag from `$ARGUMENTS`. Extract org, repo, and PR number. Store `skip_users`
 and `yolo_mode` as booleans for use in later steps.
+
+**Authorship check** (run once, before loading state): Get the authenticated
+GitHub user (`gh api user --jq '.login'`) and the PR author
+(`gh pr view <number> --repo <org>/<repo> --json author --jq '.author.login'`).
+If they do not match (case-insensitive), refuse to proceed:
+
+```text
+Error: PR #<number> was authored by <pr-author>, but you are authenticated
+as <gh-user>. yolo-agent only operates on your own PRs.
+```
+
+Stop immediately — do not load state, do not enter analysis-only mode.
 
 Load state in this order:
 
