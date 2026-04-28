@@ -20,6 +20,8 @@ allowed-tools:
   - AskUserQuestion
 ---
 
+# Manage Ticket
+
 ## Step 0: Load Laws
 
 Read the following Edge Scrum Law files from `${CLAUDE_PLUGIN_ROOT}/../edge-scrum/references/laws/`:

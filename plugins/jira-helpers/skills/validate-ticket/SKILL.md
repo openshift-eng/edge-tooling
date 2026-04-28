@@ -5,7 +5,7 @@ description: >-
   "validate ticket", "check ticket", "is this ticket well-formed", mentions
   validating a Jira issue, or when the ticket-mention hook detects ticket keys.
 user-invocable: true
-argument-hint: <TICKET-KEY>
+argument-hint: "<TICKET-KEY>"
 allowed-tools:
   - mcp__plugin_mcp-atlassian_mcp-atlassian__jira_get_issue
   - mcp__plugin_mcp-atlassian_mcp-atlassian__jira_search
@@ -27,7 +27,7 @@ Law files to load based on issue type:
 
 ## Step 1: Fetch Ticket
 
-Use `jira_get_issue` with the ticket key from the user's argument. Request fields: `summary, status, issuetype, assignee, components, labels, description, customfield_10028, customfield_10014, customfield_10018, customfield_10021, customfield_10470, customfield_10473, customfield_10795, fixVersions, versions`.
+Use `jira_get_issue` with the ticket key from the user's argument. Request fields: `summary, status, issuetype, assignee, components, labels, description, updated, customfield_10028, customfield_10014, customfield_10018, customfield_10021, customfield_10470, customfield_10473, customfield_10795, fixVersions, versions`.
 
 If the ticket key is not provided, ask the user for it.
 
@@ -60,12 +60,12 @@ Based on the issue type, run the following checks. Group findings by severity.
 ## Step 3: Report
 
 Present findings in a clear table grouped by severity. For each finding, show:
-- Severity emoji: 🔴 CRITICAL, 🟠 HIGH, 🟡 MEDIUM
+- Severity: CRITICAL, HIGH, MEDIUM
 - The rule violated
 - Current value (if applicable)
 - Expected value
 
-If no findings: report "✅ Ticket passes all validation checks."
+If no findings: report "Ticket passes all validation checks."
 
 ## Step 4: Offer Fixes
 

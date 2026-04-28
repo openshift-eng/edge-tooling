@@ -20,10 +20,10 @@ Developer-focused Jira workflow integration for the OpenShift Edge Team -- ticke
 
 | Skill | Description | Example |
 |-------|-------------|---------|
-| `validate-ticket` | Validate a Jira ticket against Edge team conventions (required fields, sizing, description template) | `/validate-ticket OCPEDGE-1234` |
-| `my-tickets` | List your assigned tickets filtered by status, sprint, or project | `/my-tickets` |
-| `manage-ticket` | Create, update, or transition a Jira ticket with convention guardrails | `/manage-ticket transition OCPEDGE-1234 to "In Progress"` |
-| `plan-sprint` | Assist with sprint planning -- capacity analysis, ticket grooming, and commitment recommendations | `/plan-sprint` |
+| `validate-ticket` | Validate a Jira ticket against Edge team conventions (required fields, sizing, description template) | `/jira-helpers:validate-ticket OCPEDGE-1234` |
+| `my-tickets` | List your assigned tickets filtered by status, sprint, or project | `/jira-helpers:my-tickets` |
+| `manage-ticket` | Create, update, or transition a Jira ticket with convention guardrails | `/jira-helpers:manage-ticket transition OCPEDGE-1234 to "In Progress"` |
+| `plan-sprint` | Assist with sprint planning -- capacity analysis, ticket grooming, and commitment recommendations | `/jira-helpers:plan-sprint` |
 
 ## Hooks
 

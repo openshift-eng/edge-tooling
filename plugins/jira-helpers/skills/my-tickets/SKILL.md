@@ -13,6 +13,8 @@ allowed-tools:
   - Write
 ---
 
+# My Tickets
+
 ## Step 0: Resolve User Identity
 Read the `JIRA_USERNAME` environment variable using Bash: `echo "$JIRA_USERNAME"`. This is the user's Jira email address used for assignee queries.
 
@@ -32,7 +34,7 @@ Apply filters from arguments:
 If no arguments provided, use the base query (all open assigned tickets).
 
 ## Step 2: Fetch Issues
-Call `jira_search` with the built JQL. Request fields: `key, summary, status, issuetype, assignee, updated, labels, issuelinks, customfield_10028, customfield_10014, customfield_10021`.
+Call `jira_search` with the built JQL. Request fields: `key, summary, status, issuetype, assignee, updated, labels, issuelinks, sprint, customfield_10028, customfield_10014, customfield_10021`.
 
 Handle pagination: if the response indicates more results, fetch subsequent pages using `page_token`.
 
@@ -51,9 +53,9 @@ Present results in a markdown table:
 ```
 
 Where Flags shows:
-- 🚩 if flagged (impediment)
-- ⛔ if blocked by another issue
-- ⏰ if stale (>5 days since update and In Progress/Review)
+- Flagged -- impediment
+- Blocked -- blocked by another issue
+- Stale -- >5 days since update and In Progress/Review
 
 Below the table, show aggregates:
 - Total issues: X (Y SP)

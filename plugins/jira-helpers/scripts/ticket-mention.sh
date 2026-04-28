@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 1; }

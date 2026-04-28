@@ -28,7 +28,12 @@ def unwrap_mcp_response(raw):
 
     if isinstance(raw, dict):
         if "result" in raw and isinstance(raw["result"], str):
-            inner = json.loads(raw["result"])
+            try:
+                inner = json.loads(raw["result"])
+            except (json.JSONDecodeError, Exception) as e:
+                preview = raw["result"][:200]
+                print(f"Failed to parse MCP result JSON: {e}\nRaw (truncated): {preview}", file=sys.stderr)
+                return []
             return unwrap_mcp_response(inner)
         if "issues" in raw:
             return raw["issues"]

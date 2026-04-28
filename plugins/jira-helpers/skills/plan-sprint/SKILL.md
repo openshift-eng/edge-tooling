@@ -9,6 +9,7 @@ user-invocable: true
 argument-hint: "[sprint-number]"
 allowed-tools:
   - mcp__plugin_mcp-atlassian_mcp-atlassian__jira_search
+  - mcp__plugin_mcp-atlassian_mcp-atlassian__jira_get_agile_boards
   - mcp__plugin_mcp-atlassian_mcp-atlassian__jira_get_sprints_from_board
   - mcp__plugin_mcp-atlassian_mcp-atlassian__jira_get_issue
   - mcp__plugin_mcp-atlassian_mcp-atlassian__jira_update_issue
@@ -29,17 +30,18 @@ allowed-tools:
    If edge-scrum is not installed, use defaults: 8 SP target, Fibonacci pointing.
 
 ## Step 1: Identify Target Sprint
-1. Call `jira_get_sprints_from_board` with `board_id="11479"` and `state="active"` to get the active sprint.
-2. Call `jira_get_sprints_from_board` with `board_id="11479"` and `state="future"` to get future sprints.
-3. If the user provided a sprint number, match it. Otherwise, use the next future sprint. If no future sprint exists, ask the user which sprint to plan for.
-4. Note the target sprint ID and name.
+1. Resolve the board ID: call `jira_get_agile_boards` with `project_key="OCPEDGE"`. If multiple boards are returned, ask the user to select one. Use the resolved board ID for all subsequent sprint calls.
+2. Call `jira_get_sprints_from_board` with the resolved board ID and `state="active"` to get the active sprint.
+3. Call `jira_get_sprints_from_board` with the resolved board ID and `state="future"` to get future sprints.
+4. If the user provided a sprint number, match it. Otherwise, use the next future sprint. If no future sprint exists, ask the user which sprint to plan for.
+5. Note the target sprint ID and name.
 
 ## Step 2: Assess Current Sprint Load
 1. Query active sprint tickets assigned to the user:
    ```
    assignee = "{JIRA_USERNAME}" AND sprint in openSprints() AND project in (OCPEDGE, USHIFT, OCPBUGS) ORDER BY priority ASC
    ```
-2. Request fields: `key, summary, status, issuetype, customfield_10028, customfield_10014, customfield_10021, issuelinks`.
+2. Request fields: `key, summary, status, issuetype, priority, description, customfield_10028, customfield_10014, customfield_10021, issuelinks`.
 3. Calculate:
    - Total committed SP in active sprint
    - SP completed (status in Done, Closed, Verified)
@@ -81,7 +83,7 @@ Display the proposed plan:
 - Expected carryover: X SP
 - New work suggested: Y SP
 - Total planned: Z SP
-- Capacity status: 🟢 On target / 🟡 Over/under by N SP
+- Capacity status: On target / Over/under by N SP
 
 ### Ticket Gaps Found
 List any issues that need fixing before sprint planning.
