@@ -1,6 +1,6 @@
 ---
 name: yolo-agent
-argument-hint: <pr-url>
+argument-hint: "<pr-url> [--infinite-loop] [--skip-users]"
 description: "Autonomous PR lifecycle agent — monitors CI, triages review comments, auto-fixes trivial issues, and loops until the PR is ready"
 user-invocable: true
 allowed-tools: Skill, Bash, Read, Write, Edit, Glob, Grep, Agent
@@ -20,7 +20,12 @@ The user argument is: $ARGUMENTS
 ## Arguments
 
 `$ARGUMENTS`: A GitHub PR URL (`https://github.com/<org>/<repo>/pull/<number>`),
-optionally followed by `--infinite-loop` for unlimited iterations (default: 3).
+optionally followed by:
+
+- `--infinite-loop` — unlimited iterations (default: 3)
+- `--skip-users` — ignore human review comments; only process bot comments
+  (e.g., CodeRabbit). Human comments are excluded from the comment track
+  entirely: they are not analyzed, not fixed, and not replied to.
 
 ## Security
 
@@ -47,8 +52,9 @@ require explicit user confirmation.
 
 ### Step 1: Initialize
 
-Parse the PR URL and `--infinite-loop` flag from `$ARGUMENTS`. Extract org,
-repo, and PR number.
+Parse the PR URL, `--infinite-loop` flag, and `--skip-users` flag from
+`$ARGUMENTS`. Extract org, repo, and PR number. Store `skip_users` as a
+boolean for use in Step 2a.
 
 Load state in this order:
 
@@ -64,11 +70,13 @@ enter analysis-only mode.
 
 #### 2a: Gather Data
 
-Run `pr-checks.sh <url>` and `pr-comments.sh <url> <addressed-ids>` to
-collect CI status and unresolved review comments. Extract the branch name
-from the checks JSON (`.pr.branch`) for use in push operations. Increment
-the cycle counter via `pr-state.sh increment cycle`. Display a compact
-status summary.
+Run `pr-checks.sh <url>` and `pr-comments.sh <url> <addressed-ids>
+[--skip-users]` to collect CI status and unresolved review comments. Pass
+`--skip-users` to `pr-comments.sh` when the flag was provided — this
+filters out human comments at the data layer, returning only bot comments.
+Extract the branch name from the checks JSON (`.pr.branch`) for use in
+push operations. Increment the cycle counter via `pr-state.sh increment
+cycle`. Display a compact status summary.
 
 #### 2b: Evaluate Completion
 
@@ -83,10 +91,75 @@ Check in order:
 
 Launch up to TWO parallel Agent calls:
 
-**Comment Track** (if new comments exist): Read each inline comment, analyze
-CodeRabbit suggestions and human comments against the referenced code. Propose
-fixes as diffs, classify each as trivial or non-trivial. For non-actionable
-comments, return the comment ID and a brief reason.
+**Comment Track** (if new comments exist):
+
+The Comment Track routes comments through the team's standardized
+analysis skills based on author type.
+
+**Partition**: Separate the `inline_comments` array from `pr-comments.sh`
+output into two groups using the `is_bot` field:
+
+- **Bot comments**: entries where `is_bot == true`
+- **Human comments**: entries where `is_bot == false`
+
+When `--skip-users` was passed, `pr-comments.sh` has already filtered
+out human comments at the data layer — the human group will be empty.
+
+**Dispatch**: Launch up to TWO sub-Agent calls in parallel (one per
+non-empty group). Skip any group that has zero comments.
+
+Bot comments agent (all bots, not just CodeRabbit):
+
+```text
+Run the coderabbit skill in batch mode for this PR:
+/pr-review:coderabbit <pr_url> --batch
+Return the JSON output verbatim.
+```
+
+> **Note:** The coderabbit skill currently handles all bot comments.
+> In the future it may be generalized into a bot-generic analysis
+> skill, or bot comments may be routed to different skills by author.
+
+Human comments agent:
+
+```text
+Run the vet-review skill in batch mode for this PR:
+/pr-review:vet-review <pr_number> --batch
+Return the JSON output verbatim.
+```
+
+**Merge and classify**: Collect the JSON output from each sub-agent
+and map findings to yolo-agent's classification:
+
+| coderabbit `category` | yolo-agent classification |
+|------------------------|---------------------------|
+| `auto_apply` | **trivial** — apply directly, batch for auto-push |
+| `review` | **non-trivial** — display diff, ask for confirmation |
+| `dropped` | **non-actionable** — reply with reason, mark addressed |
+
+| vet-review `status` | yolo-agent classification |
+|----------------------|---------------------------|
+| `survived` (any category) | **non-trivial** — display diff, ask for confirmation |
+| `dropped` | **non-actionable** — reply with reason, mark addressed |
+
+Human review findings are always non-trivial — auto-pushing without
+confirmation would undermine the review process.
+
+**Extract comment IDs**: Each finding includes a `comment_id` field.
+Collect all IDs for state tracking via `pr-state.sh add-addressed`.
+Findings with `comment_id: null` (summary/review-body sourced) should
+be displayed but not added to the addressed list.
+
+**Edge cases**:
+
+| Scenario | Behavior |
+|----------|----------|
+| No bot comments | Skip coderabbit dispatch, only run vet-review |
+| No human comments | Skip vet-review dispatch, only run coderabbit |
+| `--skip-users` active, no bot comments | No Comment Track work, return empty |
+| `--skip-users` active | Human group empty, only dispatch coderabbit if bots exist |
+| Both groups empty | No Comment Track work, proceed to 2d/2e |
+| Sub-agent returns `{"findings": []}` | No findings from that source, merge with other |
 
 **CI Track** (if failed jobs exist): Check the `analyzed` list in state and
 skip already-analyzed jobs. Route each new failure to the appropriate skill:
@@ -161,7 +234,9 @@ Update state with notes, delay, and `status=waiting`. Save state via
 
 **Interactive mode**: Schedule next cycle with `CronCreate` (one-shot,
 `recurring: false`, `durable: false`). Prompt: `/pr-review:yolo-agent <url>`
-(append `--infinite-loop` if max_iterations is 0). Then stop.
+(append `--infinite-loop` if max_iterations is 0, append `--skip-users` if
+the flag was provided). The cron expression MUST use the machine's local
+time (run `date '+%H:%M'` to get it), NOT UTC. Then stop.
 
 **Headless mode**: Just exit. The Stop hook reads the saved state, sleeps
 for `next_check_delay`, and spawns a new `claude -p` session.
@@ -186,7 +261,7 @@ direct `jq` state manipulation, manual `git push`, or ad-hoc replacements.**
 |--------|---------|------|------------|
 | `pr-state.sh` | ALL state operations | `init <url> [max]`, `save <n>`, `load <n>`, `clean <n>`, `get <field>`, `set <field> <value>`, `increment <field>`, `set-notes <text>`, `set-status <status>`, `add-addressed <id>`, `add-analyzed <key>`, `decode` | 0=ok, 3=error |
 | `pr-checks.sh` | Fetch PR metadata + CI status | `<pr-url>` | 0=all pass, 1=failures, 2=pending only, 3=error |
-| `pr-comments.sh` | Fetch unresolved review comments | `<pr-url> [addressed-ids]` | 0=has comments, 1=no comments, 3=error |
+| `pr-comments.sh` | Fetch unresolved review comments | `<pr-url> [addressed-ids] [--skip-users]` | 0=has comments, 1=no comments, 3=error |
 | `pr-push.sh` | Validate fork remote + push | `<branch> [message] [--expected-files f1,f2]` | 0=pushed, 1=nothing to push, 2=file mismatch, 3=error |
 
 **Mandatory usage rules:**
@@ -205,4 +280,5 @@ to `/tmp/pr-monitor-<pr-number>.json`.
 - `gh` CLI authenticated with repo access
 - `jq` installed
 - CI analysis skills: `ci:prow-job-analyze-test-failure`, `ci:prow-job-analyze-install-failure`
+- Comment analysis skills: `pr-review:coderabbit`, `pr-review:vet-review`
 - Local clone of the target repository

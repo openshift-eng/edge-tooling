@@ -24,9 +24,15 @@ Skeptical second pass on findings from a prior review (e.g., `/review-pr`). Filt
 
 # Or vet review comments already on a PR
 /pr-review:vet-review 123
+
+# Batch mode — output structured JSON instead of interactive flow
+# (used by yolo-agent for automated integration)
+/pr-review:vet-review 123 --batch
 ```
 
 **This skill does not generate its own findings.** It works exclusively with output from a prior review. If no review findings are found, it will ask you to run `/review-pr` first.
+
+**Batch mode (`--batch`):** Performs identical vetting but outputs categorized findings as JSON instead of presenting them interactively. Does not apply changes or prompt for confirmation. Used by yolo-agent for standardized comment analysis.
 
 ### coderabbit
 
@@ -44,13 +50,21 @@ Triage CodeRabbit automated review comments on a PR. Fetches all inline CodeRabb
 
 # Auto-detect PR from current branch
 /pr-review:coderabbit
+
+# Batch mode — output structured JSON instead of interactive flow
+# (used by yolo-agent for automated integration)
+/pr-review:coderabbit 123 --batch
 ```
 
 **This skill does not generate its own findings.** It works exclusively with CodeRabbit's inline review comments. Summary/walkthrough comments are read for context but not actioned.
 
+**Batch mode (`--batch`):** Performs identical vetting but outputs categorized findings as JSON instead of presenting the interactive table. Does not apply changes, reply to comments, or prompt for confirmation. Used by yolo-agent for standardized comment analysis.
+
 ### yolo-agent
 
 Autonomous PR lifecycle agent. Monitors CI checks and review comments, auto-fixes trivial issues (style, linting, imports), asks for confirmation on non-trivial changes, and loops until the PR is ready. Uses `CronCreate` to automatically schedule the next cycle within the same session.
+
+Comment analysis is routed through the team's standardized skills: bot comments (e.g., CodeRabbit) are analyzed via the `coderabbit` skill in batch mode, and human comments are analyzed via the `vet-review` skill in batch mode. This ensures consistent vetting criteria across all invocation paths.
 
 ```text
 # Monitor a PR (default 3 iterations)
@@ -58,6 +72,12 @@ Autonomous PR lifecycle agent. Monitors CI checks and review comments, auto-fixe
 
 # Monitor with unlimited iterations
 /pr-review:yolo-agent https://github.com/org/repo/pull/123 --infinite-loop
+
+# Only process bot comments (skip human reviewers)
+/pr-review:yolo-agent https://github.com/org/repo/pull/123 --skip-users
+
+# Combine flags
+/pr-review:yolo-agent https://github.com/org/repo/pull/123 --infinite-loop --skip-users
 ```
 
 **Auto-push rules:** Trivial changes (style, naming, linting, imports, simple assertions) are pushed without confirmation. Non-trivial changes require explicit approval. Security-sensitive files are never modified.
@@ -67,6 +87,6 @@ Autonomous PR lifecycle agent. Monitors CI checks and review comments, auto-fixe
 - **Claude Code:** >= 1.0.0
 - **Category:** debug
 
-## Author
+## Authors
 
-fonta-rh
+fonta-rh, vmauro

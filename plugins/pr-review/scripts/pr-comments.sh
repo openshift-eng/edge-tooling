@@ -102,7 +102,7 @@ build_output() {
             file: .path,
             line: (.line // .original_line),
             diff_hunk: .diff_hunk,
-            is_coderabbit: (.user.login == "coderabbitai"),
+            is_bot: (.user.type == "Bot" or (.user.login | test("\\[bot\\]$"))),
             created_at: .created_at,
             updated_at: .updated_at,
             in_reply_to_id: (.in_reply_to_id // null)
@@ -125,10 +125,28 @@ build_output() {
 }
 
 main() {
-    [[ $# -lt 1 ]] && die "Usage: $(basename "$0") <github-pr-url> [addressed-comment-ids]"
+    [[ $# -lt 1 ]] && die "Usage: $(basename "$0") <github-pr-url> [addressed-comment-ids] [--skip-users]"
 
-    local pr_url="$1"
-    local addressed_ids="${2:-}"
+    local pr_url="" addressed_ids="" skip_users=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --skip-users)
+                skip_users=true
+                shift
+                ;;
+            *)
+                if [[ -z "${pr_url}" ]]; then
+                    pr_url="$1"
+                elif [[ -z "${addressed_ids}" ]]; then
+                    addressed_ids="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    [[ -z "${pr_url}" ]] && die "Usage: $(basename "$0") <github-pr-url> [addressed-comment-ids] [--skip-users]"
 
     check_dependencies
     validate_url "${pr_url}"
@@ -138,6 +156,10 @@ main() {
     review_comments=$(fetch_review_comments "${ORG}" "${REPO}" "${PR_NUMBER}")
     review_threads=$(fetch_review_threads "${ORG}" "${REPO}" "${PR_NUMBER}")
     resolved_ids=$(fetch_resolved_comment_ids "${ORG}" "${REPO}" "${PR_NUMBER}")
+
+    if [[ "${skip_users}" == "true" ]]; then
+        review_comments=$(echo "${review_comments}" | jq '[.[] | select(.user.type == "Bot" or (.user.login | test("\\[bot\\]$")))]')
+    fi
 
     local output
     output=$(build_output "${review_comments}" "${review_threads}" "${addressed_ids}" "${resolved_ids}")

@@ -1,7 +1,7 @@
 ---
 name: vet-review
 description: "Skeptical second pass on PR review findings — use after /review-pr to filter noise and validate real issues"
-argument-hint: "[PR number | branch]"
+argument-hint: "[PR number | branch] [--batch]"
 user-invocable: true
 ---
 
@@ -51,6 +51,11 @@ Look for review output in this order:
 
 Collect all findings into a working list.
 
+Check whether `$ARGUMENTS` contains `--batch`. If present, set
+`BATCH_MODE = true` and remove `--batch` from the argument string
+before parsing the PR number or branch. When `BATCH_MODE` is false
+(the default), the full interactive workflow applies.
+
 ### 2. Gather the diff
 
 Determine the diff based on `$ARGUMENTS`:
@@ -89,11 +94,65 @@ Categorize surviving findings:
 - **Clarity**: Something that will genuinely confuse the next person
   reading this code (not just "could be slightly clearer")
 
+### 4b. Batch Mode Output (skip to here when `BATCH_MODE = true`)
+
+When `BATCH_MODE` is true, **skip Steps 5 through 7 entirely**. Instead,
+output a single JSON object containing all findings (both survived and
+dropped):
+
+```json
+{
+  "findings": [
+    {
+      "comment_id": "<number|null>",
+      "status": "survived|dropped",
+      "category": "bug|security|logic_gap|clarity|null",
+      "file": "<string|null>",
+      "line": "<number|null>",
+      "description": "<string>",
+      "fix_diff": "<string|null>",
+      "reason": "<string>"
+    }
+  ]
+}
+```
+
+Field definitions:
+
+- **comment_id**: The GitHub inline comment `id` that produced this
+  finding. `null` when the finding came from conversation context
+  rather than a PR comment.
+- **status**: `survived` if the finding passed vetting, `dropped` if
+  it was filtered as noise.
+- **category**: The category from Step 4 (`bug`, `security`,
+  `logic_gap`, `clarity`). `null` for dropped findings.
+- **file**: The file path referenced by the finding. `null` if not
+  file-specific.
+- **line**: The line number. `null` if not line-specific.
+- **description**: One-line description of the finding.
+- **fix_diff**: The proposed fix as a unified diff string. `null` for
+  dropped findings or findings where no fix was generated.
+- **reason**: Why the finding survived or was dropped. For survived:
+  the concrete scenario. For dropped: why it's noise.
+
+**Rules for batch output:**
+
+- Output ONLY the JSON object. No markdown, no commentary.
+- Do NOT present findings one-by-one.
+- Do NOT prompt the user for accept/discard/discuss.
+- The vetting in Steps 1–4 is identical to interactive mode. Only the
+  output format changes.
+- If no findings exist at all, output `{"findings": []}`.
+- If all findings are dropped, still include them with
+  `"status": "dropped"`.
+
 ### 5. Present findings one by one
+
+**(Interactive mode only — skip when `BATCH_MODE = true`.)**
 
 Start with a summary:
 
-```
+```text
 ## Vet Review Summary
 
 **Review source**: <where the findings came from>
@@ -106,17 +165,17 @@ Start with a summary:
 
 Then present the first surviving finding:
 
-```
+```text
 ## Finding 1/M — [Category]
 
-**File:** `path/to/file.go:42`
-**Original finding:** <what the review said>
+**File:** path/to/file.go:42
+**Original finding:** what the review said
 
 **My assessment:**
-<Why this finding is valid — what concrete scenario causes a problem>
+Why this finding is valid — what concrete scenario causes a problem
 
 **Suggested fix:**
-<Specific, minimal change>
+Specific, minimal change
 
 ---
 What do you think — accept, discard, or discuss?
@@ -134,10 +193,12 @@ What do you think — accept, discard, or discuss?
 
 ### 6. Report dropped findings
 
+**(Interactive mode only — skip when `BATCH_MODE = true`.)**
+
 After all surviving findings are processed, briefly list what was
 dropped and why:
 
-```
+```text
 ## Dropped Findings
 
 | # | Original Finding | Reason Dropped |
@@ -149,14 +210,16 @@ dropped and why:
 
 ### 7. Final summary
 
+**(Interactive mode only — skip when `BATCH_MODE = true`.)**
+
 After all findings are processed, give a brief summary:
 
-```
+```text
 ## Final Tally
 
-- **Accepted**: <list>
-- **Discarded by user**: <list>
-- **Dropped as noise**: <list>
+- **Accepted**: list
+- **Discarded by user**: list
+- **Dropped as noise**: list
 ```
 
 ### 8. If no findings survive
