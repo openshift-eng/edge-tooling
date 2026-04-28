@@ -18,6 +18,12 @@ go build .    # produces ./gangway-cli binary
 
 Requires Go 1.20+.
 
+The scripts find `gangway-cli` via `GANGWAY_BIN`. If the binary is on your `PATH`, it's detected automatically. Otherwise, export it:
+
+```bash
+export GANGWAY_BIN=~/Projects/gangway-cli/gangway-cli
+```
+
 ### 2. Get your app.ci token
 
 1. Log in to [app.ci console](https://console-openshift-console.apps.ci.l2s4.p1.openshiftapps.com)
@@ -118,7 +124,7 @@ Usage: scripts/launch.sh <topology> <version> --job <selector> [options]
 
 Before launching, the script verifies:
 
-1. `gangway-cli` binary exists and is executable (skipped for `--dry-run`)
+1. `gangway-cli` is a regular file and executable (skipped for `--dry-run`, `--list`, `--refresh`)
 2. Release image tag exists on quay.io (via REST API)
 3. `MY_APPCI_TOKEN` is set and accepted by the Gangway API (skipped for `--dry-run`)
 

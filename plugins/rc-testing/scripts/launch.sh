@@ -19,7 +19,11 @@ declare -A SIPPY_FILTER=(
 
 to_image() {
     local version="$1"
-    echo "${IMAGE_BASE}:${version}-${ARCH}"
+    if [[ "$version" == */* ]]; then
+        echo "$version"
+    else
+        echo "${IMAGE_BASE}:${version}-${ARCH}"
+    fi
 }
 
 detect_release() {
@@ -135,18 +139,22 @@ if ! $DRY_RUN && ! $LIST_ONLY && ! $REFRESH; then
 fi
 
 if [[ -n "$RELEASE_IMAGE" ]]; then
-    RELEASE_TAG="${RELEASE_IMAGE#*:}"
-    echo "Verifying image tag: $RELEASE_TAG"
-    TAG_EXISTS=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 20 \
-         "https://quay.io/api/v1/repository/openshift-release-dev/ocp-release/tag/?specificTag=${RELEASE_TAG}" \
-        | jq -r '.tags | length' 2>/dev/null || echo "unknown")
-    if [[ "$TAG_EXISTS" == "0" ]]; then
-        echo "Error: tag '$RELEASE_TAG' not found on quay.io"
-        exit 1
-    elif [[ "$TAG_EXISTS" == "unknown" ]]; then
-        echo "Warning: could not verify tag (quay.io unreachable or jq missing), proceeding anyway"
+    if [[ "$RELEASE_IMAGE" == "${IMAGE_BASE}:"* ]]; then
+        RELEASE_TAG="${RELEASE_IMAGE#*:}"
+        echo "Verifying image tag: $RELEASE_TAG"
+        TAG_EXISTS=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 20 \
+             "https://quay.io/api/v1/repository/openshift-release-dev/ocp-release/tag/?specificTag=${RELEASE_TAG}" \
+            | jq -r '.tags | length' 2>/dev/null || echo "unknown")
+        if [[ "$TAG_EXISTS" == "0" ]]; then
+            echo "Error: tag '$RELEASE_TAG' not found on quay.io"
+            exit 1
+        elif [[ "$TAG_EXISTS" == "unknown" ]]; then
+            echo "Warning: could not verify tag (quay.io unreachable or jq missing), proceeding anyway"
+        else
+            echo "Image OK ($RELEASE_IMAGE)"
+        fi
     else
-        echo "Image OK ($RELEASE_IMAGE)"
+        echo "Using custom image: $RELEASE_IMAGE (skipping quay.io verification)"
     fi
 fi
 
@@ -174,9 +182,9 @@ if $REFRESH; then
     SIPPY_RESPONSE=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 30 \
          "${SIPPY_API}?release=${OCP_RELEASE}&filter=${ENCODED_FILTER}&period=default&sortField=name&sort=asc")
 
-    # Extract nightly job names, sort, tag cross-upgrade jobs
+    # Extract nightly job names with recent runs, sort, tag cross-upgrade jobs
     echo "$SIPPY_RESPONSE" \
-        | jq -r '.[].name' 2>/dev/null \
+        | jq -r '.[] | select(.current_runs > 0) | .name' 2>/dev/null \
         | { grep '^periodic-ci-openshift-release-main-nightly' || true; } \
         | sort \
         | while IFS= read -r name; do
@@ -360,17 +368,21 @@ while IFS= read -r line; do
     if $DRY_RUN; then
         echo "  [dry-run] would launch with --initial=$JOB_INITIAL --latest=$RELEASE_IMAGE"
     else
-        if "$GANGWAY_BIN" \
+        GANGWAY_OUTPUT=$("$GANGWAY_BIN" \
             --api-url="$GANGWAY_API" \
             --initial "$JOB_INITIAL" \
             --latest "$RELEASE_IMAGE" \
             --job-name "$JOB" \
-            --jobs-file-path="$RUN_DIR"; then
+            --jobs-file-path="$RUN_DIR" 2>&1) && {
             echo "  launched"
-        else
-            echo "  FAILED to launch"
-            FAILED=$((FAILED + 1))
-        fi
+        } || {
+            if echo "$GANGWAY_OUTPUT" | grep -q "500 Internal Server Error"; then
+                echo "  SKIPPED — job not found in Prow (HTTP 500). Remove from $JOB_FILE or run --refresh."
+            else
+                echo "  FAILED to launch: $GANGWAY_OUTPUT"
+                FAILED=$((FAILED + 1))
+            fi
+        }
         sleep "$DELAY"
     fi
 done < "$JOB_FILE"
