@@ -85,8 +85,8 @@ validate_not_upstream() {
     local gh_user
     gh_user=$(gh api user --jq '.login') || die "Failed to get GitHub username"
 
-    # If the remote URL contains the upstream org/repo AND the org doesn't match the gh user
-    if echo "${remote_url}" | grep -qi "${upstream_org}/${upstream_repo}"; then
+    # Match both HTTPS (org/repo) and SSH (org/repo.git) URL patterns
+    if echo "${remote_url}" | grep -qiE "${upstream_org}/${upstream_repo}(\.git)?$|:${upstream_org}/${upstream_repo}(\.git)?$"; then
         if [[ "${upstream_org,,}" != "${gh_user,,}" ]]; then
             die "Remote '${remote}' points to upstream ${upstream_org}/${upstream_repo} — refusing to push directly to upstream"
         fi
@@ -124,14 +124,13 @@ check_blocked_patterns() {
     [[ -z "${staged_files}" ]] && return 0
 
     # Tier 1: substring matches (case-insensitive, anywhere in path)
-    local blocked_substrings=("rbac" "secret" "credential" "password" "passwd" "kubeconfig" "htpasswd")
+    local blocked_substrings=("rbac" "secret" "credential" "password" "passwd" "kubeconfig" "htpasswd" "token")
 
     # Tier 2: regex matches (extended regex against full path)
     local blocked_regexes=(
         '\.(key|pem|p12|pfx|jks|keystore)$'
         '(^|/)\.env(\..+)?$'
         '(^|/)id_(rsa|ed25519|ecdsa|dsa)'
-        '(^|[/_.-])tokens?([/_.-]|$)'
     )
 
     local file pattern
@@ -194,14 +193,16 @@ main() {
         fi
         verify_staged_files "${expected_files}"
 
-        git commit -m "${commit_message}"
+        git commit -m "${commit_message}" \
+            || die "git commit failed"
     fi
 
     local remote
     remote=$(find_fork_remote)
     validate_not_upstream "${remote}"
 
-    git push "${remote}" "HEAD:${branch}"
+    git push "${remote}" "HEAD:${branch}" \
+        || die "git push to ${remote} failed"
 
     local sha
     sha=$(git rev-parse --short HEAD)

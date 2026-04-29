@@ -51,32 +51,38 @@ main() {
         get)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") get <field>"
             require_state
-            echo "${PR_MONITOR_STATE}" | jq -r --arg f "$1" '.[$f] // empty | if type == "array" then join(",") else tostring end'
+            echo "${PR_MONITOR_STATE}" | jq -r --arg f "$1" '.[$f] // empty | if type == "array" then join(",") else tostring end' \
+                || die "Failed to get field '$1'"
             ;;
         set)
             [[ $# -lt 2 ]] && die "Usage: $(basename "$0") set <field> <value>"
             require_state
-            echo "${PR_MONITOR_STATE}" | jq -c --arg f "$1" --arg v "$2" '.[$f] = ($v | try tonumber // $v)'
+            echo "${PR_MONITOR_STATE}" | jq -c --arg f "$1" --arg v "$2" '.[$f] = ($v | try tonumber // $v)' \
+                || die "Failed to set field '$1'"
             ;;
         add-addressed)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") add-addressed <comment-id>"
             require_state
-            echo "${PR_MONITOR_STATE}" | jq -c --arg id "$1" '.addressed += [($id | try tonumber // $id)]'
+            echo "${PR_MONITOR_STATE}" | jq -c --arg id "$1" '.addressed += [($id | try tonumber // $id)]' \
+                || die "Failed to add addressed ID '$1'"
             ;;
         add-analyzed)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") add-analyzed <job-key>"
             require_state
-            echo "${PR_MONITOR_STATE}" | jq -c --arg key "$1" '.analyzed += [$key]'
+            echo "${PR_MONITOR_STATE}" | jq -c --arg key "$1" '.analyzed += [$key]' \
+                || die "Failed to add analyzed key '$1'"
             ;;
         increment)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") increment <field>"
             require_state
-            echo "${PR_MONITOR_STATE}" | jq -c --arg f "$1" 'if .[$f] | type != "number" then error("field is not numeric") else .[$f] += 1 end'
+            echo "${PR_MONITOR_STATE}" | jq -c --arg f "$1" 'if .[$f] | type != "number" then error("field is not numeric") else .[$f] += 1 end' \
+                || die "Failed to increment field '$1'"
             ;;
         set-notes)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") set-notes <text>"
             require_state
-            echo "${PR_MONITOR_STATE}" | jq -c --arg v "$1" '.notes = $v'
+            echo "${PR_MONITOR_STATE}" | jq -c --arg v "$1" '.notes = $v' \
+                || die "Failed to set notes"
             ;;
         set-status)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") set-status <running|complete|waiting>"
@@ -85,11 +91,13 @@ main() {
                 running|complete|waiting) ;;
                 *) die "Invalid status: $1 (expected running|complete|waiting)" ;;
             esac
-            echo "${PR_MONITOR_STATE}" | jq -c --arg v "$1" '.status = $v'
+            echo "${PR_MONITOR_STATE}" | jq -c --arg v "$1" '.status = $v' \
+                || die "Failed to set status to '$1'"
             ;;
         decode)
             require_state
-            echo "${PR_MONITOR_STATE}" | jq .
+            echo "${PR_MONITOR_STATE}" | jq . \
+                || die "Failed to decode state"
             ;;
         *)
             die "Unknown subcommand: ${subcommand}"

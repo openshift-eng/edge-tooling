@@ -83,6 +83,9 @@ Load state in this order:
 If `--yolo` was provided (or `yolo_mode` is true in loaded state), set
 `yolo_mode` to `true` in state via `pr-state.sh set yolo_mode true`.
 
+If `--skip-users` was provided (or `skip_users` is true in loaded state),
+set `skip_users` to `true` in state via `pr-state.sh set skip_users true`.
+
 If continuing, set status to `running` and display iteration number and
 previous cycle notes. If the org is not in the trusted allowlist, warn and
 enter analysis-only mode.
@@ -129,7 +132,7 @@ out human comments at the data layer — the human group will be empty.
 **Dispatch**: Launch up to TWO sub-Agent calls in parallel (one per
 non-empty group). Skip any group that has zero comments.
 
-Bot comments agent (all bots, not just CodeRabbit):
+Bot comments agent:
 
 ```text
 Run the coderabbit skill in batch mode for this PR:
@@ -137,9 +140,10 @@ Run the coderabbit skill in batch mode for this PR:
 Return the JSON output verbatim.
 ```
 
-> **Note:** The coderabbit skill currently handles all bot comments.
-> In the future it may be generalized into a bot-generic analysis
-> skill, or bot comments may be routed to different skills by author.
+> **Note:** The coderabbit skill currently processes only
+> `coderabbitai[bot]` comments. Other bot comments are passed through
+> but may not receive specialized analysis. In the future, bot comments
+> may be routed to different skills.
 
 Human comments agent:
 

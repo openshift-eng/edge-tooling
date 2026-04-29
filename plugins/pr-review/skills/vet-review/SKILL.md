@@ -96,7 +96,7 @@ Categorize surviving findings:
 
 ### 4b. Batch Mode Output (skip to here when `BATCH_MODE = true`)
 
-When `BATCH_MODE` is true, **skip Steps 5 through 7 entirely**. Instead,
+When `BATCH_MODE` is true, **skip Steps 5 through 8 entirely**. Instead,
 output a single JSON object containing all findings (both survived and
 dropped):
 

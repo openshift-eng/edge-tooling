@@ -64,13 +64,14 @@ main() {
 
         command -v claude >/dev/null 2>&1 || die "claude CLI is not installed"
 
-        local loop_flag="" yolo_flag=""
+        local loop_flag="" yolo_flag="" skip_flag=""
         [[ "${max_iterations}" -eq 0 ]] && loop_flag=" --infinite-loop"
         [[ "$(jq_get "yolo_mode")" == "true" ]] && yolo_flag=" --yolo"
+        [[ "$(jq_get "skip_users")" == "true" ]] && skip_flag=" --skip-users"
 
         (
             sleep "${next_check_delay}"
-            PR_MONITOR_STATE="${PR_MONITOR_STATE}" claude -p "/pr-review:yolo-agent ${pr_url}${loop_flag}${yolo_flag}" \
+            PR_MONITOR_STATE="${PR_MONITOR_STATE}" claude -p "/pr-review:yolo-agent ${pr_url}${loop_flag}${yolo_flag}${skip_flag}" \
                 > "/tmp/pr-review-yolo-agent-pr$(echo "${pr_url}" | grep -oP '[0-9]+$')-iter-${new_iteration}.log" 2>&1
         ) &
         disown
@@ -100,11 +101,12 @@ main() {
 
         command -v claude >/dev/null 2>&1 || die "claude CLI is not installed"
 
-        local loop_flag="" yolo_flag=""
+        local loop_flag="" yolo_flag="" skip_flag=""
         [[ "${max_iterations}" -eq 0 ]] && loop_flag=" --infinite-loop"
         [[ "$(jq_get "yolo_mode")" == "true" ]] && yolo_flag=" --yolo"
+        [[ "$(jq_get "skip_users")" == "true" ]] && skip_flag=" --skip-users"
 
-        PR_MONITOR_STATE="${PR_MONITOR_STATE}" nohup claude -p "/pr-review:yolo-agent ${pr_url}${loop_flag}${yolo_flag}" \
+        PR_MONITOR_STATE="${PR_MONITOR_STATE}" nohup claude -p "/pr-review:yolo-agent ${pr_url}${loop_flag}${yolo_flag}${skip_flag}" \
             > "/tmp/pr-review-yolo-agent-pr$(echo "${pr_url}" | grep -oP '[0-9]+$')-crash-${new_iteration}.log" 2>&1 &
 
         exit 0

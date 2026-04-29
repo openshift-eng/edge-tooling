@@ -84,15 +84,20 @@ fetch_all_data() {
             || die "Failed to fetch PR data for ${org}/${repo}#${pr_number}"
 
         if [[ -z "${review_decision}" ]]; then
-            review_decision=$(echo "${result}" | jq -r '.data.repository.pullRequest.reviewDecision // "PENDING"')
+            review_decision=$(echo "${result}" | jq -r '.data.repository.pullRequest.reviewDecision // "PENDING"') \
+                || die "Failed to parse reviewDecision from GraphQL response"
         fi
 
         local page_threads
-        page_threads=$(echo "${result}" | jq -c '.data.repository.pullRequest.reviewThreads.nodes')
-        all_threads=$(jq -nc --argjson a "${all_threads}" --argjson b "${page_threads}" '$a + $b')
+        page_threads=$(echo "${result}" | jq -c '.data.repository.pullRequest.reviewThreads.nodes') \
+            || die "Failed to parse reviewThreads from GraphQL response"
+        all_threads=$(jq -nc --argjson a "${all_threads}" --argjson b "${page_threads}" '$a + $b') \
+            || die "Failed to merge thread pages"
 
-        has_next=$(echo "${result}" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
-        cursor=$(echo "${result}" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')
+        has_next=$(echo "${result}" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage') \
+            || die "Failed to parse pageInfo from GraphQL response"
+        cursor=$(echo "${result}" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor') \
+            || die "Failed to parse endCursor from GraphQL response"
     done
 
     jq -nc \
@@ -106,13 +111,15 @@ build_output() {
 
     local addressed_filter
     if [[ -n "${addressed_ids}" ]]; then
-        addressed_filter=$(echo "${addressed_ids}" | jq -Rc 'split(",") | map(tonumber)')
+        addressed_filter=$(echo "${addressed_ids}" | jq -Rc 'split(",") | map(tonumber)') \
+            || die "Failed to parse addressed IDs: ${addressed_ids}"
     else
         addressed_filter="[]"
     fi
 
     local review_decision
-    review_decision=$(echo "${graphql_data}" | jq -r '.review_decision')
+    review_decision=$(echo "${graphql_data}" | jq -r '.review_decision') \
+        || die "Failed to extract review_decision from data"
 
     local inline_block
     inline_block=$(echo "${graphql_data}" | jq -c \
@@ -138,10 +145,12 @@ build_output() {
             }
           | select(.id as $id | ($addressed | index($id)) | not)
           | if $skip_bots_only then select(.is_bot) else . end
-        ]')
+        ]') \
+        || die "Failed to build inline comments from GraphQL data"
 
     local inline_count
-    inline_count=$(echo "${inline_block}" | jq 'length')
+    inline_count=$(echo "${inline_block}" | jq 'length') \
+        || die "Failed to count inline comments"
 
     jq -nc \
         --argjson inline "${inline_block}" \
