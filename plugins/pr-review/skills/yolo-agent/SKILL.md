@@ -54,6 +54,48 @@ Auto-push WITHOUT confirmation:
 All other changes (new files, logic changes, API changes, multi-package)
 require explicit user confirmation.
 
+## Error Handling
+
+When any script or operation fails, **report the error and stop
+immediately**. Do NOT attempt to diagnose, fix, or work around the
+error. The user must resolve it manually.
+
+**Rules:**
+
+1. **Script exit code 3** (any script): Display the script name, the
+   error message from stderr, and the exit code. Set status to
+   `complete` with notes describing the failure. Stop.
+2. **Push failure** (`pr-push.sh` exit code 3): Display the full error
+   output (rejected push, auth failure, non-fast-forward, etc.). Do
+   NOT run `git pull`, `git rebase`, `git reset`, or force-push. Stop.
+3. **Push file mismatch** (`pr-push.sh` exit code 2): Display the
+   expected vs. staged file lists from the JSON output. Ask the user
+   whether to retry with the actual staged files. Do NOT unstage,
+   remove, or gitignore files.
+4. **API failures** (`gh api`, `gh pr`): Display the HTTP status code
+   and error body. Do NOT retry. Stop.
+5. **State load failure** (`pr-state.sh load` exit code 3): Display the
+   error. Do NOT initialize fresh state as a fallback — a missing
+   state file on a continuation cycle indicates a real problem. Stop.
+6. **Sub-agent failure** (Agent call returns error or unexpected
+   output): Display what the sub-agent returned. Do NOT re-dispatch
+   or fall back to direct analysis. Mark the cycle as incomplete and
+   stop.
+
+**Format for error output:**
+
+```text
+yolo-agent error — <script-or-operation>
+Exit code: <N>
+Output: <stderr or error JSON>
+
+Stopping. Manual intervention required.
+```
+
+Save state before stopping (if state is available) so the user can
+inspect it via `pr-state.sh decode`. Use `set-notes` to record the
+failure reason.
+
 ## Workflow
 
 ### Step 1: Initialize
@@ -95,12 +137,13 @@ enter analysis-only mode.
 #### 2a: Gather Data
 
 Run `pr-checks.sh <url>` and `pr-comments.sh <url> <addressed-ids>
-[--skip-users]` to collect CI status and unresolved review comments. Pass
-`--skip-users` to `pr-comments.sh` when the flag was provided — this
-filters out human comments at the data layer, returning only bot comments.
-Extract the branch name from the checks JSON (`.pr.branch`) for use in
-push operations. Increment the cycle counter via `pr-state.sh increment
-cycle`. Display a compact status summary.
+[--skip-users]` to collect CI status and unresolved review comments. If
+either script exits with code 3, follow the **Error Handling** rules and
+stop. Pass `--skip-users` to `pr-comments.sh` when the flag was
+provided — this filters out human comments at the data layer, returning
+only bot comments. Extract the branch name from the checks JSON
+(`.pr.branch`) for use in push operations. Increment the cycle counter
+via `pr-state.sh increment cycle`. Display a compact status summary.
 
 #### 2b: Evaluate Completion
 
@@ -213,7 +256,7 @@ and report which check failed.
 - **Infrastructure failures**: ask to post `/retest` comment
 
 After applying, push via `pr-push.sh <branch> <message> --expected-files <files>`.
-If exit code 2 (file mismatch), report and ask before retrying.
+On any non-zero exit code, follow the **Error Handling** rules above.
 
 On successful push, reply to each addressed comment on the PR with a brief
 description of what was done (e.g., "Renamed variable to snake_case",
