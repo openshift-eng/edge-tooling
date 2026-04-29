@@ -91,7 +91,7 @@ fetch_all_data() {
         local page_threads
         page_threads=$(echo "${result}" | jq -c '.data.repository.pullRequest.reviewThreads.nodes') \
             || die "Failed to parse reviewThreads from GraphQL response"
-        all_threads=$(jq -nc --argjson a "${all_threads}" --argjson b "${page_threads}" '$a + $b') \
+        all_threads=$(jq -s '.[0] + .[1]' <(echo "${all_threads}") <(echo "${page_threads}")) \
             || die "Failed to merge thread pages"
 
         has_next=$(echo "${result}" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage') \
@@ -100,10 +100,8 @@ fetch_all_data() {
             || die "Failed to parse endCursor from GraphQL response"
     done
 
-    jq -nc \
-        --arg decision "${review_decision}" \
-        --argjson threads "${all_threads}" \
-        '{"review_decision": $decision, "threads": $threads}'
+    echo "${all_threads}" | jq -c --arg decision "${review_decision}" \
+        '{"review_decision": $decision, "threads": .}'
 }
 
 build_output() {
@@ -152,12 +150,11 @@ build_output() {
     inline_count=$(echo "${inline_block}" | jq 'length') \
         || die "Failed to count inline comments"
 
-    jq -nc \
-        --argjson inline "${inline_block}" \
+    echo "${inline_block}" | jq -c \
         --arg decision "${review_decision}" \
         --argjson total "${inline_count}" \
         '{
-            inline_comments: $inline,
+            inline_comments: .,
             review_decision: $decision,
             summary: {
                 total_new: $total
