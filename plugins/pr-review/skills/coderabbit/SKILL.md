@@ -1,7 +1,7 @@
 ---
 name: coderabbit
 description: "Triage CodeRabbit review comments on a PR — vet, apply valid fixes, reply"
-argument-hint: "[PR number | PR URL | owner/repo#number]"
+argument-hint: "[PR number | PR URL | owner/repo#number] [--batch]"
 user-invocable: true
 ---
 
@@ -44,15 +44,23 @@ Parse `$ARGUMENTS` to extract the PR identifier:
 2. **`owner/repo#number`**: Parse directly.
 3. **Bare number** (e.g., `123`, `#123`): Determine owner/repo from
    the current working directory:
+
    ```bash
    gh repo view --json owner,name --jq '"\(.owner.login)/\(.name)"'
    ```
+
 4. **No arguments**: Detect the PR from the current branch:
+
    ```bash
    gh pr view --json number,url
    ```
 
 Store `OWNER`, `REPO`, and `PR_NUMBER` for subsequent steps.
+
+Check whether `$ARGUMENTS` contains `--batch`. If present, set
+`BATCH_MODE = true` and remove `--batch` from the argument string
+before parsing the PR identifier. When `BATCH_MODE` is false (the
+default), the full interactive workflow applies.
 
 ### 2. Fetch CodeRabbit comments
 
@@ -210,7 +218,59 @@ For each summary-sourced finding (`SOURCE: summary`):
      reviewed): recategorize to REVIEW regardless of original
      category.
 
+### 4b. Batch Mode Output (skip to here when `BATCH_MODE = true`)
+
+When `BATCH_MODE` is true, **skip Steps 5 through 9 entirely**. Instead,
+output a single JSON object containing all findings:
+
+```json
+{
+  "findings": [
+    {
+      "comment_id": "<number|null>",
+      "category": "auto_apply|review|dropped",
+      "source": "inline|review-body|summary",
+      "file": "<string|null>",
+      "line": "<number|null>",
+      "description": "<string>",
+      "fix_diff": "<string|null>",
+      "reason": "<string>"
+    }
+  ]
+}
+```
+
+Field definitions:
+
+- **comment_id**: The GitHub comment `id` for inline-sourced findings.
+  `null` for review-body and summary-sourced findings (these have no
+  individual comment ID).
+- **category**: The triage bucket from Step 4: `auto_apply`, `review`,
+  or `dropped`.
+- **source**: Where the finding came from: `inline`, `review-body`, or
+  `summary`.
+- **file**: The file path. `null` for summary findings that are not
+  file-specific.
+- **line**: The line number. `null` for summary findings.
+- **description**: One-line description of the finding.
+- **fix_diff**: The proposed fix as a unified diff string. `null` for
+  dropped findings or findings where no fix was generated.
+- **reason**: Why this category was assigned. For dropped findings, the
+  reason it was dropped. For auto_apply/review, why it was kept.
+
+**Rules for batch output:**
+
+- Output ONLY the JSON object. No markdown, no commentary, no table.
+- Do NOT apply any changes to the codebase.
+- Do NOT reply to any GitHub comments.
+- Do NOT prompt the user for confirmation.
+- The vetting in Steps 1–4 is identical to interactive mode. Only the
+  output format changes.
+- If there are no findings at all, output `{"findings": []}`.
+
 ### 5. Present the table
+
+**(Interactive mode only — skip when `BATCH_MODE = true`.)**
 
 Present ALL findings in a single structured output. Do NOT present
 findings one-by-one. The user needs to see the full picture before
@@ -218,7 +278,7 @@ confirming any actions.
 
 Format:
 
-```
+```text
 ## CodeRabbit Triage — PR #{PR_NUMBER}
 
 **PR**: {title}
@@ -228,45 +288,45 @@ Format:
 
 | # | Category | Source | File | Line | Finding |
 |---|----------|--------|------|------|---------|
-| 1 | AUTO-APPLY | inline | `path/file.go` | 42 | Missing nil check on `foo` |
-| 2 | REVIEW | inline | `pkg/api.go` | 15 | Error not propagated from `bar()` |
-| 3 | REVIEW | review-body | `cmd/main.go` | 88 | Parenthetical contradicts new behavior |
+| 1 | AUTO-APPLY | inline | path/file.go | 42 | Missing nil check on foo |
+| 2 | REVIEW | inline | pkg/api.go | 15 | Error not propagated from bar() |
+| 3 | REVIEW | review-body | cmd/main.go | 88 | Parenthetical contradicts new behavior |
 | 4 | REVIEW | summary | — | — | No migration docs for schema change |
-| 5 | DROPPED | inline | `utils/helper.go` | 33 | "Consider extracting to helper" |
+| 5 | DROPPED | inline | utils/helper.go | 33 | "Consider extracting to helper" |
 
 ---
 
 ### Auto-Apply (N)
 
-**1. `path/file.go:42` — Missing nil check**
-CodeRabbit: <brief quote>
-```diff
+**1. path/file.go:42 — Missing nil check**
+CodeRabbit: `brief quote`
+--- a/path/file.go
++++ b/path/file.go
 - original code
 + fixed code
-```
 
 ### Needs Review (N)
 
-**2. `pkg/api.go:15` — Error not propagated**
-CodeRabbit: <brief quote>
-Assessment: <why this is valid but needs human judgment>
-```diff
+**2. pkg/api.go:15 — Error not propagated**
+CodeRabbit: `brief quote`
+Assessment: `why this is valid but needs human judgment`
+--- a/pkg/api.go
++++ b/pkg/api.go
 - original code
 + fixed code
-```
 
-**3. `cmd/main.go:88` — Parenthetical contradicts new behavior** (review-body)
-CodeRabbit: <brief quote from nitpick>
-Assessment: <why this is a genuine inconsistency>
-```diff
+**3. cmd/main.go:88 — Parenthetical contradicts new behavior** (review-body)
+CodeRabbit: `brief quote from nitpick`
+Assessment: `why this is a genuine inconsistency`
+--- a/cmd/main.go
++++ b/cmd/main.go
 - old wording
 + fixed wording
-```
 
 **4. (summary) No migration docs for schema change**
-CodeRabbit: <brief quote from summary>
-Assessment: <why this is valid — e.g., schema change confirmed in diff but no migration guide found>
-Affected files: `db/migrations/0042_add_column.sql`
+CodeRabbit: `brief quote from summary`
+Assessment: `why this is valid`
+Affected files: db/migrations/0042_add_column.sql
 
 ### Dropped (N)
 
@@ -277,12 +337,15 @@ Affected files: `db/migrations/0042_add_column.sql`
 ---
 
 Actions:
+
 - Confirm auto-apply items? (or reject by number)
 - Accept or reject review items? (by number)
 - Override dropped items? (by number)
 ```
 
 ### 6. User confirmation
+
+**(Interactive mode only — skip when `BATCH_MODE = true`.)**
 
 Wait for the user's response. Parse it to build the final action list.
 Accept flexible input:
@@ -300,14 +363,17 @@ full table and confirmed.
 
 ### 7. Apply changes
 
+**(Interactive mode only — skip when `BATCH_MODE = true`.)**
+
 For all confirmed items:
 
 1. Apply edits to the codebase using the Edit tool. Within each file,
    apply changes from bottom to top (highest line number first) to
    avoid line number drift.
 
-2. Create a single commit:
-   ```
+2. Create a single commit with a message like:
+
+   ```text
    Apply CodeRabbit suggestions from PR #{PR_NUMBER}
 
    Auto-applied:
@@ -323,21 +389,26 @@ For all confirmed items:
 
 ### 8. Reply to CodeRabbit comments
 
+**(Interactive mode only — skip when `BATCH_MODE = true`.)**
+
 **For inline-sourced findings**, post an inline reply:
 
 **Applied items**:
+
 ```bash
 gh api "repos/{OWNER}/{REPO}/pulls/{PR_NUMBER}/comments/{COMMENT_ID}/replies" \
   -f body="Applied — fixed in {SHA_SHORT}."
 ```
 
 **Declined items** (review items the user rejected):
+
 ```bash
 gh api "repos/{OWNER}/{REPO}/pulls/{PR_NUMBER}/comments/{COMMENT_ID}/replies" \
   -f body="Won't fix — {one-line reason}."
 ```
 
 **Dropped items**:
+
 ```bash
 gh api "repos/{OWNER}/{REPO}/pulls/{PR_NUMBER}/comments/{COMMENT_ID}/replies" \
   -f body="Won't fix — {one-line reason}."
@@ -366,7 +437,9 @@ gh api "repos/{OWNER}/{REPO}/issues/{PR_NUMBER}/comments" \
 
 ### 9. Final summary
 
-```
+**(Interactive mode only — skip when `BATCH_MODE = true`.)**
+
+```text
 ## Done
 
 **Commit**: {SHA_SHORT} ({N} files changed)
