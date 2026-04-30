@@ -56,6 +56,41 @@ class TestConfig:
             assert "topology" in view
             assert "{version}" in view["pattern"]
 
+    def test_sno_matches_canonical_tokens(self, config):
+        for name in [
+            "periodic-ci-e2e-metal-sno-test",
+            "periodic-ci-e2e-single-node-test",
+            "periodic-ci-e2e-metal-single-node-upgrade",
+        ]:
+            assert config.classify_topology(name) == "SNO"
+
+    def test_sno_excludes_telco(self, config):
+        assert config.classify_topology("periodic-ci-telco-sno-test") is None
+
+    def test_sno_excludes_f7(self, config):
+        assert config.classify_topology("periodic-ci-e2e-sno-f7-test") is None
+
+    def test_sno_excludes_oidc(self, config):
+        assert config.classify_topology("periodic-ci-e2e-sno-oidc-test") is None
+
+    def test_sno_excludes_recert(self, config):
+        assert config.classify_topology("periodic-ci-e2e-sno-recert-test") is None
+
+    def test_sno_excludes_multi_a_a(self, config):
+        assert config.classify_topology("periodic-ci-e2e-sno-multi-a-a-test") is None
+
+    def test_sno_excludes_csi(self, config):
+        assert config.classify_topology("periodic-ci-e2e-sno-csi-test") is None
+
+    def test_sno_excludes_matrix(self, config):
+        assert config.classify_topology("periodic-ci-e2e-sno-matrix-test") is None
+
+    def test_sno_excludes_cert_rotation(self, config):
+        assert config.classify_topology("periodic-ci-e2e-sno-cert-rotation-test") is None
+
+    def test_sno_excludes_insights_operator(self, config):
+        assert config.classify_topology("periodic-ci-e2e-sno-insights-operator-test") is None
+
     def test_versions_are_independent(self):
         c1 = Config()
         c2 = Config()
