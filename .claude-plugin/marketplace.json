@@ -69,8 +69,8 @@
     {
       "name": "pr-review",
       "source": "./plugins/pr-review",
-      "description": "Post-review utilities for PR workflows — vet findings, triage CodeRabbit reviews, filter noise",
-      "version": "1.1.0"
+      "description": "PR lifecycle toolkit — vet findings, triage CodeRabbit reviews, filter noise, and autonomous yolo-agent for CI monitoring and auto-fixes",
+      "version": "2.0.0"
     },
     {
       "name": "threat-model",
