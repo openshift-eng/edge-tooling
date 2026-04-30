@@ -208,6 +208,22 @@ Users install plugins via Claude Code's built-in plugin system:
 - **ci-cd**: CI/CD automation
 - **util**: General utilities
 
+## Skill Quality
+
+Skills must pass the content quality linter. Run it before submitting:
+
+```bash
+scripts/lint-skills.sh plugins/my-plugin/skills/*/SKILL.md
+```
+
+Or lint all skills:
+
+```bash
+make lint-all-skills
+```
+
+See [Skill Quality Guidelines](SKILL-GUIDELINES.md) for the full quality standards, examples, and anti-patterns.
+
 ## Best Practices
 
 - Keep plugins focused (single responsibility)

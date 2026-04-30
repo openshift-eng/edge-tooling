@@ -2,34 +2,35 @@
 name: {{PLUGIN_NAME}}
 description: "{{DESCRIPTION}}"
 user-invocable: true
+# allowed-tools: Read, Bash
+# argument-hint: "<describe expected arguments>"
 ---
 
 # {{PLUGIN_NAME}}
 
-## Purpose
+## Synopsis
 
-<!-- TODO: Describe what this skill does and when Claude should use it -->
+```text
+/{{PLUGIN_NAME}} <arguments>
+```
 
 ## Prerequisites
 
-- OpenShift cluster accessible (KUBECONFIG set)
-- Required CLI tools: `oc`, `kubectl`
+- List required tools, credentials, or cluster state
 
 ## Steps
 
 ### 1. Validate Environment
 
-- Check KUBECONFIG is set
-- Verify cluster connectivity: `oc whoami`
+- Check prerequisites are met
 
 ### 2. Gather Information
 
-- Cluster version: `oc version`
-- Relevant resources: `oc get <resource>`
+- Collect data needed for analysis
 
-### 3. Perform Analysis
+### 3. Perform Action
 
-<!-- TODO: Define the analysis steps -->
+- Execute the main workflow
 
 ### 4. Present Results
 
@@ -38,8 +39,15 @@ user-invocable: true
 
 ## Examples
 
-### Example 1
-
-**User:** "Use {{PLUGIN_NAME}} to check X"
+**User:** "/{{PLUGIN_NAME}} example-arg"
 
 **Claude:** Runs the skill steps and presents structured output.
+
+## Edge Cases
+
+- **Missing prerequisite**: Stop with clear error message
+- **Empty result set**: Warn user and proceed gracefully
+
+## Notes
+
+- Document whether the skill is read-only or, if it changes state, what confirmation/rollback guard it requires
