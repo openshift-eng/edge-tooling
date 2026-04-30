@@ -35,6 +35,17 @@
             "statusMessage": "Checking markdown files..."
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "scripts/lint-skills.sh --hook",
+            "timeout": 15,
+            "statusMessage": "Checking skill quality..."
+          }
+        ]
       }
     ]
   }

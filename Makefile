@@ -1,4 +1,4 @@
-.PHONY: setup-githooks lint-markdown lint-all-markdown
+.PHONY: setup-githooks lint-markdown lint-all-markdown lint-skills lint-all-skills
 
 setup-githooks:
 	git config core.hooksPath .githooks
@@ -12,3 +12,9 @@ lint-all-markdown:
 
 lint-fix-markdown:
 	scripts/lint-markdown.sh --fix
+
+lint-skills:
+	scripts/lint-skills.sh
+
+lint-all-skills:
+	scripts/lint-skills.sh --check-all-files
