@@ -69,8 +69,8 @@
     {
       "name": "pr-review",
       "source": "./plugins/pr-review",
-      "description": "PR lifecycle toolkit — vet findings, triage CodeRabbit reviews, filter noise, and autonomous yolo-agent for CI monitoring and auto-fixes",
-      "version": "2.0.0"
+      "description": "Post-review utilities for PR workflows — vet findings, triage CodeRabbit reviews, filter noise",
+      "version": "1.1.0"
     },
     {
       "name": "threat-model",
@@ -88,6 +88,12 @@
       "name": "edge-ic",
       "source": "./plugins/edge-ic",
       "description": "Individual contributor workflow automation for TODO management, status reporting, and Jira updates",
+      "version": "1.0.0"
+    },
+    {
+      "name": "skills-review",
+      "source": "./plugins/skills-review",
+      "description": "Lint SKILL.md files for quality, correctness, and adherence to skill guidelines",
       "version": "1.0.0"
     }
   ]
