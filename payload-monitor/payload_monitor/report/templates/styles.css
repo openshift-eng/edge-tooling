@@ -480,9 +480,9 @@ a:hover { text-decoration: underline; }
 }
 .fs-blocking-name:hover { text-decoration: underline; }
 .fs-blocking-versions {
-  font-size: 12px;
-  color: var(--text-muted);
-  font-weight: 500;
+  font-size: 13px;
+  color: #f0f6fc;
+  font-weight: 600;
   flex-shrink: 0;
 }
 .fs-blocking-test {
@@ -512,8 +512,8 @@ a:hover { text-decoration: underline; }
 }
 .fs-job-version {
   font-size: 12px;
-  color: var(--text-muted);
-  font-weight: 500;
+  color: #f0f6fc;
+  font-weight: 700;
 }
 
 /* Escalation risk list */
@@ -819,6 +819,7 @@ details summary {
   font-size: 13px;
 }
 details summary:hover { background: var(--surface-hover); }
+.detail-version { color: #f0f6fc; font-weight: 700; }
 details .content {
   padding: 0 16px 16px;
   font-size: 13px;
