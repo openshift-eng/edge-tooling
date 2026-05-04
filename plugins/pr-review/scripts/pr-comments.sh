@@ -213,7 +213,9 @@ main() {
     validate_url "${pr_url}"
     parse_url "${pr_url}"
 
-    resolve_gh_user
+    if [[ -n "${addressed_ids}" ]]; then
+        resolve_gh_user
+    fi
 
     local graphql_data
     graphql_data=$(fetch_all_data "${ORG}" "${REPO}" "${PR_NUMBER}")

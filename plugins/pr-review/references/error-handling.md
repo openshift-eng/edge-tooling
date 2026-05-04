@@ -88,9 +88,11 @@ addressed.
    tracked or retried. The thread will remain unresolved, which is a
    safe default (reviewers can resolve it manually).
 3. **Log and continue** — print a one-line warning to stderr:
+
    ```text
    Warning: failed to resolve thread <thread_id> for comment <comment_id> — continuing
    ```
+
 4. **Still mark as addressed** — the comment ID is added to the
    `addressed` list regardless of whether resolution succeeded. The
    resurfacing logic in `pr-comments.sh` will re-surface the thread if
