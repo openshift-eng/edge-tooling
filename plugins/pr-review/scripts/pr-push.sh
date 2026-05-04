@@ -184,6 +184,8 @@ main() {
             die "--expected-files is required when committing"
         fi
 
+        git reset HEAD -- . >/dev/null 2>&1 || true
+
         local file
         IFS=',' read -ra expected_arr <<< "${expected_files}"
         for file in "${expected_arr[@]}"; do

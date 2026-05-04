@@ -17,6 +17,7 @@ query($owner: String!, $repo: String!, $number: Int!, $after: String) {
       reviewThreads(first: 100, after: $after) {
         pageInfo { hasNextPage endCursor }
         nodes {
+          id
           isResolved
           comments(first: 100) {
             nodes {
@@ -40,6 +41,14 @@ query($owner: String!, $repo: String!, $number: Int!, $after: String) {
 die() {
     echo "Error: $1" >&2
     exit 3
+}
+
+GH_USER=""
+
+resolve_gh_user() {
+    if [[ -z "${GH_USER}" ]]; then
+        GH_USER=$(gh api user --jq '.login') || die "Failed to get GitHub username"
+    fi
 }
 
 check_dependencies() {
@@ -124,15 +133,25 @@ build_output() {
     inline_block=$(echo "${graphql_data}" | jq -c \
         --argjson addressed "${addressed_filter}" \
         --argjson include_users "${include_users}" \
+        --arg gh_user "${GH_USER}" \
         '[
           .threads[]
+          | .id as $thread_id
           | select(.isResolved | not)
           | .comments.nodes as $comments
           | ($comments[0]) as $root
           | $root.databaseId as $root_id
-          | select($root_id as $id | ($addressed | index($id)) | not)
+          | (($addressed | index($root_id)) != null) as $was_addressed
+          | select(
+              if $was_addressed then
+                ($gh_user != "") and (($comments | last | .author.login) != $gh_user)
+              else
+                true
+              end
+            )
           | {
               id: $root_id,
+              thread_id: $thread_id,
               author: $root.author.login,
               body: $root.body,
               file: $root.path,
@@ -141,6 +160,7 @@ build_output() {
               is_bot: ($root.author.__typename == "Bot" or ($root.author.login | test("\\[bot\\]$"))),
               created_at: $root.createdAt,
               updated_at: $root.updatedAt,
+              resurfaced: $was_addressed,
               thread_context: (
                 if ($comments | length) > 1 then
                   [$comments[1:][] | {author: .author.login, body: .body, created_at: .createdAt}]
@@ -153,18 +173,14 @@ build_output() {
         ]') \
         || die "Failed to build inline comments from GraphQL data"
 
-    local inline_count
-    inline_count=$(echo "${inline_block}" | jq 'length') \
-        || die "Failed to count inline comments"
-
     echo "${inline_block}" | jq -c \
         --arg decision "${review_decision}" \
-        --argjson total "${inline_count}" \
         '{
             inline_comments: .,
             review_decision: $decision,
             summary: {
-                total_new: $total
+                total_new: [.[] | select(.resurfaced | not)] | length,
+                total_resurfaced: [.[] | select(.resurfaced)] | length
             }
         }'
 }
@@ -197,6 +213,8 @@ main() {
     validate_url "${pr_url}"
     parse_url "${pr_url}"
 
+    resolve_gh_user
+
     local graphql_data
     graphql_data=$(fetch_all_data "${ORG}" "${REPO}" "${PR_NUMBER}")
 
@@ -205,9 +223,10 @@ main() {
 
     echo "${output}"
 
-    local total_new
+    local total_new total_resurfaced
     total_new=$(echo "${output}" | jq -r '.summary.total_new')
-    if [[ "${total_new}" -eq 0 ]]; then
+    total_resurfaced=$(echo "${output}" | jq -r '.summary.total_resurfaced')
+    if [[ "${total_new}" -eq 0 && "${total_resurfaced}" -eq 0 ]]; then
         exit 1
     fi
 }

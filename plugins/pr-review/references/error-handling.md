@@ -74,3 +74,24 @@ reply succeeds. If the `gh api` reply call fails:
    ```
 
    - Set notes in state describing which comments hit the limit.
+
+## Thread Resolution Failure Handling
+
+After replying to a comment, the agent resolves the GitHub review thread
+via GraphQL mutation. Thread resolution is **best-effort** — a failure
+must never block the cycle or prevent the comment from being marked as
+addressed.
+
+1. **Do NOT stop** — the reply succeeded and the fix (if any) is pushed.
+   A resolution failure only means the thread stays open on GitHub.
+2. **Do NOT retry** — unlike reply failures, resolution failures are not
+   tracked or retried. The thread will remain unresolved, which is a
+   safe default (reviewers can resolve it manually).
+3. **Log and continue** — print a one-line warning to stderr:
+   ```text
+   Warning: failed to resolve thread <thread_id> for comment <comment_id> — continuing
+   ```
+4. **Still mark as addressed** — the comment ID is added to the
+   `addressed` list regardless of whether resolution succeeded. The
+   resurfacing logic in `pr-comments.sh` will re-surface the thread if
+   a reviewer replies, whether or not it was resolved.
