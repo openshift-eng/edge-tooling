@@ -8,7 +8,7 @@ Usage:
     python3 scripts/lint-skills.py [OPTIONS] [FILE...]
 
     --check-all-files  Lint all SKILL.md files in plugins/
-    --json             Output JSON for Claude Code hook
+    --hook             Hook mode: read JSON stdin, output JSON, always exit 0
     --severity LEVEL   Minimum severity to report: error, warning (default: warning)
     FILE               One or more SKILL.md paths (default: changed files vs main)
 """
@@ -735,7 +735,7 @@ def _run_linter(args):
         files = find_changed_skills(repo_root)
 
     if not files:
-        if args.json:
+        if args.hook:
             if not args.hook:
                 print(json.dumps({}))
         else:
@@ -755,7 +755,7 @@ def _run_linter(args):
     for f in all_findings:
         f.file = os.path.relpath(f.file, repo_root)
 
-    if args.json:
+    if args.hook:
         errors = [f for f in all_findings if f.severity == "error"]
         if errors:
             format_json(all_findings)
@@ -785,11 +785,6 @@ def main():
         help="Hook mode: read JSON from stdin, output JSON, always exit 0",
     )
     parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output JSON for Claude Code hook",
-    )
-    parser.add_argument(
         "--severity",
         choices=["error", "warning"],
         default="warning",
@@ -810,8 +805,6 @@ def main():
 
     if hook_cwd:
         os.chdir(hook_cwd)
-    if args.hook:
-        args.json = True
 
     if args.hook:
         try:
