@@ -7,7 +7,7 @@ See plugins/docs/SKILL-GUIDELINES.md for the full quality standards.
 Usage:
     python3 scripts/lint-skills.py [OPTIONS] [FILE...]
 
-    --check-all        Lint all SKILL.md files in plugins/
+    --check-all-files  Lint all SKILL.md files in plugins/
     --json             Output JSON for Claude Code hook
     --severity LEVEL   Minimum severity to report: error, warning (default: warning)
     FILE               One or more SKILL.md paths (default: changed files vs main)
@@ -604,7 +604,7 @@ def find_changed_skills(repo_root):
             resolved = merge_base_local.stdout.strip()
         else:
             print(f"Warning: could not determine merge-base for '{base_ref}'. "
-                  f"No changed files will be detected. Use --check-all or provide "
+                  f"No changed files will be detected. Use --check-all-files or provide "
                   f"explicit file paths.", file=sys.stderr)
             resolved = "HEAD"
 
@@ -709,14 +709,80 @@ def get_repo_root():
     return os.getcwd()
 
 
+def _read_hook_stdin():
+    """Read JSON from stdin in hook mode to extract cwd."""
+    if sys.stdin.isatty():
+        return None
+    try:
+        raw = sys.stdin.read()
+        if not raw.strip():
+            return None
+        hook_input = json.loads(raw)
+        return hook_input.get("cwd")
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _run_linter(args):
+    """Core linting logic, separated for hook-mode crash resilience."""
+    repo_root = get_repo_root()
+
+    if args.files:
+        files = [os.path.abspath(f) for f in args.files]
+    elif args.check_all_files:
+        files = find_all_skills(repo_root)
+    else:
+        files = find_changed_skills(repo_root)
+
+    if not files:
+        if args.json:
+            if not args.hook:
+                print(json.dumps({}))
+        else:
+            print("No SKILL.md files to lint", file=sys.stderr)
+        return False
+
+    all_findings = []
+    for f in files:
+        if not os.path.isfile(f):
+            print(f"Warning: {f} not found, skipping", file=sys.stderr)
+            continue
+        all_findings.extend(lint_file(f))
+
+    if args.severity == "error":
+        all_findings = [f for f in all_findings if f.severity == "error"]
+
+    for f in all_findings:
+        f.file = os.path.relpath(f.file, repo_root)
+
+    if args.json:
+        errors = [f for f in all_findings if f.severity == "error"]
+        if errors:
+            format_json(all_findings)
+        elif not args.hook:
+            print(json.dumps({}))
+    else:
+        use_color = args.color or sys.stderr.isatty()
+        format_human(all_findings, use_color=use_color)
+
+    return any(f.severity == "error" for f in all_findings)
+
+
 def main():
+    hook_cwd = _read_hook_stdin()
+
     parser = argparse.ArgumentParser(
         description="Lint SKILL.md files for content quality"
     )
     parser.add_argument(
-        "--check-all",
+        "--check-all-files",
         action="store_true",
         help="Lint all SKILL.md files in plugins/",
+    )
+    parser.add_argument(
+        "--hook",
+        action="store_true",
+        help="Hook mode: read JSON from stdin, output JSON, always exit 0",
     )
     parser.add_argument(
         "--json",
@@ -742,46 +808,23 @@ def main():
 
     args = parser.parse_args()
 
-    repo_root = get_repo_root()
+    if hook_cwd:
+        os.chdir(hook_cwd)
+    if args.hook:
+        args.json = True
 
-    if args.files:
-        files = [os.path.abspath(f) for f in args.files]
-    elif args.check_all:
-        files = find_all_skills(repo_root)
-    else:
-        files = find_changed_skills(repo_root)
-
-    if not files:
-        if args.json:
-            print(json.dumps({}))
-        else:
-            print("No SKILL.md files to lint", file=sys.stderr)
+    if args.hook:
+        try:
+            _run_linter(args)
+        except Exception as e:
+            print(json.dumps({
+                "decision": "block",
+                "reason": f"Skill linter crashed: {e}",
+            }))
         sys.exit(0)
-
-    all_findings = []
-    for f in files:
-        if not os.path.isfile(f):
-            print(f"Warning: {f} not found, skipping", file=sys.stderr)
-            continue
-        all_findings.extend(lint_file(f))
-
-    if args.severity == "error":
-        all_findings = [f for f in all_findings if f.severity == "error"]
-
-    for f in all_findings:
-        f.file = os.path.relpath(f.file, repo_root)
-
-    if args.json:
-        if all_findings:
-            format_json(all_findings)
-        else:
-            print(json.dumps({}))
     else:
-        use_color = args.color or sys.stderr.isatty()
-        format_human(all_findings, use_color=use_color)
-
-    has_errors = any(f.severity == "error" for f in all_findings)
-    sys.exit(1 if has_errors else 0)
+        has_errors = _run_linter(args)
+        sys.exit(1 if has_errors else 0)
 
 
 if __name__ == "__main__":

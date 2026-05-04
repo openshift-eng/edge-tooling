@@ -1,6 +1,6 @@
 # Skill Quality Guidelines
 
-Quality standards for SKILL.md files in the edge-tooling plugin marketplace. These guidelines are enforced by `scripts/lint-skills.sh` (automated checks) and CodeRabbit (PR review).
+Quality standards for SKILL.md files in the edge-tooling plugin marketplace. These guidelines are enforced by `scripts/lint-skills.py` (automated checks) and CodeRabbit (PR review).
 
 ## Linter Quick Reference
 
@@ -34,7 +34,7 @@ Run locally:
 
 ```bash
 make lint-skills              # lint changed SKILL.md files
-scripts/lint-skills.sh --check-all-files      # lint all skills
+scripts/lint-skills.py --check-all-files        # lint all skills
 ```
 
 ## Frontmatter
@@ -413,4 +413,4 @@ For PR reviewers — verify these before approving a new or updated skill:
 - [ ] No hardcoded credentials or token patterns
 - [ ] File is under 500 lines
 - [ ] Side effects are declared and guarded
-- [ ] Passes `scripts/lint-skills.sh <path>`
+- [ ] Passes `scripts/lint-skills.py <path>`

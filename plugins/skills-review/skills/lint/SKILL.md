@@ -8,7 +8,7 @@ allowed-tools: Bash, Read, Glob, Grep
 
 # Skill Linter
 
-Runs the skills quality linter (`scripts/lint-skills.sh`) and presents findings.
+Runs the skills quality linter (`scripts/lint-skills.py`) and presents findings.
 
 ## Synopsis
 
@@ -27,10 +27,10 @@ Determine the linting scope from `$ARGUMENTS`:
 
 | Argument | Command | Behavior |
 |----------|---------|----------|
-| (empty) | `bash scripts/lint-skills.sh` | Lint SKILL.md files changed vs main branch |
-| `--all` | `bash scripts/lint-skills.sh --check-all-files` | Lint every SKILL.md under `plugins/` |
-| `--severity error` | `bash scripts/lint-skills.sh --severity error` | Only report errors (E001–E007), skip warnings |
-| file paths | `bash scripts/lint-skills.sh <paths>` | Lint the specified file(s) |
+| (empty) | `bash scripts/lint-skills.py` | Lint SKILL.md files changed vs main branch |
+| `--all` | `bash scripts/lint-skills.py --check-all-files` | Lint every SKILL.md under `plugins/` |
+| `--severity error` | `bash scripts/lint-skills.py --severity error` | Only report errors (E001–E007), skip warnings |
+| file paths | `bash scripts/lint-skills.py <paths>` | Lint the specified file(s) |
 
 Arguments can be combined: `--all --severity error` or `path/SKILL.md --severity error`.
 
@@ -60,10 +60,10 @@ Execute from the repository root.
 ## Edge Cases
 
 - **No SKILL.md files changed**: Report that no files matched and suggest `--all` to lint everything.
-- **Linter script missing**: Warn that `scripts/lint-skills.sh` was not found at the expected path.
+- **Linter script missing**: Warn that `scripts/lint-skills.py` was not found at the expected path.
 
 ## Notes
 
 - **Analysis-only by default**: This skill runs the linter and presents findings. It only modifies files if the user explicitly requests fixes.
 - See `plugins/docs/SKILL-GUIDELINES.md` for the full quality standards reference.
-- The shell wrapper handles python invocation internally.
+- The linter is a standalone Python script with no external dependencies.

@@ -8,7 +8,7 @@
 - [ ] At least one component (skill, hook, agent, or MCP)
 - [ ] Passes `./marketplace validate <name>`
 - [ ] Smoke tests pass: `bash plugins/tests/marketplace_smoke_test.sh`
-- [ ] Skills pass quality checks: `scripts/lint-skills.sh <plugin>/skills/*/SKILL.md`
+- [ ] Skills pass quality checks: `scripts/lint-skills.py <plugin>/skills/*/SKILL.md`
 - [ ] Skills follow [Skill Quality Guidelines](SKILL-GUIDELINES.md)
 - [ ] No security vulnerabilities or hardcoded credentials
 

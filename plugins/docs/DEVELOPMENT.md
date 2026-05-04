@@ -213,7 +213,7 @@ Users install plugins via Claude Code's built-in plugin system:
 Skills must pass the content quality linter. Run it before submitting:
 
 ```bash
-scripts/lint-skills.sh plugins/my-plugin/skills/*/SKILL.md
+scripts/lint-skills.py plugins/my-plugin/skills/*/SKILL.md
 ```
 
 Or lint all skills:

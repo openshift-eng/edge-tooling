@@ -14,7 +14,7 @@ lint-fix-markdown:
 	scripts/lint-markdown.sh --fix
 
 lint-skills:
-	scripts/lint-skills.sh
+	scripts/lint-skills.py
 
 lint-all-skills:
-	scripts/lint-skills.sh --check-all-files
+	scripts/lint-skills.py --check-all-files
