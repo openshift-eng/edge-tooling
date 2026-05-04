@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Validate the fork remote and push changes.
 # Usage: pr-push.sh <branch> [commit-message] [--expected-files file1,file2,...]
-# Exit codes: 0=success, 1=nothing to push, 2=file mismatch, 3=error
+# Exit codes: 0=success, 1=nothing to push, 3=error
 
 die() {
     echo "Error: $1" >&2
@@ -125,6 +125,7 @@ check_blocked_patterns() {
         '\.(key|pem|p12|pfx|jks|keystore)$'
         '(^|/)\.env(\..+)?$'
         '(^|/)id_(rsa|ed25519|ecdsa|dsa)'
+        '(^|/)\.claude/.+\.lock$'
     )
 
     local file pattern

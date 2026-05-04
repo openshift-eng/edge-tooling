@@ -248,8 +248,10 @@ addressed comment IDs, and add analyzed job keys.
 
 #### 2e: Handle No-Action Cycle
 
-If no changes were proposed: reply to non-actionable comments with reasons,
-mark all comment IDs as addressed in state.
+If no changes were proposed: reply to non-actionable comments with reasons.
+Apply the same reply-failure handling as step 2d (non-fatal, tracked with
+retry, 3-strike escalation per `${PLUGIN_DIR}/references/error-handling.md`).
+Only mark each comment ID as addressed after its reply succeeds.
 
 #### 2f: Schedule Next Cycle
 
