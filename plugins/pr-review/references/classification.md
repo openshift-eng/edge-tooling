@@ -17,7 +17,7 @@ into at least one category below.
 **Scope guards** (all must hold):
 
 - Diff touches 3 or fewer files
-- Total added + removed lines across all files is under 50
+- Total added + removed lines across all files is under 100
 - All changes are within a single Go package or directory tree
 
 **Categories:**
