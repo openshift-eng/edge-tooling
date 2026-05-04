@@ -1,15 +1,15 @@
 #!/bin/bash
 
-sudo hostnamectl set-hostname aws-${STACK_NAME}
+sudo hostnamectl set-hostname "aws-${STACK_NAME}"
 
 user=${1-pitadmin}
 if id "$user" >/dev/null 2>&1; then
     echo "user $user found"
 else
     echo "user $user not found, creating"
-    sudo useradd -m $user
-    sudo passwd $user
-    echo -e "${user}\tALL=(ALL)\tNOPASSWD: ALL" | sudo tee "/etc/sudoers.d/${user}"
+    sudo useradd -m "$user"
+    sudo passwd "$user"
+    printf '%s\tALL=(ALL)\tNOPASSWD: ALL\n' "$user" | sudo tee "/etc/sudoers.d/${user}"
 fi
 
 sudo rm -rf /etc/yum.repos.d/*

@@ -8,6 +8,7 @@ set -euo pipefail
 
 URL_PATTERN='^https://github\.com/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+/pull/[0-9]+$'
 
+# shellcheck disable=SC2016
 GRAPHQL_QUERY='
 query($owner: String!, $repo: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $repo) {
@@ -70,13 +71,13 @@ fetch_all_data() {
 
     while [[ "${has_next}" == "true" ]]; do
         local -a gh_args=(
-            -f query="${GRAPHQL_QUERY}"
-            -f owner="${org}"
-            -f repo="${repo}"
-            -F number="${pr_number}"
+            -f "query=${GRAPHQL_QUERY}"
+            -f "owner=${org}"
+            -f "repo=${repo}"
+            -F "number=${pr_number}"
         )
         if [[ -n "${cursor}" ]]; then
-            gh_args+=(-f after="${cursor}")
+            gh_args+=(-f "after=${cursor}")
         fi
 
         local result

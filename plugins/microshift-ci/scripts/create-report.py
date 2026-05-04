@@ -156,10 +156,10 @@ document.querySelector('.container').style.display='';"""
 # ---------------------------------------------------------------------------
 
 def discover_files(workdir, releases):
-    result = {"releases": {}, "prs": {"summary": None, "status": None, "bugs": []}}
+    result = {"releases": {}, "prs": {"summary": None, "status": None, "bugs": [], "error": None}}
 
     for version in releases:
-        entry = {"summary": None, "bugs": None, "jobs": None}
+        entry = {"summary": None, "bugs": None, "jobs": None, "error": None}
         path = os.path.join(workdir, f"analyze-ci-release-{version}-summary.json")
         if os.path.exists(path):
             entry["summary"] = path
@@ -169,6 +169,10 @@ def discover_files(workdir, releases):
         path = os.path.join(workdir, f"analyze-ci-release-{version}-jobs.json")
         if os.path.exists(path):
             entry["jobs"] = path
+        path = os.path.join(workdir, f"analyze-ci-release-{version}-error.txt")
+        if os.path.exists(path):
+            with open(path) as f:
+                entry["error"] = f.read().strip()
         result["releases"][version] = entry
 
     path = os.path.join(workdir, "analyze-ci-prs-summary.json")
@@ -181,6 +185,11 @@ def discover_files(workdir, releases):
 
     for path in glob_mod.glob(os.path.join(workdir, "analyze-ci-bugs-rebase-release-*.json")):
         result["prs"]["bugs"].append(path)
+
+    path = os.path.join(workdir, "analyze-ci-prs-error.txt")
+    if os.path.exists(path):
+        with open(path) as f:
+            result["prs"]["error"] = f.read().strip()
 
     return result
 
@@ -430,6 +439,17 @@ def render_release_section(version, rdata, bug_candidates):
             "        </div>"
         )
 
+    if rdata.get("collection_error"):
+        return (
+            f'        <div class="release-section" id="release-{_e(version)}">\n'
+            '            <div class="release-header">\n'
+            f'                <h2>Release {_e(version)}</h2>\n'
+            '                <span class="badge badge-nodata">collection error</span>\n'
+            '            </div>\n'
+            f'            <pre>Data collection failed: {_e(rdata["collection_error"])}</pre>\n'
+            "        </div>"
+        )
+
     total = rdata["total_failed"]
     has_critical = any(i.get("severity", "").upper() == "CRITICAL" for i in rdata["issues"])
     badge = _badge_class(total, has_critical)
@@ -484,13 +504,25 @@ def render_release_section(version, rdata, bug_candidates):
     return "\n".join(lines)
 
 
-def render_pr_section(pr_data, all_pr_bugs, pr_status):
+def render_pr_section(pr_data, all_pr_bugs, pr_status, pr_error=None):
     """Render the Pull Requests tab.
 
     pr_data: analyzed PR summary (from aggregate), may be None.
     all_pr_bugs: dict mapping PR number (int) to list of bug candidates.
     pr_status: list of all PR status snapshots (from prepare), may be None.
+    pr_error: collection error message string, or None.
     """
+    if pr_error:
+        return (
+            '        <div class="release-section">\n'
+            '            <div class="release-header">\n'
+            "                <h2>Rebase Pull Requests</h2>\n"
+            '                <span class="badge badge-nodata">collection error</span>\n'
+            "            </div>\n"
+            f'            <pre>Data collection failed: {_e(pr_error)}</pre>\n'
+            "        </div>"
+        )
+
     # Build a lookup of analyzed PRs by number
     analyzed = {}
     if pr_data and pr_data.get("has_content"):
@@ -633,14 +665,21 @@ def render_pr_section(pr_data, all_pr_bugs, pr_status):
     return "\n".join(toc_lines) + "\n\n" + "\n".join(lines)
 
 
-def generate_html(releases_data, bug_data, pr_data, all_pr_bugs, pr_status, timestamp):
+def generate_html(releases_data, bug_data, pr_data, all_pr_bugs, pr_status, timestamp, pr_error=None):
     date_str = timestamp.strftime("%Y-%m-%d")
     time_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
 
     cards = []
     for version, rdata in releases_data.items():
-        count = rdata["total_failed"] if rdata else "?"
-        css = "status-fail" if rdata and rdata["total_failed"] > 0 else ("status-pass" if rdata else "")
+        if rdata and rdata.get("collection_error"):
+            count = "!"
+            css = "status-fail"
+        elif rdata:
+            count = rdata["total_failed"]
+            css = "status-fail" if rdata["total_failed"] > 0 else "status-pass"
+        else:
+            count = "?"
+            css = ""
         cards.append(
             '        <div class="overview-card">\n'
             f'            <div class="number {css}">{count}</div>\n'
@@ -648,23 +687,32 @@ def generate_html(releases_data, bug_data, pr_data, all_pr_bugs, pr_status, time
             "        </div>"
         )
     # PR overview: count failures from status (all PRs) or analysis
-    if pr_status:
-        pr_failed = sum(p.get("failed", 0) for p in pr_status)
+    if pr_error:
+        pr_failed_count = "!"
+        pr_css = "status-fail"
+    elif pr_status:
+        pr_failed_count = sum(p.get("failed", 0) for p in pr_status)
+        pr_css = "status-fail" if pr_failed_count > 0 else "status-pass"
     elif pr_data:
-        pr_failed = pr_data.get("total_failed", 0)
+        pr_failed_count = pr_data.get("total_failed", 0)
+        pr_css = "status-fail" if pr_failed_count > 0 else "status-pass"
     else:
-        pr_failed = 0
-    pr_css = "status-fail" if pr_failed > 0 else "status-pass"
+        pr_failed_count = 0
+        pr_css = "status-pass"
     cards.append(
         '        <div class="overview-card">\n'
-        f'            <div class="number {pr_css}">{pr_failed}</div>\n'
+        f'            <div class="number {pr_css}">{pr_failed_count}</div>\n'
         f'            <div class="label">Rebase PRs</div>\n'
         "        </div>"
     )
 
     toc = []
     for version, rdata in releases_data.items():
-        if rdata:
+        if rdata and rdata.get("collection_error"):
+            toc.append(
+                f'                <li><a href="#release-{_e(version)}">Release {_e(version)}</a> &mdash; collection error</li>'
+            )
+        elif rdata:
             b = rdata["breakdown"]
             toc.append(
                 f'                <li><a href="#release-{_e(version)}">Release {_e(version)}</a> &mdash; '
@@ -678,7 +726,7 @@ def generate_html(releases_data, bug_data, pr_data, all_pr_bugs, pr_status, time
         bugs = bug_data.get(version, [])
         sections.append(render_release_section(version, rdata, bugs))
 
-    pr_section = render_pr_section(pr_data, all_pr_bugs, pr_status)
+    pr_section = render_pr_section(pr_data, all_pr_bugs, pr_status, pr_error)
 
     return f"""\
 <!DOCTYPE html>
@@ -811,14 +859,22 @@ def main():
         entry = files["releases"][version]
         rdata = load_json(entry["summary"])
         if rdata is None:
-            # Distinguish "no failures" from "analysis failed" by checking the jobs file
-            jobs = load_json(entry["jobs"])
-            if jobs is not None and len(jobs) == 0:
+            if entry.get("error"):
                 rdata = {
                     "total_failed": 0,
                     "issues": [],
                     "breakdown": _EMPTY_BREAKDOWN,
+                    "collection_error": entry["error"],
                 }
+            else:
+                # Distinguish "no failures" from "analysis failed" by checking the jobs file
+                jobs = load_json(entry["jobs"])
+                if jobs is not None and len(jobs) == 0:
+                    rdata = {
+                        "total_failed": 0,
+                        "issues": [],
+                        "breakdown": _EMPTY_BREAKDOWN,
+                    }
         releases_data[version] = rdata
         bug_data[version] = load_bug_candidates(entry["bugs"])
 
@@ -826,6 +882,7 @@ def main():
     pr_status = load_json(pr_entry["status"])
 
     all_pr_bugs = _index_pr_bugs(pr_entry["bugs"])
+    pr_error = pr_entry.get("error")
 
     # Set graphs directory for rendering
     global _GRAPHS_DIR
@@ -835,7 +892,7 @@ def main():
 
     # Generate HTML
     timestamp = datetime.now(timezone.utc)
-    html_content = generate_html(releases_data, bug_data, pr_data, all_pr_bugs, pr_status, timestamp)
+    html_content = generate_html(releases_data, bug_data, pr_data, all_pr_bugs, pr_status, timestamp, pr_error)
 
     output_path = os.path.join(workdir, "microshift-ci-doctor-report.html")
     with open(output_path, "w") as f:
@@ -846,12 +903,16 @@ def main():
     print("  Periodics:")
     for version in releases:
         rdata = releases_data[version]
-        if rdata:
+        if rdata and rdata.get("collection_error"):
+            print(f"    Release {version}: ERROR - data collection failed")
+        elif rdata:
             print(f"    Release {version}: {rdata['total_failed']} failed periodic jobs")
         else:
             print(f"    Release {version}: no data")
     print("  Pull Requests:")
-    if pr_status:
+    if pr_error:
+        print("    ERROR - data collection failed")
+    elif pr_status:
         pr_total_failed = sum(p.get("failed", 0) for p in pr_status)
         pr_total_pending = sum(p.get("pending", 0) for p in pr_status)
         parts = [f"{len(pr_status)} rebase PRs", f"{pr_total_failed} failed jobs"]

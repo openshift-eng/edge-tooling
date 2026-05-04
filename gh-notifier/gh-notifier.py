@@ -7,7 +7,8 @@ reviewers) using **OWNERS_ALIASES** in the same repository checkout (defaults: r
 
 Writes a self-contained **HTML dashboard** (path via ``GH_NOTIFIER_HTML_OUTPUT``) with PR details and
 Slack **mrkdwn** / webhook **JSON** copy buttons. Optional ``SLACK_WEBHOOK_URL`` still posts automatically.
-If ``PROW_JOB_URL`` is set, only the **Slack webhook** message gets a Prow job link under the header (not the HTML copy).
+If ``PROW_JOB_URL`` is set, the **verbose** Slack webhook message includes a Prow job link under the header (not the HTML copy).
+By default (``VERBOSE_SLACK_MESSAGE`` unset, empty, or false) the webhook sends a **minimal** message: ``PROW_HTML_URL`` first, optional ``PROW_JOB_URL``. The HTML dashboard still includes full Slack copy helpers (verbose).
 
 Designed to be initiated from openshift/release on a schedule with env vars driving repos, labels,
 and notification.
@@ -46,11 +47,19 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _truthy_env(name: str) -> bool:
+    """True only for explicit affirmative values; unset, empty, or ``false``/``0`` → False."""
+    v = _env(name, "").lower()
+    return v in ("1", "true", "t", "yes", "y", "on")
+
+
 STALE_DAYS = _int_env("STALE_DAYS", 7)
 GITHUB_TOKEN = _env("GITHUB_TOKEN")
 SLACK_WEBHOOK_URL = _env("SLACK_WEBHOOK_URL", "")
 # When set, only the Slack webhook payload (not HTML / full mrkdwn) gets a Prow job link at the top.
 PROW_JOB_URL = _env("PROW_JOB_URL", "")
+PROW_HTML_URL = _env("PROW_HTML_URL", "")
+VERBOSE_SLACK_MESSAGE = _truthy_env("VERBOSE_SLACK_MESSAGE")
 
 
 # Comma-separated org/repo pairs
@@ -370,6 +379,28 @@ def _divider() -> dict[str, Any]:
     return {"type": "divider"}
 
 
+def build_slack_payload_minimal() -> dict[str, Any]:
+    """Short Slack webhook body: dashboard artifact first, optional Prow job second."""
+    blocks: list[dict[str, Any]] = []
+    if PROW_HTML_URL:
+        blocks.append(_section_mrkdwn(f"Today's PR dashboard: <{PROW_HTML_URL}|Click for full PR list>"))
+    if PROW_JOB_URL:
+        if PROW_HTML_URL:
+            blocks.append(_context_line(f"Prow: <{PROW_JOB_URL}|job logs>"))
+        else:
+            blocks.append(_section_mrkdwn(f"<{PROW_JOB_URL}|Open in Prow>"))
+    if not blocks:
+        blocks.append(
+            _context_line("PR notifier completed (set `PROW_HTML_URL` and/or `PROW_JOB_URL` for links).")
+        )
+    preview = "PR dashboard"
+    if PROW_HTML_URL:
+        preview = "PR dashboard · HTML"
+    elif PROW_JOB_URL:
+        preview = "PR dashboard · Prow"
+    return {"text": preview, "blocks": blocks}
+
+
 def _chunk_section_blocks(blocks: list[dict[str, Any]], text: str) -> None:
     text = text.strip()
     if not text:
@@ -402,7 +433,8 @@ def build_slack_payload(
     Pass ``None`` to include every PR (used for the HTML mrkdwn copy block).
 
     When ``include_prow_job_link`` is true and ``PROW_JOB_URL`` is set, a Prow job link is inserted
-    under the header (Slack webhook only; not used for the HTML dashboard copy).
+    under the header (verbose Slack webhook and HTML mrkdwn copy; minimal webhook uses
+    ``build_slack_payload_minimal`` instead).
     """
     att_n = len(attention)
     blocks: list[dict[str, Any]] = [_plain_header("Pull request dashboard")]
@@ -839,14 +871,6 @@ def main() -> int:
 
     fetch_errors: list[str] = []
 
-    payload_slack = build_slack_payload(
-        fetched_at=fetched_at,
-        open_pr_count=open_count,
-        attention=items,
-        fetch_errors=fetch_errors,
-        slack_pr_cap=MAX_PRS_IN_MESSAGE,
-        include_prow_job_link=True,
-    )
     payload_full_mrkdwn = build_slack_payload(
         fetched_at=fetched_at,
         open_pr_count=open_count,
@@ -855,6 +879,17 @@ def main() -> int:
         slack_pr_cap=None,
         include_prow_job_link=True,
     )
+    if VERBOSE_SLACK_MESSAGE:
+        payload_slack = build_slack_payload(
+            fetched_at=fetched_at,
+            open_pr_count=open_count,
+            attention=items,
+            fetch_errors=fetch_errors,
+            slack_pr_cap=MAX_PRS_IN_MESSAGE,
+            include_prow_job_link=True,
+        )
+    else:
+        payload_slack = build_slack_payload_minimal()
     mrkdwn = slack_mrkdwn_http_links_to_markdown(slack_blocks_to_mrkdwn_for_paste(payload_full_mrkdwn))
     json_raw = slack_serialize_payload(payload_slack).decode("utf-8")
 

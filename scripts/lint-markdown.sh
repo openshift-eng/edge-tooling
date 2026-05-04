@@ -67,8 +67,18 @@ fi
 cleanup() {
     rm -f "${CWD}/markdownlint-cli2-junit.xml" "${CWD}/markdownlint-cli2-results.json"
     if is_ci; then
-        cp -f "${RUN_CWD}/markdownlint-cli2-junit.xml" "${ARTIFACT_DIR}/"
-        cp -f "${RUN_CWD}/markdownlint-cli2-results.json" "${ARTIFACT_DIR}/"
+        if [[ -f "${RUN_CWD}/markdownlint-cli2-junit.xml" ]]; then
+            cp -f "${RUN_CWD}/markdownlint-cli2-junit.xml" "${ARTIFACT_DIR}/"
+        else
+            echo "Artifact not produced: ${RUN_CWD}/markdownlint-cli2-junit.xml" >&2
+        fi
+
+        if [[ -f "${RUN_CWD}/markdownlint-cli2-results.json" ]]; then
+            cp -f "${RUN_CWD}/markdownlint-cli2-results.json" "${ARTIFACT_DIR}/"
+        else
+            echo "Artifact not produced: ${RUN_CWD}/markdownlint-cli2-results.json" >&2
+        fi
+
         rm -rf "$RUN_CWD"
     fi
 }

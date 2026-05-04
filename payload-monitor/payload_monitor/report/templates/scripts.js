@@ -429,7 +429,7 @@ document.addEventListener('DOMContentLoaded', function() {
       }
       if (item.version) {
         var ver = document.createElement('span');
-        ver.style.cssText = 'color:var(--text-muted);font-size:12px';
+        ver.style.cssText = 'color:#f0f6fc;font-size:13px;font-weight:600';
         ver.textContent = item.version;
         header.appendChild(ver);
       }

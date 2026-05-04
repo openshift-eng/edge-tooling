@@ -71,7 +71,7 @@ echo ""
 # Check 2: Emoji format
 echo "=== Emoji Format ==="
 VALID_EMOJIS=":done-circle-check:|:in-progress:|:jira-blocker:"
-INVALID_EMOJI_PATTERNS="^- \[x\]|^- \[ \]|✓|✗|🔴|🟢|🟡"
+INVALID_EMOJI_PATTERNS='^- \[x\]|^- \[ \]|✓|✗|🔴|🟢|🟡'
 
 if grep -qE "$VALID_EMOJIS" "$REPORT_FILE"; then
     pass "Valid emoji format found"
@@ -117,7 +117,7 @@ echo ""
 
 # Check 4: No markdown code blocks
 echo "=== Plain Text Format ==="
-if grep -qE '^```' "$REPORT_FILE"; then
+if grep -qE "^\`\`\`" "$REPORT_FILE"; then
     fail "Markdown code blocks found (report should be plain text)"
     info "  Remove code fences (\`\`\`) for Slack compatibility"
 else

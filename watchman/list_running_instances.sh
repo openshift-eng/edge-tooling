@@ -20,7 +20,7 @@ for region in $regions; do
     instances=$(aws ec2 describe-instances \
         --region "$region" \
         --filters "Name=instance-state-name,Values=running" \
-        --query 'Reservations[].Instances[].[InstanceId,InstanceType,LaunchTime,Tags[?Key==`Name`].Value|[0]]' \
+        --query "Reservations[].Instances[].[InstanceId,InstanceType,LaunchTime,Tags[?Key==\`Name\`].Value|[0]]" \
         --output text 2>/dev/null)
     
     if [ -n "$instances" ]; then
@@ -33,7 +33,7 @@ for region in $regions; do
             # Format launch time for better readability
             launch_time_formatted=$(date -d "$launch_time" +"%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "$launch_time")
             name_tag="${name:-<no-name>}"
-            printf "  %-20s %-15s %-19s %s\n" "$instance_id" "$instance_type" "$launch_time_formatted" "$name_tag"
+            printf '  %-20s %-15s %-19s %s\n' "$instance_id" "$instance_type" "$launch_time_formatted" "$name_tag"
         done
         echo ""
     fi
@@ -43,5 +43,5 @@ echo "=========================================="
 echo "Summary:"
 echo "  Total running instances: $total_instances"
 echo "  Regions with instances: $regions_with_instances"
-echo "  Total regions checked: $(echo $regions | wc -w | tr -d ' ')"
+echo "  Total regions checked: $(echo "$regions" | wc -w | tr -d ' ')"
 echo "=========================================="

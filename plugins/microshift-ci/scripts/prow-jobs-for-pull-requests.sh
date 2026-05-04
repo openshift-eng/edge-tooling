@@ -34,7 +34,7 @@ fetch_open_prs() {
 # List job names for a PR from GCS
 list_pr_jobs() {
     local pr="${1}"
-    curl -s --max-time 30 "${GCS_API}?prefix=${GCS_PR_PREFIX}/${pr}/&delimiter=/" | \
+    curl -s --max-time 60 --retry 3 --retry-delay 5 "${GCS_API}?prefix=${GCS_PR_PREFIX}/${pr}/&delimiter=/" | \
         jq -r '.prefixes[]? // empty' | \
         sed "s|${GCS_PR_PREFIX}/${pr}/||; s|/$||"
 }
@@ -45,12 +45,12 @@ get_latest_build() {
     local pr="${1}" job="${2}"
     local build_id finished_json
 
-    build_id=$(curl -s --max-time 10 "${GCS_BASE}/${GCS_PR_PREFIX}/${pr}/${job}/latest-build.txt" 2>/dev/null) || return 1
+    build_id=$(curl -s --max-time 60 --retry 3 --retry-delay 5 "${GCS_BASE}/${GCS_PR_PREFIX}/${pr}/${job}/latest-build.txt" 2>/dev/null) || return 1
     [[ -z "${build_id}" || "${build_id}" == *"<"* ]] && return 1
 
     local url="${PROW_VIEW}/pr-logs/pull/openshift_microshift/${pr}/${job}/${build_id}"
 
-    finished_json=$(curl -s --max-time 10 "${GCS_BASE}/${GCS_PR_PREFIX}/${pr}/${job}/${build_id}/finished.json" 2>/dev/null)
+    finished_json=$(curl -s --max-time 60 --retry 3 --retry-delay 5 "${GCS_BASE}/${GCS_PR_PREFIX}/${pr}/${job}/${build_id}/finished.json" 2>/dev/null)
 
     if [[ -z "${finished_json}" || "${finished_json}" == *"NoSuchKey"* || "${finished_json}" == *"<"* ]]; then
         # Job still running — no finished.json yet
@@ -281,8 +281,8 @@ mode_restart() {
         local comment=""
         for job in "${failed_jobs[@]}"; do
             local build_id short_name
-            build_id=$(curl -s --max-time 10 "${GCS_BASE}/${GCS_PR_PREFIX}/${pr_number}/${job}/latest-build.txt" 2>/dev/null) || continue
-            short_name=$(curl -s --max-time 10 "${GCS_BASE}/${GCS_PR_PREFIX}/${pr_number}/${job}/${build_id}/prowjob.json" 2>/dev/null | \
+            build_id=$(curl -s --max-time 60 --retry 3 --retry-delay 5 "${GCS_BASE}/${GCS_PR_PREFIX}/${pr_number}/${job}/latest-build.txt" 2>/dev/null) || continue
+            short_name=$(curl -s --max-time 60 --retry 3 --retry-delay 5 "${GCS_BASE}/${GCS_PR_PREFIX}/${pr_number}/${job}/${build_id}/prowjob.json" 2>/dev/null | \
                 jq -r '.spec.rerun_command // empty' 2>/dev/null | sed 's|^/test ||') || short_name=""
             short_name=$(echo "${short_name}" | xargs)
             [[ -z "${short_name}" ]] && continue

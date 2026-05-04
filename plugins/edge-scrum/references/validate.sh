@@ -8,11 +8,50 @@ ERRORS=0
 pass() { echo "OK:   $1"; }
 fail() { echo "FAIL: $1"; ERRORS=$((ERRORS + 1)); }
 
-check_file()     { [ -f "$1" ] && pass "exists: $1" || fail "missing: $1"; }
-check_preamble() { [ -f "$1" ] && grep -q "RFC 2119" "$1" && pass "RFC 2119 preamble: $(basename "$1")" || fail "missing RFC 2119 preamble: $(basename "$1")"; }
-check_index()    { grep -qF "$1" "$SCRIPT_DIR/Edge-Scrum-Laws.md" 2>/dev/null && pass "index links: $1" || fail "index missing link to: $1"; }
-check_no_old()   { [ -f "$1" ] || { fail "file missing: $(basename "$1")"; return; }; ! grep -q "edge-scrum/Edge-Scrum-Laws\.md" "$1" && pass "no old path: $(basename "$1")" || fail "old path still in: $(basename "$1")"; }
-check_new()      { grep -q "references/Edge-Scrum-Laws\.md\|references/laws/" "$1" 2>/dev/null && pass "new path in: $(basename "$1")" || fail "new path missing from: $(basename "$1")"; }
+check_file() {
+    if [ -f "$1" ]; then
+        pass "exists: $1"
+    else
+        fail "missing: $1"
+    fi
+}
+
+check_preamble() {
+    if [ -f "$1" ] && grep -q "RFC 2119" "$1"; then
+        pass "RFC 2119 preamble: $(basename "$1")"
+    else
+        fail "missing RFC 2119 preamble: $(basename "$1")"
+    fi
+}
+
+check_index() {
+    if grep -qF "$1" "$SCRIPT_DIR/Edge-Scrum-Laws.md" 2>/dev/null; then
+        pass "index links: $1"
+    else
+        fail "index missing link to: $1"
+    fi
+}
+
+check_no_old() {
+    if [ ! -f "$1" ]; then
+        fail "file missing: $(basename "$1")"
+        return
+    fi
+
+    if grep -q 'edge-scrum/Edge-Scrum-Laws\.md' "$1"; then
+        fail "old path still in: $(basename "$1")"
+    else
+        pass "no old path: $(basename "$1")"
+    fi
+}
+
+check_new() {
+    if grep -qE 'references/Edge-Scrum-Laws\.md|references/laws/' "$1" 2>/dev/null; then
+        pass "new path in: $(basename "$1")"
+    else
+        fail "new path missing from: $(basename "$1")"
+    fi
+}
 
 echo "=== Index ==="
 check_file "$SCRIPT_DIR/Edge-Scrum-Laws.md"
@@ -42,7 +81,11 @@ for f in "${LAWS[@]}"; do
 done
 
 echo "=== Old file removed ==="
-[ ! -f "$PLUGIN_DIR/Edge-Scrum-Laws.md" ] && pass "old Edge-Scrum-Laws.md removed" || fail "old Edge-Scrum-Laws.md still exists at plugin root"
+if [ ! -f "$PLUGIN_DIR/Edge-Scrum-Laws.md" ]; then
+    pass "old Edge-Scrum-Laws.md removed"
+else
+    fail "old Edge-Scrum-Laws.md still exists at plugin root"
+fi
 
 echo "=== Skill/agent path updates ==="
 for f in \
@@ -55,5 +98,10 @@ for f in \
 done
 
 echo ""
-[ "$ERRORS" -eq 0 ] && echo "All checks passed!" && exit 0
-echo "$ERRORS check(s) failed." && exit 1
+if [ "$ERRORS" -eq 0 ]; then
+    echo "All checks passed!"
+    exit 0
+fi
+
+echo "$ERRORS check(s) failed."
+exit 1

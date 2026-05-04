@@ -1,6 +1,6 @@
 # gh-notifier
 
-Python script that lists **open pull requests** in configured GitHub repos, keeps only PRs whose **authors** appear in the team roster derived from **`OWNERS`** and **`OWNERS_ALIASES`**, applies **draft / label** filters, flags PRs that **need attention** (stale activity, age, optional label rules), and writes a **self-contained HTML dashboard** with Slack **copy** helpers. If **`SLACK_WEBHOOK_URL`** is set, it also posts the same payload to Slack automatically.
+Python script that lists **open pull requests** in configured GitHub repos, keeps only PRs whose **authors** appear in the team roster derived from **`OWNERS`** and **`OWNERS_ALIASES`**, applies **draft / label** filters, flags PRs that **need attention** (stale activity, age, optional label rules), and writes a **self-contained HTML dashboard** with Slack **copy** helpers. If **`SLACK_WEBHOOK_URL`** is set, it also posts to Slack: by default a **minimal** link-only message (`PROW_HTML_URL` first, optional `PROW_JOB_URL`), or the full Block Kit digest when **`VERBOSE_SLACK_MESSAGE`** is enabled.
 
 There are **no third-party packages** (stdlib only: `urllib`, `json`, etc.).
 
@@ -41,7 +41,9 @@ Stdout prints a one-line summary and the **absolute path** to the HTML file. Run
 |----------|----------|---------|-------------|
 | `GITHUB_TOKEN` | yes | — | Bearer token for `api.github.com`, we will be using the same token as the microshift ci-doctor |
 | `SLACK_WEBHOOK_URL` | no | empty | If set, POSTs the Block Kit payload to Slack after writing HTML |
-| `PROW_JOB_URL` | no | empty | If set (e.g. `PROW_JOB_URL` from Prow), only the **Slack** message includes a link under the header so users can open the job for the full PR list and logs; HTML / copy-paste mrkdwn are unchanged |
+| `PROW_HTML_URL` | no | empty | Public URL to the generated HTML artifact (e.g. Prow artifact or GCS proxy). Used as the **primary** link in the default (minimal) Slack webhook message |
+| `PROW_JOB_URL` | no | empty | Prow job URL. In **minimal** Slack mode, shown as a secondary line after `PROW_HTML_URL` when both are set. In **verbose** mode, appears under the digest header |
+| `VERBOSE_SLACK_MESSAGE` | no | `false` | If unset, empty, or false (`0`, `no`, …), the webhook posts only `PROW_HTML_URL` + optional `PROW_JOB_URL`. Set to `true` / `1` / `yes` / `on` for the full PR digest in Slack (same shape as the HTML **mrkdwn** copy area, capped by `MAX_PRS_IN_MESSAGE`) |
 | `GH_NOTIFIER_HTML_OUTPUT` | no | `<repo>/gh-notifier/pr-dashboard.html` | Path to the generated dashboard (parent dirs are created if needed) |
 | `OWNERS_FILE` | no | `<repo>/OWNERS` | Path to `OWNERS` (Kubernetes-style `approvers` / `reviewers`) |
 | `OWNERS_ALIASES_FILE` | no | `<repo>/OWNERS_ALIASES` | Path to `OWNERS_ALIASES` (`aliases:` block) |
@@ -55,7 +57,7 @@ Stdout prints a one-line summary and the **absolute path** to the HTML file. Run
 
 ## Slack payload
 
-The webhook message uses Slack **Block Kit** (header, context, sections). The number of PRs listed in one message is capped (`MAX_PRS_IN_MESSAGE` in the script). With **`PROW_JOB_URL`**, a Prow link section is added at the top of the webhook payload only. The HTML page exposes full-list **mrkdwn** (for pasting) and capped **JSON** matching the webhook (for replay or debugging).
+**Default (minimal):** Block Kit with a link to **`PROW_HTML_URL`** first and an optional **`PROW_JOB_URL`** line for job logs. **Verbose:** header, metrics, optional Prow line, and PR rows (capped by **`MAX_PRS_IN_MESSAGE`** in the webhook). The HTML page always includes full-list **mrkdwn** (verbose, for pasting) and **JSON** matching whatever the webhook would post (minimal or verbose).
 
 ## CI (openshift/release)
 

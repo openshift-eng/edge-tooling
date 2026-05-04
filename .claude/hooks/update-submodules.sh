@@ -92,7 +92,7 @@ if [ ${#STALE_SUBMODULES[@]} -gt 0 ]; then
     details=""
     for entry in "${STALE_SUBMODULES[@]}"; do
         IFS='|' read -r name path branch count old_hash new_hash <<< "$entry"
-        details="${details}- ${name} (${path}): ${count} commits behind origin/${branch} (${old_hash} -> ${new_hash})\n"
+        details="${details}- ${name} (${path}): ${count} commits behind origin/${branch} (${old_hash} -> ${new_hash})\\n"
     done
 
     # Escape for JSON

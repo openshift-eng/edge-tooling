@@ -181,8 +181,8 @@ handle_specific_repo() {
 show_status() {
     log_info "Repository status:"
     echo
-    printf "%-30s %-12s %-20s %s\n" "DIRECTORY" "STATUS" "BRANCH" "LAST COMMIT"
-    printf "%-30s %-12s %-20s %s\n" "---------" "------" "------" "-----------"
+    printf "%-30s %-12s %-20s %s\\n" "DIRECTORY" "STATUS" "BRANCH" "LAST COMMIT"
+    printf "%-30s %-12s %-20s %s\\n" "---------" "------" "------" "-----------"
 
     while IFS= read -r line; do
         if parse_repo_line "$line"; then
@@ -201,7 +201,7 @@ show_status() {
                 last_commit="-"
             fi
 
-            printf "%-30s $(echo -e $status)%-1s %-20s %s\n" "$dir" "" "$branch_info" "$last_commit"
+            printf "%-30s %b%-1s %-20s %s\\n" "$dir" "$status" "" "$branch_info" "$last_commit"
         fi
     done < "$REPOS_FILE"
 }
@@ -209,13 +209,13 @@ show_status() {
 # List configured repos
 list_repos() {
     echo
-    printf "%-30s %-50s %-12s\n" "DIRECTORY" "URL" "BRANCH"
-    printf "%-30s %-50s %-12s\n" "---------" "---" "------"
+    printf "%-30s %-50s %-12s\\n" "DIRECTORY" "URL" "BRANCH"
+    printf "%-30s %-50s %-12s\\n" "---------" "---" "------"
 
     while IFS= read -r line; do
         if parse_repo_line "$line"; then
             local short_url="${url#https://github.com/}"
-            printf "%-30s %-50s %-12s\n" "$dir" "$short_url" "$branch"
+            printf "%-30s %-50s %-12s\\n" "$dir" "$short_url" "$branch"
         fi
     done < "$REPOS_FILE"
 }

@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# shellcheck disable=SC1091
 source ./.env
 
 set -o nounset
@@ -55,7 +56,7 @@ Parameters:
     Default: 'VirtualMachine'
     Type: String
   VpcCidr:
-    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/(1[6-9]|2[0-4]))$
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\\/(1[6-9]|2[0-4]))$
     ConstraintDescription: CIDR block parameter must be in the form x.x.x.x/16-24.
     Default: 10.192.0.0/16
     Description: CIDR block for VPC.
@@ -284,7 +285,7 @@ Resources:
           sudo systemctl enable --now cockpit.socket |& tee -a "\$log_output_file"
 
           echo "====== Getting Disk Path ======" | tee -a "\$log_output_file"
-          pv_location=\$(sudo lsblk -Jd | jq -r '.blockdevices[] | select(.size == "200G") | "/dev/\(.name)"')
+          pv_location=\$(sudo lsblk -Jd | jq -r '.blockdevices[] | select(.size == "200G") | "/dev/" + .name')
           echo "discovered pv location of (\$pv_location)" | tee -a "\$log_output_file"
 
           # NOTE: wrappig script vars with {} since the cloudformation will see
@@ -319,7 +320,7 @@ aws --region "$REGION" cloudformation create-stack --stack-name "${STACK_NAME}" 
         ParameterKey=Machinename,ParameterValue="${STACK_NAME}"  \
         ParameterKey=AmiId,ParameterValue="${RHEL_HOST_AMI}" \
         ParameterKey=EC2Type,ParameterValue="${ec2Type}" \
-        ParameterKey=PublicKeyString,ParameterValue="$(cat ${SSH_PUBLIC_KEY})"
+        ParameterKey=PublicKeyString,ParameterValue="$(cat "${SSH_PUBLIC_KEY}")"
 
 echo "Created stack"
 
@@ -350,4 +351,4 @@ sleep 15
 echo "updating sshconfig for aws-hyperviser"
 go run main.go -k aws-hyperviser -h "$HOST_PUBLIC_IP"
 
-scp -oStrictHostKeyChecking=no "$(cat ${SHARED_DIR}/ssh_user)@${HOST_PUBLIC_IP}:/tmp/init_output.txt" "${SHARED_DIR}/init_output.txt"
+scp -oStrictHostKeyChecking=no "$(cat "${SHARED_DIR}/ssh_user")@${HOST_PUBLIC_IP}:/tmp/init_output.txt" "${SHARED_DIR}/init_output.txt"

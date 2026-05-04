@@ -19,7 +19,6 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOS_DIR="$SCRIPT_DIR/repos"
 DEV_ENV_YAML="$SCRIPT_DIR/dev-env.yaml"
-DEV_ENV_TEMPLATE="$SCRIPT_DIR/dev-env.yaml.template"
 REPOS_FILE="$SCRIPT_DIR/repos.txt"
 REPOS_TEMPLATE="$SCRIPT_DIR/repos.txt.template"
 PRESETS_DIR="$SCRIPT_DIR/presets"
@@ -117,7 +116,7 @@ iterate_repos() {
     local callback="$1"
 
     if [[ "$REPO_FORMAT" == "yaml" ]]; then
-        while IFS='|' read -r url dir branch _name _cat _summary; do
+        while IFS='|' read -r url dir branch _name; do
             if [[ -z "$url" || -z "$dir" ]]; then
                 [[ -n "$_name" || -n "$url" ]] && log_warn "Skipping entry with missing url or name: ${_name:-${url:-unknown}}"
                 continue
@@ -292,8 +291,8 @@ handle_specific_repo() {
 show_status() {
     log_info "Repository status:"
     echo
-    printf "%-30s %-12s %-20s %s\n" "DIRECTORY" "STATUS" "BRANCH" "LAST COMMIT"
-    printf "%-30s %-12s %-20s %s\n" "---------" "------" "------" "-----------"
+    printf '%-30s %-12s %-20s %s\n' "DIRECTORY" "STATUS" "BRANCH" "LAST COMMIT"
+    printf '%-30s %-12s %-20s %s\n' "---------" "------" "------" "-----------"
 
     _status_callback() {
         local target="$REPOS_DIR/$dir"
@@ -311,7 +310,7 @@ show_status() {
             last_commit="-"
         fi
 
-        printf "%-30s $(echo -e $status)%-1s %-20s %s\n" "$dir" "" "$branch_info" "$last_commit"
+        printf '%-30s %b%-1s %-20s %s\n' "$dir" "$status" "" "$branch_info" "$last_commit"
     }
     iterate_repos _status_callback
 }
@@ -320,22 +319,22 @@ show_status() {
 list_repos() {
     echo
     if [[ "$REPO_FORMAT" == "yaml" ]]; then
-        printf "%-30s %-10s %-50s %-12s\n" "DIRECTORY" "CATEGORY" "URL" "BRANCH"
-        printf "%-30s %-10s %-50s %-12s\n" "---------" "--------" "---" "------"
+        printf '%-30s %-10s %-50s %-12s\n' "DIRECTORY" "CATEGORY" "URL" "BRANCH"
+        printf '%-30s %-10s %-50s %-12s\n' "---------" "--------" "---" "------"
 
-        while IFS='|' read -r url dir branch name cat summary; do
+        while IFS='|' read -r url dir branch name cat; do
             [[ -z "$url" ]] && continue
             local short_url="${url#https://github.com/}"
-            printf "%-30s %-10s %-50s %-12s\n" "$dir" "$cat" "$short_url" "$branch"
+            printf '%-30s %-10s %-50s %-12s\n' "$dir" "$cat" "$short_url" "$branch"
         done < <(parse_yaml_repos "$REPO_SOURCE")
     else
-        printf "%-30s %-50s %-12s\n" "DIRECTORY" "URL" "BRANCH"
-        printf "%-30s %-50s %-12s\n" "---------" "---" "------"
+        printf '%-30s %-50s %-12s\n' "DIRECTORY" "URL" "BRANCH"
+        printf '%-30s %-50s %-12s\n' "---------" "---" "------"
 
         while IFS= read -r line; do
             if parse_repo_line "$line"; then
                 local short_url="${url#https://github.com/}"
-                printf "%-30s %-50s %-12s\n" "$dir" "$short_url" "$branch"
+                printf '%-30s %-50s %-12s\n' "$dir" "$short_url" "$branch"
             fi
         done < "$REPO_SOURCE"
     fi
@@ -357,7 +356,7 @@ init_preset() {
             if [[ -f "$preset_dir/preset.yaml" ]]; then
                 desc=$(grep '^description:' "$preset_dir/preset.yaml" | sed 's/^description: *"*//;s/"*$//')
             fi
-            printf "  %-15s %s\n" "$name" "$desc"
+            printf '  %-15s %s\n' "$name" "$desc"
         done
         echo
         log_info "Usage: ./setup.sh init <preset-name>"

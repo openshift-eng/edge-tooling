@@ -64,6 +64,7 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 
 - If `<ARGUMENTS>` is empty, show usage and stop
 - If a release has no failed jobs, its jobs JSON will be an empty array — skip analysis for that release
+- If a release has an `"error"` field in the JSON summary, data collection failed for that release — report the error to the user but continue with other releases
 
 ### Step 1b: Generate PCP Performance Graphs
 
@@ -113,10 +114,9 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
       Use the Write tool to save the file. The file must contain the complete analysis report."
    ```
 
-3. Launch **ALL** agents (all releases + PRs) in a single message using `run_in_background: true`
-4. After launching, say "Analyzing N jobs in parallel..." and STOP.
-5. As agent completion notifications arrive, respond with only "." (a single period) — no summaries, no status updates.
-6. **CRITICAL**: After ALL agents are confirmed complete, you MUST immediately proceed to Step 3. Do NOT end your turn with a dot. Do NOT stop. The task is NOT complete until the HTML report is generated in Step 4.
+3. Launch **ALL** agents (all releases + PRs) in a **single message** as **foreground** agents (do NOT use `run_in_background`). Foreground agents in the same message run concurrently — this is just as fast as background agents but keeps your turn active until all complete.
+4. Say "Analyzing N jobs in parallel..." in your message text alongside the Agent tool calls.
+5. When all agents return, immediately proceed to Step 3 in the same turn. Do NOT stop or end your turn between Step 2 and Step 3.
 
 ### Step 3: Run Bug Correlation (Dry-Run)
 
@@ -124,23 +124,21 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 
 **Actions**:
 
-1. **IMPORTANT**: Wait until ALL analysis agents from Step 2 are confirmed complete
-2. For each release version, launch `microshift-ci:create-bugs` in dry-run mode as an **Agent**:
+1. For each release version, launch `microshift-ci:create-bugs` in dry-run mode as an **Agent**:
 
    ```text
    Agent: subagent_type=general_purpose, prompt="Run /microshift-ci:create-bugs <version>"
    ```
 
-3. If rebase PR analysis produced job files, also launch `microshift-ci:create-bugs` for rebase PRs (check the PR jobs JSON to identify rebase PR source identifiers like `rebase-release-4.22`):
+2. If rebase PR analysis produced job files, also launch `microshift-ci:create-bugs` for rebase PRs (check the PR jobs JSON to identify rebase PR source identifiers like `rebase-release-4.22`):
 
    ```text
    Agent: subagent_type=general_purpose, prompt="Run /microshift-ci:create-bugs rebase-release-<version>"
    ```
 
-4. Launch all create-bugs agents **in parallel** with `run_in_background: true`
-5. Respond with only "." for each intermediate completion notification. Wait until all complete.
-6. Each agent produces `<WORKDIR>/analyze-ci-bugs-<source>.json`
-7. **CRITICAL**: After ALL bug correlation agents complete, you MUST immediately proceed to Step 4. Do NOT stop.
+3. Launch all create-bugs agents in a **single message** as **foreground** agents (do NOT use `run_in_background`). They run concurrently.
+4. Each agent produces `<WORKDIR>/analyze-ci-bugs-<source>.json`
+5. When all agents return, immediately proceed to Step 4 in the same turn. Do NOT stop or end your turn between Step 3 and Step 4.
 
 **Error Handling**:
 
@@ -178,7 +176,7 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 Summary:
   Periodics:
     Release 4.19: 3 failed periodic jobs
-    Release 4.20: 7 failed periodic jobs
+    Release 4.20: ERROR - data collection failed
     Release 4.21: 0 failed periodic jobs
     Release 4.22: 12 failed periodic jobs
   Pull Requests:

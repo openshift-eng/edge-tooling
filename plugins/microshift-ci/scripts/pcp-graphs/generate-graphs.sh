@@ -58,7 +58,7 @@ generate_job_graphs() {
 
     # Extract build_id from path: .../artifacts/<build_id>/artifacts/.../pmlogs/...
     local build_id
-    build_id=$(echo "${pcp_dir}" | sed -n "s|.*/artifacts/\([0-9]*\)/artifacts/.*|\1|p")
+    build_id=$(echo "${pcp_dir}" | sed -nE 's|.*/artifacts/([0-9]*)/artifacts/.*|\1|p')
     if [[ -z "${build_id}" ]]; then
         echo "  SKIP: cannot extract build_id from ${pcp_dir}" >&2
         return 0

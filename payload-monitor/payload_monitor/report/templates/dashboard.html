@@ -270,9 +270,11 @@
   {# Situation bar: compact horizontal summary with real context #}
   <div class="fs-situation-bar">
     <div class="fs-situation-item {% if blocking_jobs_list %}critical{% endif %}" onclick="jumpToFailures(null,'blocking')" title="View blocking failures">
-      <span class="fs-situation-count">{{ blocking_jobs_list|length }}</span>
+      <span class="fs-situation-count">{{ ns.blocking_failures }}</span>
       <span class="fs-situation-label">blocking</span>
-      {% if ns.rejected_payloads > 0 %}
+      {% if blocking_jobs_list|length < ns.blocking_failures %}
+      <span class="fs-situation-context">{{ blocking_jobs_list|length }} unique job{{ 's' if blocking_jobs_list|length != 1 else '' }}</span>
+      {% elif ns.rejected_payloads > 0 %}
       <span class="fs-situation-context">{{ ns.rejected_payloads }} payload{{ 's' if ns.rejected_payloads != 1 else '' }} rejected</span>
       {% endif %}
     </div>
@@ -310,8 +312,8 @@
       <div class="fs-severity-icon fs-icon-critical" title="Critical — requires immediate action">!</div>
       <div class="fs-section-content">
         <div class="fs-priority-label">Critical — Immediate Action Required</div>
-        <div class="fs-section-title">{{ blocking_jobs_list|length }} Blocking Job{{ 's' if blocking_jobs_list|length != 1 else '' }} Failing</div>
-        <div class="fs-section-desc">{{ ns.blocking_failures }} failure{{ 's' if ns.blocking_failures != 1 else '' }} across {{ ns.rejected_payloads }} rejected payload{{ 's' if ns.rejected_payloads != 1 else '' }} — prevents payload acceptance</div>
+        <div class="fs-section-title">{{ ns.blocking_failures }} Blocking Failure{{ 's' if ns.blocking_failures != 1 else '' }}{% if blocking_jobs_list|length < ns.blocking_failures %} ({{ blocking_jobs_list|length }} Unique Job{{ 's' if blocking_jobs_list|length != 1 else '' }}){% endif %}</div>
+        <div class="fs-section-desc">prevents payload acceptance</div>
       </div>
       <a class="fs-section-action fs-action-critical" onclick="jumpToFailures(null,'blocking')">Investigate All &#8594;</a>
     </div>
@@ -505,7 +507,7 @@
     {% if also_in %}
     <span class="cross-topo-hint" title="The same base job is also failing in other topologies, suggesting a shared platform issue.">Also in: {% for t in also_in %}<span class="badge {{ t|lower }}">{{ t }}</span>{% endfor %}</span>
     {% endif %}
-    {{ detail.job.name }} ({{ detail.version }})
+    {{ detail.job.name }} <span class="detail-version">({{ detail.version }})</span>
   </summary>
   <div class="content">
     <p><strong>Payload:</strong> <a href="{{ detail.payload_url }}" target="_blank">{{ detail.payload_tag }}</a></p>

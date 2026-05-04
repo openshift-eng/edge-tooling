@@ -13,6 +13,9 @@ lint-all-markdown:
 lint-fix-markdown:
 	scripts/lint-markdown.sh --fix
 
+lint-shellcheck:
+	scripts/lint-shellcheck.sh
+
 lint-skills:
 	scripts/lint-skills.py
 

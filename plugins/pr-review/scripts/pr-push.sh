@@ -10,6 +10,11 @@ die() {
     exit 3
 }
 
+escape_regex() {
+    # Escape ERE metacharacters so dynamic input is treated literally.
+    printf '%s' "$1" | sed -E 's/[][\\.^$*+?(){}|]/\\&/g'
+}
+
 check_dependencies() {
     command -v gh >/dev/null 2>&1 || die "gh CLI is not installed"
     command -v git >/dev/null 2>&1 || die "git is not installed"
@@ -33,11 +38,13 @@ find_fork_remote() {
     local remote
     # Search for a push remote matching both the GitHub username and repo name (case-insensitive)
     if [[ -n "${expected_repo}" ]]; then
+        local expected_repo_escaped
+        expected_repo_escaped=$(escape_regex "${expected_repo}")
         remote=$(git remote -v \
             | grep '(push)' \
             | awk '{print $1, $2}' \
             | grep -i "${gh_user}" \
-            | grep -i "/${expected_repo}\\.git\|/${expected_repo}$" \
+            | grep -iE "/${expected_repo_escaped}(\\.git)?$" \
             | head -1 \
             | awk '{print $1}')
     fi
@@ -81,12 +88,15 @@ validate_not_upstream() {
     local upstream_org upstream_repo
     upstream_org=$(echo "${pr_url}" | cut -d'/' -f4)
     upstream_repo=$(echo "${pr_url}" | cut -d'/' -f5)
+    local upstream_org_escaped upstream_repo_escaped
+    upstream_org_escaped=$(escape_regex "${upstream_org}")
+    upstream_repo_escaped=$(escape_regex "${upstream_repo}")
 
     local gh_user
     gh_user=$(gh api user --jq '.login') || die "Failed to get GitHub username"
 
     # Match both HTTPS (org/repo) and SSH (org/repo.git) URL patterns
-    if echo "${remote_url}" | grep -qiE "${upstream_org}/${upstream_repo}(\.git)?$|:${upstream_org}/${upstream_repo}(\.git)?$"; then
+    if echo "${remote_url}" | grep -qiE "${upstream_org_escaped}/${upstream_repo_escaped}(\\.git)?$|:${upstream_org_escaped}/${upstream_repo_escaped}(\\.git)?$"; then
         if [[ "${upstream_org,,}" != "${gh_user,,}" ]]; then
             die "Remote '${remote}' points to upstream ${upstream_org}/${upstream_repo} — refusing to push directly to upstream"
         fi
@@ -108,8 +118,18 @@ verify_staged_files() {
         only_staged=$(comm -13 <(echo "${expected_sorted}") <(echo "${staged_sorted}"))
 
         echo "Error: staged files do not match expected files" >&2
-        [[ -n "${only_expected}" ]] && echo "  Expected but not staged:" >&2 && echo "${only_expected}" | sed 's/^/    /' >&2
-        [[ -n "${only_staged}" ]] && echo "  Staged but not expected:" >&2 && echo "${only_staged}" | sed 's/^/    /' >&2
+        if [[ -n "${only_expected}" ]]; then
+            echo "  Expected but not staged:" >&2
+            while IFS= read -r line; do
+                echo "    ${line}" >&2
+            done <<< "${only_expected}"
+        fi
+        if [[ -n "${only_staged}" ]]; then
+            echo "  Staged but not expected:" >&2
+            while IFS= read -r line; do
+                echo "    ${line}" >&2
+            done <<< "${only_staged}"
+        fi
         local staged_csv
         staged_csv=$(git diff --cached --name-only | tr '\n' ',' | sed 's/,$//')
         jq -n --arg expected "${expected_csv}" --arg staged "${staged_csv}" \

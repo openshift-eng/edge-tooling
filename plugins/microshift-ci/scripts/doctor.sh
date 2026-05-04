@@ -57,6 +57,7 @@ cmd_prepare() {
 
     IFS=',' read -ra RELEASES <<< "${releases_arg}"
     local total_jobs=0
+    declare -A release_errors
 
     # Collect and download for each release
     for release in "${RELEASES[@]}"; do
@@ -70,9 +71,13 @@ cmd_prepare() {
         raw_err=$(mktemp)
         if ! raw_json=$(bash "${SCRIPT_DIR}/prow-jobs-for-release.sh" "${release}" 2>"${raw_err}"); then
             echo "  ERROR: failed to collect jobs for release ${release}:" >&2
-            cat "${raw_err}" >&2
+            local err_msg
+            err_msg=$(cat "${raw_err}")
+            echo "${err_msg}" >&2
             rm -f "${raw_err}"
             echo "[]" > "${jobs_file}"
+            release_errors["${release}"]="${err_msg:-data collection failed}"
+            echo "${release_errors["${release}"]}" > "${WORKDIR}/analyze-ci-release-${release}-error.txt"
             continue
         fi
         rm -f "${raw_err}"
@@ -112,13 +117,16 @@ cmd_prepare() {
         echo "  Collecting rebase PRs..." >&2
         local pr_json pr_err
         pr_err=$(mktemp)
+        local prs_error=""
         if ! pr_json=$(bash "${SCRIPT_DIR}/prow-jobs-for-pull-requests.sh" \
             --mode detail --author "microshift-rebase-script[bot]" 2>"${pr_err}"); then
             echo "  ERROR: failed to collect rebase PRs:" >&2
-            cat "${pr_err}" >&2
+            prs_error=$(cat "${pr_err}")
+            echo "${prs_error}" >&2
             rm -f "${pr_err}"
             echo "[]" > "${prs_file}"
             echo "[]" > "${prs_status_file}"
+            echo "${prs_error:-rebase PR collection failed}" > "${WORKDIR}/analyze-ci-prs-error.txt"
         else
             rm -f "${pr_err}"
 
@@ -183,9 +191,16 @@ cmd_prepare() {
         if [[ -f "${jobs_file}" ]]; then
             count=$(jq 'length' "${jobs_file}")
         fi
-        releases_json=$(echo "${releases_json}" | jq \
-            --arg r "${release}" --argjson c "${count}" --arg f "${jobs_file}" \
-            '. + [{release: $r, jobs: $c, jobs_file: $f}]')
+        local error="${release_errors["${release}"]:-}"
+        if [[ -n "${error}" ]]; then
+            releases_json=$(echo "${releases_json}" | jq \
+                --arg r "${release}" --argjson c "${count}" --arg f "${jobs_file}" --arg e "${error}" \
+                '. + [{release: $r, jobs: $c, jobs_file: $f, error: $e}]')
+        else
+            releases_json=$(echo "${releases_json}" | jq \
+                --arg r "${release}" --argjson c "${count}" --arg f "${jobs_file}" \
+                '. + [{release: $r, jobs: $c, jobs_file: $f}]')
+        fi
     done
 
     local result
@@ -198,9 +213,15 @@ cmd_prepare() {
         if [[ -f "${prs_file}" ]]; then
             pr_job_count=$(jq 'length' "${prs_file}")
         fi
-        result=$(echo "${result}" | jq \
-            --argjson c "${pr_job_count}" --arg f "${prs_file}" \
-            '. + {prs: {jobs: $c, jobs_file: $f}}')
+        if [[ -n "${prs_error:-}" ]]; then
+            result=$(echo "${result}" | jq \
+                --argjson c "${pr_job_count}" --arg f "${prs_file}" --arg e "${prs_error}" \
+                '. + {prs: {jobs: $c, jobs_file: $f, error: $e}}')
+        else
+            result=$(echo "${result}" | jq \
+                --argjson c "${pr_job_count}" --arg f "${prs_file}" \
+                '. + {prs: {jobs: $c, jobs_file: $f}}')
+        fi
     fi
 
     echo "${result}"

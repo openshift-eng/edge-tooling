@@ -10,7 +10,7 @@ PROW_URL="https://prow.ci.openshift.org/data.js"
 # Fetch all MicroShift jobs for a release, return latest run per job as JSON
 fetch_latest_per_job() {
     local release="${1}"
-    curl -s --max-time 60 "${PROW_URL}" | jq --arg release "${release}" '
+    curl -s --max-time 300 --retry 3 --retry-delay 5 --compressed "${PROW_URL}" | jq --arg release "${release}" '
         [.[] | select((.job | contains("microshift")) and (.job | contains($release)))] |
         group_by(.job) |
         map(sort_by(.started | tonumber) | reverse | first) |
