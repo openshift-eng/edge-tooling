@@ -1,6 +1,6 @@
 ---
 name: yolo-agent
-argument-hint: "<pr-url> [--infinite-loop] [--skip-users] [--yolo]"
+argument-hint: "<pr-url> [--infinite-loop] [--include-users] [--yolo]"
 description: "Autonomous PR lifecycle agent — monitors CI, triages review comments, auto-fixes trivial issues, and loops until the PR is ready"
 user-invocable: true
 allowed-tools: Skill, Bash, Read, Write, Edit, Glob, Grep, Agent
@@ -23,9 +23,10 @@ The user argument is: $ARGUMENTS
 optionally followed by:
 
 - `--infinite-loop` — unlimited iterations (default: 3)
-- `--skip-users` — ignore human review comments; only process bot comments
-  (e.g., CodeRabbit). Human comments are excluded from the comment track
-  entirely: they are not analyzed, not fixed, and not replied to.
+- `--include-users` — also process human review comments. By default,
+  only bot comments (e.g., CodeRabbit) are processed. When this flag is
+  provided, human comments are included in the comment track: analyzed,
+  fixed if possible, and replied to.
 - `--yolo` — auto-push ALL changes without confirmation, including non-trivial
   ones. Security checks still apply: security-sensitive file patterns are never
   modified, and all six security validations run before every change regardless
@@ -43,65 +44,28 @@ optionally followed by:
 
 ## Trivial Change Classification
 
-Auto-push WITHOUT confirmation:
-
-1. Style and formatting fixes
-2. Variable or function renaming
-3. Linting error fixes (golint, shellcheck, etc.)
-4. Simple test assertion fixes (expected value mismatch)
-5. Adding missing imports
-
-All other changes (new files, logic changes, API changes, multi-package)
-require explicit user confirmation.
+When classifying any proposed fix as trivial or non-trivial (step 2d),
+read the full classification criteria from
+`${PLUGIN_DIR}/references/classification.md`. That file defines scope
+guards, 11 trivial categories, explicit non-trivial signals, and edge
+case rules. Applies to both CI-track and comment-track fixes. Do NOT
+classify without reading it first.
 
 ## Error Handling
 
-When any script or operation fails, **report the error and stop
-immediately**. Do NOT attempt to diagnose, fix, or work around the
-error. The user must resolve it manually.
-
-**Rules:**
-
-1. **Script exit code 3** (any script): Display the script name, the
-   error message from stderr, and the exit code. Set status to
-   `complete` with notes describing the failure. Stop.
-2. **Push failure** (`pr-push.sh` exit code 3): Display the full error
-   output (rejected push, auth failure, non-fast-forward, etc.). Do
-   NOT run `git pull`, `git rebase`, `git reset`, or force-push. Stop.
-3. **Push file mismatch** (`pr-push.sh` exit code 2): Display the
-   expected vs. staged file lists from the JSON output. Ask the user
-   whether to retry with the actual staged files. Do NOT unstage,
-   remove, or gitignore files.
-4. **API failures** (`gh api`, `gh pr`): Display the HTTP status code
-   and error body. Do NOT retry. Stop.
-5. **State load failure** (`pr-state.sh load` exit code 3): Display the
-   error. Do NOT initialize fresh state as a fallback — a missing
-   state file on a continuation cycle indicates a real problem. Stop.
-6. **Sub-agent failure** (Agent call returns error or unexpected
-   output): Display what the sub-agent returned. Do NOT re-dispatch
-   or fall back to direct analysis. Mark the cycle as incomplete and
-   stop.
-
-**Format for error output:**
-
-```text
-yolo-agent error — <script-or-operation>
-Exit code: <N>
-Output: <stderr or error JSON>
-
-Stopping. Manual intervention required.
-```
-
-Save state before stopping (if state is available) so the user can
-inspect it via `pr-state.sh decode`. Use `set-notes` to record the
-failure reason.
+When any script or operation fails, read the full error handling rules
+from `${PLUGIN_DIR}/references/error-handling.md`. That file defines
+exit code handling for each script, API failure rules, the required
+error output format, and reply failure handling (non-fatal retries with
+3-strike escalation). The general rule: report the error and stop
+immediately. Do NOT diagnose, fix, or work around errors.
 
 ## Workflow
 
 ### Step 1: Initialize
 
-Parse the PR URL, `--infinite-loop` flag, `--skip-users` flag, and `--yolo`
-flag from `$ARGUMENTS`. Extract org, repo, and PR number. Store `skip_users`
+Parse the PR URL, `--infinite-loop` flag, `--include-users` flag, and `--yolo`
+flag from `$ARGUMENTS`. Extract org, repo, and PR number. Store `include_users`
 and `yolo_mode` as booleans for use in later steps.
 
 **Authorship check** (run once, before loading state): Get the authenticated
@@ -125,8 +89,8 @@ Load state in this order:
 If `--yolo` was provided (or `yolo_mode` is true in loaded state), set
 `yolo_mode` to `true` in state via `pr-state.sh set yolo_mode true`.
 
-If `--skip-users` was provided (or `skip_users` is true in loaded state),
-set `skip_users` to `true` in state via `pr-state.sh set skip_users true`.
+If `--include-users` was provided (or `include_users` is true in loaded state),
+set `include_users` to `true` in state via `pr-state.sh set include_users true`.
 
 If continuing, set status to `running` and display iteration number and
 previous cycle notes. If the org is not in the trusted allowlist, warn and
@@ -137,11 +101,11 @@ enter analysis-only mode.
 #### 2a: Gather Data
 
 Run `pr-checks.sh <url>` and `pr-comments.sh <url> <addressed-ids>
-[--skip-users]` to collect CI status and unresolved review comments. If
+[--include-users]` to collect CI status and unresolved review comments. If
 either script exits with code 3, follow the **Error Handling** rules and
-stop. Pass `--skip-users` to `pr-comments.sh` when the flag was
-provided — this filters out human comments at the data layer, returning
-only bot comments. Extract the branch name from the checks JSON
+stop. By default, `pr-comments.sh` returns only bot comments. Pass
+`--include-users` when the flag was provided to also include human
+comments. Extract the branch name from the checks JSON
 (`.pr.branch`) for use in push operations. Increment the cycle counter
 via `pr-state.sh increment cycle`. Display a compact status summary.
 
@@ -169,8 +133,8 @@ output into two groups using the `is_bot` field:
 - **Bot comments**: entries where `is_bot == true`
 - **Human comments**: entries where `is_bot == false`
 
-When `--skip-users` was passed, `pr-comments.sh` has already filtered
-out human comments at the data layer — the human group will be empty.
+By default, `pr-comments.sh` filters out human comments at the data
+layer — the human group will be empty unless `--include-users` was passed.
 
 **Dispatch**: Launch up to TWO sub-Agent calls in parallel (one per
 non-empty group). Skip any group that has zero comments.
@@ -224,8 +188,8 @@ be displayed but not added to the addressed list.
 |----------|----------|
 | No bot comments | Skip coderabbit dispatch, only run vet-review |
 | No human comments | Skip vet-review dispatch, only run coderabbit |
-| `--skip-users` active, no bot comments | No Comment Track work, return empty |
-| `--skip-users` active | Human group empty, only dispatch coderabbit if bots exist |
+| Default (no `--include-users`), no bot comments | No Comment Track work, return empty |
+| Default (no `--include-users`) | Human group empty, only dispatch coderabbit if bots exist |
 | Both groups empty | No Comment Track work, proceed to 2d/2e |
 | Sub-agent returns `{"findings": []}` | No findings from that source, merge with other |
 
@@ -260,8 +224,7 @@ On any non-zero exit code, follow the **Error Handling** rules above.
 
 On successful push, reply to each addressed comment on the PR with a brief
 description of what was done (e.g., "Renamed variable to snake_case",
-"Added missing import for `fmt`"), followed by the footer. Update state:
-set `last_push_cycle`, add addressed comment IDs and analyzed job keys.
+"Added missing import for `fmt`"), followed by the footer.
 
 For non-actionable comments, reply with the reason why it was not addressed
 (e.g., "Already fixed in a previous commit.", "Non-trivial change — deferred
@@ -274,6 +237,14 @@ All PR comment replies MUST use this format:
 
 This message is AI generated by the yolo-agent of [edge-tooling](https://github.com/openshift-eng/edge-tooling).
 ```
+
+**Reply failure handling:** Only mark a comment as addressed AFTER its
+reply succeeds. If a reply fails, follow the reply failure handling
+rules in `${PLUGIN_DIR}/references/error-handling.md` (non-fatal,
+tracked with retry, 3-strike escalation).
+
+Update state after all replies: set `last_push_cycle`, add successfully
+addressed comment IDs, and add analyzed job keys.
 
 #### 2e: Handle No-Action Cycle
 
@@ -304,8 +275,8 @@ Update state with notes, delay, and `status=waiting`. Save state via
 
 **Interactive mode**: Schedule next cycle with `CronCreate` (one-shot,
 `recurring: false`, `durable: false`). Prompt: `/pr-review:yolo-agent <url>`
-(append `--infinite-loop` if max_iterations is 0, append `--skip-users` if
-the flag was provided, append `--yolo` if yolo_mode is active). The cron
+(append `--infinite-loop` if max_iterations is 0, append `--include-users` if
+`include_users` is active in state, append `--yolo` if yolo_mode is active). The cron
 expression MUST use the machine's local
 time (run `date '+%H:%M'` to get it), NOT UTC. Then stop.
 
@@ -332,8 +303,8 @@ direct `jq` state manipulation, manual `git push`, or ad-hoc replacements.**
 |--------|---------|------|------------|
 | `pr-state.sh` | ALL state operations | `init <url> [max]`, `save <n>`, `load <n>`, `clean <n>`, `get <field>`, `set <field> <value>`, `increment <field>`, `set-notes <text>`, `set-status <status>`, `add-addressed <id>`, `add-analyzed <key>`, `decode` | 0=ok, 3=error |
 | `pr-checks.sh` | Fetch PR metadata + CI status | `<pr-url>` | 0=all pass, 1=failures, 2=pending only, 3=error |
-| `pr-comments.sh` | Fetch unresolved review comments | `<pr-url> [addressed-ids] [--skip-users]` | 0=has comments, 1=no comments, 3=error |
-| `pr-push.sh` | Validate fork remote + push | `<branch> [message --expected-files f1,f2]` | 0=pushed, 1=nothing to push, 2=file mismatch, 3=error |
+| `pr-comments.sh` | Fetch unresolved review comments | `<pr-url> [addressed-ids] [--include-users]` | 0=has comments, 1=no comments, 3=error |
+| `pr-push.sh` | Validate fork remote + push | `<branch> [message --expected-files f1,f2]` | 0=pushed, 1=nothing to push, 3=error |
 
 **Mandatory usage rules:**
 

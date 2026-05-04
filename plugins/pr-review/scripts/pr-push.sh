@@ -22,9 +22,17 @@ check_dependencies() {
     gh auth status >/dev/null 2>&1 || die "gh CLI is not authenticated — run 'gh auth login'"
 }
 
+GH_USER=""
+
+resolve_gh_user() {
+    if [[ -z "${GH_USER}" ]]; then
+        GH_USER=$(gh api user --jq '.login') || die "Failed to get GitHub username"
+    fi
+}
+
 find_fork_remote() {
-    local gh_user
-    gh_user=$(gh api user --jq '.login') || die "Failed to get GitHub username"
+    resolve_gh_user
+    local gh_user="${GH_USER}"
 
     # Determine expected repo name from PR URL or git directory name
     local expected_repo=""
@@ -92,8 +100,8 @@ validate_not_upstream() {
     upstream_org_escaped=$(escape_regex "${upstream_org}")
     upstream_repo_escaped=$(escape_regex "${upstream_repo}")
 
-    local gh_user
-    gh_user=$(gh api user --jq '.login') || die "Failed to get GitHub username"
+    resolve_gh_user
+    local gh_user="${GH_USER}"
 
     # Match both HTTPS (org/repo) and SSH (org/repo.git) URL patterns
     if echo "${remote_url}" | grep -qiE "${upstream_org_escaped}/${upstream_repo_escaped}(\\.git)?$|:${upstream_org_escaped}/${upstream_repo_escaped}(\\.git)?$"; then
@@ -103,40 +111,6 @@ validate_not_upstream() {
     fi
 }
 
-verify_staged_files() {
-    local expected_csv="$1"
-
-    local expected_sorted
-    expected_sorted=$(echo "${expected_csv}" | tr ',' '\n' | sort)
-
-    local staged_sorted
-    staged_sorted=$(git diff --cached --name-only | sort)
-
-    if [[ "${expected_sorted}" != "${staged_sorted}" ]]; then
-        local only_expected only_staged
-        only_expected=$(comm -23 <(echo "${expected_sorted}") <(echo "${staged_sorted}"))
-        only_staged=$(comm -13 <(echo "${expected_sorted}") <(echo "${staged_sorted}"))
-
-        echo "Error: staged files do not match expected files" >&2
-        if [[ -n "${only_expected}" ]]; then
-            echo "  Expected but not staged:" >&2
-            while IFS= read -r line; do
-                echo "    ${line}" >&2
-            done <<< "${only_expected}"
-        fi
-        if [[ -n "${only_staged}" ]]; then
-            echo "  Staged but not expected:" >&2
-            while IFS= read -r line; do
-                echo "    ${line}" >&2
-            done <<< "${only_staged}"
-        fi
-        local staged_csv
-        staged_csv=$(git diff --cached --name-only | tr '\n' ',' | sed 's/,$//')
-        jq -n --arg expected "${expected_csv}" --arg staged "${staged_csv}" \
-            '{"pushed": false, "reason": "file mismatch", "expected": $expected, "staged": $staged}'
-        exit 2
-    fi
-}
 
 check_blocked_patterns() {
     local staged_files
@@ -204,14 +178,27 @@ main() {
             echo '{"pushed": false, "reason": "no changes to commit"}'
             exit 1
         fi
-        git add -A
-
-        check_blocked_patterns
 
         if [[ -z "${expected_files}" ]]; then
             die "--expected-files is required when committing"
         fi
-        verify_staged_files "${expected_files}"
+
+        local file
+        IFS=',' read -ra expected_arr <<< "${expected_files}"
+        for file in "${expected_arr[@]}"; do
+            git add -- "${file}" || die "Failed to stage '${file}'"
+        done
+
+        check_blocked_patterns
+
+        local unexpected_dirty
+        unexpected_dirty=$(git diff --name-only)
+        if [[ -n "${unexpected_dirty}" ]]; then
+            echo "Warning: unstaged modified files not in expected list:" >&2
+            while IFS= read -r line; do
+                echo "  ${line}" >&2
+            done <<< "${unexpected_dirty}"
+        fi
 
         git commit -m "${commit_message}" \
             || die "git commit failed"

@@ -30,7 +30,7 @@ main() {
             jq -nc \
                 --arg url "$1" \
                 --argjson max "${2:-3}" \
-                '{pr_url:$url,iteration:0,max_iterations:$max,cycle:0,addressed:[],analyzed:[],status:"running",notes:"",next_check_delay:0,last_push_cycle:0}'
+                '{pr_url:$url,iteration:0,max_iterations:$max,cycle:0,addressed:[],analyzed:[],reply_failures:{},status:"running",notes:"",next_check_delay:0,last_push_cycle:0}'
             ;;
         save)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") save <pr-number>"
@@ -63,7 +63,7 @@ main() {
         add-addressed)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") add-addressed <comment-id>"
             require_state
-            echo "${PR_MONITOR_STATE}" | jq -c --arg id "$1" '.addressed += [($id | try tonumber // $id)]' \
+            echo "${PR_MONITOR_STATE}" | jq -c --arg id "$1" '.addressed |= (. + [($id | try tonumber // $id)] | unique)' \
                 || die "Failed to add addressed ID '$1'"
             ;;
         add-analyzed)

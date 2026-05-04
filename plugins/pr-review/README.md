@@ -67,23 +67,23 @@ Autonomous PR lifecycle agent. Monitors CI checks and review comments, auto-fixe
 Comment analysis is routed through the team's standardized skills: bot comments (e.g., CodeRabbit) are analyzed via the `coderabbit` skill in batch mode, and human comments are analyzed via the `vet-review` skill in batch mode. This ensures consistent vetting criteria across all invocation paths.
 
 ```text
-# Monitor a PR (default 3 iterations)
+# Monitor a PR (default 3 iterations, bot comments only)
 /pr-review:yolo-agent https://github.com/org/repo/pull/123
 
 # Monitor with unlimited iterations
 /pr-review:yolo-agent https://github.com/org/repo/pull/123 --infinite-loop
 
-# Only process bot comments (skip human reviewers)
-/pr-review:yolo-agent https://github.com/org/repo/pull/123 --skip-users
+# Also process human review comments (bot-only by default)
+/pr-review:yolo-agent https://github.com/org/repo/pull/123 --include-users
 
 # Yolo mode — auto-push all changes without confirmation (security checks still apply)
 /pr-review:yolo-agent https://github.com/org/repo/pull/123 --yolo
 
 # Combine flags
-/pr-review:yolo-agent https://github.com/org/repo/pull/123 --infinite-loop --skip-users --yolo
+/pr-review:yolo-agent https://github.com/org/repo/pull/123 --infinite-loop --include-users --yolo
 ```
 
-**Auto-push rules:** Trivial changes (style, naming, linting, imports, simple assertions) are pushed without confirmation. Non-trivial changes require explicit approval unless `--yolo` is active, which auto-pushes all changes. Security-sensitive files are never modified regardless of flags.
+**Auto-push rules:** Trivial changes (style, naming, linting, imports, simple assertions, doc fixes, generated code, dependency tidying — subject to scope guards; see SKILL.md for full criteria) are pushed without confirmation. Non-trivial changes require explicit approval unless `--yolo` is active, which auto-pushes all changes. Security-sensitive files are never modified regardless of flags.
 
 ## Future Work
 

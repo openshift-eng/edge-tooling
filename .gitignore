@@ -9,3 +9,4 @@ gh-notifier/pr-dashboard.html
 markdownlint-cli2-junit.xml
 markdownlint-cli2-results.json
 .env
+.claude/**/*.lock

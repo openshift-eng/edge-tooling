@@ -1,7 +1,7 @@
 {
   "name": "pr-review",
   "description": "PR lifecycle toolkit — vet findings, triage CodeRabbit reviews, filter noise, and autonomous yolo-agent for CI monitoring and auto-fixes",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "author": { "name": "fonta-rh, vmauro" },
   "homepage": "https://github.com/openshift-eng/edge-tooling",
   "license": "Apache-2.0"
