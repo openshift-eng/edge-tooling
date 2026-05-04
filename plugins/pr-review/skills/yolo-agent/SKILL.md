@@ -347,7 +347,18 @@ direct `jq` state manipulation, manual `git push`, or ad-hoc replacements.**
 - CI check gathering → `pr-checks.sh` (never call `gh pr checks` directly)
 - Comment gathering → `pr-comments.sh` (never call `gh api` for comments directly)
 - Pushing changes → `pr-push.sh` (never call `git push` directly — the script validates the fork remote, blocks security-sensitive file patterns, and prevents pushing to upstream). When committing, `--expected-files` is mandatory — the script refuses to commit without it
-- Replying to PR comments → `gh api` is allowed only for posting replies after fixes are applied
+- Replying to PR comments → use the exact endpoint below (do NOT
+  vary the path):
+
+  ```bash
+  gh api repos/<org>/<repo>/pulls/<pr_number>/comments/<comment_id>/replies -f body='<message>'
+  ```
+
+- Resolving review threads → use the GraphQL mutation:
+
+  ```bash
+  gh api graphql -f query='mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }' -f id='<thread_id>'
+  ```
 
 State is a JSON string carried in `PR_MONITOR_STATE` env var and persisted
 to `/tmp/pr-review-yolo-agent-<pr-number>.json`.

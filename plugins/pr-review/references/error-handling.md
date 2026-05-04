@@ -16,9 +16,11 @@ error. The user must resolve it manually.
    pattern): Display the file and pattern that matched. Do NOT
    remove or gitignore the file. Stop.
 4. **API failures** (`gh api`, `gh pr`): Display the HTTP status code
-   and error body. Do NOT retry. Stop. **Exception:** comment reply
-   failures after a successful push are non-fatal — see reply failure
-   handling in step 2d.
+   and error body. Do NOT retry. Do NOT diagnose, change the endpoint,
+   or vary the API call — use the exact endpoints documented in the
+   SKILL.md script interfaces section. Stop. **Exception:** comment
+   reply failures after a successful push are non-fatal — see reply
+   failure handling below.
 5. **State load failure** (`pr-state.sh load` exit code 3): Display the
    error. Do NOT initialize fresh state as a fallback — a missing
    state file on a continuation cycle indicates a real problem. Stop.
