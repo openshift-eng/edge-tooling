@@ -13,8 +13,10 @@ Errors block PRs. Warnings are advisory.
 | E003 | `description-present` | error | `description` field present and non-empty |
 | E004 | `description-not-placeholder` | error | Description is not a TODO/placeholder from template |
 | E005 | `body-not-empty` | error | Skill body below frontmatter has content |
-| E006 | `description-length` | error | Description ≤ 1536 characters |
+| E006 | `description-length` | error | Description ≤ 1024 characters |
 | E007 | `line-count-max` | error | File ≤ 1000 lines |
+| E008 | `name-format` | error | `name` is lowercase alphanumeric + hyphens (plus optional `plugin:skill` colon), max 64 chars, no leading/trailing/consecutive hyphens |
+| E009 | `name-matches-dir` | error | `name` (or skill segment after colon) matches parent directory name |
 | W001 | `description-quality` | warning | Description does not start with filler phrases ("A skill that...", "This plugin...") |
 | W002 | `line-count` | warning | File ≤ 500 lines |
 | W003 | `has-examples` | warning | Body contains Examples/Synopsis/Usage section |
@@ -41,12 +43,25 @@ Every SKILL.md starts with YAML frontmatter between `---` markers.
 
 ### Required Fields
 
-| Field | Purpose | Example |
-|-------|---------|---------|
-| `name` | Slash command identifier | `sprint-health` or `two-node:bug-reproducer` |
-| `description` | Claude uses this to decide auto-invocation | See [Description Quality](#description-quality) |
+| Field | Purpose | Constraints |
+|-------|---------|-------------|
+| `name` | Slash command identifier | Max 64 chars. Lowercase letters, numbers, and hyphens only. No leading/trailing/consecutive hyphens. Must match parent directory name. Claude Code extension: may include a `plugin:skill` colon separator (e.g., `two-node:bug-reproducer`). |
+| `description` | Agent uses this to decide when to invoke the skill | Max 1024 chars. See [Description Quality](#description-quality). |
 
-### Recommended Fields
+### Optional Fields (Agent Skills Spec)
+
+These fields are defined by the [Agent Skills specification](https://agentskills.io/specification) and are portable across any agent that supports the format.
+
+| Field | When to use | Example |
+|-------|-------------|---------|
+| `license` | Skill has a specific license | `Apache-2.0` or `Proprietary. LICENSE.txt has complete terms` |
+| `compatibility` | Skill requires specific tools or environment | `Requires oc, podman, and access to the internet` |
+| `metadata` | Additional key-value metadata (author, version) | `metadata:\n  author: edge-team\n  version: "1.0"` |
+| `allowed-tools` | Limit what tools the skill can use (experimental) | `Read Bash Agent` |
+
+### Recommended Fields (Claude Code Extensions)
+
+These fields are Claude Code-specific extensions not part of the base Agent Skills spec. They control Claude Code's skill registration and invocation behavior.
 
 | Field | When to use | Example |
 |-------|-------------|---------|
@@ -57,7 +72,7 @@ Every SKILL.md starts with YAML frontmatter between `---` markers.
 
 ### Description Quality
 
-The description is the most important field. Claude reads it to decide when to auto-invoke the skill. Front-load the use case and keep it under 1536 characters (Claude's truncation limit).
+The description is the most important field. Agents read it to decide when to invoke the skill. Front-load the use case and keep it under 1024 characters (the [Agent Skills spec limit](https://agentskills.io/specification#description-field)).
 
 **Good descriptions** — start with an action verb or "Use when..." and specify the trigger context:
 
@@ -342,6 +357,28 @@ Skills currently lack standardized testing frameworks. At minimum, document thes
 3. **Known failure modes** — what breaks and how the skill handles it
 
 For higher confidence, test with and without the skill to measure the delta it provides — does the skill actually improve Claude's output for the target task?
+
+## Description Optimization
+
+A skill only helps if it gets activated. The `description` field carries the entire burden of triggering — if it doesn't convey when the skill is useful, the agent won't invoke it.
+
+### Writing for triggering
+
+- **Use imperative phrasing** — "Use when..." rather than "This skill does..."
+- **Focus on user intent** — describe what the user is trying to achieve, not the skill's internal mechanics
+- **Be specific but not narrow** — list contexts where the skill applies, including cases where the user doesn't name the domain directly
+- **Stay under 1024 characters** — long enough to cover scope, short enough to not bloat startup context
+
+### Testing trigger accuracy
+
+For non-trivial skills, test whether your description triggers on the right prompts. Create ~20 eval queries (half should-trigger, half should-not) and run them against the agent:
+
+- **Should-trigger queries**: vary phrasing (formal/casual), explicitness (names domain vs. describes need), and complexity
+- **Should-not-trigger queries**: focus on near-misses that share keywords but need something different
+
+The most valuable test cases are ones where the skill would help but the connection isn't obvious from the query alone — these are where description wording makes the difference.
+
+For a structured approach with train/validation splits and iterative optimization, see [Optimizing skill descriptions](https://agentskills.io/skill-creation/optimizing-descriptions).
 
 ## Anti-Patterns
 

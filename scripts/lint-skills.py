@@ -217,11 +217,76 @@ def check_body_not_empty(skill):
 
 def check_description_length(skill):
     desc = skill.frontmatter.get("description", "")
-    if len(desc) > 1536:
+    if len(desc) > 1024:
         return Finding(
             skill.path, "E006", "description-length", "error",
-            f"Description is {len(desc)} chars (max 1536)",
+            f"Description is {len(desc)} chars (max 1024)",
             line=skill.fm_line("description"),
+        )
+    return None
+
+
+NAME_SEGMENT_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
+
+
+def _validate_name_segment(segment):
+    """Validate a single name segment (before or after colon)."""
+    if "--" in segment:
+        return "consecutive hyphens"
+    if not NAME_SEGMENT_RE.match(segment):
+        return ("must contain only lowercase letters, numbers, and hyphens, "
+                "and must not start or end with a hyphen")
+    return None
+
+
+def check_name_format(skill):
+    name = skill.frontmatter.get("name", "")
+    if not name:
+        return None
+    if len(name) > 64:
+        return Finding(
+            skill.path, "E008", "name-format", "error",
+            f"Name is {len(name)} chars (max 64)",
+            line=skill.fm_line("name"),
+        )
+    # Claude Code extension: names may use plugin:skill namespace separator
+    segments = name.split(":")
+    if len(segments) > 2:
+        return Finding(
+            skill.path, "E008", "name-format", "error",
+            "Name may contain at most one colon (plugin:skill namespace)",
+            line=skill.fm_line("name"),
+        )
+    for segment in segments:
+        if not segment:
+            return Finding(
+                skill.path, "E008", "name-format", "error",
+                "Name has empty segment around colon",
+                line=skill.fm_line("name"),
+            )
+        err = _validate_name_segment(segment)
+        if err:
+            return Finding(
+                skill.path, "E008", "name-format", "error",
+                f"Name segment '{segment}' — {err}",
+                line=skill.fm_line("name"),
+            )
+    return None
+
+
+def check_name_matches_dir(skill):
+    name = skill.frontmatter.get("name", "")
+    if not name:
+        return None
+    # For namespaced names (plugin:skill), the skill part must match the dir
+    dir_name = name.split(":")[-1] if ":" in name else name
+    parent_dir = os.path.basename(os.path.dirname(skill.path))
+    if parent_dir and parent_dir != dir_name:
+        return Finding(
+            skill.path, "E009", "name-matches-dir", "error",
+            f"Name '{name}' (skill segment '{dir_name}') does not match "
+            f"parent directory '{parent_dir}'",
+            line=skill.fm_line("name"),
         )
     return None
 
@@ -460,6 +525,8 @@ def check_description_too_short(skill):
 
 ALL_CHECKS = [
     check_name_present,
+    check_name_format,
+    check_name_matches_dir,
     check_description_present,
     check_description_not_placeholder,
     check_body_not_empty,
