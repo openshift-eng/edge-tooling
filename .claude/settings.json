@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "scripts/lint-skills.sh --hook",
+            "command": "scripts/lint-skills.py --hook",
             "timeout": 15,
             "statusMessage": "Checking skill quality..."
           }
