@@ -39,7 +39,7 @@ reviews:
       instructions: |
         Review this skill against the quality guidelines in plugins/docs/SKILL-GUIDELINES.md.
         Check for:
-        - Description quality: specific, front-loaded use case, under 1536 chars
+        - Description quality: specific, front-loaded use case, under 1024 chars
         - Instruction clarity: numbered steps, clear stop conditions, output format
         - Safety: destructive operations require user confirmation, no credential logging
         - Edge cases: failure modes documented, guard checks between phases
