@@ -13,6 +13,10 @@ reviews:
   collapse_walkthrough: false
   request_changes_workflow: true
   abort_on_close: true
+  auto_apply_labels: true
+  labeling_instructions:
+    - label: "ready-for-human-review"
+      instructions: "Apply when CodeRabbit approves the PR with no outstanding comments or requested changes."
 
   auto_review:
     enabled: true
