@@ -16,11 +16,11 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # NVR format regex patterns per release type
 _NVR_GA = re.compile(
     r"^microshift-\d+\.\d+\.\d+-\d{12}\.p0\.g[0-9a-f]+"
-    r"\.assembly\.\d+\.\d+\.\d+\.el\d"
+    r"\.assembly\.\d+\.\d+\.\d+\.el\d+$"
 )
 _NVR_NIGHTLY = re.compile(
     r"^microshift-\d+\.\d+\.\d+~0\.nightly_\d{4}_\d{2}_\d{2}_\d{6}"
-    r"-\d{12}\.p0\.g[0-9a-f]+\.assembly\.microshift\.el\d"
+    r"-\d{12}\.p0\.g[0-9a-f]+\.assembly\.microshift\.el\d+$"
 )
 _NVR_PATTERNS = {
     "Z": _NVR_GA,
@@ -28,11 +28,11 @@ _NVR_PATTERNS = {
     "Y": _NVR_GA,
     "RC": re.compile(
         r"^microshift-\d+\.\d+\.\d+~rc\.\d+-\d{12}\.p0\.g[0-9a-f]+"
-        r"\.assembly\.rc\.\d+\.el\d"
+        r"\.assembly\.rc\.\d+\.el\d+$"
     ),
     "EC": re.compile(
         r"^microshift-\d+\.\d+\.\d+~ec\.\d+-\d{12}\.p0\.g[0-9a-f]+"
-        r"\.assembly\.ec\.\d+\.el\d"
+        r"\.assembly\.ec\.\d+\.el\d+$"
     ),
     "nightly": _NVR_NIGHTLY,
 }
@@ -272,7 +272,11 @@ def _fetch_advisory_images(advisory_url):
         sha_match = re.search(r"@sha256:([0-9a-f]+)",
                               img.get("containerImage", ""))
         if arch and sha_match:
-            result[arch] = sha_match.group(1)
+            rhel_match = re.search(r"rhel(\d+)", comp)
+            if rhel_match:
+                result[f"{arch}/el{rhel_match.group(1)}"] = sha_match.group(1)
+            else:
+                result[arch] = sha_match.group(1)
     return result if result else None
 
 
@@ -310,7 +314,7 @@ def validate_bootc_sha_match(version, release_type, shipment=None,
                     continue
                 m = re.search(r"@sha256:([0-9a-f]+)", resp.text)
                 if m:
-                    mirror_shas[_ARCH_MAP[arch]] = m.group(1)
+                    mirror_shas[f"{_ARCH_MAP[arch]}/el{rhel}"] = m.group(1)
             except requests.RequestException:
                 continue
 
@@ -336,19 +340,22 @@ def validate_bootc_sha_match(version, release_type, shipment=None,
         return {"valid": None,
                 "reason": "Could not fetch or parse advisory YAML"}
 
-    # 4. Compare per arch
+    # 4. Compare per arch/RHEL combination
     details = []
     mismatches = 0
-    for arch, mirror_sha in sorted(mirror_shas.items()):
-        adv_sha = advisory_shas.get(arch)
+    for key, mirror_sha in sorted(mirror_shas.items()):
+        adv_sha = advisory_shas.get(key)
         if adv_sha is None:
-            details.append(f"{arch}: not in advisory YAML")
+            arch_only = key.split("/")[0]
+            adv_sha = advisory_shas.get(arch_only)
+        if adv_sha is None:
+            details.append(f"{key}: not in advisory YAML")
             mismatches += 1
         elif mirror_sha == adv_sha:
-            details.append(f"{arch}: match ({mirror_sha[:12]})")
+            details.append(f"{key}: match ({mirror_sha[:12]})")
         else:
             details.append(
-                f"{arch}: MISMATCH mirror={mirror_sha[:12]} "
+                f"{key}: MISMATCH mirror={mirror_sha[:12]} "
                 f"advisory={adv_sha[:12]}"
             )
             mismatches += 1
@@ -458,6 +465,7 @@ def fetch_shipment_mr(version):
     mr = matching[0]
     mr_iid = mr["iid"]
     result = {"found": True, "mr_iid": mr_iid, "mr_title": mr["title"],
+              "state": mr.get("state"),
               "reason": f"MR !{mr_iid}: {mr['title']}"}
 
     # Fetch MR changes to find the YAML file
@@ -534,8 +542,10 @@ def _parse_shipment_yaml(content):
 
     metadata = ship.get("metadata", {})
 
+    spec = ship.get("spec", {})
+
     return {
-        "spec_type": release_notes.get("type"),
+        "spec_type": spec.get("type"),
         "release_notes_solution": release_notes.get("solution"),
         "release_notes_type": release_notes.get("type"),
         "stage_advisory_url": stage_advisory.get("internal_url"),

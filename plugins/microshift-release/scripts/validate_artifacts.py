@@ -437,11 +437,11 @@ def run_bootc_checks(version_info):
         if check_id in xy_only and vtype not in ("X", "Y", "XY"):
             shipment_results.append(_skip(check_id, f"N/A ({vtype}, not X.Y.0)"))
 
-    # Catalog check: stage for open shipment MRs, prod for shipped, skip for EC/RC
+    # Catalog check: stage for open shipment MRs, prod for merged/shipped, skip for EC/RC
     if vtype in ("EC", "RC"):
         catalog = None
     elif shipment.get("found") and not shipment.get("skipped"):
-        catalog = "stage"
+        catalog = "prod" if shipment.get("state") == "merged" else "stage"
     else:
         catalog = "prod"
 
@@ -499,8 +499,7 @@ def run_bootc_checks(version_info):
     else:
         sha_result = (_pass if sha["valid"] else _fail)(
             "bootc_image_sha_match", sha["reason"],
-            [f"Pullspec SHA: {sha.get('pullspec_sha', 'N/A')}",
-             f"Advisory SHA: {sha.get('advisory_sha', 'N/A')}"])
+            sha.get("details"))
 
     # Assemble in canonical order
     extra_by_id = {r["check"]: r for r in [
