@@ -9,11 +9,13 @@ allowed-tools: Bash
 # microshift-release:validate-artifacts
 
 ## Synopsis
+
 ```bash
 /microshift-release:validate-artifacts <version> [--verbose]
 ```
 
 ## Description
+
 Phase 1 of the MicroShift release process: verify that ART produced correct RPMs and bootc images for a given release. Checks Brew builds, NVR format, commit provenance, RHEL variants, mirror availability, shipment MR, stage catalog, and bootc image SHA consistency.
 
 Supports all release types: X/Y (GA), Z (z-stream), RC, EC, and nightly.
@@ -28,6 +30,7 @@ Supports all release types: X/Y (GA), Z (z-stream), RC, EC, and nightly.
 | Internet (mirrors) | `rpm_mirror_*`, `bootc_mirror_*` | Yes for RC/EC mirror checks |
 
 ## Arguments
+
 - `version` (required): Full version string
   - Z-stream: `4.21.8`
   - X/Y (GA): `4.22.0`
@@ -37,6 +40,7 @@ Supports all release types: X/Y (GA), Z (z-stream), RC, EC, and nightly.
 - `--verbose` (optional): Show detailed markdown report with evidence per check
 
 ## Scripts Directory
+
 ```bash
 SCRIPTS_DIR=plugins/microshift-release/scripts
 ```
@@ -63,6 +67,7 @@ Display output **verbatim** — do not reformat, summarize, or add commentary. T
 ### Step 4: Handle Errors
 
 If the script exits non-zero:
+
 - **VPN errors**: Connect to VPN (Brew and git operations require it)
 - **Missing GITLAB_API_TOKEN**: `export GITLAB_API_TOKEN=<token>` for shipment MR checks
 - **HTTP errors on mirrors**: Mirrors may not be populated yet — check with ART
@@ -70,6 +75,7 @@ If the script exits non-zero:
 ## Checks Performed
 
 ### RPM Checks (all release types)
+
 | Check | Description |
 |---|---|
 | `rpm_packages_built` | NVR exists in Brew |
@@ -81,6 +87,7 @@ If the script exits non-zero:
 | `rpm_xy0_commit_match` | X.Y.0 only: commit matches the latest RC commit |
 
 ### Bootc Checks (4.18+, not nightly)
+
 | Check | Description |
 |---|---|
 | `bootc_shipment_mr` | Shipment MR exists in `ocp-shipment-data` GitLab repo |
@@ -98,7 +105,8 @@ If the script exits non-zero:
 ## Output Format
 
 **Short (default):**
-```
+
+```text
 PASS  rpm_packages_built      [4.21.8] NVR found: microshift-4.21.8-...assembly.4.21.8.el9
 PASS  rpm_filename_format     [4.21.8] NVR matches Z pattern
 PASS  rpm_commit_id           [4.21.8] Commit abc1234 verified on release-4.21
@@ -124,8 +132,8 @@ PASS  bootc_shipment_yaml_count [4.21.8] 1 YAML file in MR
 ```
 
 ## Notes
-- Read-only — does NOT create tickets, advisories, or modify external state. No confirmation required.
 
+- Read-only — does NOT create tickets, advisories, or modify external state. No confirmation required.
 - VPN is required for Brew queries and git commit verification on internal repos
 - GITLAB_API_TOKEN enables shipment MR checks; without it those checks show WARN
 - Bootc checks are skipped for versions below 4.18 and for nightly builds
