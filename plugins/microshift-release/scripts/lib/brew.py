@@ -244,8 +244,8 @@ def find_latest_rc(minor):
     combined = ""
     try:
         combined = _fetch_brew_page()
-    except Exception:
-        pass
+    except requests.RequestException as exc:
+        logger.debug("Brew package page unavailable, will search directly: %s", exc)
     search_html = _search_brew(f"{minor}.0~rc*")
     combined += search_html
 

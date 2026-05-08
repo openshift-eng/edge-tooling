@@ -1,5 +1,6 @@
 """Artifact validation helpers for MicroShift Phase 1 release checks."""
 
+import json
 import logging
 import os
 import re
@@ -101,7 +102,6 @@ def validate_commit_on_branch(commit_hash, minor):
             }
 
         # Verify the commit is reachable from origin/release-{minor}
-        import subprocess  # noqa: PLC0415
         branch = f"origin/release-{minor}"
         result = subprocess.run(
             ["git", "-C", repo_path, "merge-base", "--is-ancestor", commit_hash, branch],
@@ -253,9 +253,13 @@ def _fetch_advisory_images(advisory_url):
     try:
         resp = _http_get(advisory_url, verify=False, timeout=15)
         if resp.status_code != 200:
+            logger.debug("Advisory YAML fetch returned HTTP %d: %s",
+                         resp.status_code, advisory_url)
             return None
         content = _yaml.safe_load(resp.text)
-    except Exception:
+    except (requests.RequestException, _yaml.YAMLError) as exc:
+        logger.debug("Advisory YAML fetch/parse failed for %s: %s",
+                     advisory_url, exc)
         return None
 
     images = content.get("spec", {}).get("content", {}).get("images", [])
@@ -358,7 +362,7 @@ def _gitlab_headers():
     return {"PRIVATE-TOKEN": token}
 
 
-def _gitlab_get(path, params=None):
+def _gitlab_get(path):
     """Perform a GET against the internal GitLab API.
 
     Uses GITLAB_API_TOKEN if set, otherwise tries unauthenticated.
@@ -385,7 +389,11 @@ def _get_gitlab_project_id():
     resp = _gitlab_get(f"projects/{encoded}")
     if resp is None or resp.status_code != 200:
         return None
-    return resp.json().get("id")
+    try:
+        return resp.json().get("id")
+    except (json.JSONDecodeError, ValueError):
+        logger.debug("GitLab project lookup returned non-JSON response")
+        return None
 
 
 def fetch_shipment_mr(version):
@@ -422,7 +430,13 @@ def fetch_shipment_mr(version):
                       f"{resp.status_code if resp else 'no response'}",
         }
 
-    mrs = resp.json()
+    try:
+        mrs = resp.json()
+    except (json.JSONDecodeError, ValueError):
+        return {
+            "found": False,
+            "reason": "GitLab MR search returned non-JSON response",
+        }
     matching = [mr for mr in mrs
                 if "Microshift-bootc shipment for" in mr.get("title", "")
                 and mr.get("title", "").strip().endswith(version)]
@@ -445,7 +459,12 @@ def fetch_shipment_mr(version):
         result["yaml_count"] = 0
         return result
 
-    changes = changes_resp.json().get("changes", [])
+    try:
+        changes = changes_resp.json().get("changes", [])
+    except (json.JSONDecodeError, ValueError):
+        result["yaml_file"] = None
+        result["yaml_count"] = 0
+        return result
     yaml_files = [c["new_path"] for c in changes
                   if c["new_path"].endswith(".yaml") or c["new_path"].endswith(".yml")]
     result["yaml_count"] = len(yaml_files)

@@ -205,9 +205,7 @@ def check_rpm_filename_format(version_info, build_info):
     nvr = build_info["nvr"]
     release_type = version_info["type"]
     # Use the appropriate type key for validation
-    type_key = release_type if release_type in ("RC", "EC", "nightly") else (
-        "Z" if release_type == "Z" else "Z"  # XY uses same pattern as Z
-    )
+    type_key = release_type if release_type in ("RC", "EC", "nightly") else "Z"
     result = artifacts.validate_nvr_format(nvr, type_key)
     if result["valid"]:
         return _pass("rpm_filename_format", result["reason"])
