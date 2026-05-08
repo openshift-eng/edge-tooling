@@ -191,7 +191,10 @@ def get_build_info(version, release_type):
     brew_version = version.replace("-", "~") if release_type in ("RC", "EC") else version
 
     # Try cached package page first (fast, no extra request)
-    html = _fetch_brew_page()
+    try:
+        html = _fetch_brew_page()
+    except requests.RequestException:
+        html = ""
     matches = _parse_build_matches(html, brew_version)
 
     # Fallback: search Brew directly for older builds
@@ -292,7 +295,10 @@ def get_build_packages(nvr):
     escaped = re.escape(brew_version)
 
     # Try cached package page first
-    html = _fetch_brew_page()
+    try:
+        html = _fetch_brew_page()
+    except requests.RequestException:
+        html = ""
     build_id = _extract_build_id_for_nvr(html, nvr)
 
     if build_id:

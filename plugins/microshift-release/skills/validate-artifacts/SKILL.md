@@ -26,7 +26,6 @@ Supports all release types: X/Y (GA), Z (z-stream), RC, EC, and nightly.
 |---|---|---|
 | VPN | Brew RPM checks, git commit verification | Yes — Brew checks WARN and degrade without it |
 | `GITLAB_API_TOKEN` | Shipment MR checks (`bootc_shipment_*`) | No — bootc MR checks WARN and skip without it |
-| `ATLASSIAN_API_TOKEN` | Advisory SHA comparison (RC/EC) | No — SHA match check WARNs without it |
 | Internet (mirrors) | `rpm_mirror_*`, `bootc_mirror_*` | Yes for RC/EC mirror checks |
 
 ## Arguments
@@ -78,7 +77,7 @@ If the script exits non-zero:
 
 | Check | Description |
 |---|---|
-| `rpm_packages_built` | NVR exists in Brew |
+| `rpm_packages_list` | All expected RPM packages present in Brew build |
 | `rpm_filename_format` | NVR matches expected pattern for this release type |
 | `rpm_commit_id` | Commit hash from NVR is on the correct `release-X.Y` branch |
 | `rpm_rhel_version` | Both el9 and el10 builds are present |
@@ -95,7 +94,7 @@ If the script exits non-zero:
 | `bootc_shipment_xy0_type` | X/Y.0 only: `spec.type == RHEA` |
 | `bootc_shipment_xy0_release_notes` | X/Y.0 only: `releaseNotes.solution` URL present |
 | `bootc_stage_advisory_url` | `environments.stage.advisory.internal_url` present |
-| `bootc_stage_catalog` | Image published in stage catalog |
+| `bootc_catalog` | Image published in catalog (stage or prod) |
 | `bootc_prod_xy0_type` | X/Y.0 only: `releaseNotes.type == RHEA` |
 | `bootc_prod_advisory_url` | X/Y.0 only: `environments.prod.advisory.internal_url` present |
 | `bootc_image_sha_match` | RC/EC only: pullspec SHA matches advisory YAML SHA |
@@ -107,7 +106,7 @@ If the script exits non-zero:
 **Short (default):**
 
 ```text
-PASS  rpm_packages_built      [4.21.8] NVR found: microshift-4.21.8-...assembly.4.21.8.el9
+PASS  rpm_packages_list       [4.21.8] All 7 expected packages found in Brew
 PASS  rpm_filename_format     [4.21.8] NVR matches Z pattern
 PASS  rpm_commit_id           [4.21.8] Commit abc1234 verified on release-4.21
 PASS  rpm_rhel_version        [4.21.8] el9 and el10 builds present

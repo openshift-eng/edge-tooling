@@ -129,7 +129,7 @@ def validate_rhel_builds(build_info, require_el10=True):
 
     Args:
         build_info: dict returned by brew.get_build_info().
-        require_el10: Whether el10 is required (True for 4.22+).
+        require_el10: Whether el10 is required (True for 4.23+).
 
     Returns:
         dict: {valid: bool, el9: bool, el10: bool, reason: str}
@@ -139,7 +139,7 @@ def validate_rhel_builds(build_info, require_el10=True):
     if not require_el10:
         if el9:
             return {"valid": True, "el9": True, "el10": el10,
-                    "reason": "el9 build present (el10 N/A before 4.22)"}
+                    "reason": "el9 build present (el10 N/A before 4.23)"}
         return {"valid": False, "el9": False, "el10": el10,
                 "reason": "Missing RHEL variant: el9"}
     if el9 and el10:
@@ -361,15 +361,18 @@ def _gitlab_headers():
 def _gitlab_get(path, params=None):
     """Perform a GET against the internal GitLab API.
 
-    Uses GITLAB_API_TOKEN if set, otherwise tries unauthenticated
-    (works for public projects like ocp-shipment-data).
+    Uses GITLAB_API_TOKEN if set, otherwise tries unauthenticated.
 
     Returns:
         requests.Response or None on failure.
     """
     headers = _gitlab_headers() or {}
     url = f"{_GITLAB_BASE}/api/v4/{path.lstrip('/')}"
-    return _http_get(url, headers=headers, verify=False, timeout=15)
+    try:
+        return _http_get(url, headers=headers, verify=False, timeout=15)
+    except requests.RequestException as exc:
+        logger.debug("GitLab API request failed for %s: %s", path, exc)
+        return None
 
 
 def _get_gitlab_project_id():
@@ -449,12 +452,15 @@ def fetch_shipment_mr(version):
     result["yaml_file"] = yaml_files[0] if len(yaml_files) == 1 else None
 
     if result["yaml_file"]:
-        # Fetch the YAML content from the MR source branch
         source_branch = mr.get("source_branch", "main")
+        if mr.get("state") == "merged":
+            ref = mr.get("merge_commit_sha") or mr.get("sha") or source_branch
+        else:
+            ref = source_branch
         encoded_path = result["yaml_file"].replace("/", "%2F")
         file_resp = _gitlab_get(
             f"projects/{project_id}/repository/files/{encoded_path}/raw"
-            f"?ref={source_branch}"
+            f"?ref={ref}"
         )
         if file_resp and file_resp.status_code == 200:
             import yaml as _yaml  # noqa: PLC0415
@@ -541,8 +547,7 @@ def validate_shipment_yaml(shipment, release_type):
         return results
 
     # X/Y-only checks
-    if release_type in ("X", "Y"):
-        spec_type = shipment.get("spec_type")
+    if release_type in ("X", "Y", "XY"):
         spec_type = shipment.get("spec_type")
         type_ok = spec_type == "RHEA"
         _check("bootc_shipment_xy0_type", type_ok,

@@ -237,7 +237,7 @@ def check_rpm_commit_id(version_info, build_info, vpn_ok):
 
 
 def check_rpm_rhel_version(version_info, build_info):
-    """rpm_rhel_version: Check el9 and el10 builds are both present (el10 required 4.22+)."""
+    """rpm_rhel_version: Check el9 and el10 builds are both present (el10 required 4.23+)."""
     if not build_info.get("found"):
         return _skip("rpm_rhel_version", "No Brew build found")
 
@@ -408,16 +408,20 @@ def run_bootc_checks(version_info):
     logger.info("Fetching shipment MR for %s...", version)
     shipment = artifacts.fetch_shipment_mr(version)
 
+    _SHIPMENT_DEPENDENT = {"bootc_shipment_mr", "bootc_shipment_yaml_count",
+                           "bootc_shipment_xy0_type", "bootc_shipment_xy0_release_notes",
+                           "bootc_stage_advisory_url", "bootc_prod_xy0_type",
+                           "bootc_prod_advisory_url"}
+
     if shipment.get("skipped"):
         shipment_results = [_warn(c, shipment["reason"])
                             for c in _BOOTC_CHECKS
-                            if c.startswith("bootc_shipment_")]
+                            if c in _SHIPMENT_DEPENDENT]
     elif not shipment.get("found"):
         shipment_results = [_fail("bootc_shipment_mr", shipment["reason"])]
-        # Skip sub-checks that depend on shipment MR
         shipment_results += [_skip(c, "Shipment MR not found")
                              for c in _BOOTC_CHECKS
-                             if c.startswith("bootc_shipment_") and c != "bootc_shipment_mr"]
+                             if c in _SHIPMENT_DEPENDENT and c != "bootc_shipment_mr"]
     else:
         shipment_results = [_pass("bootc_shipment_mr", shipment["reason"])]
         yaml_checks = artifacts.validate_shipment_yaml(shipment, vtype)
