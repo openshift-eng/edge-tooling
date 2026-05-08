@@ -453,7 +453,8 @@ def run_bootc_checks(version_info):
                 _rhel_versions_for(minor))
             futures[mirror_key] = "bootc_mirror_key"
             sha_key = ex.submit(
-                artifacts.validate_bootc_sha_match, version, vtype)
+                artifacts.validate_bootc_sha_match, version, vtype,
+                shipment, _rhel_versions_for(minor))
             futures[sha_key] = "bootc_image_sha_match"
             if catalog:
                 cat_key = ex.submit(

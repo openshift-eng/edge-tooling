@@ -276,7 +276,8 @@ def _fetch_advisory_images(advisory_url):
     return result if result else None
 
 
-def validate_bootc_sha_match(version, release_type):
+def validate_bootc_sha_match(version, release_type, shipment=None,
+                             rhel_versions=None):
     """Verify mirror pullspec SHAs match the advisory YAML SHAs for both arches.
 
     Fetches bootc-pullspec.txt from the mirror for each architecture,
@@ -286,6 +287,8 @@ def validate_bootc_sha_match(version, release_type):
     Args:
         version: Full version string.
         release_type: "RC" or "EC".
+        shipment: Pre-fetched shipment MR dict (avoids duplicate API calls).
+        rhel_versions: List of RHEL versions to check (default: [9, 10]).
 
     Returns:
         dict: {valid: bool, reason: str, details: list[str]}
@@ -293,26 +296,31 @@ def validate_bootc_sha_match(version, release_type):
     if release_type not in _MIRROR_BOOTC:
         return {"valid": True, "reason": f"N/A ({release_type} has no mirror bootc)"}
 
-    # 1. Fetch mirror pullspecs for both arches
+    rhel_versions = rhel_versions or _RHEL_VERSIONS
+
+    # 1. Fetch mirror pullspecs for all arches and RHEL versions
     mirror_shas = {}
     for arch in _ARCHES:
-        url = _MIRROR_BOOTC[release_type].format(arch=arch, version=version, rhel=9)
-        try:
-            resp = _http_get(url, timeout=10)
-            if resp.status_code != 200:
+        for rhel in rhel_versions:
+            url = _MIRROR_BOOTC[release_type].format(
+                arch=arch, version=version, rhel=rhel)
+            try:
+                resp = _http_get(url, timeout=10)
+                if resp.status_code != 200:
+                    continue
+                m = re.search(r"@sha256:([0-9a-f]+)", resp.text)
+                if m:
+                    mirror_shas[_ARCH_MAP[arch]] = m.group(1)
+            except requests.RequestException:
                 continue
-            m = re.search(r"@sha256:([0-9a-f]+)", resp.text)
-            if m:
-                mirror_shas[_ARCH_MAP[arch]] = m.group(1)
-        except requests.RequestException:
-            continue
 
     if not mirror_shas:
         return {"valid": False,
                 "reason": "Could not fetch bootc-pullspec.txt from mirror"}
 
     # 2. Get the advisory URL from the shipment MR
-    shipment = fetch_shipment_mr(version)
+    if shipment is None:
+        shipment = fetch_shipment_mr(version)
     if not shipment.get("found"):
         return {"valid": None,
                 "reason": "Shipment MR not found — cannot compare SHAs"}
@@ -655,6 +663,8 @@ def _parse_spec_content(content):
             if args[0] == "-n" and len(args) > 1:
                 names.append(args[1])
             elif args[0] != "-n":
+                if base_name is None:
+                    continue
                 names.append(f"{base_name}-{args[0]}")
 
     return list(dict.fromkeys(names)) if names else None
