@@ -240,14 +240,14 @@ def validate_bootc_mirror(version, release_type, rhel_versions=None):
 _ARCH_MAP = {"x86_64": "amd64", "aarch64": "arm64"}
 
 
-def _fetch_advisory_images(advisory_url):
-    """Fetch advisory YAML and extract per-arch image SHAs.
+def _fetch_advisory_data(advisory_url):
+    """Fetch advisory YAML and extract spec.type and per-arch image SHAs.
 
     Args:
         advisory_url: GitLab raw URL to the advisory YAML.
 
     Returns:
-        dict: {arch: sha} e.g. {"amd64": "6ba548...", "arm64": "ec5f36..."}, or None.
+        dict: {"spec_type": str|None, "images": {arch: sha}} or None on failure.
     """
     import yaml as _yaml  # noqa: PLC0415
     try:
@@ -262,8 +262,9 @@ def _fetch_advisory_images(advisory_url):
                      advisory_url, exc)
         return None
 
-    images = content.get("spec", {}).get("content", {}).get("images", [])
-    result = {}
+    spec = content.get("spec", {})
+    images = spec.get("content", {}).get("images", [])
+    image_shas = {}
     for img in images:
         comp = img.get("component", "")
         if "microshift-bootc" not in comp:
@@ -274,10 +275,14 @@ def _fetch_advisory_images(advisory_url):
         if arch and sha_match:
             rhel_match = re.search(r"rhel(\d+)", comp)
             if rhel_match:
-                result[f"{arch}/el{rhel_match.group(1)}"] = sha_match.group(1)
+                image_shas[f"{arch}/el{rhel_match.group(1)}"] = sha_match.group(1)
             else:
-                result[arch] = sha_match.group(1)
-    return result if result else None
+                image_shas[arch] = sha_match.group(1)
+
+    return {
+        "spec_type": spec.get("type"),
+        "images": image_shas if image_shas else None,
+    }
 
 
 def validate_bootc_sha_match(version, release_type, shipment=None,
@@ -335,10 +340,12 @@ def validate_bootc_sha_match(version, release_type, shipment=None,
                 "reason": "No stage advisory URL in shipment YAML"}
 
     # 3. Fetch and parse the advisory YAML
-    advisory_shas = _fetch_advisory_images(advisory_url)
-    if not advisory_shas:
+    advisory_data = _fetch_advisory_data(advisory_url)
+    if not advisory_data or not advisory_data.get("images"):
         return {"valid": None,
                 "reason": "Could not fetch or parse advisory YAML"}
+
+    advisory_shas = advisory_data["images"]
 
     # 4. Compare per arch/RHEL combination
     details = []
@@ -421,8 +428,8 @@ def fetch_shipment_mr(version):
 
     Returns:
         dict: {found, mr_iid, mr_title, yaml_file, yaml_content,
-               image_sha, spec_type, release_notes_solution, stage_advisory_url,
-               prod_advisory_url, reason}
+               image_sha, release_notes_solution, release_notes_type,
+               stage_advisory_url, prod_advisory_url, reason}
     """
     project_id = _get_gitlab_project_id()
     if project_id is None:
@@ -514,8 +521,8 @@ def _parse_shipment_yaml(content):
     """Extract key fields from a shipment YAML dict.
 
     Returns:
-        dict of field values (spec_type, release_notes_solution,
-        release_notes_type, stage_advisory_url, prod_advisory_url, image_sha)
+        dict of field values (release_notes_solution, release_notes_type,
+        stage_advisory_url, prod_advisory_url, image_sha)
     """
     if not isinstance(content, dict):
         return {}
@@ -542,10 +549,7 @@ def _parse_shipment_yaml(content):
 
     metadata = ship.get("metadata", {})
 
-    spec = ship.get("spec", {})
-
     return {
-        "spec_type": spec.get("type"),
         "release_notes_solution": release_notes.get("solution"),
         "release_notes_type": release_notes.get("type"),
         "stage_advisory_url": stage_advisory.get("internal_url"),
@@ -585,19 +589,32 @@ def validate_shipment_yaml(shipment, release_type):
 
     # X/Y-only checks
     if release_type in ("X", "Y", "XY"):
-        spec_type = shipment.get("spec_type")
-        type_ok = spec_type == "RHEA"
-        _check("bootc_shipment_xy0_type", type_ok,
-               f"spec.type = {spec_type!r}" + ("" if type_ok else " (expected RHEA)"))
+        rn_type = shipment.get("release_notes_type")
+        rn_ok = rn_type == "RHEA"
+        _check("bootc_shipment_xy0_type", rn_ok,
+               f"releaseNotes.type = {rn_type!r}"
+               + ("" if rn_ok else " (expected RHEA)"))
 
         rn_solution = shipment.get("release_notes_solution")
         _check("bootc_shipment_xy0_release_notes", bool(rn_solution),
                "releaseNotes.solution present" if rn_solution else "releaseNotes.solution missing")
 
-        rn_type = shipment.get("release_notes_type")
-        rn_ok = rn_type == "RHEA"
-        _check("bootc_prod_xy0_type", rn_ok,
-               f"releaseNotes.type = {rn_type!r}" + ("" if rn_ok else " (expected RHEA)"))
+        advisory_url = (shipment.get("prod_advisory_url")
+                        or shipment.get("stage_advisory_url"))
+        if advisory_url:
+            adv_data = _fetch_advisory_data(advisory_url)
+            if adv_data:
+                adv_type = adv_data.get("spec_type")
+                adv_ok = adv_type == "RHEA"
+                _check("bootc_prod_xy0_type", adv_ok,
+                       f"advisory spec.type = {adv_type!r}"
+                       + ("" if adv_ok else " (expected RHEA)"))
+            else:
+                _check("bootc_prod_xy0_type", None,
+                       "Could not fetch advisory YAML")
+        else:
+            _check("bootc_prod_xy0_type", None,
+                   "No advisory URL available")
 
         prod_url = shipment.get("prod_advisory_url")
         _check("bootc_prod_advisory_url",
