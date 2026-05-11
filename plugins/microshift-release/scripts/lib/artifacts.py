@@ -110,7 +110,7 @@ def validate_commit_on_branch(commit_hash, minor):
         if result.returncode == 0:
             date_result = subprocess.run(
                 ["git", "-C", repo_path, "log", "-1",
-                 "--date=format:%d-%m-%Y", "--format=%ad", commit_hash],
+                 "--date=format:%Y-%m-%d", "--format=%ad", commit_hash],
                 capture_output=True, text=True,
             )
             commit_date = date_result.stdout.strip() if date_result.returncode == 0 else ""

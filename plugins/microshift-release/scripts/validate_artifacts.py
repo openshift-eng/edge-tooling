@@ -520,9 +520,11 @@ _STATUS_EMOJI = {
 
 
 def format_text_short(version, rpm_results, bootc_results):
-    """Format one line per check: EMOJI  check_id  reason."""
-    all_results = rpm_results + bootc_results
-    max_id_len = max((len(r["check"]) for r in all_results), default=20)
+    """Format one line per check: EMOJI  check_id  reason. SKIPs hidden."""
+    rpm_visible = [r for r in rpm_results if r["status"] != "SKIP"]
+    bootc_visible = [r for r in bootc_results if r["status"] != "SKIP"]
+    all_visible = rpm_visible + bootc_visible
+    max_id_len = max((len(r["check"]) for r in all_visible), default=20)
 
     def _fmt(results):
         lines = []
@@ -530,16 +532,25 @@ def format_text_short(version, rpm_results, bootc_results):
             icon = _STATUS_EMOJI.get(r["status"], r["status"])
             check_id = r["check"].ljust(max_id_len)
             lines.append(f"{icon}  {check_id}  {r['reason']}")
+            if r["status"] == "FAIL" and r.get("details"):
+                pad = " " * (len(icon) + 2 + max_id_len + 2)
+                for d in r["details"]:
+                    lines.append(f"{pad}{d}")
         return lines
+
+    skip_count = sum(1 for r in rpm_results + bootc_results if r["status"] == "SKIP")
+    footer = [f"({skip_count} checks skipped — not applicable)"] if skip_count else []
 
     return "\n".join([
         f"Validating {version}",
         "",
         "── RPM ──────────────────────────────────────────────────────",
-        *_fmt(rpm_results),
+        *_fmt(rpm_visible),
         "",
         "── Bootc ────────────────────────────────────────────────────",
-        *_fmt(bootc_results),
+        *_fmt(bootc_visible),
+        "",
+        *footer,
     ])
 
 

@@ -103,22 +103,35 @@ If the script exits non-zero:
 
 ## Output Format
 
-**Short (default):**
+**Short (default):** Only actionable checks are shown. Skipped checks (not applicable
+for the release type) are hidden and summarized as a count. Details are shown only on failure.
 
 ```text
-PASS  rpm_packages_list       [4.21.8] All 7 expected packages found in Brew
-PASS  rpm_filename_format     [4.21.8] NVR matches Z pattern
-PASS  rpm_commit_id           [4.21.8] Commit abc1234 verified on release-4.21
-PASS  rpm_rhel_version        [4.21.8] el9 and el10 builds present
-SKIP  rpm_mirror_ec           [4.21.8] N/A (Z, not EC)
-SKIP  rpm_mirror_rc           [4.21.8] N/A (Z, not RC)
-SKIP  rpm_xy0_commit_match    [4.21.8] N/A (Z, not X.Y.0)
-PASS  bootc_shipment_mr       [4.21.8] MR !1234: microshift 4.21.8 shipment
-PASS  bootc_shipment_yaml_count [4.21.8] 1 YAML file in MR
-...
+Validating 4.21.8
+
+── RPM ──────────────────────────────────────────────────────
+✅  rpm_packages_list       All 7 expected packages found in Brew
+✅  rpm_filename_format     NVR matches Z pattern
+✅  rpm_commit_id           Commit abc1234 from 2026-05-08 is on release-4.21
+✅  rpm_rhel_version        el9 and el10 builds present
+
+── Bootc ────────────────────────────────────────────────────
+✅  bootc_shipment_mr       MR !1234: microshift 4.21.8 shipment
+✅  bootc_shipment_yaml_count  1 YAML file in MR
+✅  bootc_catalog           Image found in prod catalog
+
+(6 checks skipped — not applicable)
 ```
 
-**Verbose (--verbose):** Markdown table with full evidence per check.
+On failure, details appear below the failing check:
+
+```text
+❌  rpm_packages_list       2 package(s) missing from Brew build
+                            Missing: microshift-libs, microshift-selinux
+                            Expected: microshift, microshift-libs, ...
+```
+
+**Verbose (--verbose):** Markdown table with full evidence per check (all checks shown including skips).
 
 ## Examples
 
