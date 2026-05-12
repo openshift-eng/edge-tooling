@@ -13,6 +13,10 @@ if [[ ! -d "${ENVDIR}" ]]; then
     python3 -m venv "${ENVDIR}"
 fi
 
-"${ENVDIR}/bin/python3" -m pip install -r "${SCRIPTDIR}/requirements.txt" >&2
+MARKER="${ENVDIR}/.deps-installed"
+if [[ ! -f "${MARKER}" ]] || [[ "${SCRIPTDIR}/requirements.txt" -nt "${MARKER}" ]]; then
+    "${ENVDIR}/bin/python3" -m pip install -q -r "${SCRIPTDIR}/requirements.txt" >&2
+    touch "${MARKER}"
+fi
 
 "${ENVDIR}/bin/python3" "${SCRIPTDIR}/validate_artifacts.py" "$@"
