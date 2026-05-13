@@ -35,7 +35,10 @@ main() {
         save)
             [[ $# -lt 1 ]] && die "Usage: $(basename "$0") save <pr-number>"
             require_state
-            printf '%s' "${PR_MONITOR_STATE}" > "/tmp/pr-review-yolo-agent-$1.json"
+            local state_file="/tmp/pr-review-yolo-agent-$1.json"
+            printf '%s' "${PR_MONITOR_STATE}" > "${state_file}.tmp" \
+                && mv "${state_file}.tmp" "${state_file}" \
+                || die "Failed to save state to ${state_file}"
             echo "${PR_MONITOR_STATE}"
             ;;
         load)

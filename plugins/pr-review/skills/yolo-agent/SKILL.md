@@ -121,7 +121,9 @@ appeared from someone other than the authenticated user.
 Check in order:
 
 1. **PR closed/merged** → set status `complete`, clean state file, stop
-2. **All CI green AND no new comments AND no resurfaced comments** → set status `complete`, clean state file, report "PR is ready", stop
+2. **All CI green AND no new comments AND no resurfaced comments** →
+   add the `ready-for-human-review` label (see **Label guard** below),
+   set status `complete`, clean state file, report "PR is ready", stop
 3. **New comments OR resurfaced comments OR CI failures** → continue to 2c
 4. **Only pending CI, no comments** → skip to 2f
 
@@ -202,7 +204,11 @@ be displayed but not added to the addressed list.
 | Resurfaced comments (`resurfaced: true`) | Treat as new comments for dispatch. The `thread_context` contains all replies including the agent's own — focus analysis on replies AFTER the agent's. Remove the root ID from `addressed` before processing so it can be re-added after the new response |
 
 **CI Track** (if failed jobs exist): Check the `analyzed` list in state and
-skip already-analyzed jobs. Route each new failure to the appropriate skill:
+skip already-analyzed jobs. The analyzed key for each job is `name:url`
+(e.g., `e2e-tests:https://prow.ci.openshift.org/view/gs/...`). This
+ensures re-runs of the same job (after `/retest`) are analyzed again
+since they produce a new URL. Route each new failure to the appropriate
+skill:
 
 | Job name pattern | Analysis method |
 |------------------|-----------------|
@@ -277,7 +283,7 @@ failures, follow the thread resolution failure handling rules in the
 same file.
 
 Update state after all replies: set `last_push_cycle`, add successfully
-addressed comment IDs, and add analyzed job keys.
+addressed comment IDs, and add analyzed job keys (using `name:url` format).
 
 #### 2e: Handle No-Action Cycle
 
