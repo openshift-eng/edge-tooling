@@ -27,8 +27,9 @@
 
 1. Make changes in the plugin directory
 2. Bump version in `.claude-plugin/plugin.json`
-3. Validate and test
-4. Submit PR with `fix(plugins): description` or `feat(plugins): description`
+3. Bump the matching version in the root `.claude-plugin/marketplace.json` — Claude Code uses this for update detection
+4. Validate and test
+5. Submit PR with `fix(plugins): description` or `feat(plugins): description`
 
 ### Documentation
 

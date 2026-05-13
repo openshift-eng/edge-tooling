@@ -57,7 +57,6 @@ def main():
     )
 
     table_rows = []
-    table_colors = []
 
     for idx, part in enumerate(partitions):
         dev = part["device"]
@@ -91,7 +90,6 @@ def main():
         table_rows.append([dev_label, f"{cap_gb:.0f} GB",
                           valid_ts[peak_idx].strftime("%H:%M:%S"),
                           f"{peak_gb:.1f} GB ({peak_pct:.0f}%)"])
-        table_colors.append([color + "22"] * 4)  # won't work with named colors
 
         print(f"  {dev_label}: {cap_gb:.0f} GB capacity, peak {peak_gb:.1f} GB ({peak_pct:.0f}%)")
 

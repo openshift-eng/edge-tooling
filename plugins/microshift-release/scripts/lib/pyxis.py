@@ -8,24 +8,55 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 
 PYXIS_BASE_URL = "https://catalog.redhat.com/api/containers/v1"
+PYXIS_STAGE_BASE_URL = "https://catalog.stage.redhat.com/api/containers/v1"
 BOOTC_REPO_PATH = (
     "repositories/registry/registry.access.redhat.com"
     "/repository/openshift4/microshift-bootc-rhel9/images"
 )
+BOOTC_STAGE_REPO_PATH = (
+    "repositories/registry/registry.stage.redhat.io"
+    "/repository/openshift4/microshift-bootc-rhel9/images"
+)
+CONTAINERFILE_URL_TEMPLATE = (
+    "https://raw.githubusercontent.com/openshift/microshift"
+    "/{commit}/packaging/images/bootc/Containerfile"
+)
+
+_CATALOG_URLS = {
+    "prod": f"{PYXIS_BASE_URL}/{BOOTC_REPO_PATH}",
+    "stage": f"{PYXIS_STAGE_BASE_URL}/{BOOTC_STAGE_REPO_PATH}",
+}
+
+_LABEL_COMMIT_ID = "io.openshift.build.commit.id"
+_LABEL_COMMIT_URL = "io.openshift.build.commit.url"
+_LABEL_SOURCE_LOCATION = "io.openshift.build.source-location"
 
 logger = logging.getLogger(__name__)
 
 
-def _fetch_page(page):
+def _catalog_url(catalog="prod"):
+    """Return the Pyxis images URL for the given catalog.
+
+    Args:
+        catalog: "prod" or "stage".
+
+    Returns:
+        str: Full API URL for the bootc images endpoint.
+    """
+    return _CATALOG_URLS.get(catalog, _CATALOG_URLS["prod"])
+
+
+def _fetch_page(page, catalog="prod"):
     """Fetch a single page of bootc images from Pyxis.
 
     Args:
         page: Page number (0-indexed).
+        catalog: "prod" or "stage".
 
     Returns:
         str: Response text.
     """
-    url = f"{PYXIS_BASE_URL}/{BOOTC_REPO_PATH}"
+    url = _catalog_url(catalog)
     params = {
         "filter": "architecture==amd64",
         "page_size": 100,
@@ -34,6 +65,93 @@ def _fetch_page(page):
     response = requests.get(url, params=params, timeout=30)
     response.raise_for_status()
     return response.text
+
+
+def _parse_env_variables(env_list):
+    """Parse environment variables from Pyxis parsed_data.env_variables.
+
+    Args:
+        env_list: List of "KEY=VALUE" strings.
+
+    Returns:
+        dict: Mapping of env var names to values.
+    """
+    result = {}
+    for entry in env_list or []:
+        if "=" in entry:
+            key, _, value = entry.partition("=")
+            result[key] = value
+    return result
+
+
+def _parse_labels(labels_list):
+    """Parse labels from Pyxis parsed_data.labels.
+
+    Args:
+        labels_list: List of {name, value} dicts.
+
+    Returns:
+        dict: Mapping of label names to values.
+    """
+    return {lbl["name"]: lbl["value"]
+            for lbl in labels_list or []
+            if "name" in lbl and "value" in lbl}
+
+
+def _parse_image_metadata(image):
+    """Extract structured metadata from a single Pyxis image dict.
+
+    Args:
+        image: A single image dict from the Pyxis API data[] array.
+
+    Returns:
+        dict with keys: image_id, commit_id, commit_short, commit_url,
+            source_url, source_git_tag, containerfile_url, tags,
+            version_tags, assembly_version, last_update_date.
+    """
+    parsed = image.get("parsed_data") or {}
+    labels = _parse_labels(parsed.get("labels"))
+    env = _parse_env_variables(parsed.get("env_variables"))
+
+    commit_id = (labels.get(_LABEL_COMMIT_ID)
+                 or env.get("SOURCE_GIT_COMMIT"))
+    commit_short = env.get("OS_GIT_COMMIT")
+    commit_url = labels.get(_LABEL_COMMIT_URL)
+    source_url = (labels.get(_LABEL_SOURCE_LOCATION)
+                  or env.get("SOURCE_GIT_URL"))
+    source_git_tag = env.get("SOURCE_GIT_TAG")
+
+    containerfile_url = None
+    if commit_id:
+        containerfile_url = CONTAINERFILE_URL_TEMPLATE.format(commit=commit_id)
+
+    repos = image.get("repositories") or []
+    raw_tags = repos[0].get("tags", []) if repos else []
+    tags = [{"name": t["name"], "added_date": t.get("added_date")}
+            for t in raw_tags]
+
+    version_pattern = re.compile(r"^v?\d+\.\d+(\.\d+)?$")
+    version_tags = [t["name"] for t in raw_tags
+                    if version_pattern.match(t["name"])]
+
+    assembly_match = re.search(
+        r"assembly\.(\d+\.\d+\.\d+)", " ".join(t["name"] for t in raw_tags)
+    )
+    assembly_version = assembly_match.group(1) if assembly_match else None
+
+    return {
+        "image_id": image.get("_id"),
+        "commit_id": commit_id,
+        "commit_short": commit_short,
+        "commit_url": commit_url,
+        "source_url": source_url,
+        "source_git_tag": source_git_tag,
+        "containerfile_url": containerfile_url,
+        "tags": tags,
+        "version_tags": version_tags,
+        "assembly_version": assembly_version,
+        "last_update_date": image.get("last_update_date"),
+    }
 
 
 def _scan_pages_for_versions(minor_version, pages=5):
@@ -265,3 +383,118 @@ def find_all_published_versions(minor_version, pages=5):
     """
     found_z = _scan_pages_for_versions(minor_version, pages)
     return [f"{minor_version}.{z}" for z in sorted(found_z)]
+
+
+def fetch_all_bootc_images(catalog="prod", pages=5):
+    """Fetch all amd64 bootc images from the catalog with metadata.
+
+    Args:
+        catalog: "prod" or "stage".
+        pages: Number of pages to fetch (page_size=100).
+
+    Returns:
+        list[dict]: One dict per image with keys: image_id, commit_id,
+            commit_short, commit_url, source_url, source_git_tag,
+            containerfile_url, tags, version_tags, assembly_version,
+            last_update_date.
+    """
+    images = []
+    with ThreadPoolExecutor(max_workers=pages) as executor:
+        futures = [executor.submit(_fetch_page, p, catalog)
+                   for p in range(pages)]
+        for future in futures:
+            try:
+                text = future.result()
+                data = json.loads(text)
+                for image in data.get("data", []):
+                    images.append(_parse_image_metadata(image))
+            except requests.HTTPError as e:
+                if catalog == "stage" and e.response.status_code == 403:
+                    logger.warning("Stage catalog unreachable (403), "
+                                   "falling back to prod")
+                    return fetch_all_bootc_images(catalog="prod", pages=pages)
+                logger.warning("Failed to fetch bootc images: %s", e)
+            except (requests.RequestException, json.JSONDecodeError) as e:
+                logger.warning("Failed to fetch/parse bootc images: %s", e)
+
+    images.sort(key=lambda img: img.get("assembly_version") or "")
+    return images
+
+
+def check_catalog_image(version, catalog="prod"):
+    """Check if a specific version's bootc image exists in the catalog.
+
+    Args:
+        version: Full version string, e.g., "4.21.8".
+        catalog: "prod" or "stage".
+
+    Returns:
+        dict: {valid: bool, reason: str, image: dict | None, catalog: str}
+    """
+    tag = re.sub(r"-(ec|rc)\.\d+$", "", version)
+    assembly_pattern = re.compile(rf"\bassembly\.{re.escape(tag)}\b")
+
+    url = _catalog_url(catalog)
+    for page in range(5):
+        params = {
+            "filter": "architecture==amd64",
+            "page_size": 100,
+            "page": page,
+        }
+        try:
+            resp = requests.get(url, params=params, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.HTTPError as e:
+            if catalog == "stage" and e.response.status_code == 403:
+                logger.warning("Stage catalog unreachable (403), "
+                               "falling back to prod")
+                return check_catalog_image(version, catalog="prod")
+            return {"valid": False,
+                    "reason": f"Catalog query failed ({catalog}): {e}",
+                    "image": None, "catalog": catalog}
+        except (requests.RequestException, json.JSONDecodeError) as e:
+            return {"valid": False,
+                    "reason": f"Catalog query failed ({catalog}): {e}",
+                    "image": None, "catalog": catalog}
+
+        for image in data.get("data", []):
+            repos = image.get("repositories") or []
+            for repo in repos:
+                for t in repo.get("tags", []):
+                    if assembly_pattern.search(t.get("name", "")):
+                        metadata = _parse_image_metadata(image)
+                        return {
+                            "valid": True,
+                            "reason": f"Image found in {catalog} catalog "
+                                      f"(assembly {tag})",
+                            "image": metadata,
+                            "catalog": catalog,
+                        }
+
+        if len(data.get("data", [])) < 100:
+            break
+
+    return {"valid": False,
+            "reason": f"Image for {version} not found in {catalog} catalog",
+            "image": None, "catalog": catalog}
+
+
+def fetch_containerfile(commit_hash):
+    """Fetch the Containerfile content from GitHub for a specific commit.
+
+    Args:
+        commit_hash: Full or short git commit hash.
+
+    Returns:
+        dict: {found: bool, content: str | None, url: str}
+    """
+    url = CONTAINERFILE_URL_TEMPLATE.format(commit=commit_hash)
+    try:
+        resp = requests.get(url, timeout=15)
+        if resp.status_code == 200:
+            return {"found": True, "content": resp.text, "url": url}
+        return {"found": False, "content": None, "url": url}
+    except requests.RequestException as e:
+        logger.warning("Failed to fetch Containerfile at %s: %s", url, e)
+        return {"found": False, "content": None, "url": url}

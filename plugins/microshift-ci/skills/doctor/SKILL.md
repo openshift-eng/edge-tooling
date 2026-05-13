@@ -3,7 +3,7 @@ name: microshift-ci:doctor
 argument-hint: <release1,release2,...>
 description: Analyze CI for multiple MicroShift releases and produce an HTML summary
 user-invocable: true
-allowed-tools: Skill, Bash, Read, Write, Glob, Grep, Agent, mcp__jira__jira_search
+allowed-tools: Skill, Bash, Read, Write, Glob, Grep, Agent
 ---
 
 # microshift-ci:doctor
@@ -137,61 +137,12 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
    ```
 
 3. Launch all create-bugs agents in a **single message** as **foreground** agents (do NOT use `run_in_background`). They run concurrently.
-4. Each agent produces `<WORKDIR>/analyze-ci-bugs-<source>.json`
-5. When all agents return, immediately proceed to Step 3b in the same turn. Do NOT stop or end your turn between Step 3 and Step 3b.
+4. Each agent produces `<WORKDIR>/analyze-ci-bugs-<source>.json` (including open bugs data for the Bugs tab)
+5. When all agents return, immediately proceed to Step 4 in the same turn. Do NOT stop or end your turn between Step 3 and Step 4.
 
 **Error Handling**:
 
 - If create-bugs fails for a release, note the failure but do not block other releases or HTML generation
-
-### Step 3b: Fetch Open AI-Generated Bugs
-
-**Goal**: Query JIRA for all open bugs with the `microshift-ci-ai-generated` label so the Bugs tab can cross-reference them with current failures.
-
-**Actions**:
-
-1. Query JIRA using `mcp__jira__jira_search`:
-
-   ```text
-   mcp__jira__jira_search(
-     jql="project = USHIFT AND issuetype = Bug AND labels = microshift-ci-ai-generated AND status not in (Closed, Verified) ORDER BY updated DESC",
-     fields="summary,status,priority,assignee,created,updated",
-     limit=50
-   )
-   ```
-
-   If more than 50 results, paginate with `start_at` until all issues are fetched.
-
-2. Transform the results into the open bugs JSON format and write to `<WORKDIR>/analyze-ci-open-bugs.json`:
-
-   ```json
-   {
-     "date": "<YYYY-MM-DD>",
-     "total": <count>,
-     "issues": [
-       {
-         "key": "USHIFT-1234",
-         "summary": "...",
-         "status": "In Progress",
-         "priority": "Normal",
-         "assignee": "jdoe",
-         "created": "2026-05-01",
-         "updated": "2026-05-09"
-       }
-     ]
-   }
-   ```
-
-   - `date`: today's date in YYYY-MM-DD format
-   - For each issue: extract `key` from the issue, `summary`/`status`/`priority`/`assignee`/`created`/`updated` from the fields. Use the status name, priority name, and assignee display name. Truncate `created` and `updated` to date only (first 10 characters).
-
-3. This step can run immediately after Step 3 completes — it does not depend on create-bugs output. It is also used by the `refresh` sub-command.
-
-**Error Handling**:
-
-- If the JIRA query fails, log the error and continue — the Bugs tab will degrade gracefully to showing only bugs linked to current failures.
-
-When Step 3b completes, immediately proceed to Step 4. Do NOT stop or end your turn between Step 3b and Step 4.
 
 ### Step 4: Finalize — Aggregate and Generate HTML Report
 
@@ -268,12 +219,13 @@ HTML report generated: <WORKDIR>/microshift-ci-doctor-report.html
 
 - **microshift-ci:prow-job**: Single job analysis (used by Step 2 agents)
 - **microshift-ci:create-bugs**: Bug correlation and creation (used in Step 3; can also be run with `--create` after this command)
+- **microshift-ci:doctor-refresh**: Re-run bug correlation and regenerate the HTML report after JIRA state changes
 
 ## Notes
 
 - **Deterministic scripts** handle: data collection, artifact download, aggregation, HTML generation
-- **LLM agents** handle: per-job root cause analysis (Step 2), Jira bug search (Step 3), open bugs query (Step 3b)
-- `doctor.sh refresh` re-runs only `create-report.py` (no aggregation). Use it after `/microshift-ci:create-bugs --create` or any JIRA state change — run Step 3b first to update `analyze-ci-open-bugs.json`, then `doctor.sh refresh`
+- **LLM agents** handle: per-job root cause analysis (Step 2), Jira bug search and open bugs query (Step 3)
+- `/microshift-ci:doctor-refresh` re-queries JIRA and regenerates the HTML report. Use it after `/microshift-ci:create-bugs --create` or any JIRA state change
 - All agents (all releases + PRs) are launched in a single parallel wave — no per-release agents
 - The `prepare` script downloads all artifacts upfront so prow-job agents use local paths (no redundant downloads)
 - The `finalize` script runs aggregation and HTML generation in one call

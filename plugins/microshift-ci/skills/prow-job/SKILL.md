@@ -98,7 +98,11 @@ After downloading artifacts locally, find the SOS report at:
 <TMP>/artifacts/<TEST_NAME>/openshift-microshift-infra-sos-aws/artifacts/sosreport-*.tar.xz
 ```
 
-Where `<TEST_NAME>` is the test name directory (e.g., `e2e-aws-tests`, `e2e-aws-ovn-ocp-conformance-serial`). Use `find <TMP>/artifacts -name 'sosreport-*.tar.xz'` to locate it.
+Where `<TEST_NAME>` is the test name directory (e.g., `e2e-aws-tests`, `e2e-aws-ovn-ocp-conformance-serial`). Use `find <TMP>/artifacts -name 'sosreport-*.tar.xz'` to locate it. When extracting, always use `--no-same-owner` so files are owned by the current user:
+
+```text
+tar --no-same-owner -xf <sosreport>.tar.xz -C <destination>
+```
 
 ## Work Directory
 

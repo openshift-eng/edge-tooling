@@ -293,6 +293,13 @@ def load_bug_candidates(filepath):
     return data.get("candidates", [])
 
 
+def load_open_bugs(filepath):
+    data = load_json(filepath)
+    if not data:
+        return []
+    return data.get("open_bugs", [])
+
+
 # ---------------------------------------------------------------------------
 # Fuzzy matching
 # ---------------------------------------------------------------------------
@@ -1201,8 +1208,21 @@ def main():
     for path in pr_entry["bugs"]:
         all_bug_candidates.extend(load_bug_candidates(path))
 
-    # Load open bugs data, build bugs tab, and persist summary
-    open_bugs_data = load_json(files["open_bugs"])
+    # Collect open bugs from mapping files (deduplicated), fallback to standalone file
+    all_open_bugs = []
+    seen_open_keys = set()
+    bug_file_paths = [files["releases"][v]["bugs"] for v in releases if files["releases"].get(v, {}).get("bugs")]
+    bug_file_paths.extend(pr_entry["bugs"])
+    for path in bug_file_paths:
+        for bug in load_open_bugs(path):
+            if bug.get("key") and bug["key"] not in seen_open_keys:
+                seen_open_keys.add(bug["key"])
+                all_open_bugs.append(bug)
+
+    if all_open_bugs:
+        open_bugs_data = {"date": datetime.now(timezone.utc).strftime("%Y-%m-%d"), "total": len(all_open_bugs), "issues": all_open_bugs}
+    else:
+        open_bugs_data = load_json(files["open_bugs"])
     bugs_tab_data = build_bugs_tab_data(open_bugs_data, bug_data, pr_entry["bugs"], releases_data, pr_data, all_bug_candidates)
 
     bugs_summary_path = os.path.join(workdir, "analyze-ci-bugs-summary.json")

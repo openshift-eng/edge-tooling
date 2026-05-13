@@ -7,6 +7,11 @@ import requests
 import urllib3
 
 BREW_PACKAGE_URL = "https://brewweb.engineering.redhat.com/brew/packageinfo?packageID=82827"
+BREW_BUILDINFO_URL = "https://brewweb.engineering.redhat.com/brew/buildinfo?buildID={build_id}"
+BREW_SEARCH_URL = (
+    "https://brewweb.engineering.redhat.com/brew/search"
+    "?match=glob&type=build&terms={terms}"
+)
 ERRATA_PROBE_URL = "https://errata.devel.redhat.com/"
 
 logger = logging.getLogger(__name__)
@@ -139,6 +144,203 @@ def find_zstream_rpms(version):
         dict: {"found": True, "nvr": "...", "build_date": "..."} or {"found": False}.
     """
     return _find_rpms(version)
+
+
+def _search_brew(brew_version):
+    """Search Brew for NVRs matching a version when not on the package page.
+
+    The package listing page only shows recent builds. This searches Brew
+    directly for older builds.
+
+    Returns:
+        str: HTML content of the search results page, or empty string.
+    """
+    terms = f"microshift-{brew_version}-*"
+    url = BREW_SEARCH_URL.format(terms=requests.utils.quote(terms, safe="*"))
+    try:
+        resp = requests.get(url, verify=False, timeout=30)
+        if resp.status_code == 200:
+            return resp.text
+    except requests.RequestException as exc:
+        logger.debug("Brew search failed for %s: %s", brew_version, exc)
+    return ""
+
+
+def _parse_build_matches(html, brew_version):
+    """Extract NVR matches from HTML for a given brew version."""
+    escaped = re.escape(brew_version)
+    pattern = re.compile(
+        rf"(microshift-{escaped}-(\d{{12}})\.p0\.g([0-9a-f]+)\.[^\s\"<]+)"
+    )
+    return pattern.findall(html)
+
+
+def get_build_info(version, release_type):
+    """Get detailed build info for a MicroShift version from Brew.
+
+    Searches the cached package page first, then falls back to Brew search
+    for older builds that are no longer on the first page.
+
+    Args:
+        version: e.g., "4.21.8", "4.22.0-ec.5", "4.22.0-rc.1".
+        release_type: One of "Z", "X", "Y", "RC", "EC", "nightly".
+
+    Returns:
+        dict: {found, nvr, build_date, commit, el9, el10} or {found: False}.
+    """
+    brew_version = version.replace("-", "~") if release_type in ("RC", "EC") else version
+
+    # Try cached package page first (fast, no extra request)
+    try:
+        html = _fetch_brew_page()
+    except requests.RequestException:
+        html = ""
+    matches = _parse_build_matches(html, brew_version)
+
+    # Fallback: search Brew directly for older builds
+    if not matches:
+        logger.info("NVR not on package page, searching Brew for %s...", brew_version)
+        search_html = _search_brew(brew_version)
+        matches = _parse_build_matches(search_html, brew_version)
+
+    if not matches:
+        return {"found": False}
+
+    first_nvr, date_str, commit = matches[0]
+    build_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+
+    all_nvrs = [m[0] for m in matches]
+    el9 = any("el9" in nvr for nvr in all_nvrs)
+    el10 = any("el10" in nvr for nvr in all_nvrs)
+
+    return {
+        "found": True,
+        "nvr": first_nvr,
+        "build_date": build_date,
+        "commit": commit,
+        "el9": el9,
+        "el10": el10,
+    }
+
+
+def find_latest_rc(minor):
+    """Find the latest RC build for a minor version.
+
+    Searches Brew for all microshift-X.Y.0~rc.* builds in one query
+    and returns the highest-numbered RC.
+
+    Args:
+        minor: Minor version string, e.g. "4.21".
+
+    Returns:
+        dict: {found, version, commit, rc_num} or {found: False}.
+    """
+    escaped = re.escape(minor)
+    rc_pattern = re.compile(
+        rf"microshift-{escaped}\.0~rc\.(\d+)-\d{{12}}\.p0\.g([0-9a-f]+)"
+    )
+
+    # Search cached page + Brew search in one pass
+    combined = ""
+    try:
+        combined = _fetch_brew_page()
+    except requests.RequestException as exc:
+        logger.debug("Brew package page unavailable, will search directly: %s", exc)
+    search_html = _search_brew(f"{minor}.0~rc*")
+    combined += search_html
+
+    matches = rc_pattern.findall(combined)
+    if not matches:
+        return {"found": False}
+
+    best = max(matches, key=lambda m: int(m[0]))
+    rc_num, commit = best
+    return {
+        "found": True,
+        "version": f"{minor}.0-rc.{rc_num}",
+        "commit": commit,
+        "rc_num": int(rc_num),
+    }
+
+
+def _extract_build_id_for_nvr(html, nvr):
+    """Find the Brew build ID nearest to the NVR text on the package page."""
+    idx = html.find(nvr)
+    if idx < 0:
+        return None
+    window = html[max(0, idx - 500):idx]
+    m = re.search(r'buildID=(\d+)', window)
+    return m.group(1) if m else None
+
+
+def get_build_packages(nvr):
+    """Return the set of RPM package names from a Brew build.
+
+    Uses the cached package page to find the build ID for the NVR,
+    then fetches the build detail page and parses RPM entries.
+
+    Args:
+        nvr: Full NVR string from get_build_info(), e.g.
+             "microshift-4.20.20-202605040640.p0.g8c79976.assembly.4.20.20.el9".
+
+    Returns:
+        set of package name strings, or None on failure.
+    """
+    m = re.match(r'microshift-(\S+?)-\d{12}\.', nvr)
+    if not m:
+        logger.debug("Could not extract version from NVR: %s", nvr)
+        return None
+    brew_version = m.group(1)
+
+    escaped = re.escape(brew_version)
+
+    # Try cached package page first
+    try:
+        html = _fetch_brew_page()
+    except requests.RequestException:
+        html = ""
+    build_id = _extract_build_id_for_nvr(html, nvr)
+
+    if build_id:
+        url = BREW_BUILDINFO_URL.format(build_id=build_id)
+        try:
+            resp = requests.get(url, verify=False, timeout=30)
+            if resp.status_code == 200:
+                matches = re.findall(
+                    rf'(microshift[a-z-]*)-{escaped}-\S+\.rpm', resp.text
+                )
+                if matches:
+                    return set(matches)
+        except requests.RequestException as exc:
+            logger.debug("Brew buildinfo fetch failed: %s", exc)
+
+    # Fallback: search may return the build detail page or a list page
+    search_html = _search_brew(brew_version)
+    if search_html:
+        matches = re.findall(
+            rf'(microshift[a-z-]*)-{escaped}-\S+\.rpm', search_html
+        )
+        if matches:
+            return set(matches)
+
+        # List page — extract build ID and fetch detail page
+        build_id = _extract_build_id_for_nvr(search_html, nvr)
+        if build_id:
+            try:
+                url = BREW_BUILDINFO_URL.format(build_id=build_id)
+                resp = requests.get(url, verify=False, timeout=30)
+                if resp.status_code == 200:
+                    matches = re.findall(
+                        rf'(microshift[a-z-]*)-{escaped}-\S+\.rpm',
+                        resp.text,
+                    )
+                    if matches:
+                        return set(matches)
+            except requests.RequestException as exc:
+                logger.debug("Brew buildinfo fetch failed: %s", exc)
+
+    logger.debug("Could not retrieve build packages for %s", nvr)
+    return None
 
 
 def extract_commit_from_nvr(version):

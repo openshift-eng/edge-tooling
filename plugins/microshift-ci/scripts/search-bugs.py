@@ -307,21 +307,45 @@ def find_job_files(workdir, source):
         files = sorted(glob_mod.glob(pattern))
         return files, f"PR #{pr_num}"
 
-    # Rebase PR shorthand
+    # Rebase PR shorthand — jobs may target a different branch than the
+    # rebase source name (e.g. rebase-release-5.0 jobs run on branch main)
     m = re.match(r"^rebase-release-(.+)$", source)
     if m:
         release = m.group(1)
-        # Scan all PR job files for ones matching this release
+
+        # Find PR numbers for this rebase source from the status file
+        rebase_pr_numbers = set()
+        status_file = os.path.join(workdir, "analyze-ci-prs-status.json")
+        if os.path.isfile(status_file):
+            with open(status_file, "r") as f:
+                try:
+                    pr_statuses = json.load(f)
+                except (json.JSONDecodeError, ValueError):
+                    pr_statuses = []
+            for pr in pr_statuses:
+                if f"rebase-release-{release}" in pr.get("title", ""):
+                    pr_num = pr.get("pr_number")
+                    if pr_num is not None:
+                        rebase_pr_numbers.add(int(pr_num))
+
         pattern = os.path.join(workdir, "analyze-ci-prs-job-*.txt")
         all_files = sorted(glob_mod.glob(pattern))
         files = []
         for filepath in all_files:
+            # Match by PR number extracted from filename
+            pr_match = re.search(r"-pr(\d+)-", os.path.basename(filepath))
+            if pr_match and int(pr_match.group(1)) in rebase_pr_numbers:
+                files.append(filepath)
+                continue
+
+            # Fallback: match by structured summary fields
             summary = parse_structured_summary(filepath)
             if summary and (
                 f"release-{release}" in summary.get("job_name", "")
                 or summary.get("release", "") == release
             ):
                 files.append(filepath)
+
         return files, f"rebase PR for {release}"
 
     return [], source

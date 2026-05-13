@@ -51,6 +51,10 @@ def main():
 
     print(f"Loaded {len(timestamps)} data points")
 
+    # mem.util.used = MemTotal - MemFree, which includes cached memory.
+    # Subtract cached to get exclusive segments for the stacked chart.
+    used_excl_cache = [max(u - c, 0) for u, c in zip(used, cached)]
+
     used_peak_idx = max(range(len(used)), key=lambda i: used[i])
     total_mem = total[0] if total else 0
 
@@ -62,8 +66,8 @@ def main():
         gridspec_kw={"height_ratios": [8, 1]},
     )
 
-    ax.stackplot(timestamps, used, cached,
-                 labels=["Used", "Cached"],
+    ax.stackplot(timestamps, used_excl_cache, cached,
+                 labels=["Used (excl. cache)", "Cached"],
                  colors=["tab:red", "tab:orange"],
                  alpha=0.7)
 
