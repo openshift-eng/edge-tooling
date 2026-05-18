@@ -14,4 +14,4 @@ fi
 "${ENVDIR}/bin/python3" -m pip install -r "${SCRIPTDIR}/requirements.txt" >&2
 
 cd "${SCRIPTDIR}"
-"${ENVDIR}/bin/python3" -m unittest unit_tests.test_logic -v
+"${ENVDIR}/bin/python3" -m unittest unit_tests.test_logic unit_tests.test_prow -v
