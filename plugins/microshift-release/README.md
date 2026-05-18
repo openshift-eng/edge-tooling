@@ -24,7 +24,7 @@ Additional skills are planned for each release testing phase:
 |---|---|---|
 | Pre-Check (Phase 0) | `pre-check` | Done |
 | Build Validation (Phase 1) | `validate-artifacts` | Planned |
-| Automated Testing (Phase 2) | `prow-testing` | Planned |
+| Automated Testing (Phase 2) | `automated-testing` | Planned |
 | Advisory Promotion (Phase 3) | `advisory-promotion` | Planned |
 | Post-Release (Phase 4) | `post-release` | Planned |
 
