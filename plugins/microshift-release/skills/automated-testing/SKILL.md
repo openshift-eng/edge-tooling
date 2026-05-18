@@ -21,7 +21,7 @@ Runs the full Prow CI release testing workflow for MicroShift (Phase 2 of the re
 The skill walks through all steps sequentially, skipping steps that are already complete. For running individual actions manually, use the bash script directly:
 
 ```bash
-bash plugins/microshift-release/scripts/prow_testing.sh <version>
+bash plugins/microshift-release/scripts/prow_testing.sh <action> <version> [--execute]
 ```
 
 ## Prerequisites
@@ -90,6 +90,7 @@ Run `bash ${SCRIPTS_DIR}/prow_testing.sh merge-status <version>`. Parse the JSON
 
 - If `"status": "merged"` — display the message and continue to Step 6.
 - If `"status": "open"` — display the message and stop the workflow (waiting for human `/lgtm` and Tide merge).
+- If `"status": "closed"` — display the message and stop the workflow (PR was closed without merging).
 
 ### Step 6: Download Artifacts
 
