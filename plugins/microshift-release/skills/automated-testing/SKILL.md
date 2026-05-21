@@ -28,10 +28,10 @@ bash plugins/microshift-release/scripts/prow_testing.sh <action> <version> [--ex
 
 | Requirement | Needed for | Mandatory? |
 |---|---|---|
-| `aws` CLI (configured) | Step 0 (preflight), Step 7 (upload) | Yes |
+| `aws` CLI (configured) | Step 0 (preflight), Step 5 (upload) | Yes |
 | `gh` CLI (authenticated) | All PR operations | Yes |
 | Push access to `openshift/microshift` | Step 1 (create PR) | Yes |
-| `gsutil` CLI | Step 6 (download) | Yes |
+| `gsutil` CLI | Step 4 (download) | Yes |
 
 ## Arguments
 
@@ -47,7 +47,7 @@ SCRIPTS_DIR=plugins/microshift-release/scripts
 
 Execute each step in order. Redirect stderr to `/dev/null` for all commands — stderr only contains progress messages. On non-zero exit, re-run **without** suppressing stderr and display the error.
 
-### Step 0: Pre-flight Checks
+### Step 0: Validate Build Artifact are in the Cache
 
 Run `bash ${SCRIPTS_DIR}/prow_testing.sh preflight <version>`. Parse the JSON output:
 
@@ -62,7 +62,7 @@ Run `bash ${SCRIPTS_DIR}/prow_testing.sh preflight <version>`. Parse the JSON ou
     /test e2e-aws-tests-cache-arm
     ```
 
-### Step 1: Create PR (Draft)
+### Step 1: Create Release Testing Draft PR
 
 The PR is **always** created in draft state. Run `bash ${SCRIPTS_DIR}/prow_testing.sh create-pr <version>` **without** `--execute` first. Parse the JSON output:
 
@@ -71,7 +71,7 @@ The PR is **always** created in draft state. Run `bash ${SCRIPTS_DIR}/prow_testi
   - If confirmed, re-run with `--execute` and display the result.
   - If declined, stop the workflow.
 
-### Step 2: Trigger Jobs
+### Step 2: Trigger CI Jobs
 
 Run `bash ${SCRIPTS_DIR}/prow_testing.sh trigger <version>` **without** `--execute` first. Parse the JSON output:
 
@@ -80,7 +80,7 @@ Run `bash ${SCRIPTS_DIR}/prow_testing.sh trigger <version>` **without** `--execu
   - If confirmed, re-run with `--execute` and display the result, then continue to Step 3.
   - If declined, continue to Step 3.
 
-### Step 3: Check Status
+### Step 3: Verify CI Jobs and Scenarios results
 
 Run `bash ${SCRIPTS_DIR}/prow_testing.sh status <version>`.
 
@@ -102,26 +102,7 @@ Run `bash ${SCRIPTS_DIR}/prow_testing.sh scenarios <version>`. Parse the JSON ou
 
 If not all jobs passed, stop the workflow.
 
-### Step 4: Merge PR
-
-Run `bash ${SCRIPTS_DIR}/prow_testing.sh merge <version>` **without** `--execute` first. Parse the JSON output:
-
-- If `"status": "already-merged"` — display the message and continue to Step 5.
-- If `"status": "plan"` — display the plan and ask for confirmation.
-  - If confirmed, re-run with `--execute` and display the result, then continue to Step 5.
-  - If declined, stop the workflow.
-
-**Note:** The merge step does NOT post `/lgtm`. A human must review and post `/lgtm` manually to approve the merge.
-
-### Step 5: Check Merge Status
-
-Run `bash ${SCRIPTS_DIR}/prow_testing.sh merge-status <version>`. Parse the JSON output:
-
-- If `"status": "merged"` — display the message and continue to Step 6.
-- If `"status": "open"` — display the message and stop the workflow (waiting for human `/lgtm` and Tide merge).
-- If `"status": "closed"` — display the message and stop the workflow (PR was closed without merging).
-
-### Step 6: Download Artifacts
+### Step 4: Download CI Jobs results
 
 Run `bash ${SCRIPTS_DIR}/prow_testing.sh download <version>` **without** `--execute` first. Parse the JSON output:
 
@@ -129,12 +110,20 @@ Run `bash ${SCRIPTS_DIR}/prow_testing.sh download <version>` **without** `--exec
   - If confirmed, re-run with `--execute` and display the result.
   - If declined, stop the workflow.
 
-### Step 7: Upload Artifacts
+### Step 5: Upload CI Jobs results to S3
 
 Run `bash ${SCRIPTS_DIR}/prow_testing.sh upload <version>` **without** `--execute` first. Parse the JSON output:
 
 - If `"status": "plan"` — display the plan (tar.gz name, S3 destination) and ask for confirmation.
   - If confirmed, re-run with `--execute` and display the result (public URL).
+  - If declined, stop the workflow.
+
+### Step 6: Close PR and Clean Up
+
+Run `bash ${SCRIPTS_DIR}/prow_testing.sh complete <version>` **without** `--execute` first. Parse the JSON output:
+
+- If `"status": "plan"` — display the plan (post comment, close PR, delete branch) and ask for confirmation.
+  - If confirmed, re-run with `--execute` and display the result.
   - If declined, stop the workflow.
 
 ## Errors

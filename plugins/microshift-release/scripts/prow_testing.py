@@ -614,57 +614,31 @@ def cmd_status(args):
         print(_format_status_table(v, pr, statuses))
 
 
-def cmd_merge(args):
-    """Undraft PR and post Prow merge labels/approvals."""
+def cmd_complete(args):
+    """Post completion comment, close PR, and delete branch."""
     v = prow.parse_version(args.version)
-
-    pr_any = prow.find_pr_any_state(v["pr_title"])
-    if pr_any and pr_any.get("state") == "MERGED":
-        print(json.dumps({
-            "action": "merge",
-            "status": "already-merged",
-            "pr_number": pr_any["number"],
-            "url": pr_any["url"],
-            "message": f"PR #{pr_any['number']} is already merged.",
-        }))
-        return
-
     pr = _require_pr(v)
+    head_branch = f"release-testing-{v['version']}"
     comment_body = (
-        "/label backport-risk-assessed\n"
-        "/label jira/valid-bug\n"
-        "/verified by CI\n"
+        f"Automated release testing for {v['version']} completed. "
+        "Artifacts uploaded to S3."
     )
 
     if not args.execute:
         print(json.dumps({
-            "action": "merge",
+            "action": "complete",
             "status": "plan",
             "pr_number": pr["number"],
             "pr_url": pr["url"],
             "actions": [
-                "Undraft PR (gh pr ready)",
-                "Post comment: /label backport-risk-assessed",
-                "Post comment: /label jira/valid-bug",
-                "Post comment: /verified by CI",
+                f"Post completion comment on PR #{pr['number']}",
+                f"Close PR #{pr['number']}",
+                f"Delete remote branch {head_branch}",
             ],
         }))
         return
 
-    logger.info("Marking PR #%s as ready (undraft)...", pr["number"])
-    ready_result = subprocess.run(
-        ["gh", "pr", "ready", str(pr["number"]), "--repo", prow.GH_REPO],
-        capture_output=True, text=True,
-    )
-    if ready_result.returncode != 0:
-        print(json.dumps({
-            "action": "merge",
-            "status": "error",
-            "message": f"gh pr ready failed: {ready_result.stderr.strip()}",
-        }))
-        sys.exit(1)
-
-    logger.info("Posting merge labels and approvals on PR #%s...", pr["number"])
+    logger.info("Posting completion comment on PR #%s...", pr["number"])
     comment_result = subprocess.run(
         [
             "gh", "pr", "comment", str(pr["number"]),
@@ -675,71 +649,39 @@ def cmd_merge(args):
     )
     if comment_result.returncode != 0:
         print(json.dumps({
-            "action": "merge",
+            "action": "complete",
             "status": "error",
             "message": f"gh pr comment failed: {comment_result.stderr.strip()}",
         }))
         sys.exit(1)
 
+    logger.info("Closing PR #%s and deleting branch %s...", pr["number"], head_branch)
+    close_result = subprocess.run(
+        [
+            "gh", "pr", "close", str(pr["number"]),
+            "--repo", prow.GH_REPO,
+            "--delete-branch",
+        ],
+        capture_output=True, text=True,
+    )
+    if close_result.returncode != 0:
+        print(json.dumps({
+            "action": "complete",
+            "status": "error",
+            "message": f"gh pr close failed: {close_result.stderr.strip()}",
+        }))
+        sys.exit(1)
+
     print(json.dumps({
-        "action": "merge",
-        "status": "merge-initiated",
+        "action": "complete",
+        "status": "completed",
         "pr_number": pr["number"],
         "url": pr["url"],
         "message": (
-            f"PR #{pr['number']} undrafted and merge labels posted. "
-            "A human must post /lgtm to approve the merge."
+            f"PR #{pr['number']} commented, closed, "
+            f"and branch {head_branch} deleted."
         ),
     }))
-
-
-def cmd_merge_status(args):
-    """Check if the release testing PR has been merged."""
-    v = prow.parse_version(args.version)
-
-    pr = prow.find_pr_any_state(v["pr_title"])
-    if pr is None:
-        print(json.dumps({
-            "action": "merge-status",
-            "status": "error",
-            "message": (
-                f"No release testing PR found for {v['version']}. "
-                "Run 'create-pr' first."
-            ),
-        }))
-        sys.exit(1)
-
-    state = pr.get("state", "OPEN")
-
-    if state == "MERGED":
-        print(json.dumps({
-            "action": "merge-status",
-            "status": "merged",
-            "pr_number": pr["number"],
-            "url": pr["url"],
-            "merged_at": pr.get("mergedAt"),
-            "message": f"PR #{pr['number']} has been merged.",
-        }))
-    elif state == "CLOSED":
-        print(json.dumps({
-            "action": "merge-status",
-            "status": "closed",
-            "pr_number": pr["number"],
-            "url": pr["url"],
-            "message": f"PR #{pr['number']} was closed without merging.",
-        }))
-        sys.exit(1)
-    else:
-        print(json.dumps({
-            "action": "merge-status",
-            "status": "open",
-            "pr_number": pr["number"],
-            "url": pr["url"],
-            "message": (
-                f"PR #{pr['number']} is still open. "
-                "Waiting for Tide to merge."
-            ),
-        }))
 
 
 def cmd_download(args):
@@ -934,10 +876,9 @@ def main():
         ("trigger", cmd_trigger, True, "Trigger CI jobs via /test comment"),
         ("status", cmd_status, False, "Check CI job statuses"),
         ("scenarios", cmd_scenarios, False, "Validate scenarios and versions in completed jobs"),
-        ("merge", cmd_merge, True, "Undraft PR and post merge labels"),
-        ("merge-status", cmd_merge_status, False, "Check if PR has been merged"),
         ("download", cmd_download, True, "Download artifacts from GCS"),
         ("upload", cmd_upload, True, "Compress and upload artifacts to S3"),
+        ("complete", cmd_complete, True, "Post comment, close PR, delete branch"),
     ]:
         sp = subparsers.add_parser(name, help=help_text)
         sp.add_argument("version", help="MicroShift version (X.Y.Z, X.Y.Z-rc.N, X.Y.Z-ec.N)")
