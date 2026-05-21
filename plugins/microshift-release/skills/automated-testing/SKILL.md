@@ -57,7 +57,8 @@ Run `bash ${SCRIPTS_DIR}/prow_testing.sh preflight <version>`. Parse the JSON ou
   - If declined, stop the workflow.
 - If `"status": "fail"` — display each check's status, reason, and details. Stop the workflow.
   - For `s3_rpms` failure: tell the user to refresh the build cache by posting these comments on the PR (create the PR first if needed):
-    ```
+
+    ```text
     /test e2e-aws-tests-cache
     /test e2e-aws-tests-cache-arm
     ```
