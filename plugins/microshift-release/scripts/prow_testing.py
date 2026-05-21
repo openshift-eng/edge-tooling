@@ -11,10 +11,13 @@ import argparse
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
+
+import requests
 
 from lib import git_ops, prow
 
@@ -94,6 +97,325 @@ def _format_status_table(version_info, pr, statuses):
         )
 
     return "\n".join(lines)
+
+
+_BUILD_CACHE_ARCHES = ["x86_64", "aarch64"]
+
+
+def _check_s3_rpms(v):
+    """Check if RPMs exist in the S3 build cache for the target version."""
+    if not shutil.which("aws"):
+        return {
+            "check": "s3_rpms",
+            "status": "FAIL",
+            "reason": "aws CLI not found. Install and configure AWS CLI.",
+        }
+
+    minor = v["minor"]
+    version = v["version"]
+
+    failures = []
+    details = []
+    tar_path_for_version_check = None
+
+    for arch in _BUILD_CACHE_ARCHES:
+        base = f"{prow.S3_BUILD_CACHE}/release-{minor}/{arch}"
+
+        last_result = subprocess.run(
+            ["aws", "s3", "cp", f"{base}/last", "-"],
+            capture_output=True, text=True,
+        )
+        if last_result.returncode != 0 or not last_result.stdout.strip():
+            failures.append(f"{arch}: 'last' marker not found at {base}/last")
+            continue
+
+        date = last_result.stdout.strip()
+        tar_path = f"{base}/{date}/brew-rpms.tar"
+
+        ls_result = subprocess.run(
+            ["aws", "s3", "ls", tar_path],
+            capture_output=True, text=True,
+        )
+        if ls_result.returncode != 0 or not ls_result.stdout.strip():
+            failures.append(f"{arch}: brew-rpms.tar not found at {tar_path}")
+            continue
+
+        details.append(f"{arch}: brew-rpms.tar found (date={date})")
+        if tar_path_for_version_check is None:
+            tar_path_for_version_check = tar_path
+
+    if failures:
+        return {
+            "check": "s3_rpms",
+            "status": "FAIL",
+            "reason": f"Build cache check failed for {len(failures)} arch(es)",
+            "details": failures + details,
+        }
+
+    if tar_path_for_version_check:
+        brew_version = version.replace("-", "~")
+        try:
+            proc = subprocess.Popen(
+                f"aws s3 cp '{tar_path_for_version_check}' - 2>/dev/null"
+                f" | tar tf - 2>/dev/null | grep -m1 '{brew_version}'",
+                shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            )
+            stdout, _ = proc.communicate(timeout=300)
+            match = stdout.decode().strip()
+        except subprocess.TimeoutExpired:
+            if proc.poll() is None:
+                proc.kill()
+            match = None
+        except OSError:
+            match = None
+
+        if match:
+            details.append(f"Version match: found {brew_version} RPMs in tar")
+        elif match is None:
+            details.append(
+                f"Version check timed out (tar is large) — "
+                f"could not confirm {brew_version} RPMs"
+            )
+        else:
+            return {
+                "check": "s3_rpms",
+                "status": "FAIL",
+                "reason": (
+                    f"brew-rpms.tar does not contain RPMs for {version} "
+                    f"(searched for '{brew_version}')"
+                ),
+                "details": details,
+            }
+
+    return {
+        "check": "s3_rpms",
+        "status": "PASS",
+        "reason": "brew-rpms.tar found in build cache for both arches",
+        "details": details,
+    }
+
+
+_GCSWEB_BASE = "https://gcsweb-ci.apps.ci.l2s4.p1.openshiftapps.com/gcs/test-platform-results"
+_SCENARIO_ROW_RE = re.compile(
+    r'<tr class="(status-pass|status-fail|status-skip)">'
+)
+_SCENARIO_NAME_RE = re.compile(
+    r'<a class="scenario-link"[^>]*>([^<]+)</a>'
+)
+_VERSION_BADGE_RE = re.compile(
+    r'<span class="version-badge">([^<]+)</span>'
+)
+
+
+def _parse_scenarios(html):
+    """Parse custom-link-tools.html and extract scenario results."""
+    scenarios = []
+    rows = html.split("<tr ")
+    for row in rows:
+        status_match = _SCENARIO_ROW_RE.search("<tr " + row)
+        if not status_match:
+            continue
+
+        status_class = status_match.group(1)
+        if status_class == "status-pass":
+            status = "pass"
+        elif status_class == "status-fail":
+            status = "fail"
+        else:
+            status = "skip"
+
+        name_match = _SCENARIO_NAME_RE.search(row)
+        name = name_match.group(1) if name_match else "unknown"
+
+        version_match = _VERSION_BADGE_RE.search(row)
+        version = version_match.group(1) if version_match else "-"
+
+        scenarios.append({"name": name, "status": status, "version": version})
+
+    return scenarios
+
+
+def _custom_link_url(pr_number, full_job_name, build_id, short_name):
+    """Construct the custom-link-tools.html URL for a job."""
+    return (
+        f"{_GCSWEB_BASE}/{prow.GCS_PR_PREFIX}/{pr_number}/"
+        f"{full_job_name}/{build_id}/artifacts/{short_name}/"
+        "openshift-microshift-e2e-metal-tests/artifacts/custom-link-tools.html"
+    )
+
+
+def cmd_scenarios(args):
+    """Validate scenarios in completed jobs: check for skips and version mismatches."""
+    v = prow.parse_version(args.version)
+    pr = _require_pr(v)
+    pr_number = pr["number"]
+
+    gcs_jobs = prow.list_pr_jobs(pr_number)
+    matched = prow.match_ci_jobs(gcs_jobs, v["minor"])
+    statuses = prow.fetch_all_job_statuses(pr_number, matched, v["minor"])
+
+    brew_version = v["version"].replace("-", "~")
+    job_results = []
+    has_version_mismatch = False
+
+    for s in statuses:
+        if s["status"] not in ("SUCCESS", "FAILURE") or not s.get("build_id"):
+            continue
+
+        short = s["short_name"]
+        full = matched.get(short)
+        if not full:
+            continue
+
+        url = _custom_link_url(pr_number, full, s["build_id"], short)
+
+        try:
+            resp = requests.get(url, timeout=30)
+            if resp.status_code != 200:
+                job_results.append({
+                    "job": short,
+                    "status": "error",
+                    "reason": f"HTTP {resp.status_code} fetching custom-link-tools.html",
+                })
+                continue
+        except requests.RequestException as e:
+            job_results.append({
+                "job": short,
+                "status": "error",
+                "reason": str(e),
+            })
+            continue
+
+        scenarios = _parse_scenarios(resp.text)
+        skipped = [sc for sc in scenarios if sc["status"] == "skip"]
+        failed = [sc for sc in scenarios if sc["status"] == "fail"]
+        mismatches = [
+            sc for sc in scenarios
+            if sc["version"] not in ("-", brew_version)
+            and "nightly" not in sc["version"]
+        ]
+
+        versions_seen = [
+            sc["version"] for sc in scenarios if sc["version"] != "-"
+        ]
+        if versions_seen:
+            release_under_test = max(set(versions_seen), key=versions_seen.count)
+        else:
+            release_under_test = "-"
+
+        job_entry = {
+            "job": short,
+            "release_under_test": release_under_test,
+            "total": len(scenarios),
+            "passed": sum(1 for sc in scenarios if sc["status"] == "pass"),
+            "failed": len(failed),
+            "skipped": len(skipped),
+        }
+
+        if skipped:
+            job_entry["skipped_scenarios"] = [sc["name"] for sc in skipped]
+        if failed:
+            job_entry["failed_scenarios"] = [sc["name"] for sc in failed]
+        if mismatches:
+            has_version_mismatch = True
+            job_entry["version_mismatches"] = [
+                {"name": sc["name"], "version": sc["version"]}
+                for sc in mismatches
+            ]
+
+        job_results.append(job_entry)
+
+    has_failed = any(j.get("failed", 0) > 0 for j in job_results)
+    has_wrong_release = any(
+        j.get("release_under_test") not in ("-", brew_version)
+        for j in job_results
+    )
+
+    if has_version_mismatch or has_failed or has_wrong_release:
+        overall = "fail"
+    else:
+        overall = "pass"
+
+    output = {
+        "action": "scenarios",
+        "status": overall,
+        "version": v["version"],
+        "jobs": job_results,
+    }
+
+    total_jobs = len(job_results)
+    total_scenarios = sum(j.get("total", 0) for j in job_results)
+    total_passed = sum(j.get("passed", 0) for j in job_results)
+    total_failed = sum(j.get("failed", 0) for j in job_results)
+    total_skipped = sum(j.get("skipped", 0) for j in job_results)
+
+    parts = [f"{total_jobs} jobs, {total_scenarios} scenarios"]
+    parts.append(f"{total_passed} passed")
+    if total_failed:
+        parts.append(f"{total_failed} failed")
+    if total_skipped:
+        parts.append(f"{total_skipped} skipped")
+
+    errors = []
+    if has_wrong_release:
+        wrong = [
+            f"{j['job']}={j['release_under_test']}"
+            for j in job_results
+            if j.get("release_under_test") not in ("-", brew_version)
+        ]
+        errors.append(f"release mismatch ({', '.join(wrong)})")
+    if has_version_mismatch:
+        errors.append("scenario version mismatch")
+
+    summary = ", ".join(parts)
+    if errors:
+        summary += " — " + "; ".join(errors)
+
+    output["message"] = summary
+
+    print(json.dumps(output))
+
+    if overall == "fail":
+        sys.exit(1)
+
+
+def cmd_preflight(args):
+    """Run pre-flight checks before creating the release testing PR."""
+    v = prow.parse_version(args.version)
+
+    checks = []
+
+    logger.info("Verifying RPMs exist in build cache...")
+    checks.append(_check_s3_rpms(v))
+
+    has_fail = any(c["status"] == "FAIL" for c in checks)
+    has_warn = any(c["status"] == "WARN" for c in checks)
+
+    if has_fail:
+        overall = "fail"
+    elif has_warn:
+        overall = "warn"
+    else:
+        overall = "pass"
+
+    output = {
+        "action": "preflight",
+        "status": overall,
+        "version": v["version"],
+        "checks": checks,
+    }
+
+    if has_fail:
+        output["message"] = "Pre-flight checks failed. Fix issues before creating PR."
+    elif has_warn:
+        output["message"] = "Pre-flight checks passed with warnings. Review before proceeding."
+    else:
+        output["message"] = "All pre-flight checks passed. Ready to create PR."
+
+    print(json.dumps(output))
+
+    if has_fail:
+        sys.exit(1)
 
 
 def cmd_create_pr(args):
@@ -607,9 +929,11 @@ def main():
     subparsers = parser.add_subparsers(dest="action", required=True)
 
     for name, handler, mutating, help_text in [
+        ("preflight", cmd_preflight, False, "Run pre-flight checks"),
         ("create-pr", cmd_create_pr, True, "Create draft PR with empty commit"),
         ("trigger", cmd_trigger, True, "Trigger CI jobs via /test comment"),
         ("status", cmd_status, False, "Check CI job statuses"),
+        ("scenarios", cmd_scenarios, False, "Validate scenarios and versions in completed jobs"),
         ("merge", cmd_merge, True, "Undraft PR and post merge labels"),
         ("merge-status", cmd_merge_status, False, "Check if PR has been merged"),
         ("download", cmd_download, True, "Download artifacts from GCS"),

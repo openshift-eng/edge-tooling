@@ -20,6 +20,7 @@ GCS_BASE = "https://storage.googleapis.com/test-platform-results"
 GCS_PR_PREFIX = "pr-logs/pull/openshift_microshift"
 PROW_VIEW = "https://prow.ci.openshift.org/view/gs/test-platform-results"
 S3_BUCKET = "s3://release-testing-results/microshift"
+S3_BUILD_CACHE = "s3://microshift-build-cache-us-west-2"
 
 _CI_JOBS_421 = [
     "e2e-aws-tests-bootc-release",
@@ -59,7 +60,7 @@ def parse_version(version_str):
         version_str: e.g. "4.21.3", "4.22.0-rc.1", "4.22.0-ec.5".
 
     Returns:
-        dict with keys: version, minor, branch, pr_title.
+        dict with keys: version, minor, branch, pr_title, release_type, ecrc_num.
 
     Raises:
         ValueError: If the version is invalid, <4.21, or nightly.
@@ -87,11 +88,22 @@ def parse_version(version_str):
     branch = f"release-{minor}"
     pr_title = f"[{branch}] Release Testing {version}"
 
+    release_type_tag = match.group(4)
+    ecrc_num = int(match.group(5)) if match.group(5) else None
+    if release_type_tag == "ec":
+        release_type = "EC"
+    elif release_type_tag == "rc":
+        release_type = "RC"
+    else:
+        release_type = "Z"
+
     return {
         "version": version,
         "minor": minor,
         "branch": branch,
         "pr_title": pr_title,
+        "release_type": release_type,
+        "ecrc_num": ecrc_num,
     }
 
 

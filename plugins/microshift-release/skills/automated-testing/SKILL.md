@@ -28,10 +28,10 @@ bash plugins/microshift-release/scripts/prow_testing.sh <action> <version> [--ex
 
 | Requirement | Needed for | Mandatory? |
 |---|---|---|
+| `aws` CLI (configured) | Step 0 (preflight), Step 7 (upload) | Yes |
 | `gh` CLI (authenticated) | All PR operations | Yes |
 | Push access to `openshift/microshift` | Step 1 (create PR) | Yes |
 | `gsutil` CLI | Step 6 (download) | Yes |
-| `aws` CLI (configured) | Step 7 (upload) | Yes |
 
 ## Arguments
 
@@ -46,6 +46,21 @@ SCRIPTS_DIR=plugins/microshift-release/scripts
 ## Implementation
 
 Execute each step in order. Redirect stderr to `/dev/null` for all commands — stderr only contains progress messages. On non-zero exit, re-run **without** suppressing stderr and display the error.
+
+### Step 0: Pre-flight Checks
+
+Run `bash ${SCRIPTS_DIR}/prow_testing.sh preflight <version>`. Parse the JSON output:
+
+- If `"status": "pass"` — display the message and continue to Step 1.
+- If `"status": "warn"` — display each check's status and reason. Ask the user if they want to proceed.
+  - If confirmed, continue to Step 1.
+  - If declined, stop the workflow.
+- If `"status": "fail"` — display each check's status, reason, and details. Stop the workflow.
+  - For `s3_rpms` failure: tell the user to refresh the build cache by posting these comments on the PR (create the PR first if needed):
+    ```
+    /test e2e-aws-tests-cache
+    /test e2e-aws-tests-cache-arm
+    ```
 
 ### Step 1: Create PR (Draft)
 
@@ -71,7 +86,21 @@ Run `bash ${SCRIPTS_DIR}/prow_testing.sh status <version>`.
 
 Display the output **verbatim** — it is a pre-formatted table. Do not reformat it.
 
-If all jobs passed, continue to Step 4. Otherwise, stop the workflow.
+If all jobs passed, run scenario validation:
+
+Run `bash ${SCRIPTS_DIR}/prow_testing.sh scenarios <version>`. Parse the JSON output:
+
+- Display the `message` field (summary of jobs, scenarios, pass/fail/skip counts).
+- For each job, display `release_under_test` and scenario counts.
+- If any `skipped_scenarios` — display them as warnings.
+- If any `failed_scenarios` — display them.
+- If `"status": "fail"` — display the message and stop the workflow. Possible causes:
+  - `release_under_test` does not match the target version for a job.
+  - Scenarios failed.
+  - Individual scenario versions don't match the target (excluding nightlies).
+- If `"status": "pass"` — continue to Step 4.
+
+If not all jobs passed, stop the workflow.
 
 ### Step 4: Merge PR
 
