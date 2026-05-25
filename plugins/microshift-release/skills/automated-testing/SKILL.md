@@ -87,7 +87,7 @@ Run `bash ${SCRIPTS_DIR}/prow_testing.sh status <version>`.
 
 Display the output **verbatim** — it is a pre-formatted table. Do not reformat it.
 
-If all jobs passed, run scenario validation:
+If all jobs finished, run scenario validation:
 
 Run `bash ${SCRIPTS_DIR}/prow_testing.sh scenarios <version>`. Parse the JSON output:
 
