@@ -71,7 +71,7 @@ If a time range is present instead of explicit versions, query Product Pages to 
 
 If the `mcp__productpages__list_entities` tool is not available (MCP not loaded), stop and show this message verbatim:
 
-```
+
 The Product Pages MCP is required for time-range lookups but is not enabled in this session.
 
 To enable it, run this command:
@@ -83,6 +83,8 @@ claude mcp add productpages -s user --transport http https://productpages.redhat
 Then restart Claude Code and re-run the command.
 
 Alternatively, pass explicit versions instead of a time range:
+
+```bash
   /microshift-release:pre-check 4.19.X 4.20.X 4.21.X
 ```
 
