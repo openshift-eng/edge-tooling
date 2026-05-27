@@ -163,8 +163,8 @@ def compute_recommendation(evaluation):
     """Compute the final recommendation for a version.
 
     Decision rules:
-    - ASK ART TO CREATE ARTIFACTS: critical CVE fix or 90-day rule, OCP payload available
-    - NEEDS REVIEW: ambiguous cases, or OCP payload not yet available when action would be needed
+    - ASK ART TO CREATE ARTIFACTS: critical CVE fix or 90-day rule
+    - NEEDS REVIEW: ambiguous cases
     - SKIP: no changes, no CVEs, within 90 days
     - SKIP: lifecycle inactive
 
@@ -177,23 +177,15 @@ def compute_recommendation(evaluation):
     cve_impact = evaluation.get("cve_impact", {}).get("impact", "unknown")
     commits = evaluation.get("commits", 0)
     days_since = evaluation.get("days_since")
-    ocp_status = evaluation.get("ocp_status", "")
-    ocp_available = ocp_status == "available"
 
     # Must release: CVE with Done-Errata
     if cve_impact == "must_release":
         cve_details = evaluation.get("cve_impact", {}).get("details", [])
         cve_list = ", ".join(d["cve"] for d in cve_details)
-        if not ocp_available:
-            return "NEEDS REVIEW", f"CVE fix: {cve_list} (OCP payload not yet available)"
         return "ASK ART TO CREATE ARTIFACTS", f"CVE fix: {cve_list}"
 
     # 90-day rule (hard policy constraint — evaluated before OCPBUGS labels)
     if days_since is not None and days_since >= 90 and commits > 0:
-        if not ocp_available:
-            return ("NEEDS REVIEW",
-                    f"90-day rule ({days_since}d, {commits} commits)"
-                    " — OCP payload not yet available")
         return ("ASK ART TO CREATE ARTIFACTS",
                 f"90-day rule ({days_since}d since last release,"
                 f" {commits} commits)")
@@ -207,8 +199,6 @@ def compute_recommendation(evaluation):
 
         if release_required > 0:
             bug_summary = f"{release_required} OCPBUGS labeled release-required"
-            if not ocp_available:
-                return "NEEDS REVIEW", f"{bug_summary} (OCP payload not yet available)"
             return "ASK ART TO CREATE ARTIFACTS", bug_summary
         if needs_review_bugs > 0:
             bug_summary = f"{ocpbugs_count} OCPBUGS ({needs_review_bugs} unlabeled, needs review)"
@@ -506,7 +496,7 @@ def _build_reason(e):
 def format_text_short(evaluations):
     """Format evaluations as one-line-per-version text.
 
-    Format: ACTION x.y.z [OCP: available/NOT available] [reason]
+    Format: ACTION x.y.z [reason]
 
     Args:
         evaluations: List of evaluation result dicts.
@@ -538,19 +528,10 @@ def format_text_short(evaluations):
                 " [VPN not connected]")
             continue
 
-        # OCP status
-        ocp = e.get("ocp_status", "")
-        if ocp == "available":
-            ocp_str = "available"
-        elif not ocp:
-            ocp_str = "unknown"
-        else:
-            ocp_str = "NOT available"
-
         # Build reason using pipe-separated format
         reason = _build_reason(e)
 
-        lines.append(f"{rec:<{REC_WIDTH}} {version} [OCP: {ocp_str}] [{reason}]")
+        lines.append(f"{rec:<{REC_WIDTH}} {version} [{reason}]")
 
     return "\n".join(lines)
 
@@ -572,15 +553,14 @@ def format_text_full(output):
 
     # Release Schedule table
     sections.append("## Release Schedule\n")
-    sections.append("| Version | ART Ticket | Due Date | OCP Status | Lifecycle |")
-    sections.append("|---------|-----------|----------|------------|-----------|")
+    sections.append("| Version | ART Ticket | Due Date | Lifecycle |")
+    sections.append("|---------|-----------|----------|-----------|")
     for e in evaluations:
         v = e.get("version", "?")
         art = e.get("art_ticket", "--")
         due = e.get("due_date", "--") or "--"
-        ocp = e.get("ocp_status", "--")
         lc = e.get("lifecycle_status", "--")
-        sections.append(f"| {v} | {art} | {due} | {ocp} | {lc} |")
+        sections.append(f"| {v} | {art} | {due} | {lc} |")
 
     # Z-Stream Evaluation table
     sections.append("\n## Z-Stream Evaluation\n")

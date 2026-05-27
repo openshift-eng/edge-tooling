@@ -313,8 +313,8 @@ class TestComputeRecommendation(unittest.TestCase):
             "ocpbugs": _ocpbugs(count=1, required=1),
         }
         rec, reason = compute_recommendation(evaluation)
-        self.assertEqual(rec, "NEEDS REVIEW")
-        self.assertIn("OCP payload not yet available", reason)
+        self.assertEqual(rec, "ASK ART TO CREATE ARTIFACTS")
+        self.assertIn("release-required", reason)
 
     def test_cve_takes_priority_over_ocpbugs(self):
         evaluation = {
@@ -488,7 +488,6 @@ class TestXyzFormatTextShort(unittest.TestCase):
         }]
         result = format_text_short(evals)
         self.assertIn("SKIP", result)
-        self.assertIn("[OCP: available]", result)
         self.assertIn("no CVEs", result)
 
     def test_ask_art(self):
@@ -500,7 +499,6 @@ class TestXyzFormatTextShort(unittest.TestCase):
         }]
         result = format_text_short(evals)
         self.assertIn("ASK ART TO CREATE ARTIFACTS", result)
-        self.assertIn("[OCP: NOT available]", result)
 
 
 class TestBuildReason(unittest.TestCase):
@@ -782,7 +780,7 @@ class TestEolSkipFormatting(unittest.TestCase):
         lines = result.strip().split("\n")
         self.assertEqual(len(lines), 2)
         self.assertIn("End of life", lines[0])
-        self.assertIn("OCP:", lines[1])
+        self.assertIn("no CVEs", lines[1])
 
 
 class TestBuildRevisionRange(unittest.TestCase):
