@@ -55,7 +55,7 @@ Downloads CI Doctor analysis artifacts (per-job reports, summaries, bug mappings
    - **Re-generate the HTML report** (e.g., after modifying job reports):
 
      ```text
-     bash plugins/microshift-ci/scripts/doctor.sh finalize --workdir <WORKDIR> <RELEASES>
+     bash plugins/microshift-ci/scripts/doctor.sh finalize --component microshift --workdir <WORKDIR> <RELEASES>
      ```
 
      where `<RELEASES>` is a comma-separated list of the releases found in the summary.

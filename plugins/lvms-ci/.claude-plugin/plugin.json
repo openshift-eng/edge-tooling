@@ -1,0 +1,10 @@
+{
+  "name": "lvms-ci",
+  "description": "LVMS CI Automation",
+  "version": "1.0.0",
+  "author": {
+    "name": "knarra"
+  },
+  "homepage": "https://github.com/openshift-eng/edge-tooling",
+  "license": "Apache-2.0"
+}

@@ -14,12 +14,12 @@ Generate a daily standup report from today's TODO file in Slack-ready format.
 
 ## Task
 
-Read today's TODO file (`.daily/YYYY/MM/YYYY-MM-DD.md`) and generate a daily report following the format specified in `plugins/edge-ic/references/DAILY_REPORT_FORMAT.md`.
+Read today's TODO file (`$HOME/.daily/YYYY/MM/YYYY-MM-DD.md`) and generate a daily report following the format specified in `plugins/edge-ic/references/DAILY_REPORT_FORMAT.md`.
 
 ## Instructions
 
 1. **Read the format specification** from `plugins/edge-ic/references/DAILY_REPORT_FORMAT.md`
-2. **Read today's TODO file** from `.daily/YYYY/MM/` using today's date
+2. **Read today's TODO file** from `$HOME/.daily/YYYY/MM/` using today's date
 3. **Parse all sections systematically** (read every item from TODO file):
    - **Completed section**: Parse EVERY completed item
    - **In Sprint (Blocked/Waiting)**: Parse ALL blocked items

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Parse pcp2json output with disk.dev.read, disk.dev.write, and disk.dev.await.
+"""Parse pcp2json output with disk.dev.read, write, await, and aveq.
 
 pcp2json produces a nested structure:
   @pcp.@hosts[].@metrics[] where each metric entry has @timestamp and
-  nested disk.dev.{read,write,await}.@instances[].{name, value}.
+  nested disk.dev.{read,write,await,aveq}.@instances[].{name, value}.
 
-Aggregates per-device instances: sum for read/write, max for await.
-Outputs a clean JSON with arrays: timestamps, bi, bo, await.
+Aggregates per-device instances: sum for read/write, max for await/aveq.
+Outputs JSON with arrays: timestamps, bi, bo, iops, await, aveq.
 """
 
 import argparse
@@ -101,7 +101,8 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
-    result = {"timestamps": [], "bi": [], "bo": [], "await": []}
+    result = {"timestamps": [], "bi": [], "bo": [], "iops": [],
+              "await": [], "aveq": []}
 
     for sample in samples:
         ts_str = sample.get("@timestamp", "")
@@ -112,15 +113,21 @@ def main():
         read_insts = get_instances(sample, "disk", "dev", "read")
         write_insts = get_instances(sample, "disk", "dev", "write")
         await_insts = get_instances(sample, "disk", "dev", "await")
+        aveq_insts = get_instances(sample, "disk", "dev", "aveq")
 
         # Skip samples with no metric data (e.g. first interval)
         if not read_insts and not write_insts and not await_insts:
             continue
 
+        bi = aggregate_instances(read_insts, sum)
+        bo = aggregate_instances(write_insts, sum)
         result["timestamps"].append(ts)
-        result["bi"].append(aggregate_instances(read_insts, sum))
-        result["bo"].append(aggregate_instances(write_insts, sum))
+        result["bi"].append(bi)
+        result["bo"].append(bo)
+        result["iops"].append(bi + bo)
         result["await"].append(aggregate_instances(await_insts, max))
+        # pcp2json rate-converts aveq to ms/s; divide by 1000 for queue depth
+        result["aveq"].append(aggregate_instances(aveq_insts, max) / 1000)
 
     if not result["timestamps"]:
         print("ERROR: No valid data points found", file=sys.stderr)

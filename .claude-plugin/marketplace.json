@@ -43,6 +43,12 @@
       "version": "1.0.0"
     },
     {
+      "name": "lvms-ci",
+      "source": "./plugins/lvms-ci",
+      "description": "LVMS CI Automation",
+      "version": "1.0.0"
+    },
+    {
       "name": "mcp-atlassian",
       "source": "./plugins/mcp-atlassian",
       "description": "Atlassian Jira MCP server for Claude Code — provides Jira tools via the mcp-atlassian container image",
@@ -82,13 +88,13 @@
       "name": "two-node",
       "source": "./plugins/two-node",
       "description": "Two-node topology (TNA/TNF) workflow automation — RHEL verification, Jira integration, and more",
-      "version": "1.0.0"
+      "version": "1.1.0"
     },
     {
       "name": "edge-ic",
       "source": "./plugins/edge-ic",
       "description": "Individual contributor workflow automation for TODO management, status reporting, and Jira updates",
-      "version": "1.1.0"
+      "version": "1.2.0"
     },
     {
       "name": "skills-review",

@@ -1,6 +1,7 @@
 #!/bin/bash
 # Extract disk IO data from PCP archive using pcp2json with 15-second intervals.
-# Outputs JSON with arrays: timestamps, bi (reads/s), bo (writes/s), await (disk await ms)
+# Outputs JSON with arrays: timestamps, bi (reads/s), bo (writes/s), iops (total),
+# await (disk await ms), aveq (avg queue length)
 #
 # Usage: ./extract_io.sh <pcp-archive-dir> [output-json] [timezone]
 
@@ -18,7 +19,7 @@ TMPFILE=$(mktemp)
 trap 'rm -f "${TMPFILE}"' EXIT
 
 (cd "${DATA_DIR}" && pcp2json -a . -t 15sec \
-    disk.dev.read disk.dev.write disk.dev.await) \
+    disk.dev.read disk.dev.write disk.dev.await disk.dev.aveq) \
     > "${TMPFILE}" 2>/dev/null || true
 
 # Parse pcp2json output into clean plot-ready JSON

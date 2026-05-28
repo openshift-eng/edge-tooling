@@ -1,9 +1,9 @@
 ---
 name: microshift-ci:doctor-refresh
 argument-hint: <release1,release2,...>
-description: Re-run bug correlation and regenerate the CI Doctor HTML report
+description: Regenerate the CI Doctor HTML report from existing data
 user-invocable: true
-allowed-tools: Skill, Bash, Read, Write, Agent
+allowed-tools: Bash, Read, Glob
 ---
 
 # microshift-ci:doctor-refresh
@@ -16,9 +16,9 @@ allowed-tools: Skill, Bash, Read, Write, Agent
 
 ## Description
 
-Re-runs bug correlation (dry-run) for each release and regenerates the CI Doctor HTML report. Use this after `/microshift-ci:create-bugs --create` or any JIRA state change to update the report with the latest bug data.
+Regenerates the CI Doctor HTML report from existing data. Use this after `/microshift-ci:create-bugs --create` to update the report with newly created bugs.
 
-This is a lightweight operation: it does not re-analyze jobs or re-aggregate summaries. It re-runs the JIRA searches in create-bugs (which also fetches the open bugs list) and regenerates the HTML from existing summary data.
+This is a lightweight operation: it does not re-analyze jobs, re-aggregate summaries, or re-query JIRA. It reads the existing bug mapping files (which include newly created bugs via the create-bugs Step 4b update) and regenerates the HTML.
 
 ## Arguments
 
@@ -44,43 +44,28 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
    Run the full doctor workflow first: /microshift-ci:doctor <releases>
    ```
 
-### Step 2: Re-Run Bug Correlation
+### Step 2: Verify Bug Mapping Files
 
 1. Parse `<ARGUMENTS>` into a list of release versions.
 2. Check for rebase PR sources in the workdir by looking for `analyze-ci-bug-candidates-rebase-release-*.json` files. Extract the source identifiers (e.g., `rebase-release-4.22`).
-3. Delete existing bug mapping files so create-bugs performs fresh JIRA queries:
+3. Verify that `<WORKDIR>/analyze-ci-bugs-<source>.json` exists for each release version and each rebase PR source.
+4. If any mapping files are missing, report which ones are missing and show an error:
 
    ```text
-   rm -f <WORKDIR>/analyze-ci-bugs-*.json
+   Error: bug mapping files missing for: <sources>
+   Run the full create-bugs workflow first: /microshift-ci:create-bugs <sources> --create --auto
    ```
 
-4. Launch `/microshift-ci:create-bugs` in dry-run mode as **Agents** — one per release version, plus one per rebase PR source:
+   Continue to Step 3 anyway — the HTML report will be generated with whatever data is available.
 
-   **For release versions:**
-
-   ```text
-   Agent: subagent_type=general_purpose, prompt="Run /microshift-ci:create-bugs <version>"
-   ```
-
-   **For rebase PR sources:**
-
-   ```text
-   Agent: subagent_type=general_purpose, prompt="Run /microshift-ci:create-bugs rebase-release-<version>"
-   ```
-
-5. Launch **ALL** agents in a **single message** as **foreground** agents. They run concurrently.
-6. Each agent produces `<WORKDIR>/analyze-ci-bugs-<source>.json` with fresh JIRA data including the open bugs list.
-
-**Error Handling**:
-
-- If create-bugs fails for a source, note the failure but continue with other sources and HTML generation.
+**Do NOT** delete bug mapping files. **Do NOT** launch create-bugs agents. The mapping files are produced by the preceding `/microshift-ci:create-bugs` session and include newly created bugs (via Step 4b of the create-bugs skill).
 
 ### Step 3: Regenerate HTML Report
 
 Run the refresh script:
 
 ```text
-bash plugins/microshift-ci/scripts/doctor.sh refresh --workdir <WORKDIR> <ARGUMENTS>
+bash plugins/microshift-ci/scripts/doctor.sh refresh --component microshift --workdir <WORKDIR> <ARGUMENTS>
 ```
 
 ### Step 4: Report Completion
@@ -103,16 +88,16 @@ Display the path to the regenerated HTML report.
 
 ## Prerequisites
 
-- MCP Jira server must be configured (for bug correlation)
 - An existing workdir from a prior `/microshift-ci:doctor` run
+- Bug mapping files from a prior `/microshift-ci:create-bugs` run
 
 ## Related Skills
 
 - **microshift-ci:doctor**: Full CI analysis workflow (produces the initial HTML report)
-- **microshift-ci:create-bugs**: Bug correlation and creation (used by Step 2 agents)
+- **microshift-ci:create-bugs**: Bug correlation and creation (produces the bug mapping files consumed by this skill)
 
 ## Notes
 
-- This skill does NOT re-analyze jobs or re-aggregate summaries — it only refreshes JIRA data and regenerates the HTML. Also useful after manual JIRA triage (closing, reassigning, or updating bugs)
-- The create-bugs agents fetch the open bugs list as part of their normal JIRA queries, so no separate open bugs query is needed
-- All agents are launched in a single parallel wave for speed
+- This skill does NOT re-analyze jobs, re-aggregate summaries, or re-query JIRA — it only regenerates the HTML from existing data
+- Bug mapping files must already exist from a prior `/microshift-ci:create-bugs` run
+- Newly created bugs are included because the create-bugs skill updates the mapping files after creation (Step 4b)

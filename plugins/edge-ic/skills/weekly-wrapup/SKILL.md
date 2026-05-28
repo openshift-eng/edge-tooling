@@ -25,8 +25,8 @@ Automate the weekly wrap-up process by reviewing active work, gathering status u
 2. **Query active Jira tickets**: assignee = currentUser() AND statusCategory IN ("In Progress", "To Do")
 3. **Group tickets by status**: Code Review, POST, In Progress, ASSIGNED, To Do
 4. **Prompt for status updates** for each ticket
-5. **Read current week's TODO files**: Resolve Monday's date from current week and read `.daily/YYYY/MM/YYYY-MM-DD.md` (repo-relative path from working directory root). File must conform to format defined in `plugins/edge-ic/references/TODO_FILE_FORMAT.md`. If validation fails in `--dry-run` mode, display errors but continue; otherwise abort.
-6. **Generate next Monday's TODO file**: Resolve next Monday's date and write to `.daily/YYYY/MM/YYYY-MM-DD.md` (repo-relative path). Generated file must pass validation against `plugins/edge-ic/references/TODO_FILE_FORMAT.md` before writing. If validation fails in `--dry-run` mode, display errors but continue; otherwise abort.
+5. **Read current week's TODO files**: Resolve Monday's date from current week and read `$HOME/.daily/YYYY/MM/YYYY-MM-DD.md`. File must conform to format defined in `plugins/edge-ic/references/TODO_FILE_FORMAT.md`. If validation fails in `--dry-run` mode, display errors but continue; otherwise abort.
+6. **Generate next Monday's TODO file**: Resolve next Monday's date and write to `$HOME/.daily/YYYY/MM/YYYY-MM-DD.md`. Generated file must pass validation against `plugins/edge-ic/references/TODO_FILE_FORMAT.md` before writing. If validation fails in `--dry-run` mode, display errors but continue; otherwise abort.
 7. **Generate backlog suggestions**
 8. **Display summary**
 
@@ -39,7 +39,7 @@ Automate the weekly wrap-up process by reviewing active work, gathering status u
 
 ### TODO File Format and Validation
 
-- TODO files use repo-relative path: `.daily/YYYY/MM/YYYY-MM-DD.md`
+- TODO files are stored at `$HOME/.daily/YYYY/MM/YYYY-MM-DD.md`
 - Files must conform to format defined in `plugins/edge-ic/references/TODO_FILE_FORMAT.md`
 - Validation is enforced for both read and write operations
 - Validation failures abort the operation (except in --dry-run mode, which displays errors and continues)

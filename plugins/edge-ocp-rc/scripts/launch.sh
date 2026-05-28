@@ -283,7 +283,7 @@ list_file() {
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue
         LINE_NUM=$((LINE_NUM + 1))
-        printf "%3d  %s\n" "$LINE_NUM" "$line"
+        printf "%3d  %s\\n" "$LINE_NUM" "$line"
     done < "$file"
 }
 

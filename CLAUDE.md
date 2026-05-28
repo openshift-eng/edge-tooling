@@ -38,6 +38,7 @@ Run `npx markdownlint-cli2 '**/*.md'` before committing to catch lint violations
 - [Prerequisites](docs/claude/prerequisites.md) — Required credentials and tools
 - [Daily Report Validation](docs/claude/daily-reports.md) — Slack report format rules and validation
 - [Maintaining This Documentation](docs/claude/maintenance.md) — Hook configuration for submodules and new tool detection
+- [MicroShift CI Plugin](docs/claude/microshift-ci.md) — CI triage workflow and skill reference
 
 ## Additional Resources
 

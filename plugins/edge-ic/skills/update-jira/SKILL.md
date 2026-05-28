@@ -20,7 +20,7 @@ Read today's TODO file and update related Jira issues with accomplishments, stat
 
 ## Instructions
 
-1. **Read today's TODO file**: `.daily/YYYY/MM/YYYY-MM-DD.md`
+1. **Read today's TODO file**: `$HOME/.daily/YYYY/MM/YYYY-MM-DD.md`
 2. **Identify Jira issues**: Extract ticket keys and accomplishment text
 3. **Prompt for updates** for each ticket
 4. **Execute updates using MCP tools**:

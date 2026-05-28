@@ -23,9 +23,11 @@ Extract the first token from `$ARGUMENTS`. Run
 none was provided). Parse the JSON and handle by `status`:
 
 - **`ok`** — use `project.name` as the target. Proceed to 1b.
-- **`no_argument`** — present the first 3 `alternatives` as
-  AskUserQuestion options plus "See all projects". Re-run with the
-  chosen name.
+- **`no_argument`** — check if a project was loaded earlier in this
+  conversation (e.g., via `/project:resume`). If so, use that project
+  name as the default: re-run the script with that name and proceed.
+  Otherwise, present the first 3 `alternatives` as AskUserQuestion
+  options plus "See all projects". Re-run with the chosen name.
 - **`not_found`** / **`out_of_range`** — show `error_message`, present
   `alternatives` as a picker, re-run with chosen name.
 - **`no_projects`** — show `error_message` and stop.

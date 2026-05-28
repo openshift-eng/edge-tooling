@@ -192,8 +192,31 @@ def query_resolved_bugs(version, branch=None, since_version=None,
                 "release_required": 0, "release_not_required": 0,
                 "needs_review": 0, "error": f"key lookup failed: {e}"}
 
-    # Merge: fixVersion bugs first, then commit-only bugs
-    all_bugs = fixversion_bugs + commit_bugs
+    # Source 3: commit-referenced bugs that Jira didn't return
+    # (security-restricted tickets, deleted, or inaccessible)
+    returned_keys = {b["key"] for b in commit_bugs}
+    missing_keys = commit_only_keys - returned_keys
+    restricted_bugs = [
+        {
+            "key": key,
+            "summary": "Restricted/inaccessible — review manually",
+            "status": "unknown",
+            "source": "commit",
+            "release_note": "",
+            "release_note_type": "",
+            "release_note_status": "",
+            "labels": [],
+            "release_action": "needs_review",
+        }
+        for key in sorted(missing_keys)
+    ]
+    if restricted_bugs:
+        logger.info("Found %d restricted OCPBUGS (not queryable): %s",
+                    len(restricted_bugs),
+                    ", ".join(b["key"] for b in restricted_bugs))
+
+    # Merge: fixVersion bugs first, then commit-only bugs, then restricted
+    all_bugs = fixversion_bugs + commit_bugs + restricted_bugs
     release_required = sum(1 for b in all_bugs if b["release_action"] == "release_required")
     needs_review = sum(1 for b in all_bugs if b["release_action"] == "needs_review")
     return {

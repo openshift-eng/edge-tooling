@@ -10,7 +10,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from precheck_xyz import (  # noqa: E402
     compute_recommendation, interpret_cves, format_text_short, _build_reason,
 )
-from lib.ocpbugs import _issue_to_dict  # noqa: E402
+from lib.ocpbugs import (  # noqa: E402
+    _issue_to_dict, query_resolved_bugs,
+    _RELEASE_NOTE_TEXT, _RELEASE_NOTE_TYPE, _RELEASE_NOTE_STATUS,
+)
 from precheck_ecrc import (  # noqa: E402
     parse_ecrc_version, format_text as ecrc_format_text,
 )
@@ -138,6 +141,42 @@ class TestInterpretCves(unittest.TestCase):
                             "id": "USHIFT-100",
                             "resolution": "",
                             "status": "In Progress",
+                        }
+                    }
+                },
+            }
+        }
+        result = interpret_cves(report)
+        self.assertEqual(result["impact"], "needs_review")
+
+    def test_cve_must_release_resolution_done(self):
+        report = {
+            "RHSA-2026:12345": {
+                "type": "image",
+                "cves": {
+                    "CVE-2026-9999": {
+                        "jira_ticket": {
+                            "id": "OCPBUGS-80721",
+                            "resolution": "Done",
+                            "status": "Closed",
+                        }
+                    }
+                },
+            }
+        }
+        result = interpret_cves(report)
+        self.assertEqual(result["impact"], "must_release")
+
+    def test_cve_needs_review_status_verified(self):
+        report = {
+            "RHSA-2026:12345": {
+                "type": "extras",
+                "cves": {
+                    "CVE-2026-8888": {
+                        "jira_ticket": {
+                            "id": "OCPBUGS-12345",
+                            "resolution": "",
+                            "status": "Verified",
                         }
                     }
                 },
@@ -620,6 +659,93 @@ class TestIssueToDict(unittest.TestCase):
         self.assertEqual(result["release_note"], "")
         self.assertEqual(result["release_note_type"], "")
         self.assertEqual(result["release_note_status"], "")
+
+
+class TestRestrictedBugsDetected(unittest.TestCase):
+    """Commit-referenced bugs that Jira can't return are flagged as restricted."""
+
+    def test_restricted_bug_reported_as_needs_review(self):
+        from unittest.mock import patch, MagicMock
+        mock_client = MagicMock()
+        mock_client.search_issues.return_value = []
+
+        with patch("lib.ocpbugs.create_jira_client", return_value=mock_client), \
+             patch("lib.ocpbugs.extract_bugs_from_commits",
+                   return_value={"OCPBUGS-80721"}):
+            result = query_resolved_bugs(
+                "4.21.16", branch="release-4.21",
+                since_version="4.21.11",
+            )
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["needs_review"], 1)
+        bug = result["bugs"][0]
+        self.assertEqual(bug["key"], "OCPBUGS-80721")
+        self.assertEqual(bug["release_action"], "needs_review")
+        self.assertIn("Restricted", bug["summary"])
+
+    def test_mix_of_found_and_restricted(self):
+        from unittest.mock import patch, MagicMock
+        from types import SimpleNamespace
+        mock_client = MagicMock()
+        found_issue = SimpleNamespace(
+            key="OCPBUGS-111",
+            fields=SimpleNamespace(
+                summary="visible bug", status="Verified",
+                labels=["release-required"],
+                **{_RELEASE_NOTE_TEXT: "", _RELEASE_NOTE_TYPE: None,
+                   _RELEASE_NOTE_STATUS: None},
+            ),
+        )
+        mock_client.search_issues.side_effect = [
+            [],
+            [found_issue],
+        ]
+
+        with patch("lib.ocpbugs.create_jira_client", return_value=mock_client), \
+             patch("lib.ocpbugs.extract_bugs_from_commits",
+                   return_value={"OCPBUGS-111", "OCPBUGS-99999"}):
+            result = query_resolved_bugs(
+                "4.21.16", branch="release-4.21",
+                since_version="4.21.11",
+            )
+
+        self.assertEqual(result["count"], 2)
+        keys = {b["key"] for b in result["bugs"]}
+        self.assertIn("OCPBUGS-111", keys)
+        self.assertIn("OCPBUGS-99999", keys)
+        restricted = [b for b in result["bugs"] if b["key"] == "OCPBUGS-99999"]
+        self.assertEqual(restricted[0]["release_action"], "needs_review")
+
+    def test_no_restricted_when_all_found(self):
+        from unittest.mock import patch, MagicMock
+        from types import SimpleNamespace
+        mock_client = MagicMock()
+        found_issue = SimpleNamespace(
+            key="OCPBUGS-111",
+            fields=SimpleNamespace(
+                summary="visible bug", status="Verified",
+                labels=["release-not-required"],
+                **{_RELEASE_NOTE_TEXT: "", _RELEASE_NOTE_TYPE: None,
+                   _RELEASE_NOTE_STATUS: None},
+            ),
+        )
+        mock_client.search_issues.side_effect = [
+            [],
+            [found_issue],
+        ]
+
+        with patch("lib.ocpbugs.create_jira_client", return_value=mock_client), \
+             patch("lib.ocpbugs.extract_bugs_from_commits",
+                   return_value={"OCPBUGS-111"}):
+            result = query_resolved_bugs(
+                "4.21.16", branch="release-4.21",
+                since_version="4.21.11",
+            )
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["needs_review"], 0)
+        self.assertEqual(result["release_not_required"], 1)
 
 
 class TestJqlSanitization(unittest.TestCase):

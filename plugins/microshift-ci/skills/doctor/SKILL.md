@@ -42,7 +42,7 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 2. Run the prepare script:
 
    ```text
-   bash plugins/microshift-ci/scripts/doctor.sh prepare --workdir <WORKDIR> <ARGUMENTS> --rebase
+   bash plugins/microshift-ci/scripts/doctor.sh prepare --component microshift --workdir <WORKDIR> <ARGUMENTS> --rebase
    ```
 
 3. The script deterministically:
@@ -75,7 +75,7 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 1. Run the graphs script (this is deterministic, no LLM needed):
 
    ```text
-   bash plugins/microshift-ci/scripts/doctor.sh graphs --workdir <WORKDIR>
+   bash plugins/microshift-ci/scripts/doctor.sh graphs --component microshift --workdir <WORKDIR>
    ```
 
 2. The script finds PCP archives in downloaded artifacts and generates PNG graphs at `<WORKDIR>/graphs/<build_id>/`:
@@ -155,7 +155,7 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 1. Run the finalize script:
 
    ```text
-   bash plugins/microshift-ci/scripts/doctor.sh finalize --workdir <WORKDIR> <ARGUMENTS>
+   bash plugins/microshift-ci/scripts/doctor.sh finalize --component microshift --workdir <WORKDIR> <ARGUMENTS>
    ```
 
 2. The script deterministically:
@@ -219,13 +219,13 @@ HTML report generated: <WORKDIR>/microshift-ci-doctor-report.html
 
 - **microshift-ci:prow-job**: Single job analysis (used by Step 2 agents)
 - **microshift-ci:create-bugs**: Bug correlation and creation (used in Step 3; can also be run with `--create` after this command)
-- **microshift-ci:doctor-refresh**: Re-run bug correlation and regenerate the HTML report after JIRA state changes
+- **microshift-ci:doctor-refresh**: Regenerate the HTML report from existing data (e.g., after `/microshift-ci:create-bugs --create`)
 
 ## Notes
 
 - **Deterministic scripts** handle: data collection, artifact download, aggregation, HTML generation
 - **LLM agents** handle: per-job root cause analysis (Step 2), Jira bug search and open bugs query (Step 3)
-- `/microshift-ci:doctor-refresh` re-queries JIRA and regenerates the HTML report. Use it after `/microshift-ci:create-bugs --create` or any JIRA state change
+- `/microshift-ci:doctor-refresh` regenerates the HTML report from existing data. Use it after `/microshift-ci:create-bugs --create` to include newly created bugs
 - All agents (all releases + PRs) are launched in a single parallel wave — no per-release agents
 - The `prepare` script downloads all artifacts upfront so prow-job agents use local paths (no redundant downloads)
 - The `finalize` script runs aggregation and HTML generation in one call

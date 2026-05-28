@@ -60,8 +60,14 @@ install_google_cloud_cli() {
 }
 
 install_python_tools() {
+    # Alias python to python3 if not already set for convenience
+    if ! command -v python >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+        ln -sf "$(command -v python3)" /usr/local/bin/python
+        echo "Created python symlink to python3."
+    fi
+
     echo "Installing Python package dependencies..."
-    pip install \
+    python3 -m pip install \
         'uv==0.11.6' \
         'matplotlib==3.9.4'
     echo "Python package dependencies installed."

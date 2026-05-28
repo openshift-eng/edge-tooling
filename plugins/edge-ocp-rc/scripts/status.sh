@@ -337,7 +337,7 @@ render_table() {
         grep -E $'^[0-9]+\t(FAIL|ABORT)\t' "$results_file" > "$display_file" 2>/dev/null || true
     fi
 
-    printf "%-3s %-12s %-80s %s\n" "#" "Status" "Job" "URL"
+    printf "%-3s %-12s %-80s %s\\n" "#" "Status" "Job" "URL"
     echo "    $(printf '%.0s-' {1..120})"
 
     if [[ -s "$display_file" ]]; then
@@ -345,12 +345,12 @@ render_table() {
             if $CLASSIFY && [[ -n "$classification" ]]; then
                 local pct_display
                 pct_display=$(printf '%.0f' "$pass_pct" 2>/dev/null || echo "?")
-                printf "%-3d %-12s %-20s %-70s %s\n" "$num" "$status" "${classification} (${pct_display}%)" "$job_name" "$url"
+                printf "%-3d %-12s %-20s %-70s %s\\n" "$num" "$status" "${classification} (${pct_display}%)" "$job_name" "$url"
             else
-                printf "%-3d %-12s %-80s %s\n" "$num" "$status" "$job_name" "$url"
+                printf "%-3d %-12s %-80s %s\\n" "$num" "$status" "$job_name" "$url"
             fi
             if $FETCH_LOGS && [[ -n "$reason" ]]; then
-                printf "                 → %s\n" "$reason"
+                printf "                 → %s\\n" "$reason"
             fi
         done < "$display_file"
     elif $FAILED_ONLY; then
