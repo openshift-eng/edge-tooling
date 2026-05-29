@@ -75,7 +75,7 @@ def render_table(bugs):
             note = " (CVE tracker)"
         lines.append(
             f"| {b['key']} | {b['version']} | {typ} | "
-            f"{b['status']}{note} | {b['release_action']} | {b['summary'][:80]} |"
+            f"{b['status']}{note} | {b['release_action']} | {b['summary'][:80].replace('|', '\\|').replace(chr(10), ' ')} |"
         )
 
     return "\n".join(lines)

@@ -14,7 +14,7 @@ if [[ ! -d "${ENVDIR}" ]]; then
 fi
 "${ENVDIR}/bin/python3" -m pip install -r "${SCRIPTDIR}/requirements.txt" >&2
 
-CMD="${1:?Usage: precheck.sh <xyz|nightly|ecrc> [args...]}"
+CMD="${1:?Usage: precheck.sh <xyz|nightly|ecrc|enrich> [args...]}"
 shift
 
 case "${CMD}" in
