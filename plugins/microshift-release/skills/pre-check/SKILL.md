@@ -25,7 +25,7 @@ When a time range is provided (e.g., "this week"), it queries Red Hat Product Pa
 | Requirement | Needed for | Mandatory? |
 |---|---|---|
 | VPN | Brew RPM checks (nightly, EC/RC), advisory report | Yes for nightly/ecrc — xyz degrades gracefully (skips advisory, 90-day rule) |
-| Atlassian MCP | OCPBUGS enrichment (restricted/security bugs) | Yes, to do analizy OCPBUGS resolution |
+| Atlassian MCP | OCPBUGS enrichment, ART ticket queries | Yes — required to analyze OCPBUGS resolution and release action |
 | `GITLAB_API_TOKEN` | Advisory report for 4.20+ (shipment MR data) | No — advisory skipped for 4.20+ without it |
 | Product Pages MCP | Time range lookups (e.g., "this week") | Only when using time ranges — not needed for explicit versions |
 
@@ -131,9 +131,39 @@ Display the script output **verbatim** — do not reformat, add tables, or chang
 
 **OCPBUGS follow-up**: If any version shows OCPBUGS in the output (e.g., `1 OCPBUGS`), automatically re-run the command with `--verbose` to list the specific bugs. Only do this once — do not re-run if `--verbose` was already passed.
 
-**OCPBUGS enrichment**: The script auto-enriches OCPBUGS from Jira when `ATLASSIAN_EMAIL` and `ATLASSIAN_API_TOKEN` are set. Bugs show real summary, status, and release action labels. Without credentials, bugs appear as "Pending Jira lookup" — no MCP follow-up is needed.
+### Step 6: Enrich OCPBUGS via MCP
 
-### Step 6: Handle Errors
+After displaying the output (including any `--verbose` re-run), if any OCPBUGS appeared in the results:
+
+1. **Collect OCPBUGS keys**: Extract all unique `OCPBUGS-XXXXX` keys from the output (they appear in the Resolved OCPBUGS table or the one-line summaries).
+2. **Fetch each bug via MCP**: For each unique key, call `mcp__atlassian__getJiraIssue` with:
+   - `cloudId`: `"issues.redhat.com"`
+   - `issueIdOrKey`: the OCPBUGS key (e.g., `"OCPBUGS-12345"`)
+   - `fields`: `["summary", "status", "labels", "issuetype", "priority"]`
+   - `responseContentFormat`: `"markdown"`
+   Make all `getJiraIssue` calls **in parallel** (multiple tool calls in one message).
+3. **Build enriched JSON**: For each successfully fetched bug, build a JSON object:
+   ```json
+   {
+     "key": "OCPBUGS-12345",
+     "version": "4.21",
+     "summary": "<from MCP response: fields.summary>",
+     "status": "<from MCP response: fields.status.name>",
+     "labels": ["<from MCP response: fields.labels array>"],
+     "issuetype": "<from MCP response: fields.issuetype.name>",
+     "priority": "<from MCP response: fields.priority.name>"
+   }
+   ```
+   The `version` field is the minor version (e.g., `"4.21"`) from the evaluation that referenced the bug. If a bug appears in multiple versions, include one entry per version.
+4. **Render enrichment table**: Pipe the JSON array through the enrichment script:
+   ```bash
+   echo '<json_array>' | bash ${SCRIPTS_DIR}/precheck.sh enrich
+   ```
+5. **Display the enrichment output** after the main precheck output. This shows real summaries, statuses, release actions (release-required/release-not-required/needs-review), and updated recommendations.
+
+If `mcp__atlassian__getJiraIssue` is not available, skip enrichment and note that the Atlassian MCP is required for OCPBUGS analysis.
+
+### Step 8: Handle Errors
 
 If the script exits non-zero, display stderr and suggest:
 - VPN not connected → connect to VPN (Brew requires it)
@@ -166,5 +196,5 @@ If the script exits non-zero, display stderr and suggest:
 - Read-only — does NOT create tickets or modify external state
 - Scripts support `--json` for raw JSON output when called directly (e.g., `bash ${SCRIPTS_DIR}/precheck.sh xyz 4.21.10 --json`)
 - `--verbose` works for all types: detailed tables for xyz, NVR/nightly names for nightly, next versions for EC/RC
-- OCPBUGS lookups use Atlassian MCP (OAuth) — no PAT env vars needed
+- OCPBUGS enrichment uses Atlassian MCP (OAuth) — no PAT env vars needed; the script discovers bug keys from git commits, and the skill enriches them via `getJiraIssue`
 - VPN required for Brew and errata access

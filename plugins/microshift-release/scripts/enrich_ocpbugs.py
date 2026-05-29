@@ -38,21 +38,18 @@ def classify_bug(bug):
     if has_required and not has_not_required:
         release_action = "release_required"
     elif has_not_required and not has_required:
-        release_not_required = True
         release_action = "release_not_required"
     else:
         release_action = "needs_review"
 
     is_cve_tracker = issuetype == "Vulnerability"
     is_resolved = status in RESOLVED_STATUSES
-    is_unresolved = not is_resolved
 
     return {
         **bug,
         "release_action": release_action,
         "is_cve_tracker": is_cve_tracker,
         "is_resolved": is_resolved,
-        "is_unresolved": is_unresolved,
     }
 
 
@@ -70,7 +67,7 @@ def render_table(bugs):
         if priority and priority not in ("Undefined", "") and typ == "Bug":
             typ = f"Bug ({priority})"
         note = ""
-        if b["is_unresolved"]:
+        if not b["is_resolved"]:
             note = " (unresolved)"
         if b["is_cve_tracker"]:
             note = " (CVE tracker)"
@@ -100,7 +97,7 @@ def render_recommendations(bugs):
         vbugs = by_version[version]
 
         resolved_bugs = [b for b in vbugs if b["is_resolved"]]
-        unresolved_bugs = [b for b in vbugs if b["is_unresolved"]]
+        unresolved_bugs = [b for b in vbugs if not b["is_resolved"]]
         cve_trackers = [b for b in vbugs if b["is_cve_tracker"]]
         real_bugs = [b for b in resolved_bugs if not b["is_cve_tracker"]]
 

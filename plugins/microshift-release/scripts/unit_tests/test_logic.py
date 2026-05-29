@@ -590,14 +590,13 @@ class TestBuildReason(unittest.TestCase):
 
 
 class TestCommitBugScanning(unittest.TestCase):
-    """Commit-referenced bugs: unenriched without creds, enriched with."""
+    """Commit-referenced bugs: always unenriched (MCP enriches at skill level)."""
 
-    def test_bugs_without_jira_creds(self):
+    def test_bugs_unenriched(self):
         from unittest.mock import patch
 
         with patch("lib.ocpbugs.extract_bugs_from_commits",
-                   return_value={"OCPBUGS-80721", "OCPBUGS-12345"}), \
-             patch.dict(os.environ, {}, clear=True):
+                   return_value={"OCPBUGS-80721", "OCPBUGS-12345"}):
             result = query_resolved_bugs(
                 "4.21.16", branch="release-4.21",
                 since_version="4.21.11",
@@ -605,108 +604,15 @@ class TestCommitBugScanning(unittest.TestCase):
 
         self.assertEqual(result["count"], 2)
         self.assertEqual(result["needs_review"], 2)
+        self.assertEqual(result["release_required"], 0)
+        self.assertEqual(result["release_not_required"], 0)
         keys = {b["key"] for b in result["bugs"]}
         self.assertIn("OCPBUGS-80721", keys)
         self.assertIn("OCPBUGS-12345", keys)
         for bug in result["bugs"]:
             self.assertEqual(bug["summary"], "Pending Jira lookup")
             self.assertEqual(bug["release_action"], "needs_review")
-
-    def test_bugs_with_jira_enrichment(self):
-        from unittest.mock import patch, Mock
-
-        def mock_get(url, **kwargs):
-            resp = Mock()
-            resp.status_code = 200
-            resp.raise_for_status = Mock()
-            if "OCPBUGS-100" in url:
-                resp.json.return_value = {"fields": {
-                    "summary": "Fix widget crash",
-                    "status": {"name": "Closed"},
-                    "labels": ["release-required"],
-                    "issuetype": {"name": "Bug"},
-                    "priority": {"name": "Major"},
-                }}
-            elif "OCPBUGS-200" in url:
-                resp.json.return_value = {"fields": {
-                    "summary": "Update docs",
-                    "status": {"name": "Closed"},
-                    "labels": ["release-not-required"],
-                    "issuetype": {"name": "Bug"},
-                    "priority": {"name": "Minor"},
-                }}
-            elif "OCPBUGS-300" in url:
-                resp.json.return_value = {"fields": {
-                    "summary": "Investigate flake",
-                    "status": {"name": "MODIFIED"},
-                    "labels": [],
-                    "issuetype": {"name": "Bug"},
-                    "priority": {"name": "Normal"},
-                }}
-            return resp
-
-        env = {"ATLASSIAN_EMAIL": "test@example.com",
-               "ATLASSIAN_API_TOKEN": "fake-token"}
-
-        with patch("lib.ocpbugs.extract_bugs_from_commits",
-                   return_value={"OCPBUGS-100", "OCPBUGS-200", "OCPBUGS-300"}), \
-             patch("lib.ocpbugs.requests.get", side_effect=mock_get), \
-             patch.dict(os.environ, env, clear=True):
-            result = query_resolved_bugs(
-                "4.21.16", branch="release-4.21",
-                since_version="4.21.11",
-            )
-
-        self.assertEqual(result["count"], 3)
-        self.assertEqual(result["release_required"], 1)
-        self.assertEqual(result["release_not_required"], 1)
-        self.assertEqual(result["needs_review"], 1)
-
-        by_key = {b["key"]: b for b in result["bugs"]}
-        self.assertEqual(by_key["OCPBUGS-100"]["summary"], "Fix widget crash")
-        self.assertEqual(by_key["OCPBUGS-100"]["release_action"], "release_required")
-        self.assertEqual(by_key["OCPBUGS-200"]["release_action"], "release_not_required")
-        self.assertEqual(by_key["OCPBUGS-300"]["release_action"], "needs_review")
-
-    def test_bugs_jira_partial_failure(self):
-        from unittest.mock import patch, Mock
-        import requests as req
-
-        def mock_get(url, **kwargs):
-            if "OCPBUGS-100" in url:
-                resp = Mock()
-                resp.status_code = 200
-                resp.raise_for_status = Mock()
-                resp.json.return_value = {"fields": {
-                    "summary": "Real bug",
-                    "status": {"name": "Closed"},
-                    "labels": ["release-required"],
-                    "issuetype": {"name": "Bug"},
-                    "priority": {"name": "Major"},
-                }}
-                return resp
-            raise req.RequestException("connection timeout")
-
-        env = {"ATLASSIAN_EMAIL": "test@example.com",
-               "ATLASSIAN_API_TOKEN": "fake-token"}
-
-        with patch("lib.ocpbugs.extract_bugs_from_commits",
-                   return_value={"OCPBUGS-100", "OCPBUGS-999"}), \
-             patch("lib.ocpbugs.requests.get", side_effect=mock_get), \
-             patch.dict(os.environ, env, clear=True):
-            result = query_resolved_bugs(
-                "4.21.16", branch="release-4.21",
-                since_version="4.21.11",
-            )
-
-        self.assertEqual(result["count"], 2)
-        self.assertEqual(result["release_required"], 1)
-        self.assertEqual(result["needs_review"], 1)
-
-        by_key = {b["key"]: b for b in result["bugs"]}
-        self.assertEqual(by_key["OCPBUGS-100"]["summary"], "Real bug")
-        self.assertEqual(by_key["OCPBUGS-100"]["release_action"], "release_required")
-        self.assertEqual(by_key["OCPBUGS-999"]["summary"], "Pending Jira lookup")
+            self.assertEqual(bug["source"], "commit")
 
     def test_no_bugs_found(self):
         from unittest.mock import patch
