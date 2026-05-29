@@ -131,21 +131,7 @@ Display the script output **verbatim** — do not reformat, add tables, or chang
 
 **OCPBUGS follow-up**: If any version shows OCPBUGS in the output (e.g., `1 OCPBUGS`), automatically re-run the command with `--verbose` to list the specific bugs. Only do this once — do not re-run if `--verbose` was already passed.
 
-**OCPBUGS MCP enrichment**: After displaying verbose output, check for any bugs marked `Pending MCP lookup` in the Resolved OCPBUGS table. For each such bug:
-
-1. Call `mcp__atlassian__getJiraIssue` with `cloudId="issues.redhat.com"`, `issueIdOrKey=<bug key>`, `fields=["summary", "status", "labels", "priority", "issuetype"]`, `responseContentFormat="markdown"`. Make all calls in **parallel**.
-2. Build a JSON array from the MCP responses with this structure per bug:
-   ```json
-   {"key": "OCPBUGS-XXXXX", "version": "4.XX", "summary": "...", "status": "Closed", "labels": ["release-required"], "issuetype": "Bug", "priority": "Major"}
-   ```
-   The `version` is the minor stream from the precheck output (e.g., `"4.21"`). The `issuetype` is the issue type name (e.g., `"Bug"` or `"Vulnerability"`).
-3. Pipe the JSON array to the enrich script:
-   ```bash
-   echo '<json>' | bash ${SCRIPTS_DIR}/precheck.sh enrich
-   ```
-4. Display the script output verbatim.
-
-If the `mcp__atlassian__getJiraIssue` tool is not available, skip this step silently.
+**OCPBUGS enrichment**: The script auto-enriches OCPBUGS from Jira when `ATLASSIAN_EMAIL` and `ATLASSIAN_API_TOKEN` are set. Bugs show real summary, status, and release action labels. Without credentials, bugs appear as "Pending Jira lookup" — no MCP follow-up is needed.
 
 ### Step 6: Handle Errors
 
