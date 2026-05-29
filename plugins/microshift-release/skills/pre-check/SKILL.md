@@ -3,7 +3,7 @@ name: microshift-release:pre-check
 argument-hint: [Z|X|Y|RC|EC|nightly] [version|time-range...] [--verbose]
 description: Check OCP release schedule, verify availability, evaluate z-stream need, or check nightly build gaps
 user-invocable: true
-allowed-tools: Bash, mcp__productpages__search_entities, mcp__productpages__browse_schedule, mcp__productpages__list_entities
+allowed-tools: Bash, mcp__productpages__search_entities, mcp__productpages__browse_schedule, mcp__productpages__list_entities, mcp__atlassian__getJiraIssue, mcp__atlassian__searchJiraIssuesUsingJql
 ---
 
 # microshift-release:pre-check
@@ -25,8 +25,7 @@ When a time range is provided (e.g., "this week"), it queries Red Hat Product Pa
 | Requirement | Needed for | Mandatory? |
 |---|---|---|
 | VPN | Brew RPM checks (nightly, EC/RC), advisory report | Yes for nightly/ecrc — xyz degrades gracefully (skips advisory, 90-day rule) |
-| `ATLASSIAN_API_TOKEN` | ART Jira queries, advisory report, OCPBUGS check | No — scripts degrade gracefully, but advisory/CVE/OCPBUGS analysis is skipped |
-| `ATLASSIAN_EMAIL` | ART Jira queries, advisory report, OCPBUGS check | No — same as above |
+| Atlassian MCP | OCPBUGS enrichment (restricted/security bugs) | Yes, to do analizy OCPBUGS resolution |
 | `GITLAB_API_TOKEN` | Advisory report for 4.20+ (shipment MR data) | No — advisory skipped for 4.20+ without it |
 | Product Pages MCP | Time range lookups (e.g., "this week") | Only when using time ranges — not needed for explicit versions |
 
@@ -83,21 +82,42 @@ claude mcp add productpages -s user --transport http https://productpages.redhat
 Then restart Claude Code and re-run the command.
 
 Alternatively, pass explicit versions instead of a time range:
+```
   /microshift-release:pre-check 4.19.X 4.20.X 4.21.X
 ```
 
 If no versions found in the schedule, report "No OCP releases scheduled in <range>."
 
-### Step 3: Run the Script
+### Step 3: Query ART Tickets via MCP
+
+Before running the script, query ART Jira for in-progress release tickets so the script can show ART ticket status in the Release Schedule table.
+
+1. Call `mcp__atlassian__searchJiraIssuesUsingJql` with:
+   - `cloudId`: `"issues.redhat.com"`
+   - `jql`: `project = ART AND summary ~ "Release" AND status = "In Progress" ORDER BY duedate ASC`
+   - `fields`: `["summary", "status", "duedate"]`
+   - `maxResults`: `50`
+2. From the results, build a JSON array:
+   ```json
+   [{"key": "ART-XXXXX", "summary": "Release 4.21.18 [2026-Jun-03]", "status": "In Progress", "due_date": "2026-06-03"}]
+   ```
+3. Write the JSON to a temp file and set `ART_TICKETS_JSON` env var:
+   ```bash
+   echo '<json>' > /tmp/art_tickets.json
+   ```
+
+If `mcp__atlassian__searchJiraIssuesUsingJql` is not available, skip this step — the script degrades gracefully (shows `None` for ART tickets).
+
+### Step 4: Run the Script
 
 Map each release type to the corresponding `precheck.sh` subcommand and run via Bash:
 
 | Release Type | Command |
 |---|---|
-| `Z`, `X`, `Y` (default) | `bash ${SCRIPTS_DIR}/precheck.sh xyz [versions...]` |
+| `Z`, `X`, `Y` (default) | `ART_TICKETS_JSON=/tmp/art_tickets.json bash ${SCRIPTS_DIR}/precheck.sh xyz [versions...]` |
 | `nightly` | `bash ${SCRIPTS_DIR}/precheck.sh nightly [version]` |
-| `EC` | `bash ${SCRIPTS_DIR}/precheck.sh ecrc EC [version]` |
-| `RC` | `bash ${SCRIPTS_DIR}/precheck.sh ecrc RC [version]` |
+| `EC` | `ART_TICKETS_JSON=/tmp/art_tickets.json bash ${SCRIPTS_DIR}/precheck.sh ecrc EC [version]` |
+| `RC` | `ART_TICKETS_JSON=/tmp/art_tickets.json bash ${SCRIPTS_DIR}/precheck.sh ecrc RC [version]` |
 
 **IMPORTANT**: Only append `--verbose` to the command if the user explicitly passed `--verbose` in their arguments. Do NOT add it by default.
 
@@ -105,17 +125,33 @@ Stderr contains progress messages — only display it if the script exits non-ze
 
 **Multiple types** (e.g., `nightly EC RC`): Run each command as a separate Bash call in parallel.
 
-### Step 4: Display Output
+### Step 5: Display Output
 
 Display the script output **verbatim** — do not reformat, add tables, or change the layout. The scripts produce deterministic pre-formatted text. Do NOT add any commentary, explanation, or summary after the output.
 
 **OCPBUGS follow-up**: If any version shows OCPBUGS in the output (e.g., `1 OCPBUGS`), automatically re-run the command with `--verbose` to list the specific bugs. Only do this once — do not re-run if `--verbose` was already passed.
 
-### Step 5: Handle Errors
+**OCPBUGS MCP enrichment**: After displaying verbose output, check for any bugs marked `Pending MCP lookup` in the Resolved OCPBUGS table. For each such bug:
+
+1. Call `mcp__atlassian__getJiraIssue` with `cloudId="issues.redhat.com"`, `issueIdOrKey=<bug key>`, `fields=["summary", "status", "labels", "priority", "issuetype"]`, `responseContentFormat="markdown"`. Make all calls in **parallel**.
+2. Build a JSON array from the MCP responses with this structure per bug:
+   ```json
+   {"key": "OCPBUGS-XXXXX", "version": "4.XX", "summary": "...", "status": "Closed", "labels": ["release-required"], "issuetype": "Bug", "priority": "Major"}
+   ```
+   The `version` is the minor stream from the precheck output (e.g., `"4.21"`). The `issuetype` is the issue type name (e.g., `"Bug"` or `"Vulnerability"`).
+3. Pipe the JSON array to the enrich script:
+   ```bash
+   echo '<json>' | bash ${SCRIPTS_DIR}/precheck.sh enrich
+   ```
+4. Display the script output verbatim.
+
+If the `mcp__atlassian__getJiraIssue` tool is not available, skip this step silently.
+
+### Step 6: Handle Errors
 
 If the script exits non-zero, display stderr and suggest:
 - VPN not connected → connect to VPN (Brew requires it)
-- Missing env vars → set `ATLASSIAN_API_TOKEN`, `ATLASSIAN_EMAIL`, `GITLAB_API_TOKEN` (for 4.20+)
+- Missing env vars → set `GITLAB_API_TOKEN` (for 4.20+ advisory reports)
 
 ## Examples
 
@@ -144,5 +180,5 @@ If the script exits non-zero, display stderr and suggest:
 - Read-only — does NOT create tickets or modify external state
 - Scripts support `--json` for raw JSON output when called directly (e.g., `bash ${SCRIPTS_DIR}/precheck.sh xyz 4.21.10 --json`)
 - `--verbose` works for all types: detailed tables for xyz, NVR/nightly names for nightly, next versions for EC/RC
-- Jira enrichment is optional (scripts handle gracefully without credentials)
+- OCPBUGS lookups use Atlassian MCP (OAuth) — no PAT env vars needed
 - VPN required for Brew and errata access

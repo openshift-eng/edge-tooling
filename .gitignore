@@ -10,3 +10,5 @@ markdownlint-cli2-junit.xml
 markdownlint-cli2-results.json
 .env
 .claude/**/*.lock
+node_modules/
+_output/

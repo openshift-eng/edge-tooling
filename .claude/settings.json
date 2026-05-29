@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "scripts/lint-markdown.sh",
+            "command": "\"$(git rev-parse --show-toplevel)/scripts/lint-markdown.sh\"",
             "timeout": 15,
             "statusMessage": "Checking markdown files..."
           }
@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "scripts/lint-skills.py --hook",
+            "command": "\"$(git rev-parse --show-toplevel)/scripts/lint-skills.py\" --hook",
             "timeout": 15,
             "statusMessage": "Checking skill quality..."
           }

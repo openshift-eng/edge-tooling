@@ -38,18 +38,11 @@ def run_advisory_report(version, repo_root):
         dict: Parsed JSON report, or {"error": "...", "skipped": True} on failure.
     """
     # Check prerequisites
-    missing = []
-    for var in ["ATLASSIAN_API_TOKEN", "ATLASSIAN_EMAIL"]:
-        if not os.environ.get(var, "").strip():
-            missing.append(var)
     parts = version.split(".")
     if len(parts) >= 2 and parts[1].isdigit():
         minor_int = int(parts[1])
         if minor_int >= 20 and not os.environ.get("GITLAB_API_TOKEN", "").strip():
-            missing.append("GITLAB_API_TOKEN")
-
-    if missing:
-        return {"error": f"Missing env vars: {', '.join(missing)}", "skipped": True}
+            return {"error": "Missing env var: GITLAB_API_TOKEN", "skipped": True}
 
     # Check VPN
     if not brew.check_vpn():

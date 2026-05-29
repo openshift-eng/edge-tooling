@@ -27,9 +27,12 @@ case "${CMD}" in
     ecrc)
         "${ENVDIR}/bin/python3" "${SCRIPTDIR}/precheck_ecrc.py" "$@"
         ;;
+    enrich)
+        "${ENVDIR}/bin/python3" "${SCRIPTDIR}/enrich_ocpbugs.py" "$@"
+        ;;
     *)
         echo "Unknown command: ${CMD}" >&2
-        echo "Usage: precheck.sh <xyz|nightly|ecrc> [args...]" >&2
+        echo "Usage: precheck.sh <xyz|nightly|ecrc|enrich> [args...]" >&2
         exit 1
         ;;
 esac
