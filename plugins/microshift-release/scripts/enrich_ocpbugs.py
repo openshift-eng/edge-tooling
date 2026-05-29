@@ -35,15 +35,17 @@ def classify_bug(bug):
     has_required = "release-required" in labels
     has_not_required = "release-not-required" in labels
 
-    if has_required and not has_not_required:
+    is_cve_tracker = issuetype == "Vulnerability"
+    is_resolved = status in RESOLVED_STATUSES
+
+    if not is_resolved:
+        release_action = "release_not_required"
+    elif has_required and not has_not_required:
         release_action = "release_required"
     elif has_not_required and not has_required:
         release_action = "release_not_required"
     else:
         release_action = "needs_review"
-
-    is_cve_tracker = issuetype == "Vulnerability"
-    is_resolved = status in RESOLVED_STATUSES
 
     return {
         **bug,
