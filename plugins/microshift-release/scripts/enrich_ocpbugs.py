@@ -2,7 +2,7 @@
 """Enrich OCPBUGS with Jira data from Atlassian MCP.
 
 Reads a JSON array on stdin with bug details fetched via MCP, processes them
-(determines release_action, filters unresolved bugs, identifies CVE trackers),
+(determines release_action, flags unresolved bugs, identifies CVE trackers),
 and outputs an enriched markdown table with updated recommendations.
 
 Input JSON format (array of objects):
@@ -58,7 +58,7 @@ def classify_bug(bug):
 def render_table(bugs):
     """Render enriched OCPBUGS markdown table."""
     lines = []
-    lines.append("## Resolved OCPBUGS (via Atlassian MCP)")
+    lines.append("## OCPBUGS (via Atlassian MCP)")
     lines.append("")
     lines.append("| Bug | Version | Type | Status | Release Action | Summary |")
     lines.append("|-----|---------|------|--------|----------------|---------|")
@@ -131,6 +131,10 @@ def main():
         bugs = json.load(sys.stdin)
     except json.JSONDecodeError as e:
         print(f"Error: invalid JSON input: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not isinstance(bugs, list):
+        print(f"Error: expected JSON array, got {type(bugs).__name__}", file=sys.stderr)
         sys.exit(1)
 
     classified = [classify_bug(b) for b in bugs]

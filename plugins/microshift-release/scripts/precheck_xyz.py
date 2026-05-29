@@ -376,7 +376,7 @@ def evaluate_version(version, lifecycle_data, repo_root):
     result["commits"] = len(commit_list)
     result["commit_list"] = commit_list
 
-    # 4b: OCPBUGS resolved bugs (fixVersion + commit message references)
+    # 4b: OCPBUGS references from commit messages (enriched via MCP at skill level)
     logger.info("Checking resolved OCPBUGS for %s...", version)
     try:
         result["ocpbugs"] = ocpbugs.query_resolved_bugs(

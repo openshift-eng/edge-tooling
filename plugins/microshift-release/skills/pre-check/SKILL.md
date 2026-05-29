@@ -163,7 +163,7 @@ After displaying the output (including any `--verbose` re-run), if any OCPBUGS a
 
 If `mcp__atlassian__getJiraIssue` is not available, skip enrichment and note that the Atlassian MCP is required for OCPBUGS analysis.
 
-### Step 8: Handle Errors
+### Step 7: Handle Errors
 
 If the script exits non-zero, display stderr and suggest:
 - VPN not connected → connect to VPN (Brew requires it)
