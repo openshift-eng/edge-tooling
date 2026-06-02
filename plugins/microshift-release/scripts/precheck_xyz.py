@@ -715,6 +715,8 @@ def main():
     parser.add_argument("--json", action="store_true", dest="json_output",
                         help="Output raw JSON instead of formatted text")
     args = parser.parse_args()
+    if args.days_ahead < 1:
+        parser.error("--days-ahead must be >= 1")
 
     # Step 1: Fetch lifecycle data
     logger.info("Fetching lifecycle data...")
