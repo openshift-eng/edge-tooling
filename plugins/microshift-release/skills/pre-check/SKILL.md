@@ -74,6 +74,7 @@ If a time range is present instead of explicit versions, query Product Pages to 
 
 If the `mcp__productpages__list_entities` tool is not available (MCP not loaded), stop and show this message verbatim:
 
+````text
 The Product Pages MCP is required for time-range lookups but is not enabled in this session.
 
 To enable it, run this command:
@@ -85,12 +86,12 @@ claude mcp add productpages -s user --transport http https://productpages.redhat
 Then restart Claude Code and re-run the command.
 
 Alternatively, pass explicit versions instead of a time range:
-
-```bash
+```
   /microshift-release:pre-check 4.19.X 4.20.X 4.21.X
 ```
+````
 
-If no versions found in the schedule, report "No OCP releases scheduled in (range)."
+If no versions found in the schedule, report "No OCP releases scheduled in \<range\>."
 
 ### Step 3: Query ART Tickets via MCP
 
@@ -102,10 +103,13 @@ Before running the script, query ART Jira for in-progress release tickets so the
    - `fields`: `["summary", "status", "duedate"]`
    - `maxResults`: `50`
 2. From the results, build a JSON array:
+
    ```json
    [{"key": "ART-XXXXX", "summary": "Release 4.21.18 [2026-Jun-03]", "status": "In Progress", "due_date": "2026-06-03"}]
    ```
+
 3. Write the JSON to a temp file and set `ART_TICKETS_JSON` env var:
+
    ```bash
    echo '<json>' > /tmp/art_tickets.json
    ```
@@ -147,6 +151,7 @@ After displaying the output (including any `--verbose` re-run), if any OCPBUGS a
    - `responseContentFormat`: `"markdown"`
    Make all `getJiraIssue` calls **in parallel** (multiple tool calls in one message).
 3. **Build enriched JSON**: For each successfully fetched bug, build a JSON object:
+
    ```json
    {
      "key": "OCPBUGS-12345",
@@ -158,11 +163,14 @@ After displaying the output (including any `--verbose` re-run), if any OCPBUGS a
      "priority": "<from MCP response: fields.priority.name>"
    }
    ```
+
    The `version` field is the minor version (e.g., `"4.21"`) from the evaluation that referenced the bug. If a bug appears in multiple versions, include one entry per version.
 4. **Render enrichment table**: Pipe the JSON array through the enrichment script:
+
    ```bash
    echo '<json_array>' | bash ${SCRIPTS_DIR}/precheck.sh enrich
    ```
+
 5. **Display the enrichment output** after the main precheck output. This shows real summaries, statuses, release actions (release-required/release-not-required/needs-review), and updated recommendations.
 
 If `mcp__atlassian__getJiraIssue` is not available, skip enrichment and note that the Atlassian MCP is required for OCPBUGS analysis.
