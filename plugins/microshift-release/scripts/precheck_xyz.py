@@ -708,6 +708,8 @@ def format_text_full(output):
 def main():
     parser = argparse.ArgumentParser(description="MicroShift X/Y/Z release evaluation")
     parser.add_argument("versions", nargs="*", help="X.Y or X.Y.Z versions")
+    parser.add_argument("--days-ahead", type=int, default=7,
+                        help="Look ahead N days for ART releases (default: 7)")
     parser.add_argument("--verbose", action="store_true",
                         help="Show detailed tables instead of one-line summary")
     parser.add_argument("--json", action="store_true", dest="json_output",
@@ -748,9 +750,9 @@ def main():
     if args.versions:
         versions = expand_versions(args.versions, lifecycle_data)
     else:
-        # No versions specified: query ART Jira for releases due within 7 days
-        logger.info("Querying ART Jira for releases due within 7 days...")
-        art_tickets = art_jira.query_art_releases_due(days_ahead=7)
+        logger.info("Querying ART Jira for releases due within %d days...",
+                    args.days_ahead)
+        art_tickets = art_jira.query_art_releases_due(days_ahead=args.days_ahead)
         versions = []
         for ticket in art_tickets:
             v = ticket["version"]
@@ -758,7 +760,7 @@ def main():
             if lifecycle.is_version_active(minor, lifecycle_data):
                 versions.append(v)
         if not versions:
-            logger.info("No ART releases due within 7 days")
+            logger.info("No ART releases due within %d days", args.days_ahead)
 
     # Filter out EOL versions (auto-discovered only; explicit versions always evaluated)
     if not args.versions:
