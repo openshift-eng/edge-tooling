@@ -5,7 +5,7 @@ Evaluates whether MicroShift should participate in upcoming OCP X, Y, or Z
 releases by checking lifecycle status, OCP availability, advisory CVEs,
 code changes, and the 90-day rule.
 
-Usage: precheck_xyz.py [version...] [--verbose]
+Usage: precheck_xyz.py [version...] [--days-ahead N] [--verbose] [--json]
 """
 
 import argparse

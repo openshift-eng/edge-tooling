@@ -37,9 +37,9 @@ When a time range is provided (e.g., "this week"), it queries ART Jira for OCP r
 - `version` (optional): Specific version (e.g., `4.19.27`) or minor stream (e.g., `4.21`)
 - `time-range` (optional): Natural language time range instead of explicit versions. Detected by keywords like:
   - `today`, `tomorrow`
-  - `this week`, `next week`, `last week`
+  - `this week`, `next week`
   - `next 3 days`, `next 7 days`
-  - `April`, `this month`
+  - `this month`
 - `--verbose` (optional): Show extra detail (tables for xyz, NVR/nightly names for nightly, next versions for EC/RC).
 
 ## Scripts Directory
@@ -83,7 +83,7 @@ Map each release type to the corresponding `precheck.sh` subcommand and run via 
 
 | Release Type | Command |
 |---|---|
-| `Z`, `X`, `Y` (default) | `bash ${SCRIPTS_DIR}/precheck.sh xyz [versions...]` |
+| `Z`, `X`, `Y` (default) | `bash ${SCRIPTS_DIR}/precheck.sh xyz [--days-ahead N] [versions...]` |
 | `nightly` | `bash ${SCRIPTS_DIR}/precheck.sh nightly [version]` |
 | `EC` | `bash ${SCRIPTS_DIR}/precheck.sh ecrc EC [version]` |
 | `RC` | `bash ${SCRIPTS_DIR}/precheck.sh ecrc RC [version]` |
