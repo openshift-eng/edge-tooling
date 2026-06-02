@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 set -euo pipefail
 
 # Download CI Doctor analysis artifacts from a completed prow job.
@@ -20,6 +20,8 @@ set -euo pipefail
 
 WORKDIR_BASE="/tmp"
 ARTIFACTS_SUBPATH="artifacts/microshift-ci-doctor/openshift-edge-tooling-microshift-ci-doctor/artifacts"
+DL_ERR=$(mktemp)
+trap 'rm -f "${DL_ERR}"' EXIT
 
 url_to_gcs() {
     echo "$1" | sed \
@@ -115,22 +117,17 @@ main() {
     echo "" >&2
     echo "=== Downloading artifacts ===" >&2
 
-    local dl_err
-    dl_err=$(mktemp)
-
     # gsutil cp -r .../artifacts/ workdir/ → workdir/artifacts/...
     # so we download into a temp parent and move files up
     local dl_tmp="${workdir}/.dl_tmp"
     mkdir -p "${dl_tmp}"
-    if ! gsutil -q -m cp -r "${gcs_artifacts}/" "${dl_tmp}/" 2>"${dl_err}"; then
+    if ! gsutil -q -m cp -r "${gcs_artifacts}/" "${dl_tmp}/" 2>"${DL_ERR}"; then
         echo "Error: download failed" >&2
-        [[ -s "${dl_err}" ]] && cat "${dl_err}" >&2
-        rm -f "${dl_err}"
+        [[ -s "${DL_ERR}" ]] && cat "${DL_ERR}" >&2
         rm -rf "${dl_tmp}" "${workdir}"
         exit 1
     fi
-    [[ -s "${dl_err}" ]] && cat "${dl_err}" >&2
-    rm -f "${dl_err}"
+    [[ -s "${DL_ERR}" ]] && cat "${DL_ERR}" >&2
 
     # gsutil cp -r creates a subdirectory named "artifacts" inside dl_tmp;
     # move all files up to the workdir root (flat layout)

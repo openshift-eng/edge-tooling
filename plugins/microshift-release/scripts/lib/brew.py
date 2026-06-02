@@ -356,12 +356,15 @@ def extract_commit_from_nvr(version):
     Returns:
         str or None: Short git commit hash, or None if not found.
     """
-    rpms = find_zstream_rpms(version)
-    if not rpms.get("found"):
+    build = get_build_info(version, "Z")
+    if not build.get("found"):
         logger.debug("No Brew RPM found for %s", version)
         return None
 
-    nvr = rpms["nvr"]
+    if build.get("commit"):
+        return build["commit"]
+
+    nvr = build["nvr"]
     match = re.search(r"\.g([0-9a-f]{7,})\.", nvr)
     if match:
         return match.group(1)

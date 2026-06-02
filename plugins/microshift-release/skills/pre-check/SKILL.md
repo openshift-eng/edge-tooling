@@ -9,11 +9,13 @@ allowed-tools: Bash, mcp__productpages__search_entities, mcp__productpages__brow
 # microshift-release:pre-check
 
 ## Synopsis
+
 ```bash
 /microshift-release:pre-check [release_type] [version|time-range...] [--verbose]
 ```
 
 ## Description
+
 MicroShift ships as a layered product on top of OCP. Every time OCP releases a new version (z-stream, EC, RC, or nightly), the MicroShift team must evaluate whether to participate — checking for CVEs, verifying RPM builds exist in Brew, and deciding whether to ask ART to create artifacts.
 
 This command automates that evaluation (Phase 0 of the release process). It checks lifecycle status, OCP payload availability, advisory CVEs, nightly build gaps, and EC/RC readiness — then outputs a clear action per version: OK, SKIP, ASK ART, NEEDS REVIEW, or ALREADY RELEASED.
@@ -30,6 +32,7 @@ When a time range is provided (e.g., "this week"), it queries Red Hat Product Pa
 | Product Pages MCP | Time range lookups (e.g., "this week") | Only when using time ranges — not needed for explicit versions |
 
 ## Arguments
+
 - `release_type` (optional): One or more of `Z`, `X`, `Y`, `RC`, `EC`, `nightly` (case-insensitive). If omitted, defaults to `Z`.
 - `version` (optional): Specific version (e.g., `4.19.27`) or minor stream (e.g., `4.21`)
 - `time-range` (optional): Natural language time range instead of explicit versions. Detected by keywords like:
@@ -42,6 +45,7 @@ When a time range is provided (e.g., "this week"), it queries Red Hat Product Pa
 ## Scripts Directory
 
 All scripts are run relative to the repository root:
+
 ```bash
 SCRIPTS_DIR=plugins/microshift-release/scripts
 ```
@@ -70,7 +74,6 @@ If a time range is present instead of explicit versions, query Product Pages to 
 
 If the `mcp__productpages__list_entities` tool is not available (MCP not loaded), stop and show this message verbatim:
 
-```
 The Product Pages MCP is required for time-range lookups but is not enabled in this session.
 
 To enable it, run this command:
@@ -82,11 +85,12 @@ claude mcp add productpages -s user --transport http https://productpages.redhat
 Then restart Claude Code and re-run the command.
 
 Alternatively, pass explicit versions instead of a time range:
-```
+
+```bash
   /microshift-release:pre-check 4.19.X 4.20.X 4.21.X
 ```
 
-If no versions found in the schedule, report "No OCP releases scheduled in <range>."
+If no versions found in the schedule, report "No OCP releases scheduled in (range)."
 
 ### Step 3: Query ART Tickets via MCP
 
@@ -166,6 +170,7 @@ If `mcp__atlassian__getJiraIssue` is not available, skip enrichment and note tha
 ### Step 7: Handle Errors
 
 If the script exits non-zero, display stderr and suggest:
+
 - VPN not connected → connect to VPN (Brew requires it)
 - Missing env vars → set `GITLAB_API_TOKEN` (for 4.20+ advisory reports)
 
@@ -193,6 +198,7 @@ If the script exits non-zero, display stderr and suggest:
 - `date_finish` on ga-flagged tasks = release date
 
 ## Notes
+
 - Read-only — does NOT create tickets or modify external state
 - Scripts support `--json` for raw JSON output when called directly (e.g., `bash ${SCRIPTS_DIR}/precheck.sh xyz 4.21.10 --json`)
 - `--verbose` works for all types: detailed tables for xyz, NVR/nightly names for nightly, next versions for EC/RC

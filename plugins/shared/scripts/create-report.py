@@ -404,7 +404,7 @@ def _collect_linked_bugs(bug_data, pr_bug_paths):
                 "affected_jobs": cand.get("affected_jobs", 0),
             })
             if key not in details:
-                details[key] = {"summary": dup.get("summary", ""), "status": dup.get("status", ""), "updated": dup.get("updated", "")}
+                details[key] = {"summary": dup.get("summary", ""), "status": dup.get("status", ""), "assignee": dup.get("assignee", ""), "updated": dup.get("updated", "")}
 
     for version, candidates in bug_data.items():
         for cand in candidates:
@@ -422,6 +422,7 @@ def _pick_bug_fields(issue, links=None):
         "key": issue.get("key", ""),
         "summary": issue.get("summary", ""),
         "status": issue.get("status", ""),
+        "assignee": issue.get("assignee", ""),
         "updated": issue.get("updated", ""),
     }
     if links is not None:
@@ -454,7 +455,7 @@ def _add_matched_links(linked_map, linked_details, releases_data, pr_data, all_b
                     "affected_jobs": issue.get("job_count", 0),
                 })
                 if key not in linked_details:
-                    linked_details[key] = {"summary": entry.get("summary", ""), "status": entry.get("status", ""), "updated": entry.get("updated", "")}
+                    linked_details[key] = {"summary": entry.get("summary", ""), "status": entry.get("status", ""), "assignee": entry.get("assignee", ""), "updated": entry.get("updated", "")}
 
     for version, rdata in (releases_data or {}).items():
         if rdata and rdata.get("issues"):
@@ -588,7 +589,7 @@ def render_bugs_section(bugs_data):
     if all_bugs:
         lines.append('            <table class="bugs-table">')
         lines.append("            <thead><tr>")
-        lines.append('                <th>JIRA</th><th>Status</th><th>Summary</th>')
+        lines.append('                <th>JIRA</th><th>Status</th><th>Assignee</th><th>Summary</th>')
         lines.append('                <th>Releases</th><th>Updated</th>')
         lines.append("            </tr></thead>")
         lines.append("            <tbody>")
@@ -598,6 +599,7 @@ def render_bugs_section(bugs_data):
             href = f"https://issues.redhat.com/browse/{key}"
             summary = _e(bug.get("summary", ""))
             status = _e(bug.get("status", ""))
+            assignee = _e(bug.get("assignee", ""))
             updated = _e(bug.get("updated", ""))
 
             if bug.get("links"):
@@ -608,6 +610,7 @@ def render_bugs_section(bugs_data):
             lines.append("            <tr>")
             lines.append(f'                <td><a href="{href}" target="_blank">{key}</a></td>')
             lines.append(f"                <td>{status}</td>")
+            lines.append(f"                <td>{assignee}</td>")
             lines.append(f"                <td>{summary}</td>")
             lines.append(f"                <td>{releases_cell}</td>")
             lines.append(f"                <td>{updated}</td>")

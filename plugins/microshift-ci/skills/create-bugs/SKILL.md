@@ -1,9 +1,9 @@
 ---
 name: microshift-ci:create-bugs
-argument-hint: <source1>[,<source2>,...] [--create] [--auto]
+argument-hint: <source1>[,<source2>,...] [--create]
 description: Create JIRA bugs from analyze-ci failure reports with cross-release deduplication (dry-run by default)
 user-invocable: true
-allowed-tools: Bash, Read, Write, Glob, Grep, Agent, mcp__jira__jira_search, mcp__jira__jira_create_issue, mcp__jira__jira_get_issue, mcp__jira__jira_get_transitions, mcp__jira__jira_transition_issue, mcp__jira__jira_add_comment
+allowed-tools: Bash, Read, Write, Glob, Grep, Agent, mcp__jira__jira_search, mcp__jira__jira_create_issue, mcp__jira__jira_get_issue, mcp__jira__jira_add_comment
 ---
 
 # microshift-ci:create-bugs
@@ -11,8 +11,8 @@ allowed-tools: Bash, Read, Write, Glob, Grep, Agent, mcp__jira__jira_search, mcp
 ## Synopsis
 
 ```bash
-/microshift-ci:create-bugs <source> [--create] [--auto]
-/microshift-ci:create-bugs <source1>,<source2>,... [--create] [--auto]
+/microshift-ci:create-bugs <source> [--create]
+/microshift-ci:create-bugs <source1>,<source2>,... [--create]
 ```
 
 ## Description
@@ -30,8 +30,7 @@ This command does NOT re-analyze CI jobs. It consumes existing job analysis file
     - **Release version** (e.g., `4.22`, `main`): Looks for files matching `analyze-ci-release-<release>-job-*.txt`
     - **PR number** (e.g., `pr-6396` or `pr6396`): Looks for files matching `analyze-ci-prs-job-*-pr<number>-*.txt`
     - **Rebase PR shorthand** (e.g., `rebase-release-4.22`): Resolves to the corresponding rebase PR by scanning existing `analyze-ci-prs-job-*` files for the matching release version in their content
-  - `--create` (optional): Actually create JIRA issues. Without this flag, only a dry-run report is produced.
-  - `--auto` (optional): Replace interactive per-candidate prompts with an auto-decision policy. Without `--create`, labels each candidate with what would happen (dry-run). With `--create`, executes the auto-decisions without prompting. See Step 3 for the auto-decision policy.
+  - `--create` (optional): Actually create/update JIRA issues. Without this flag, only a dry-run report is produced. See Step 3 for the auto-decision policy.
 
 ## Prerequisites
 
@@ -78,11 +77,11 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 
 **Actions**:
 
-1. Parse `<ARGUMENTS>` to extract source(s) and detect `--create` and `--auto` flags
+1. Parse `<ARGUMENTS>` to extract source(s) and detect the `--create` flag
 2. Split sources on commas to get `SOURCES` list (e.g., `["4.22"]` or `["4.20", "4.21", "4.22", "5.0", "main"]`)
 3. Compute `SOURCE_TAG` — a short identifier used in per-run output filenames (merged candidates, results, report). Use the **first source** in the list (e.g., `4.22`, `main`, `rebase-release-4.22`). Do NOT concatenate all sources.
 4. Determine mode: if `--create` is present, set `MODE=create`; otherwise `MODE=dry-run`
-5. Determine today's WORKDIR path by running `date +%y%m%d` and substituting into `/tmp/microshift-ci-claude-workdir.YYMMDD`. Run `mkdir -p` on it.
+5. Determine today's WORKDIR path by running `date +%y%m%d` and substituting into `/tmp/microshift-ci-claude-workdir.<YYMMDD>`. Run `mkdir -p` on it.
 6. For **each source** in `SOURCES`, run the preparation script:
 
    ```text
@@ -194,10 +193,10 @@ If more than 50 results, paginate with `start_at` until all issues are fetched. 
       "step_name": "<step_name>",
       "affected_jobs": <count for this source>,
       "duplicates": [
-        {"key": "<JIRA-KEY>", "summary": "<summary>", "status": "<status>", "updated": "<YYYY-MM-DD>"}
+        {"key": "<JIRA-KEY>", "summary": "<summary>", "status": "<status>", "assignee": "<display_name>", "updated": "<YYYY-MM-DD>"}
       ],
       "regressions": [
-        {"key": "<JIRA-KEY>", "summary": "<summary>", "status": "<status>", "updated": "<YYYY-MM-DD>"}
+        {"key": "<JIRA-KEY>", "summary": "<summary>", "status": "<status>", "assignee": "<display_name>", "updated": "<YYYY-MM-DD>"}
       ]
     }
   ],
@@ -238,72 +237,31 @@ This writes `<WORKDIR>/analyze-ci-bug-candidates-merged-<SOURCE_TAG>.json`. Read
 1. **In dry-run mode** (`--create` NOT specified):
    - Apply the Auto-Decision Policy (see below) to each candidate
    - Do NOT display individual candidates to the user — the report in Step 5 handles that
-   - Do NOT prompt for any actions. Do NOT create any issues. Do NOT proceed to Steps 4/4a
+   - Do NOT create any issues. Do NOT proceed to Steps 4/4b
    - Build the results array (see Results JSON below), write it, and continue to Step 5
 
-2. **In interactive create mode** (`--create` specified, `--auto` NOT specified):
-   - For each candidate, prompt the user:
-
-     ```text
-     Bug Candidate N/M:
-       Summary: "<derived summary>"
-       Severity: X (affects Y jobs total)
-       Step: <step_name>
-       Releases: <source1> (N jobs), <source2> (N jobs)
-       Grouped with:                          ← only when merged_signatures is non-empty
-         - <other_error_signature_1>
-         - <other_error_signature_2>
-       Jobs:
-         - <job_url_1>
-         - <job_url_2>
-       Potential Duplicates (open):
-         - USHIFT-XXXXX: "<summary>" [Status] (or OCPBUGS-YYYYY)
-         (or "None found")
-       Potential Regressions (closed):
-         - USHIFT-YYYYY (or OCPBUGS-YYYYY): "<summary>" [Status] potential regression
-         (or "None found")
-     ```
-
-   - Select the prompt template based on whether closed regressions were found:
-
-     ```text
-     # ACTION_PROMPT_WITH_REOPEN (use when closed regressions exist):
-     Action? [c]reate / [s]kip / [l]ink-to-existing <JIRA-KEY> / [r]eopen <JIRA-KEY>:
-
-     # ACTION_PROMPT_NO_REOPEN (use when no closed regressions exist):
-     Action? [c]reate / [s]kip / [l]ink-to-existing <JIRA-KEY>:
-     ```
-
-   - **create**: Proceed to Step 4
-   - **skip**: Skip this candidate, move to next
-   - **link-to-existing**: Validate the key by calling `mcp__jira__jira_get_issue(issue_key=<JIRA-KEY>)`. If the issue exists, record the key and move to next. If the call fails or returns not-found, show an error (e.g., `"JIRA key <JIRA-KEY> not found — check for typos"`) and re-prompt with the same `Action?` choices.
-   - **reopen**: Validate the provided JIRA key before proceeding. Call `mcp__jira__jira_get_issue(issue_key=<JIRA-KEY>)` to confirm the issue exists, then verify that the key matches one of the candidate's closed regressions found in Search C, that the issue status is Closed or Verified, and that the issue type is Bug. If validation fails (key not found, not in the candidate's closed regression list, not in Closed/Verified state, or not a Bug), show an error (e.g., `"JIRA key <JIRA-KEY> not eligible for reopen — must be a Bug closed regression"`) and re-prompt with the same `Action?` choices. If validation passes, proceed to Step 4a.
-
-3. **In auto dry-run mode** (`--auto` without `--create`):
-   - Same as dry-run mode (item 1 above)
-   - Continue to Step 5
-
-4. **In auto-create mode** (`--auto --create`):
-   - Apply the auto-decision policy and execute actions — do NOT prompt the user
+2. **In create mode** (`--create` specified):
+   - Apply the auto-decision policy and execute actions
    - For candidates where decision is "create": proceed to Step 4
+   - For candidates where decision is "update": proceed to Step 4b
    - For candidates where decision is "skip": record the skip reason and move to next
    - Continue to Step 5
 
 #### Auto-Decision Policy
 
-When `--auto` is active, apply these rules in order for each candidate:
+Apply these rules in order for each candidate:
 
 | Condition | Decision | Reason |
 |-----------|----------|--------|
 | `failure_type` is `"infrastructure"` | **Skip** | `"Infrastructure failure — not a product bug"` |
-| Has open duplicates from Jira search | **Skip** | `"Duplicate of <JIRA-KEY>"` |
+| Has open duplicates from Jira search | **Update** | `"Will update <JIRA-KEY> with new CI occurrences"` — target is the first entry in the candidate's `duplicates` array. Proceed to Step 4b. |
 | Has closed regressions but no open duplicates — and **all** job `finished` dates are **on or before** the regression's `updated` date | **Skip** | `"Stale failure predating fix for <JIRA-KEY> (updated <YYYY-MM-DD>)"` |
 | Has closed regressions but no open duplicates — and **any** job `finished` date is **after** the regression's `updated` date | **Create** | Add `"Potential regression of <JIRA-KEY>"` to the bug description's Additional Info section |
 | No duplicates, no regressions | **Create** | `"No existing duplicates"` |
 
 #### Results JSON
 
-As you process each candidate (applying auto-decision policy or prompting user), build a results array. After all candidates are processed (and Step 4/4a completes for create mode), write the results to `<WORKDIR>/analyze-ci-bug-results-<SOURCE_TAG>.json`:
+As you process each candidate (applying auto-decision policy), build a results array. After all candidates are processed (and Steps 4/4b complete for create mode), write the results to `<WORKDIR>/analyze-ci-bug-results-<SOURCE_TAG>.json`:
 
 ```json
 {
@@ -319,10 +277,17 @@ As you process each candidate (applying auto-decision policy or prompting user),
     },
     {
       "error_signature": "<matches candidate's error_signature exactly>",
+      "action": "update",
+      "jira_key": "USHIFT-6938",
+      "skip_category": "",
+      "reason": "Will update USHIFT-6938 with new CI occurrences"
+    },
+    {
+      "error_signature": "<matches candidate's error_signature exactly>",
       "action": "skip",
       "jira_key": "",
-      "skip_category": "duplicate",
-      "reason": "Duplicate of USHIFT-6938"
+      "skip_category": "infrastructure",
+      "reason": "Infrastructure failure — not a product bug"
     }
   ]
 }
@@ -331,9 +296,9 @@ As you process each candidate (applying auto-decision policy or prompting user),
 All fields are required on every entry:
 
 - `error_signature`: must match the candidate's `error_signature` exactly
-- `action`: one of `create`, `skip`, `link`, `reopen`, `failed`
-- `jira_key`: the JIRA key for `create`/`link`/`reopen`; empty string `""` for `skip`/`failed`
-- `skip_category`: one of `duplicate`, `infrastructure`, `stale_regression` for `skip`; empty string `""` for other actions
+- `action`: one of `create`, `skip`, `update`, `failed`
+- `jira_key`: the JIRA key for `create`/`update`; empty string `""` for `skip`/`failed`
+- `skip_category`: one of `infrastructure`, `stale_regression`, `up_to_date` for `skip`; empty string `""` for other actions. `up_to_date` occurs when an `update` action is demoted to `skip` during comment deduplication in Step 4b
 - `reason`: human-readable explanation, always non-empty
 
 Set `mode` to `"dry-run"` or `"create"` matching the current run mode. Set `date` to today's date (YYYY-MM-DD).
@@ -341,7 +306,7 @@ Set `mode` to `"dry-run"` or `"create"` matching the current run mode. Set `date
 ### Step 4: Create Bug via MCP (create mode only)
 
 **Actions**:
-For each candidate where user chose "create":
+For each candidate where the auto-decision is "create":
 
 1. **Construct the bug summary**:
    - Format: `"MicroShift CI: <error_signature>"` (truncate to 100 chars if needed)
@@ -419,79 +384,80 @@ For each candidate where user chose "create":
 
 **Error Handling**:
 
-- **Interactive mode** (no `--auto`): If MCP call fails, report error, ask user if they want to retry or skip. Do NOT retry automatically.
-- **Auto mode** (`--auto`): If MCP call fails, log the error, record the candidate as "FAILED" in the report, and continue to the next candidate. Do NOT prompt or retry.
+- If MCP call fails, log the error, record the candidate as `"failed"` in the report, and continue to the next candidate. Do NOT prompt or retry.
 
-### Step 4a: Reopen Closed Bug as Regression (create mode only)
+### Step 4b: Update Existing Bug with Comment (create mode only)
 
-**Precondition**: The JIRA issue must be a Bug in Closed or Verified state (validated in Step 3). If the issue type is not Bug, do not proceed — show an error and re-prompt.
+**Precondition**: The candidate's action is `update` and the JIRA key has been validated (in Step 3).
 
 **Actions**:
-For each candidate where user chose "reopen":
+For each candidate where action is "update":
 
-1. **Get available transitions** for the closed issue:
+1. **Comment deduplication** — check whether the bug already has up-to-date CI data:
 
-   ```python
-   mcp__jira__jira_get_transitions(issue_key="<JIRA-KEY>")
-   ```
+   a. Fetch the target bug's comments:
 
-2. **Find the reopen transition**: Look for a transition whose name is exactly "To Do", "New", or "Backlog" (case-insensitive). If no suitable transition is found, report the error and ask the user whether to create a new bug instead or skip.
+      ```python
+      mcp__jira__jira_get_issue(issue_key="<JIRA-KEY>", fields="comment", comment_limit=100)
+      ```
 
-3. **Construct a regression comment** describing the new occurrences:
+   b. Find the most recent comment containing the marker string `"CI Doctor: New occurrences detected"`.
+
+   c. Extract the `**Last observed:**` date (YYYY-MM-DD) from that comment.
+
+   d. If no CI Doctor comment exists, check the bug description as a fallback: if it contains `"CI job failures detected across MicroShift releases"` (i.e., it was created by CI Doctor), extract the `**Last observed:**` date from the description instead.
+
+   e. Compare against the candidate's most recent job `finished` date:
+      - If **all** job `finished` dates are **on or before** the last-observed date → the bug is already up-to-date. Change the action to `"skip"` with `skip_category="up_to_date"` and reason `"Already up-to-date on <JIRA-KEY> (last observed <YYYY-MM-DD>)"`. Move to the next candidate.
+      - If **any** job `finished` date is **after** the last-observed date, or no last-observed date was found → proceed to post the comment.
+
+2. **Construct the update comment**:
 
    ```text
-   ## Regression: issue has resurfaced
+   ## CI Doctor: New occurrences detected
 
-   This issue was previously closed but the same failure has been detected again in CI.
+   This failure continues to be observed in CI.
 
    **Error Signature:** <error_signature>
    **Error Severity:** <severity>/5
    **Number of affected jobs:** <count>
-   **Last observed:** <finished date>
+   **Last observed:** <latest finished date>
+
+   **Affected Releases:**
+   - <release1> (<N> jobs)
+   - <release2> (<N> jobs)
 
    **Affected Jobs:**
    - [<job_name>](<job_url>)
    ...
 
-   Reopened automatically by /microshift-ci:create-bugs.
+   Updated automatically by /microshift-ci:create-bugs.
    ```
 
-4. **Transition the issue** to reopen it:
-
-   ```python
-   mcp__jira__jira_transition_issue(
-       issue_key="<JIRA-KEY>",
-       transition_id="<reopen_transition_id>",
-       comment="<regression comment>"
-   )
-   ```
-
-5. If the transition call does not support inline comments, add the comment separately:
+3. **Post the comment**:
 
    ```python
    mcp__jira__jira_add_comment(
        issue_key="<JIRA-KEY>",
-       body="<regression comment>"
+       body="<update comment>"
    )
    ```
 
-6. **Record the result**: Store the reopened issue key for the final report.
+4. **Record the result**: Store the updated issue key for the final report.
 
 **Error Handling**:
 
-- If no reopen-like transition is available, report available transitions to user and ask whether to create a new bug or skip
-- If the transition fails, report error and ask user if they want to retry, create a new bug instead, or skip
-- Do NOT retry automatically
+- If MCP call fails, log the error, record the candidate as `"failed"` in the report, and continue to the next candidate. Do NOT prompt or retry.
 
-### Step 4b: Update Bug Mapping Files (create mode only)
+### Step 4c: Update Bug Mapping Files (create mode only)
 
-**Precondition**: At least one candidate had action `create` or `reopen` in Step 4/4a.
+**Precondition**: At least one candidate had action `create` in Step 4. (`update` actions only add a comment and do not require mapping file updates.)
 
-After all bugs are created/reopened, update the per-source bug mapping files (`<WORKDIR>/analyze-ci-bugs-<source>.json`) so that newly created bugs are reflected in the JIRA data consumed by the HTML report generator.
+After all bugs are created, update the per-source bug mapping files (`<WORKDIR>/analyze-ci-bugs-<source>.json`) so that newly created bugs are reflected in the JIRA data consumed by the HTML report generator.
 
 **Actions**:
 
-1. **Collect new bugs**: Gather all candidates where action was `create` or `reopen`. For each, record the `jira_key`, `error_signature`, and the summary used in creation.
+1. **Collect new bugs**: Gather all candidates where action was `create`. For each, record the `jira_key`, `error_signature`, and the summary used in creation.
 
 2. **Update each mapping file**: For every `<WORKDIR>/analyze-ci-bugs-<source>.json` file (all sources, not just the current one):
 
@@ -512,7 +478,7 @@ After all bugs are created/reopened, update the per-source bug mapping files (`<
    b. **Add to `duplicates`**: Find the candidate entry in the file's `candidates` array whose `error_signature` matches. If found, append the new bug to its `duplicates` array (skip if the key already exists):
 
       ```json
-      {"key": "USHIFT-XXXX", "summary": "MicroShift CI: <error_signature>", "status": "To Do", "updated": "<today YYYY-MM-DD>"}
+      {"key": "USHIFT-XXXX", "summary": "MicroShift CI: <error_signature>", "status": "To Do", "assignee": "Unassigned", "updated": "<today YYYY-MM-DD>"}
       ```
 
    c. **Write the updated file** back to disk.
@@ -545,15 +511,7 @@ After all bugs are created/reopened, update the per-source bug mapping files (`<
 
 Shows what bugs would be created from release 4.22 analysis without creating anything.
 
-### Example 2: Create Bugs for a Release
-
-```bash
-/microshift-ci:create-bugs 4.22 --create
-```
-
-Interactively creates bugs from release 4.22 analysis.
-
-### Example 3: Dry-Run for a PR
+### Example 2: Dry-Run for a PR
 
 ```bash
 /microshift-ci:create-bugs pr-6396
@@ -561,15 +519,15 @@ Interactively creates bugs from release 4.22 analysis.
 
 Shows what bugs would be created from PR #6396 analysis.
 
-### Example 4: Create Bugs for a Rebase PR
+### Example 3: Create Bugs for a Rebase PR
 
 ```bash
 /microshift-ci:create-bugs rebase-release-4.22 --create
 ```
 
-Resolves the rebase PR for release 4.22, then interactively creates bugs.
+Resolves the rebase PR for release 4.22, then creates bugs.
 
-### Example 5: Multi-Source Dry-Run
+### Example 4: Multi-Source Dry-Run
 
 ```bash
 /microshift-ci:create-bugs main,4.22,4.21,4.20,5.0
@@ -577,31 +535,15 @@ Resolves the rebase PR for release 4.22, then interactively creates bugs.
 
 Shows all failures across 5 releases with cross-release dedup applied. Failures appearing in multiple releases are merged into single candidates with `Releases:` lines.
 
-### Example 6: Multi-Source Auto Create
+### Example 5: Multi-Source Create
 
 ```bash
-/microshift-ci:create-bugs main,4.22,4.21,4.20,5.0 --auto --create
+/microshift-ci:create-bugs main,4.22,4.21,4.20,5.0 --create
 ```
 
-Automatically creates bugs across all releases, skipping Jira duplicates. Cross-release duplicates are merged into single bugs referencing all affected releases.
+Creates bugs across all releases, updating existing Jira duplicates and skipping infrastructure failures. Cross-release duplicates are merged into single bugs referencing all affected releases.
 
-### Example 7: Auto Dry-Run
-
-```bash
-/microshift-ci:create-bugs 4.22 --auto
-```
-
-Shows what auto-decisions would be made (create/skip) without actually creating anything.
-
-### Example 8: Multi-Source Interactive Create
-
-```bash
-/microshift-ci:create-bugs main,4.22 --create
-```
-
-Cross-release dedup is applied, then each merged candidate is presented for interactive action (create/skip/link/reopen).
-
-### Example 9: No Job Files Found
+### Example 6: No Job Files Found
 
 ```bash
 /microshift-ci:create-bugs 4.19
@@ -621,11 +563,9 @@ Run the analysis first:
   - Release jobs: `analyze-ci-release-<release>-job-*.txt` (from `/microshift-ci:doctor`)
   - PR jobs: `analyze-ci-prs-job-*-pr<number>-*.txt` (from `/microshift-ci:doctor`)
 - Dry-run is the default to prevent accidental bug creation
-- The `--create` flag triggers interactive mode where each candidate requires user confirmation
-- The `--auto` flag replaces interactive prompts with deterministic auto-decisions (skip if duplicates exist, create otherwise)
-- Combine `--auto --create` for fully unattended bug creation; `--auto` alone is a labeled dry-run
+- The `--create` flag enables actual bug creation and updating
 - Candidates are always merged via `search-bugs.py --merge` (even for a single source) to produce a unified output with Jira data injected. Cross-release deduplication uses fuzzy signature matching (token-based Jaccard similarity, 50% threshold)
-- In `--auto` mode, infrastructure failures (`failure_type: "infrastructure"`) are automatically skipped — these are transient CI/cloud issues, not product bugs. Classification uses the same step-name-based logic as the HTML report (`classify_breakdown` in `classify.py`). In interactive mode (no `--auto`), all failures are shown and the user decides
+- Infrastructure failures (`failure_type: "infrastructure"`) are automatically skipped — these are transient CI/cloud issues, not product bugs. Classification uses the same step-name-based logic as the HTML report (`classify_breakdown` in `classify.py`)
 - Bugs are created in USHIFT with component "MicroShift"; duplicate search covers both USHIFT and OCPBUGS
 - All created bugs are labeled with `microshift-ci-ai-generated` for tracking
 - The STRUCTURED SUMMARY block in job files is required — this is a contract with `/microshift-ci:prow-job`
@@ -635,4 +575,4 @@ Run the analysis first:
 
 - **microshift-ci:doctor**: Produces job analysis files consumed by this command
 - **microshift-ci:prow-job**: Command that produces individual job reports with STRUCTURED SUMMARY
-- **jira:create-bug**: Interactive bug creation (not used here — we call MCP directly)
+- **jira:create-bug**: Single bug creation skill (not used here — we call MCP directly)
