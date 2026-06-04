@@ -98,6 +98,29 @@ def _query_bugs_by_keys(client, keys):
     return [_issue_to_dict(issue, "commit") for issue in issues]
 
 
+def _query_bugs_by_keys_any_status(client, keys):
+    """Look up OCPBUGS by key without status filtering.
+
+    Used as a fallback when the status-filtered query misses bugs that
+    exist but are in an early status (New, ASSIGNED, POST, etc.).
+
+    Args:
+        client: Jira client instance.
+        keys: Set of bug keys.
+
+    Returns:
+        list[dict]: Bug dicts with actual data from Jira.
+    """
+    if not keys:
+        return []
+
+    keys_csv = ", ".join(sorted(keys))
+    jql = f"key in ({keys_csv}) ORDER BY status ASC"
+
+    issues = client.search_issues(jql, maxResults=50, fields=_JIRA_FIELDS)
+    return [_issue_to_dict(issue, "commit") for issue in issues]
+
+
 def _issue_to_dict(issue, source):
     """Convert a Jira issue to a bug dict.
 
@@ -192,10 +215,23 @@ def query_resolved_bugs(version, branch=None, since_version=None,
                 "release_required": 0, "release_not_required": 0,
                 "needs_review": 0, "error": f"key lookup failed: {e}"}
 
-    # Source 3: commit-referenced bugs that Jira didn't return
-    # (security-restricted tickets, deleted, or inaccessible)
+    # Source 3: retry missing bugs without status filter — they may
+    # exist in an early status (New, ASSIGNED, POST) rather than being
+    # truly restricted.
     returned_keys = {b["key"] for b in commit_bugs}
     missing_keys = commit_only_keys - returned_keys
+    unfiltered_bugs = []
+    if missing_keys:
+        try:
+            unfiltered_bugs = _query_bugs_by_keys_any_status(
+                client, missing_keys,
+            )
+        except Exception as e:
+            logger.warning("OCPBUGS unfiltered retry failed: %s", e)
+
+    # Source 4: truly restricted bugs (still missing after unfiltered query)
+    unfiltered_keys = {b["key"] for b in unfiltered_bugs}
+    still_missing = missing_keys - unfiltered_keys
     restricted_bugs = [
         {
             "key": key,
@@ -208,15 +244,17 @@ def query_resolved_bugs(version, branch=None, since_version=None,
             "labels": [],
             "release_action": "needs_review",
         }
-        for key in sorted(missing_keys)
+        for key in sorted(still_missing)
     ]
     if restricted_bugs:
         logger.info("Found %d restricted OCPBUGS (not queryable): %s",
                     len(restricted_bugs),
                     ", ".join(b["key"] for b in restricted_bugs))
 
-    # Merge: fixVersion bugs first, then commit-only bugs, then restricted
-    all_bugs = fixversion_bugs + commit_bugs + restricted_bugs
+    # Merge: fixVersion first, then resolved commit bugs, then
+    # unfiltered (non-resolved) commit bugs, then truly restricted
+    all_bugs = (fixversion_bugs + commit_bugs
+                + unfiltered_bugs + restricted_bugs)
     release_required = sum(1 for b in all_bugs if b["release_action"] == "release_required")
     needs_review = sum(1 for b in all_bugs if b["release_action"] == "needs_review")
     return {

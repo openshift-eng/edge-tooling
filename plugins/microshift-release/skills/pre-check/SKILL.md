@@ -3,7 +3,7 @@ name: microshift-release:pre-check
 argument-hint: [Z|X|Y|RC|EC|nightly] [version|time-range...] [--verbose]
 description: Check OCP release schedule, verify availability, evaluate z-stream need, or check nightly build gaps
 user-invocable: true
-allowed-tools: Bash, mcp__jira__jira_search, mcp__atlassian__searchJiraIssuesUsingJql
+allowed-tools: Bash, mcp__atlassian__searchJiraIssuesUsingJql
 ---
 
 # microshift-release:pre-check
@@ -67,16 +67,16 @@ If a time range is present instead of explicit versions, query ART Jira for rele
 1. **Convert the time range** to concrete dates (`date_from`, `date_to`) based on today's date:
    - `today` → today only
    - `tomorrow` → tomorrow only
-   - `this week` → today through end of current week (Sunday)
+   - `this week` → Monday through Sunday of the current week
    - `next week` → next Monday through next Sunday
    - `next N days` → today through N days from now
    - `this month` → today through end of current month
    - For any other natural language range, compute the appropriate date window
 
-2. **Query ART Jira** using the Jira MCP tool (`mcp__jira__jira_search` or `mcp__atlassian__searchJiraIssuesUsingJql`):
+2. **Query ART Jira** using `mcp__atlassian__searchJiraIssuesUsingJql`:
 
    ```text
-   JQL: project = ART AND issuetype = Story AND summary ~ "Release 4." AND status = "In Progress" AND duedate >= "{date_from}" AND duedate <= "{date_to}" ORDER BY duedate ASC
+   JQL: project = ART AND issuetype = Story AND summary ~ "Release 4." AND duedate >= "{date_from}" AND duedate <= "{date_to}" ORDER BY duedate ASC
    ```
 
    Use `cloudId: "redhat.atlassian.net"` for the Atlassian MCP tool.

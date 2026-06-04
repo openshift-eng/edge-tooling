@@ -5,7 +5,7 @@ Evaluates whether MicroShift should participate in upcoming OCP X, Y, or Z
 releases by checking lifecycle status, OCP availability, advisory CVEs,
 code changes, and the 90-day rule.
 
-Usage: precheck_xyz.py [version...] [--days-ahead N] [--verbose] [--json]
+Usage: precheck_xyz.py <version...> [--verbose] [--json]
 """
 
 import argparse
@@ -707,16 +707,12 @@ def format_text_full(output):
 
 def main():
     parser = argparse.ArgumentParser(description="MicroShift X/Y/Z release evaluation")
-    parser.add_argument("versions", nargs="*", help="X.Y or X.Y.Z versions")
-    parser.add_argument("--days-ahead", type=int, default=7,
-                        help="Look ahead N days for ART releases (default: 7)")
+    parser.add_argument("versions", nargs="+", help="X.Y or X.Y.Z versions")
     parser.add_argument("--verbose", action="store_true",
                         help="Show detailed tables instead of one-line summary")
     parser.add_argument("--json", action="store_true", dest="json_output",
                         help="Output raw JSON instead of formatted text")
     args = parser.parse_args()
-    if args.days_ahead < 1:
-        parser.error("--days-ahead must be >= 1")
 
     # Step 1: Fetch lifecycle data
     logger.info("Fetching lifecycle data...")
@@ -749,33 +745,7 @@ def main():
         sys.exit(1)
 
     # Step 2: Determine versions to evaluate
-    if args.versions:
-        versions = expand_versions(args.versions, lifecycle_data)
-    else:
-        logger.info("Querying ART Jira for releases due within %d days...",
-                    args.days_ahead)
-        art_tickets = art_jira.query_art_releases_due(days_ahead=args.days_ahead)
-        versions = []
-        for ticket in art_tickets:
-            v = ticket["version"]
-            minor = ".".join(v.split(".")[:2])
-            if lifecycle.is_version_active(minor, lifecycle_data):
-                versions.append(v)
-        if not versions:
-            logger.info("No ART releases due within %d days", args.days_ahead)
-
-    # Filter out EOL versions (auto-discovered only; explicit versions always evaluated)
-    if not args.versions:
-        active_versions = []
-        for v in versions:
-            minor = ".".join(v.split(".")[:2])
-            if lifecycle.is_version_active(minor, lifecycle_data):
-                active_versions.append(v)
-            else:
-                lc = lifecycle.get_lifecycle_status(minor, lifecycle_data)
-                phase = lc["phase"] if lc else "unknown"
-                logger.info("Skipping %s (%s)", v, phase)
-        versions = active_versions
+    versions = expand_versions(args.versions, lifecycle_data)
 
     # Step 3: Evaluate each version (parallel when multiple)
     evaluations = []

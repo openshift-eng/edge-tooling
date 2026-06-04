@@ -3,7 +3,7 @@
 import logging
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 
 ATLASSIAN_URL = "https://redhat.atlassian.net"
 
@@ -89,11 +89,10 @@ def _extract_date_from_summary(summary):
         return None
 
 
-def query_art_releases_due(days_ahead=7, minor_version=None, specific_version=None):
+def query_art_releases_due(minor_version=None, specific_version=None):
     """Query ART Jira for in-progress release stories.
 
     Args:
-        days_ahead: Look ahead N days when no version is specified.
         minor_version: Filter to a specific minor, e.g., "4.21".
         specific_version: Filter to exact version, e.g., "4.21.8".
 
@@ -111,18 +110,11 @@ def query_art_releases_due(days_ahead=7, minor_version=None, specific_version=No
             f'project = ART AND summary ~ "Release {safe_version}" '
             f'AND status = "In Progress" ORDER BY created DESC'
         )
-    elif minor_version:
+    else:
         safe_version = _sanitize_jql_value(minor_version)
         jql = (
             f'project = ART AND summary ~ "Release {safe_version}" '
             f'AND status = "In Progress" ORDER BY duedate ASC'
-        )
-    else:
-        next_week = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-        jql = (
-            f'project = ART AND summary ~ "Release" '
-            f'AND status = "In Progress" AND duedate <= "{next_week}" '
-            f'ORDER BY duedate ASC'
         )
 
     try:
