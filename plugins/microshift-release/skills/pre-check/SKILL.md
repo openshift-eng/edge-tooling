@@ -3,7 +3,7 @@ name: microshift-release:pre-check
 argument-hint: [Z|X|Y|RC|EC|nightly] [version|time-range...] [--verbose]
 description: Check OCP release schedule, verify availability, evaluate z-stream need, or check nightly build gaps
 user-invocable: true
-allowed-tools: Bash, mcp__productpages__search_entities, mcp__productpages__browse_schedule, mcp__productpages__list_entities, mcp__atlassian__getJiraIssue, mcp__atlassian__searchJiraIssuesUsingJql
+allowed-tools: Bash, mcp__productpages__browse_schedule, mcp__productpages__list_entities, mcp__atlassian__getJiraIssue, mcp__atlassian__searchJiraIssuesUsingJql
 ---
 
 # microshift-release:pre-check
