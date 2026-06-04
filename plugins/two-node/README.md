@@ -83,6 +83,57 @@ Verify a RHEL resource-agents bug fix on a TNF cluster. Given a JIRA ID, the ski
 - RPM with the fix downloaded locally (typically `~/Downloads/`)
 - `HYPERVISOR` env var or `two-node-toolbox/` submodule available for auto-detection
 
+### `/two-node:cluster-diagnostic`
+
+Diagnose TNF cluster issues (shutdown/recovery, etcd, fencing, network,
+operators). Gathers live cluster state via SSH, analyzes it against a knowledge
+base of 7 bare metal test scenarios, and reports findings with severity
+classification. Read-only — never modifies cluster state.
+
+```text
+/two-node:cluster-diagnostic
+/two-node:cluster-diagnostic validate "cordon, drain, then shutdown -h 1 on each node"
+/two-node:cluster-diagnostic recovery-guide standby
+/two-node:cluster-diagnostic recovery-guide full-shutdown
+```
+
+**Modes:**
+
+- **diagnose** (default) — SSH to cluster, gather pcs/etcd/corosync/OCP state, analyze, report
+- **validate** — Check a proposed procedure against known failure modes
+- **recovery-guide** — Step-by-step recovery for: `standby`, `full-shutdown`, `single-node`, `network-partition`, `power-outage`, `rolling-restart`, `after-recovery`, `connectivity`, `etcd-nospace`, `pending-csr`, `split-brain`, `stale-data`, `partition-fencing-failure`
+
+**Access patterns** (auto-detected):
+
+- Dev-scripts: `HYPERVISOR` env var or `two-node-toolbox/` submodule
+- Bare metal: `NODE_0` and `NODE_1` env vars (direct SSH to nodes)
+- Optional: `BMC_0`/`BMC_1`/`BMC_USER`/`BMC_PASS` for Redfish power state
+- Optional: `KUBECONFIG` for OCP-layer diagnostics (nodes, operators, CSRs, events)
+- Optional: `SSH_KEY` for SSH private key path (defaults to `~/.ssh/id_rsa`)
+
+**Environment file:** Create `~/.tnf-cluster.env` to avoid exposing credentials
+in the conversation and to persist settings across sessions:
+
+```bash
+export NODE_0=10.1.155.141
+export NODE_1=10.1.155.142
+export BMC_0=<bmc-0-hostname>
+export BMC_1=<bmc-1-hostname>
+export BMC_USER=<bmc-username>
+export BMC_PASS=<bmc-password>
+export KUBECONFIG=<path-to-kubeconfig>
+```
+
+Then run diagnostics with: `source ~/.tnf-cluster.env && bash scripts/diagnose-cluster.sh`
+
+**Scripts:** `diagnose-cluster.sh` (in `scripts/`)
+
+**Acknowledgements:** etcd split-brain detection, CIB recovery attribute checks,
+and stale data recovery scenarios were adapted from etcd troubleshooting
+documentation authored by Fonta and Carlo in
+[two-node-toolbox](https://github.com/openshift-eng/two-node-toolbox/tree/main/.claude/commands/etcd)
+and validated on bare metal (2026-05-28).
+
 ### `/two-node:bug-reproducer`
 
 Automated OpenShift bug reproduction for Two-Node with Arbiter (TNA) and Two-Node with Fencing (TNF) topologies.

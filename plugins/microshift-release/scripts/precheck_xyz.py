@@ -38,18 +38,11 @@ def run_advisory_report(version, repo_root):
         dict: Parsed JSON report, or {"error": "...", "skipped": True} on failure.
     """
     # Check prerequisites
-    missing = []
-    for var in ["ATLASSIAN_API_TOKEN", "ATLASSIAN_EMAIL"]:
-        if not os.environ.get(var, "").strip():
-            missing.append(var)
     parts = version.split(".")
     if len(parts) >= 2 and parts[1].isdigit():
         minor_int = int(parts[1])
         if minor_int >= 20 and not os.environ.get("GITLAB_API_TOKEN", "").strip():
-            missing.append("GITLAB_API_TOKEN")
-
-    if missing:
-        return {"error": f"Missing env vars: {', '.join(missing)}", "skipped": True}
+            return {"error": "Missing env var: GITLAB_API_TOKEN", "skipped": True}
 
     # Check VPN
     if not brew.check_vpn():
@@ -244,10 +237,11 @@ def compute_recommendation(evaluation):
 def _resolve_range_base(version, minor, z):
     """Resolve the git range base for counting commits since a release.
 
-    Tries three strategies in order:
+    Tries four strategies in order:
     1. Exact git tag for the version.
     2. Brew NVR commit hash (embedded in the RPM build metadata).
-    3. Nearest previous z-stream tag.
+    3. Pyxis image tag commit hash (embedded in published container tags).
+    4. Nearest previous z-stream tag.
 
     Args:
         version: Published version string, e.g., "4.21.11".
@@ -272,8 +266,17 @@ def _resolve_range_base(version, minor, z):
         logger.warning("Brew commit %s for %s not found in local clone",
                        commit, version)
 
-    # Strategy 3: nearest previous tag
-    logger.warning("Brew commit not found, searching for nearest tag...")
+    # Strategy 3: Pyxis image tag commit hash
+    commit = pyxis.extract_commit_from_image(version)
+    if commit and git_ops.verify_commit_exists(commit):
+        logger.info("Using Pyxis commit %s for %s", commit, version)
+        return None, commit
+    if commit:
+        logger.warning("Pyxis commit %s for %s not found in local clone",
+                       commit, version)
+
+    # Strategy 4: nearest previous tag
+    logger.warning("No commit found via tag/Brew/Pyxis, searching for nearest tag...")
     nearest_ver, _ = git_ops.find_nearest_version_tag(minor, z - 1)
     if nearest_ver:
         logger.info("Using nearest available tag: %s", nearest_ver)
@@ -373,7 +376,7 @@ def evaluate_version(version, lifecycle_data, repo_root):
     result["commits"] = len(commit_list)
     result["commit_list"] = commit_list
 
-    # 4b: OCPBUGS resolved bugs (fixVersion + commit message references)
+    # 4b: OCPBUGS references from commit messages (enriched via MCP at skill level)
     logger.info("Checking resolved OCPBUGS for %s...", version)
     try:
         result["ocpbugs"] = ocpbugs.query_resolved_bugs(

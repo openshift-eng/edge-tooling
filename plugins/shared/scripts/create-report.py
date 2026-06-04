@@ -749,20 +749,24 @@ def _render_bug_links(bug_match):
     if has_dups:
         parts.append("<strong>Bugs:</strong><br>")
         for d in bug_match["duplicates"]:
+            assignee = d.get("assignee", "")
+            assignee_part = f", {_e(assignee)}" if assignee else ""
             parts.append(
                 f'<a class="bug-tag bug-tag-open" '
                 f'href="https://issues.redhat.com/browse/{_e(d["key"])}" '
                 f'target="_blank">{_e(d["key"])}</a> '
-                f'<span class="job-date">{_e(d["summary"])} ({_e(d["status"])})</span><br>'
+                f'<span class="job-date">{_e(d["summary"])} ({_e(d["status"])}{assignee_part})</span><br>'
             )
     if has_regs:
         parts.append("<strong>Regressions:</strong><br>")
         for r in bug_match["regressions"]:
+            assignee = r.get("assignee", "")
+            assignee_part = f", {_e(assignee)}" if assignee else ""
             parts.append(
                 f'<a class="bug-tag bug-tag-regression" '
                 f'href="https://issues.redhat.com/browse/{_e(r["key"])}" '
                 f'target="_blank">{_e(r["key"])} &#x27F2;</a> '
-                f'<span class="job-date">{_e(r["summary"])} ({_e(r["status"])})</span><br>'
+                f'<span class="job-date">{_e(r["summary"])} ({_e(r["status"])}{assignee_part})</span><br>'
             )
     return "".join(parts)
 

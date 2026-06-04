@@ -371,6 +371,42 @@ def find_latest_published_zstream_any(minor_version, pages=5):
     return None
 
 
+def extract_commit_from_image(version, pages=5):
+    """Extract the git commit hash from Pyxis image tags for a version.
+
+    Pyxis image tags embed the source commit as a short hash prefixed with 'g',
+    e.g., v4.21-202605181229.p2.g919341c.assembly.4.21.16.el9
+    contains commit 919341c.
+
+    Args:
+        version: e.g., "4.21.16".
+        pages: Number of pages to scan.
+
+    Returns:
+        str or None: Short git commit hash, or None if not found.
+    """
+    assembly_pattern = re.compile(rf"\bassembly\.{re.escape(version)}\b")
+    commit_pattern = re.compile(r"\.g([0-9a-f]{7,})\.")
+
+    for page in range(pages):
+        try:
+            text = _fetch_page(page)
+            data = json.loads(text)
+            for image in data.get("data", []):
+                for repo in image.get("repositories", []):
+                    for tag in repo.get("tags", []):
+                        name = tag.get("name", "")
+                        if assembly_pattern.search(name):
+                            match = commit_pattern.search(name)
+                            if match:
+                                return match.group(1)
+        except (requests.RequestException, json.JSONDecodeError) as e:
+            logger.warning("Pyxis commit lookup failed on page %d: %s",
+                           page, e)
+
+    return None
+
+
 def find_all_published_versions(minor_version, pages=5):
     """Find all published z-stream versions for a minor version.
 

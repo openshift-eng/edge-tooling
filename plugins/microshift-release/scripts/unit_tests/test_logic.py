@@ -10,10 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from precheck_xyz import (  # noqa: E402
     compute_recommendation, interpret_cves, format_text_short, _build_reason,
 )
-from lib.ocpbugs import (  # noqa: E402
-    _issue_to_dict, query_resolved_bugs,
-    _RELEASE_NOTE_TEXT, _RELEASE_NOTE_TYPE, _RELEASE_NOTE_STATUS,
-)
+from lib.ocpbugs import query_resolved_bugs  # noqa: E402
 from precheck_ecrc import (  # noqa: E402
     parse_ecrc_version, format_text as ecrc_format_text,
 )
@@ -592,178 +589,43 @@ class TestBuildReason(unittest.TestCase):
         self.assertNotIn("OCPBUGS", result)
 
 
-class TestIssueToDict(unittest.TestCase):
-    """Tests for _issue_to_dict label-triage logic in ocpbugs.py."""
+class TestCommitBugScanning(unittest.TestCase):
+    """Commit-referenced bugs: always unenriched (MCP enriches at skill level)."""
 
-    @staticmethod
-    def _make_issue(key, summary, status, labels=None):
-        """Build a minimal mock Jira issue."""
-        from types import SimpleNamespace
-        fields = SimpleNamespace(
-            summary=summary,
-            status=status,
-            labels=labels or [],
-        )
-        return SimpleNamespace(key=key, fields=fields)
+    def test_bugs_unenriched(self):
+        from unittest.mock import patch
 
-    def test_release_required_label(self):
-        issue = self._make_issue(
-            "OCPBUGS-111", "fix crash", "Verified",
-            labels=["release-required"],
-        )
-        result = _issue_to_dict(issue, "fixVersion")
-        self.assertEqual(result["release_action"], "release_required")
-        self.assertEqual(result["source"], "fixVersion")
-
-    def test_release_not_required_label(self):
-        issue = self._make_issue(
-            "OCPBUGS-222", "minor tweak", "Closed",
-            labels=["release-not-required"],
-        )
-        result = _issue_to_dict(issue, "commit")
-        self.assertEqual(result["release_action"], "release_not_required")
-        self.assertEqual(result["source"], "commit")
-
-    def test_no_labels_needs_review(self):
-        issue = self._make_issue(
-            "OCPBUGS-333", "unlabeled bug", "MODIFIED",
-        )
-        result = _issue_to_dict(issue, "fixVersion")
-        self.assertEqual(result["release_action"], "needs_review")
-
-    def test_both_labels_needs_review(self):
-        issue = self._make_issue(
-            "OCPBUGS-444", "conflicting labels", "ON_QA",
-            labels=["release-required", "release-not-required"],
-        )
-        result = _issue_to_dict(issue, "fixVersion")
-        self.assertEqual(result["release_action"], "needs_review")
-
-    def test_extra_labels_ignored(self):
-        issue = self._make_issue(
-            "OCPBUGS-555", "extra labels", "Verified",
-            labels=["team/microshift", "release-required", "priority/high"],
-        )
-        result = _issue_to_dict(issue, "fixVersion")
-        self.assertEqual(result["release_action"], "release_required")
-        self.assertIn("team/microshift", result["labels"])
-
-    def test_basic_fields_extracted(self):
-        issue = self._make_issue(
-            "OCPBUGS-666", "test summary", "Closed",
-        )
-        result = _issue_to_dict(issue, "commit")
-        self.assertEqual(result["key"], "OCPBUGS-666")
-        self.assertEqual(result["summary"], "test summary")
-        self.assertEqual(result["status"], "Closed")
-        self.assertEqual(result["release_note"], "")
-        self.assertEqual(result["release_note_type"], "")
-        self.assertEqual(result["release_note_status"], "")
-
-
-class TestRestrictedBugsDetected(unittest.TestCase):
-    """Commit-referenced bugs that Jira can't return are flagged as restricted."""
-
-    def test_restricted_bug_reported_as_needs_review(self):
-        from unittest.mock import patch, MagicMock
-        mock_client = MagicMock()
-        mock_client.search_issues.return_value = []
-
-        with patch("lib.ocpbugs.create_jira_client", return_value=mock_client), \
-             patch("lib.ocpbugs.extract_bugs_from_commits",
-                   return_value={"OCPBUGS-80721"}):
-            result = query_resolved_bugs(
-                "4.21.16", branch="release-4.21",
-                since_version="4.21.11",
-            )
-
-        self.assertEqual(result["count"], 1)
-        self.assertEqual(result["needs_review"], 1)
-        bug = result["bugs"][0]
-        self.assertEqual(bug["key"], "OCPBUGS-80721")
-        self.assertEqual(bug["release_action"], "needs_review")
-        self.assertIn("Restricted", bug["summary"])
-
-    def test_mix_of_found_and_restricted(self):
-        from unittest.mock import patch, MagicMock
-        from types import SimpleNamespace
-        mock_client = MagicMock()
-        found_issue = SimpleNamespace(
-            key="OCPBUGS-111",
-            fields=SimpleNamespace(
-                summary="visible bug", status="Verified",
-                labels=["release-required"],
-                **{_RELEASE_NOTE_TEXT: "", _RELEASE_NOTE_TYPE: None,
-                   _RELEASE_NOTE_STATUS: None},
-            ),
-        )
-        mock_client.search_issues.side_effect = [
-            [],
-            [found_issue],
-        ]
-
-        with patch("lib.ocpbugs.create_jira_client", return_value=mock_client), \
-             patch("lib.ocpbugs.extract_bugs_from_commits",
-                   return_value={"OCPBUGS-111", "OCPBUGS-99999"}):
+        with patch("lib.ocpbugs.extract_bugs_from_commits",
+                   return_value={"OCPBUGS-80721", "OCPBUGS-12345"}):
             result = query_resolved_bugs(
                 "4.21.16", branch="release-4.21",
                 since_version="4.21.11",
             )
 
         self.assertEqual(result["count"], 2)
+        self.assertEqual(result["needs_review"], 2)
+        self.assertEqual(result["release_required"], 0)
+        self.assertEqual(result["release_not_required"], 0)
         keys = {b["key"] for b in result["bugs"]}
-        self.assertIn("OCPBUGS-111", keys)
-        self.assertIn("OCPBUGS-99999", keys)
-        restricted = [b for b in result["bugs"] if b["key"] == "OCPBUGS-99999"]
-        self.assertEqual(restricted[0]["release_action"], "needs_review")
+        self.assertIn("OCPBUGS-80721", keys)
+        self.assertIn("OCPBUGS-12345", keys)
+        for bug in result["bugs"]:
+            self.assertEqual(bug["summary"], "Pending Jira lookup")
+            self.assertEqual(bug["release_action"], "needs_review")
+            self.assertEqual(bug["source"], "commit")
 
-    def test_no_restricted_when_all_found(self):
-        from unittest.mock import patch, MagicMock
-        from types import SimpleNamespace
-        mock_client = MagicMock()
-        found_issue = SimpleNamespace(
-            key="OCPBUGS-111",
-            fields=SimpleNamespace(
-                summary="visible bug", status="Verified",
-                labels=["release-not-required"],
-                **{_RELEASE_NOTE_TEXT: "", _RELEASE_NOTE_TYPE: None,
-                   _RELEASE_NOTE_STATUS: None},
-            ),
-        )
-        mock_client.search_issues.side_effect = [
-            [],
-            [found_issue],
-        ]
+    def test_no_bugs_found(self):
+        from unittest.mock import patch
 
-        with patch("lib.ocpbugs.create_jira_client", return_value=mock_client), \
-             patch("lib.ocpbugs.extract_bugs_from_commits",
-                   return_value={"OCPBUGS-111"}):
+        with patch("lib.ocpbugs.extract_bugs_from_commits",
+                   return_value=set()):
             result = query_resolved_bugs(
                 "4.21.16", branch="release-4.21",
                 since_version="4.21.11",
             )
 
-        self.assertEqual(result["count"], 1)
-        self.assertEqual(result["needs_review"], 0)
-        self.assertEqual(result["release_not_required"], 1)
-
-
-class TestJqlSanitization(unittest.TestCase):
-    def test_normal_version_unchanged(self):
-        from lib.art_jira import _sanitize_jql_value
-        self.assertEqual(_sanitize_jql_value("4.21.8"), "4.21.8")
-
-    def test_special_chars_escaped(self):
-        from lib.art_jira import _sanitize_jql_value
-        result = _sanitize_jql_value('4.21"')
-        # The double quote must be escaped
-        self.assertTrue(result.endswith('\\"'))
-        self.assertFalse(result.endswith('1"'))
-
-    def test_ecrc_version(self):
-        from lib.art_jira import _sanitize_jql_value
-        result = _sanitize_jql_value("4.22.0-ec.5")
-        self.assertIn("\\-", result)
+        self.assertEqual(result["count"], 0)
+        self.assertFalse(result["skipped"])
 
 
 class TestExtractCommitFromNvr(unittest.TestCase):
