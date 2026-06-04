@@ -98,7 +98,7 @@ If no versions found in the schedule, report "No OCP releases scheduled in \<ran
 Before running the script, query ART Jira for in-progress release tickets so the script can show ART ticket status in the Release Schedule table.
 
 1. Call `mcp__atlassian__searchJiraIssuesUsingJql` with:
-   - `cloudId`: `"issues.redhat.com"`
+   - `cloudId`: `"redhat.atlassian.net"`
    - `jql`: `project = ART AND summary ~ "Release" AND status = "In Progress" ORDER BY duedate ASC`
    - `fields`: `["summary", "status", "duedate"]`
    - `maxResults`: `50`
@@ -145,7 +145,7 @@ After displaying the output (including any `--verbose` re-run), if any OCPBUGS a
 
 1. **Collect OCPBUGS keys**: Extract all unique `OCPBUGS-XXXXX` keys from the output (they appear in the Resolved OCPBUGS table or the one-line summaries).
 2. **Fetch each bug via MCP**: For each unique key, call `mcp__atlassian__getJiraIssue` with:
-   - `cloudId`: `"issues.redhat.com"`
+   - `cloudId`: `"redhat.atlassian.net"`
    - `issueIdOrKey`: the OCPBUGS key (e.g., `"OCPBUGS-12345"`)
    - `fields`: `["summary", "status", "labels", "issuetype", "priority"]`
    - `responseContentFormat`: `"markdown"`
