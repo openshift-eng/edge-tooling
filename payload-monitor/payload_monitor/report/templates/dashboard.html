@@ -662,9 +662,6 @@
           <code style="font-size:11px">/ci:ask-sippy Why is {{ r.test_name }} regressing on {{ r.version }}? What tests are failing?</code>
           <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>
         </div>
-        {% if r.triage_url %}
-        <a href="{{ r.triage_url }}" target="_blank" style="font-size:11px;color:var(--accent)">View in Sippy &#8599;</a>
-        {% endif %}
       </td>
     </tr>
     {% endfor %}
@@ -759,9 +756,6 @@
           <code style="font-size:11px">/ci:ask-sippy Why is test "{{ cr.test_name }}" regressing on {{ cr.comparison }} vs HA for {{ cr.version }}? What variants are affected and what changed recently?</code>
           <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>
         </div>
-        {% if cr.detail_url %}
-        <a href="{{ cr.detail_url }}" target="_blank" style="font-size:11px;color:var(--accent)">View Detail &#8599;</a>
-        {% endif %}
       </td>
     </tr>
     {% endfor %}
