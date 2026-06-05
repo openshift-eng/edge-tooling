@@ -658,13 +658,12 @@
           <span class="key">{{ r.jira_bug }}</span>
         </a>
         {% endif %}
-        {% if r.test_id %}
         <div class="cmd-copy-row" style="margin:0">
-          <code style="font-size:11px">/ci:triage-regression {{ r.test_id }} --topology {{ r.topology }}</code>
+          <code style="font-size:11px">/ci:ask-sippy Why is {{ r.test_name }} regressing on {{ r.version }}? What tests are failing?</code>
           <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>
         </div>
-        {% elif r.triage_url %}
-        <a href="{{ r.triage_url }}" target="_blank" style="font-size:11px;color:var(--accent)">Triage in Sippy &#8599;</a>
+        {% if r.triage_url %}
+        <a href="{{ r.triage_url }}" target="_blank" style="font-size:11px;color:var(--accent)">View in Sippy &#8599;</a>
         {% endif %}
       </td>
     </tr>
@@ -756,14 +755,12 @@
         </span>
       </td>
       <td class="action-cell">
-        {% if cr.detail_url %}
-        <a href="{{ cr.detail_url }}" target="_blank" style="font-size:11px;color:var(--accent)">View Detail &#8599;</a>
-        {% endif %}
-        {% if cr.test_id %}
         <div class="cmd-copy-row" style="margin:0">
-          <code style="font-size:11px">/ci:triage-regression {{ cr.test_id }} --version {{ cr.version }}</code>
+          <code style="font-size:11px">/ci:ask-sippy Why is test "{{ cr.test_name }}" regressing on {{ cr.comparison }} vs HA for {{ cr.version }}? What variants are affected and what changed recently?</code>
           <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>
         </div>
+        {% if cr.detail_url %}
+        <a href="{{ cr.detail_url }}" target="_blank" style="font-size:11px;color:var(--accent)">View Detail &#8599;</a>
         {% endif %}
       </td>
     </tr>
