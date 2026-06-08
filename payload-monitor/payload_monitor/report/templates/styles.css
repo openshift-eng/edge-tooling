@@ -392,6 +392,7 @@ a:hover { text-decoration: underline; }
 .fs-section:last-of-type { margin-bottom: 0; }
 .fs-section-critical { border-left: 5px solid var(--red); background: rgba(248,81,73,0.07); margin-bottom: 16px; }
 .fs-section-warning  { border-left: 4px solid var(--yellow); background: rgba(210,153,34,0.04); margin-bottom: 12px; }
+.fs-section-retried  { border-left: 4px solid var(--orange); background: rgba(219,109,40,0.04); margin-bottom: 12px; }
 .fs-section-info     { border-left: 3px solid var(--accent); background: rgba(88,166,255,0.03); }
 
 .fs-section-header {
@@ -414,6 +415,7 @@ a:hover { text-decoration: underline; }
 }
 .fs-icon-critical { background: rgba(248,81,73,0.15); color: var(--red); }
 .fs-icon-warning  { background: rgba(210,153,34,0.15); color: var(--yellow); }
+.fs-icon-retried  { background: rgba(219,109,40,0.15); color: var(--orange); }
 .fs-icon-info     { background: rgba(88,166,255,0.15); color: var(--accent); }
 
 .fs-section-content {
@@ -437,6 +439,9 @@ a:hover { text-decoration: underline; }
 .fs-section-critical .fs-section-title { font-size: 17px; font-weight: 700; }
 .fs-section-critical .fs-section-desc { font-size: 13px; }
 .fs-section-warning .fs-section-title { font-size: 16px; }
+.fs-section-retried .fs-section-title { font-size: 16px; }
+.fs-section-retried .fs-priority-label { color: var(--orange); }
+.fs-section-retried .fs-inline-jobs { border-top: 1px solid rgba(219,109,40,0.15); }
 
 .fs-section-info .fs-section-header { padding: 12px 16px; }
 .fs-section-info .fs-severity-icon { width: 28px; height: 28px; font-size: 13px; }
@@ -772,6 +777,28 @@ th.sortable.desc::after { content: ' ↓'; opacity: 1; }
 .badge.recurring { background: rgba(210,153,34,0.15); color: #f0d070; }
 .badge.persistent { background: rgba(139,92,246,0.2); color: #b49cfa; }
 .badge.escalation-risk { background: rgba(219,109,40,0.25); color: #f0a050; }
+.badge.retried { background: rgba(219,109,40,0.2); color: var(--orange); }
+.badge.green { background: rgba(63,185,80,0.2); color: var(--green); }
+
+.previous-attempts {
+  margin: 12px 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--orange);
+}
+.previous-attempts h4 {
+  font-size: 13px;
+  color: var(--orange);
+  margin-bottom: 8px;
+}
+.previous-attempt-card {
+  background: rgba(219,109,40,0.05);
+  border: 1px solid rgba(219,109,40,0.2);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+}
+.previous-attempt-card p { font-size: 13px; }
+.previous-attempt-card summary { font-size: 13px; cursor: pointer; }
 
 .cross-topo-hint { font-size: 11px; color: var(--text-muted); margin-left: 4px; }
 .cross-topo-hint .badge { font-size: 10px; padding: 1px 5px; margin-left: 2px; }

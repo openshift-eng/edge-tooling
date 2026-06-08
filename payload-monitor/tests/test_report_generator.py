@@ -19,6 +19,7 @@ from payload_monitor.models import (
     MonitorReport,
     Payload,
     PayloadStatus,
+    PreviousAttempt,
     Regression,
     StreamReport,
     SuggestedBug,
@@ -515,6 +516,141 @@ class TestJsonRoundTripNewFields:
         generate_json(report, out)
         loaded = load_json(out)
         assert loaded.jira_errors == ["JIRA search failed for j1: timeout", "JIRA search failed for j2: 403"]
+
+
+class TestRetriedSuccessesContext:
+    def test_retried_success_in_context(self):
+        pa = PreviousAttempt(prow_url="https://prow/1", result=JobResult.FAILURE)
+        job = JobRun("j1", "https://prow/2", JobResult.SUCCESS, JobType.BLOCKING,
+                     "SNO", retries=1, previous_attempts=[pa])
+        payload = Payload("t", "s", "4.19", PayloadStatus.ACCEPTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        assert len(ctx["retried_successes"]) == 1
+        assert ctx["retried_successes"][0]["job"].name == "j1"
+        assert ctx["retried_successes"][0]["version"] == "4.19"
+
+    def test_retried_success_not_in_all_failing(self):
+        pa = PreviousAttempt(prow_url="https://prow/1", result=JobResult.FAILURE)
+        job = JobRun("j1", "https://prow/2", JobResult.SUCCESS, JobType.BLOCKING,
+                     "SNO", retries=1, previous_attempts=[pa])
+        payload = Payload("t", "s", "4.19", PayloadStatus.ACCEPTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        assert ctx["all_failing"] == []
+
+    def test_no_retried_success_when_no_retries(self):
+        job = JobRun("j1", "url", JobResult.SUCCESS, JobType.BLOCKING, "SNO")
+        payload = Payload("t", "s", "4.19", PayloadStatus.ACCEPTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        assert ctx["retried_successes"] == []
+
+    def test_retried_failure_not_in_retried_successes(self):
+        pa = PreviousAttempt(prow_url="https://prow/1", result=JobResult.FAILURE)
+        job = JobRun("j1", "https://prow/2", JobResult.FAILURE, JobType.BLOCKING,
+                     "SNO", retries=1, previous_attempts=[pa])
+        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        assert ctx["retried_successes"] == []
+        assert len(ctx["all_failing"]) == 1
+
+    def test_retried_success_deduped_across_payloads(self):
+        pa = PreviousAttempt(prow_url="https://prow/1", result=JobResult.FAILURE)
+        job1 = JobRun("j1", "https://prow/2", JobResult.SUCCESS, JobType.BLOCKING,
+                      "SNO", retries=1, previous_attempts=[pa])
+        job2 = JobRun("j1", "https://prow/3", JobResult.SUCCESS, JobType.BLOCKING,
+                      "SNO", retries=1, previous_attempts=[pa])
+        p1 = Payload("t1", "s", "4.19", PayloadStatus.ACCEPTED, jobs=[job1])
+        p2 = Payload("t2", "s", "4.19", PayloadStatus.ACCEPTED, jobs=[job2])
+        stream = StreamReport("s", "4.19", payloads=[p1, p2])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        assert len(ctx["retried_successes"]) == 1
+
+
+class TestRetryJsonRoundTrip:
+    def test_retries_round_trip(self, tmp_path):
+        pa = PreviousAttempt(
+            prow_url="https://prow/1",
+            result=JobResult.FAILURE,
+            failing_tests=[FailingTest(name="t1", error_message="err1")],
+            error_summary="t1: err1",
+        )
+        job = JobRun("j", "https://prow/2", JobResult.FAILURE, JobType.BLOCKING,
+                     "SNO", retries=1, previous_attempts=[pa])
+        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        out = tmp_path / "report.json"
+        generate_json(report, out)
+        loaded = load_json(out)
+
+        loaded_job = loaded.streams[0].payloads[0].jobs[0]
+        assert loaded_job.retries == 1
+        assert len(loaded_job.previous_attempts) == 1
+        loaded_pa = loaded_job.previous_attempts[0]
+        assert loaded_pa.prow_url == "https://prow/1"
+        assert loaded_pa.result == JobResult.FAILURE
+        assert len(loaded_pa.failing_tests) == 1
+        assert loaded_pa.failing_tests[0].name == "t1"
+        assert loaded_pa.error_summary == "t1: err1"
+
+    def test_no_retries_backward_compat(self, tmp_path):
+        data = {
+            "generated_at": "now",
+            "streams": [{
+                "stream": "s", "version": "4.19",
+                "payloads": [{
+                    "tag": "t", "status": "Rejected", "url": "",
+                    "edge_jobs": [{
+                        "name": "j", "result": "F", "job_type": "blocking",
+                        "topology": "SNO", "prow_url": "url",
+                        "error_summary": "", "failing_tests": [],
+                    }],
+                }],
+                "regressions": [],
+            }],
+            "jira_bugs": [],
+            "suggested_bugs": [],
+            "component_regressions": [],
+        }
+        json_path = tmp_path / "report.json"
+        json_path.write_text(json.dumps(data))
+
+        loaded = load_json(json_path)
+        job = loaded.streams[0].payloads[0].jobs[0]
+        assert job.retries == 0
+        assert job.previous_attempts == []
+
+    def test_json_contains_retry_fields(self, tmp_path):
+        pa = PreviousAttempt(prow_url="https://prow/1", result=JobResult.FAILURE)
+        job = JobRun("j", "https://prow/2", JobResult.SUCCESS, JobType.BLOCKING,
+                     "SNO", retries=1, previous_attempts=[pa])
+        payload = Payload("t", "s", "4.19", PayloadStatus.ACCEPTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        out = tmp_path / "report.json"
+        generate_json(report, out)
+        data = json.loads(out.read_text())
+
+        job_data = data["streams"][0]["payloads"][0]["edge_jobs"][0]
+        assert job_data["retries"] == 1
+        assert len(job_data["previous_attempts"]) == 1
+        assert job_data["previous_attempts"][0]["prow_url"] == "https://prow/1"
+        assert job_data["previous_attempts"][0]["result"] == "F"
 
 
 class TestSafeDataclassInit:

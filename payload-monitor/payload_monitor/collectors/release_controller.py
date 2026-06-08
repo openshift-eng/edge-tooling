@@ -16,6 +16,7 @@ from ..models import (
     JobType,
     Payload,
     PayloadStatus,
+    PreviousAttempt,
     StreamReport,
 )
 
@@ -65,6 +66,11 @@ def _parse_jobs(
             result=_parse_job_result(info.get("state", "")),
             job_type=job_type,
             topology=topology,
+            retries=info.get("retries", 0),
+            previous_attempts=[
+                PreviousAttempt(prow_url=url, result=JobResult.FAILURE)
+                for url in info.get("previousAttemptURLs", [])
+            ],
         ))
     return runs
 
