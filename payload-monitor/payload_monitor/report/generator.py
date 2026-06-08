@@ -416,7 +416,7 @@ def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
                 rf'(\s*[^<]*?\([^)]*\)\s*</summary>\s*'
                 rf'<div class="content">\s*'
                 rf'<p><strong>Payload:</strong>[^<]*<a[^>]*>[^<]*</a></p>\s*'
-                rf'(?:<div class="previous-attempts">.*?</div>\s*|'
+                rf'(?:<div class="previous-attempts">(?=.*?<a href="{escaped_url}").*?</div>\s*|'
                 rf'<p><strong>Prow Job:</strong> <a href="{escaped_url}"))'
             )
             content = re.sub(badge_pattern, rf'\1 {badge_html}\2', content, count=1, flags=re.DOTALL)

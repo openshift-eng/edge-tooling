@@ -212,6 +212,19 @@ class TestEnrichFailingJobs:
         mock_enrich_pa.assert_called_once_with(pa)
 
 
+    @patch.object(prow, "enrich_previous_attempt")
+    @patch.object(prow, "enrich_job")
+    def test_skips_previous_attempts_when_no_topology(self, mock_enrich_job, mock_enrich_pa):
+        pa = PreviousAttempt(prow_url="https://prow/1", result=JobResult.FAILURE)
+        jobs = [
+            JobRun("j1", "url2", JobResult.FAILURE, JobType.BLOCKING, "",
+                   retries=1, previous_attempts=[pa]),
+        ]
+        prow.enrich_failing_jobs(jobs)
+        mock_enrich_job.assert_not_called()
+        mock_enrich_pa.assert_not_called()
+
+
 class TestEnrichPreviousAttempt:
     @patch.object(prow, "_fetch_gcs_file")
     def test_enriches_previous_attempt(self, mock_fetch):

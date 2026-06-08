@@ -33,6 +33,7 @@ from payload_monitor.report.generator import (
     generate_html,
     generate_json,
     load_json,
+    patch_analysis_html,
 )
 
 
@@ -683,3 +684,97 @@ class TestBlockingJobFirstIdx:
         # blocking is sorted first, so b1 should be at index 1
         assert "blocking_job_first_idx" in ctx
         assert "b1" in ctx["blocking_job_first_idx"]
+
+
+class TestPatchAnalysisHtml:
+    PROW_URL = "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/test-job/123"
+    ANALYSIS = {
+        "by_prow_url": {
+            PROW_URL: {
+                "root_cause": "test root cause",
+                "failure_type": "Infrastructure flake",
+                "impact": "low impact",
+                "suspect_prs": [],
+                "recommendation": "retry",
+            },
+        },
+    }
+
+    def _write_files(self, tmp_path, html_content):
+        html_path = tmp_path / "report.html"
+        analysis_path = tmp_path / "analysis.json"
+        html_path.write_text(html_content)
+        analysis_path.write_text(json.dumps(self.ANALYSIS))
+        return html_path, analysis_path
+
+    def test_patches_non_retry_layout(self, tmp_path):
+        html = (
+            '<p><strong>Prow Job:</strong> '
+            f'<a href="{self.PROW_URL}" target="_blank">View in Prow</a></p>\n'
+            '<div class="claude-suggestion">\n'
+            '  For deeper analysis, use Claude directly:<br>\n'
+            '  <div class="cmd-copy-row">\n'
+            f'    <code>/ci:prow-job-analyze-test-failure {self.PROW_URL}</code>\n'
+            '    <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>\n'
+            '  </div>\n'
+            '</div>'
+        )
+        html_path, analysis_path = self._write_files(tmp_path, html)
+        patch_analysis_html(html_path, analysis_path)
+        result = html_path.read_text()
+        assert "deep-analysis-card" in result
+        assert "test root cause" in result
+        assert "claude-suggestion" not in result
+
+    def test_patches_retry_layout(self, tmp_path):
+        html = (
+            '<div class="previous-attempts">\n'
+            '  <div class="previous-attempt-card">\n'
+            f'    <p><strong>Attempt #1:</strong> <a href="https://prow/prev">View in Prow</a></p>\n'
+            '  </div>\n'
+            '  <div class="previous-attempt-card" style="margin-top:8px">\n'
+            f'    <p><strong>Attempt #2:</strong> <a href="{self.PROW_URL}">View in Prow</a></p>\n'
+            '  </div>\n'
+            '</div>\n'
+            '<div class="claude-suggestion">\n'
+            '  For deeper analysis, use Claude directly:<br>\n'
+            '  <div class="cmd-copy-row">\n'
+            f'    <code>/ci:prow-job-analyze-test-failure {self.PROW_URL}</code>\n'
+            '    <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>\n'
+            '  </div>\n'
+            '</div>'
+        )
+        html_path, analysis_path = self._write_files(tmp_path, html)
+        patch_analysis_html(html_path, analysis_path)
+        result = html_path.read_text()
+        assert "deep-analysis-card" in result
+        assert "test root cause" in result
+        assert "Analysis covers all 2 attempts" in result
+
+    def test_no_match_leaves_html_unchanged(self, tmp_path):
+        html = '<p>No matching prow URL here</p>'
+        html_path, analysis_path = self._write_files(tmp_path, html)
+        patch_analysis_html(html_path, analysis_path)
+        assert html_path.read_text() == html
+
+    def test_retry_scope_note_counts_attempts(self, tmp_path):
+        html = (
+            '<div class="previous-attempts">\n'
+            '  <div class="previous-attempt-card">attempt 1</div>\n'
+            '  <div class="previous-attempt-card">attempt 2</div>\n'
+            '  <div class="previous-attempt-card">\n'
+            f'    <a href="{self.PROW_URL}">View in Prow</a>\n'
+            '  </div>\n'
+            '</div>\n'
+            '<div class="claude-suggestion">\n'
+            '  For deeper analysis, use Claude directly:<br>\n'
+            '  <div class="cmd-copy-row">\n'
+            f'    <code>/ci:prow-job-analyze-test-failure {self.PROW_URL}</code>\n'
+            '    <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>\n'
+            '  </div>\n'
+            '</div>'
+        )
+        html_path, analysis_path = self._write_files(tmp_path, html)
+        patch_analysis_html(html_path, analysis_path)
+        result = html_path.read_text()
+        assert "Analysis covers all 3 attempts" in result

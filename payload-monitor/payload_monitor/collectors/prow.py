@@ -172,6 +172,6 @@ def enrich_failing_jobs(jobs: list[JobRun], max_workers: int = 4) -> None:
             label = futures[future]
             try:
                 future.result()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — isolate per-job failures in thread pool
                 logger.error(f"Failed to enrich {label}: {e}")
                 continue
