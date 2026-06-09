@@ -366,7 +366,7 @@
       <div class="fs-blocking-row">
         <div class="fs-blocking-main">
           <span class="badge {{ item.job.topology | lower }}">{{ item.job.topology }}</span>
-          <span class="fs-blocking-name">{{ item.job.name }}</span>
+          <a class="fs-blocking-name" href="{{ item.job.prow_url }}" target="_blank">{{ item.job.name }}</a>
           <span class="badge green">Succeeded</span>
           <span class="fs-blocking-versions">{{ item.version }}</span>
         </div>
