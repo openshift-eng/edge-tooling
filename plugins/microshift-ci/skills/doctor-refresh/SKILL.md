@@ -18,7 +18,7 @@ allowed-tools: Bash, Read, Glob
 
 Regenerates the CI Doctor HTML report from existing data. Use this after `/microshift-ci:create-bugs --create` to update the report with newly created bugs.
 
-This is a lightweight operation: it does not re-analyze jobs, re-aggregate summaries, or re-query JIRA. It reads the existing bug mapping files (which include newly created bugs via the create-bugs Step 4b update) and regenerates the HTML.
+This is a lightweight operation: it does not re-analyze jobs, re-aggregate summaries, or re-query JIRA. It reads the existing bug mapping files (which include newly created bugs via the create-bugs Step 4c update) and regenerates the HTML.
 
 ## Arguments
 
@@ -47,28 +47,34 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 ### Step 2: Verify Bug Mapping Files
 
 1. Parse `<ARGUMENTS>` into a list of release versions.
-2. Check for rebase PR sources in the workdir by looking for `analyze-ci-bug-candidates-rebase-release-*.json` files. Extract the source identifiers (e.g., `rebase-release-4.22`).
-3. Verify that `<WORKDIR>/analyze-ci-bugs-<source>.json` exists for each release version and each rebase PR source.
+2. Check for rebase PR sources in the workdir by looking for `bugs/bug-candidates-rebase-release-*.json` files. Extract the source identifiers (e.g., `rebase-release-4.22`).
+3. Verify that `<WORKDIR>/bugs/bug-matches-<source>.json` exists for each release version and each rebase PR source.
 4. If any mapping files are missing, report which ones are missing and show an error:
 
    ```text
    Error: bug mapping files missing for: <sources>
-   Run the full create-bugs workflow first: /microshift-ci:create-bugs <sources> --create --auto
+   Run the full create-bugs workflow first: /microshift-ci:create-bugs <sources> --create
    ```
 
    Continue to Step 3 anyway — the HTML report will be generated with whatever data is available.
 
-**Do NOT** delete bug mapping files. **Do NOT** launch create-bugs agents. The mapping files are produced by the preceding `/microshift-ci:create-bugs` session and include newly created bugs (via Step 4b of the create-bugs skill).
+**Do NOT** delete bug mapping files. **Do NOT** launch create-bugs agents. The mapping files are produced by the preceding `/microshift-ci:create-bugs` session and include newly created bugs (via Step 4c of the create-bugs skill).
 
-### Step 3: Regenerate HTML Report
+### Step 3: Check for Closed Bugs
+
+Read `<WORKDIR>/close-stale-bugs/closed-bugs.json`. If the file does not exist, skip this step — do not pass `--ignore` in Step 4. If the file exists but fails to parse as valid JSON, or the parsed object does not contain an array field named `closed`, log a warning and proceed as if the file were absent (do not set `IGNORE_KEYS`, do not pass `--ignore` in Step 4). If the `closed` array is present and non-empty, join the keys with commas to form an `IGNORE_KEYS` string (e.g., `USHIFT-1234,USHIFT-5678`).
+
+### Step 4: Regenerate HTML Report
 
 Run the refresh script:
 
 ```text
-bash plugins/microshift-ci/scripts/doctor.sh refresh --component microshift --workdir <WORKDIR> <ARGUMENTS>
+bash plugins/microshift-ci/scripts/doctor.sh refresh --component microshift --workdir <WORKDIR> [--ignore <IGNORE_KEYS>] <ARGUMENTS>
 ```
 
-### Step 4: Report Completion
+Include `--ignore <IGNORE_KEYS>` only if Step 3 produced a non-empty key list.
+
+### Step 5: Report Completion
 
 Display the path to the regenerated HTML report.
 
@@ -100,4 +106,4 @@ Display the path to the regenerated HTML report.
 
 - This skill does NOT re-analyze jobs, re-aggregate summaries, or re-query JIRA — it only regenerates the HTML from existing data
 - Bug mapping files must already exist from a prior `/microshift-ci:create-bugs` run
-- Newly created bugs are included because the create-bugs skill updates the mapping files after creation (Step 4b)
+- Newly created bugs are included because the create-bugs skill updates the mapping files after creation (Step 4c)

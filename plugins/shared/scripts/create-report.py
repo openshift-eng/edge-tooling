@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate an HTML report from analyze-ci JSON files.
+Generate an HTML report from CI analysis JSON files.
 
 Shared across components (MicroShift, LVMS, etc.) via symlinks in each
 plugin's scripts/ directory.
@@ -48,6 +48,7 @@ CSS = """\
         h1 { color: #1a1a2e; border-bottom: 3px solid #e94560; padding-bottom: 8px; font-size: 1.4em; margin: 10px 0; }
         h2 { font-size: 1.15em; margin: 0; }
         h3 { font-size: 1.05em; margin: 0 0 8px 0; }
+        .release-section h3 { margin: 18px 0 4px 0; }
         .release-section { background: white; border-radius: 8px; padding: 15px; margin: 15px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .release-header { display: flex; justify-content: space-between; align-items: center; }
         .release-header h2 { color: #16213e; margin: 0; }
@@ -88,6 +89,9 @@ CSS = """\
         .toc li { padding: 5px 0; }
         .toc a { color: #0366d6; text-decoration: none; }
         .toc a:hover { text-decoration: underline; }
+        .toc-header { display: flex; justify-content: space-between; align-items: center; }
+        .filter-toggle { cursor: pointer; user-select: none; font-size: 0.9em; color: #6c757d; font-weight: 400; }
+        .filter-toggle input[type="checkbox"] { margin-right: 5px; vertical-align: middle; }
         .timestamp { color: #6c757d; font-size: 0.9em; }
         a { color: #0366d6; }
         .tab-bar { display: flex; gap: 0; margin: 20px 0 0 0; border-bottom: 2px solid #dee2e6; }
@@ -160,6 +164,51 @@ document.querySelectorAll('.col-title').forEach(function(el) {
 function toggleGraph(id) {
     var el = document.getElementById(id);
     if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+function filterToday(on) {
+    var today = new Date().toISOString().split('T')[0];
+    document.querySelectorAll('#tab-periodics .issue-row').forEach(function(row) {
+        var dates = (row.getAttribute('data-dates') || '').split(' ');
+        var show = !on || dates.indexOf(today) !== -1;
+        row.style.display = show ? '' : 'none';
+        var detail = row.nextElementSibling;
+        if (detail && detail.classList.contains('detail-row')) {
+            if (!show) detail.classList.remove('show');
+            detail.style.display = show ? '' : 'none';
+        }
+    });
+    document.querySelectorAll('#tab-periodics .release-section').forEach(function(sec) {
+        var id = sec.id.replace('release-', '');
+        var rows = sec.querySelectorAll('.issue-row');
+        var total = 0, bd = {build: 0, test: 0, infra: 0};
+        rows.forEach(function(r) {
+            if (r.style.display !== 'none') {
+                total++;
+                var ft = r.querySelector('.col-ftype .ftype-badge');
+                if (ft) {
+                    var t = ft.textContent.trim().toLowerCase();
+                    if (t === 'build') bd.build++;
+                    else if (t === 'infra') bd.infra++;
+                    else bd.test++;
+                }
+            }
+        });
+        var lbl = total === 1 ? 'failure' : 'failures';
+        var summary = total + ' ' + lbl + ' (' + bd.build + ' build, ' + bd.test + ' test, ' + bd.infra + ' infra)';
+        var toc = document.querySelector('.toc-counts[data-release="' + id + '"]');
+        if (toc) toc.textContent = summary;
+        var badge = sec.querySelector('.release-badge');
+        if (badge) {
+            badge.textContent = total + ' ' + lbl;
+            badge.className = 'badge release-badge ' + (total === 0 ? 'badge-ok' : total >= 5 ? 'badge-critical' : 'badge-issues');
+        }
+        var bdb = sec.querySelector('.bd-build');
+        var bdt = sec.querySelector('.bd-test');
+        var bdi = sec.querySelector('.bd-infra');
+        if (bdb) bdb.textContent = bd.build;
+        if (bdt) bdt.textContent = bd.test;
+        if (bdi) bdi.textContent = bd.infra;
+    });
 }
 function showGraphTab(btn, paneId) {
     var container = btn.closest('.perf-graphs');
@@ -246,11 +295,12 @@ document.querySelectorAll('.bugs-table').forEach(function(table) {
         rows.forEach(function(r) { tbody.appendChild(r); });
     }
     headers.forEach(function(th, colIdx) {
+        if (!th.textContent.trim()) return;
         th.addEventListener('click', function() {
             sortBy(colIdx, !th.classList.contains('sort-asc'));
         });
     });
-    if (headers.length) sortBy(headers.length - 1, false);
+    if (headers.length >= 2) sortBy(headers.length - 2, false);
 });"""
 
 
@@ -259,44 +309,43 @@ document.querySelectorAll('.bugs-table').forEach(function(table) {
 # ---------------------------------------------------------------------------
 
 def discover_files(workdir, releases):
-    result = {"releases": {}, "prs": {"summary": None, "status": None, "bugs": [], "error": None}, "open_bugs": None}
+    result = {"releases": {}, "prs": {"summary": None, "status": None, "bugs": [], "error": None}}
+
+    jobs_dir = os.path.join(workdir, "jobs")
+    bugs_dir = os.path.join(workdir, "bugs")
 
     for version in releases:
         entry = {"summary": None, "bugs": None, "jobs": None, "error": None}
-        path = os.path.join(workdir, f"analyze-ci-release-{version}-summary.json")
+        path = os.path.join(jobs_dir, f"release-{version}-summary.json")
         if os.path.exists(path):
             entry["summary"] = path
-        path = os.path.join(workdir, f"analyze-ci-bugs-{version}.json")
+        path = os.path.join(bugs_dir, f"bug-matches-{version}.json")
         if os.path.exists(path):
             entry["bugs"] = path
-        path = os.path.join(workdir, f"analyze-ci-release-{version}-jobs.json")
+        path = os.path.join(jobs_dir, f"release-{version}-jobs.json")
         if os.path.exists(path):
             entry["jobs"] = path
-        path = os.path.join(workdir, f"analyze-ci-release-{version}-error.txt")
+        path = os.path.join(jobs_dir, f"release-{version}-error.txt")
         if os.path.exists(path):
             with open(path) as f:
                 entry["error"] = f.read().strip()
         result["releases"][version] = entry
 
-    path = os.path.join(workdir, "analyze-ci-prs-summary.json")
+    path = os.path.join(jobs_dir, "prs-summary.json")
     if os.path.exists(path):
         result["prs"]["summary"] = path
 
-    path = os.path.join(workdir, "analyze-ci-prs-status.json")
+    path = os.path.join(jobs_dir, "prs-status.json")
     if os.path.exists(path):
         result["prs"]["status"] = path
 
-    for path in glob_mod.glob(os.path.join(workdir, "analyze-ci-bugs-rebase-release-*.json")):
+    for path in glob_mod.glob(os.path.join(bugs_dir, "bug-matches-rebase-release-*.json")):
         result["prs"]["bugs"].append(path)
 
-    path = os.path.join(workdir, "analyze-ci-prs-error.txt")
+    path = os.path.join(jobs_dir, "prs-error.txt")
     if os.path.exists(path):
         with open(path) as f:
             result["prs"]["error"] = f.read().strip()
-
-    path = os.path.join(workdir, "analyze-ci-open-bugs.json")
-    if os.path.exists(path):
-        result["open_bugs"] = path
 
     return result
 
@@ -380,7 +429,7 @@ def match_issue_to_bugs(issue_title, bug_candidates):
 # Bugs tab data
 # ---------------------------------------------------------------------------
 
-def _collect_linked_bugs(bug_data, pr_bug_paths):
+def _collect_linked_bugs(bug_data, pr_bug_paths, ignore_keys=None):
     """Extract all JIRA keys from bug mapping duplicates, with release associations.
 
     Returns (linked, details) where:
@@ -393,7 +442,7 @@ def _collect_linked_bugs(bug_data, pr_bug_paths):
     def _add(cand, release_label):
         for dup in cand.get("duplicates", []):
             key = dup.get("key", "")
-            if not key:
+            if not key or (ignore_keys and key in ignore_keys):
                 continue
             existing = linked.get(key, [])
             if any(link["release"] == release_label for link in existing):
@@ -404,7 +453,7 @@ def _collect_linked_bugs(bug_data, pr_bug_paths):
                 "affected_jobs": cand.get("affected_jobs", 0),
             })
             if key not in details:
-                details[key] = {"summary": dup.get("summary", ""), "status": dup.get("status", ""), "updated": dup.get("updated", "")}
+                details[key] = {"summary": dup.get("summary", ""), "status": dup.get("status", ""), "assignee": dup.get("assignee", ""), "updated": dup.get("updated", "")}
 
     for version, candidates in bug_data.items():
         for cand in candidates:
@@ -422,6 +471,7 @@ def _pick_bug_fields(issue, links=None):
         "key": issue.get("key", ""),
         "summary": issue.get("summary", ""),
         "status": issue.get("status", ""),
+        "assignee": issue.get("assignee", ""),
         "updated": issue.get("updated", ""),
     }
     if links is not None:
@@ -429,7 +479,7 @@ def _pick_bug_fields(issue, links=None):
     return entry
 
 
-def _add_matched_links(linked_map, linked_details, releases_data, pr_data, all_bug_candidates):
+def _add_matched_links(linked_map, linked_details, releases_data, pr_data, all_bug_candidates, ignore_keys=None):
     """Add release/PR associations discovered by pooled candidate matching.
 
     Walks each release's and PR's issues, runs match_issue_to_bugs against the
@@ -443,7 +493,7 @@ def _add_matched_links(linked_map, linked_details, releases_data, pr_data, all_b
                 continue
             for entry in match.get("duplicates", []):
                 key = entry.get("key", "")
-                if not key:
+                if not key or (ignore_keys and key in ignore_keys):
                     continue
                 existing = linked_map.get(key, [])
                 if any(link["release"] == release_label for link in existing):
@@ -454,7 +504,7 @@ def _add_matched_links(linked_map, linked_details, releases_data, pr_data, all_b
                     "affected_jobs": issue.get("job_count", 0),
                 })
                 if key not in linked_details:
-                    linked_details[key] = {"summary": entry.get("summary", ""), "status": entry.get("status", ""), "updated": entry.get("updated", "")}
+                    linked_details[key] = {"summary": entry.get("summary", ""), "status": entry.get("status", ""), "assignee": entry.get("assignee", ""), "updated": entry.get("updated", "")}
 
     for version, rdata in (releases_data or {}).items():
         if rdata and rdata.get("issues"):
@@ -466,12 +516,12 @@ def _add_matched_links(linked_map, linked_details, releases_data, pr_data, all_b
                 _scan_issues(pr["issues"], "PRs")
 
 
-def build_bugs_tab_data(open_bugs_data, bug_data, pr_bug_paths, releases_data=None, pr_data=None, all_bug_candidates=None):
+def build_bugs_tab_data(open_bugs_data, bug_data, pr_bug_paths, releases_data=None, pr_data=None, all_bug_candidates=None, ignore_keys=None):
     """Cross-reference open bugs query with bug mapping files."""
-    linked_map, linked_details = _collect_linked_bugs(bug_data, pr_bug_paths)
+    linked_map, linked_details = _collect_linked_bugs(bug_data, pr_bug_paths, ignore_keys)
 
     if all_bug_candidates and (releases_data or pr_data):
-        _add_matched_links(linked_map, linked_details, releases_data, pr_data, all_bug_candidates)
+        _add_matched_links(linked_map, linked_details, releases_data, pr_data, all_bug_candidates, ignore_keys)
 
     if open_bugs_data and open_bugs_data.get("issues"):
         linked = []
@@ -533,6 +583,41 @@ def _bug_sort_key(bug):
     return (prio, bug.get("key", ""))
 
 
+def _render_bugs_table(bugs, show_releases=True):
+    lines = []
+    lines.append('            <table class="bugs-table">')
+    lines.append("            <thead><tr>")
+    cols = '<th>JIRA</th><th>Status</th><th>Assignee</th><th>Summary</th>'
+    if show_releases:
+        cols += '<th>Releases</th>'
+    cols += '<th>Updated</th><th></th>'
+    lines.append(f'                {cols}')
+    lines.append("            </tr></thead>")
+    lines.append("            <tbody>")
+    for bug in bugs:
+        key = _e(bug["key"])
+        href = f"https://issues.redhat.com/browse/{key}"
+        summary = _e(bug.get("summary", ""))
+        status = _e(bug.get("status", ""))
+        assignee = _e(bug.get("assignee", ""))
+        updated = _e(bug.get("updated", ""))
+        anchor_id = f'bug-{key}'
+        lines.append(f'            <tr id="{anchor_id}">')
+        lines.append(f'                <td><a href="{href}" target="_blank">{key}</a></td>')
+        lines.append(f"                <td>{status}</td>")
+        lines.append(f"                <td>{assignee}</td>")
+        lines.append(f"                <td>{summary}</td>")
+        if show_releases:
+            releases_cell = _format_release_links(bug["links"]) if bug.get("links") else ""
+            lines.append(f"                <td>{releases_cell}</td>")
+        lines.append(f"                <td>{updated}</td>")
+        lines.append(f'                <td><a href="#{anchor_id}" class="anchor-link" title="Copy link to this bug">&#128279;</a></td>')
+        lines.append("            </tr>")
+    lines.append("            </tbody>")
+    lines.append("            </table>")
+    return lines
+
+
 def render_bugs_section(bugs_data):
     """Render the Bugs tab HTML."""
     linked = bugs_data["linked"]
@@ -582,39 +667,15 @@ def render_bugs_section(bugs_data):
             "Run the full doctor workflow to include all open AI-generated bugs.</p>"
         )
 
-    # Table
-    all_bugs = sorted(linked, key=_bug_sort_key) + sorted(unlinked, key=_bug_sort_key)
+    # Linked table
+    if linked:
+        lines.append('            <h3>Linked to Failures</h3>')
+        lines.extend(_render_bugs_table(sorted(linked, key=_bug_sort_key), show_releases=True))
 
-    if all_bugs:
-        lines.append('            <table class="bugs-table">')
-        lines.append("            <thead><tr>")
-        lines.append('                <th>JIRA</th><th>Status</th><th>Summary</th>')
-        lines.append('                <th>Releases</th><th>Updated</th>')
-        lines.append("            </tr></thead>")
-        lines.append("            <tbody>")
-
-        for bug in all_bugs:
-            key = _e(bug["key"])
-            href = f"https://issues.redhat.com/browse/{key}"
-            summary = _e(bug.get("summary", ""))
-            status = _e(bug.get("status", ""))
-            updated = _e(bug.get("updated", ""))
-
-            if bug.get("links"):
-                releases_cell = _format_release_links(bug["links"])
-            else:
-                releases_cell = '<span class="link-badge link-badge-unlinked">NOT LINKED</span>'
-
-            lines.append("            <tr>")
-            lines.append(f'                <td><a href="{href}" target="_blank">{key}</a></td>')
-            lines.append(f"                <td>{status}</td>")
-            lines.append(f"                <td>{summary}</td>")
-            lines.append(f"                <td>{releases_cell}</td>")
-            lines.append(f"                <td>{updated}</td>")
-            lines.append("            </tr>")
-
-        lines.append("            </tbody>")
-        lines.append("            </table>")
+    # Unlinked table
+    if unlinked and jira_available:
+        lines.append('            <h3>Not Linked</h3>')
+        lines.extend(_render_bugs_table(sorted(unlinked, key=_bug_sort_key), show_releases=False))
 
     lines.append("        </div>")
     return "\n".join(lines)
@@ -746,20 +807,24 @@ def _render_bug_links(bug_match):
     if has_dups:
         parts.append("<strong>Bugs:</strong><br>")
         for d in bug_match["duplicates"]:
+            assignee = d.get("assignee", "")
+            assignee_part = f", {_e(assignee)}" if assignee else ""
             parts.append(
                 f'<a class="bug-tag bug-tag-open" '
                 f'href="https://issues.redhat.com/browse/{_e(d["key"])}" '
                 f'target="_blank">{_e(d["key"])}</a> '
-                f'<span class="job-date">{_e(d["summary"])} ({_e(d["status"])})</span><br>'
+                f'<span class="job-date">{_e(d["summary"])} ({_e(d["status"])}{assignee_part})</span><br>'
             )
     if has_regs:
         parts.append("<strong>Regressions:</strong><br>")
         for r in bug_match["regressions"]:
+            assignee = r.get("assignee", "")
+            assignee_part = f", {_e(assignee)}" if assignee else ""
             parts.append(
                 f'<a class="bug-tag bug-tag-regression" '
                 f'href="https://issues.redhat.com/browse/{_e(r["key"])}" '
                 f'target="_blank">{_e(r["key"])} &#x27F2;</a> '
-                f'<span class="job-date">{_e(r["summary"])} ({_e(r["status"])})</span><br>'
+                f'<span class="job-date">{_e(r["summary"])} ({_e(r["status"])}{assignee_part})</span><br>'
             )
     return "".join(parts)
 
@@ -801,12 +866,12 @@ def render_release_section(version, rdata, bug_candidates):
     lines.append('            <div class="release-header">')
     lines.append(f'                <h2>Release {_e(version)}<a href="#release-{_e(version)}" class="section-anchor" title="Copy link to this section">&#128279;</a></h2>')
     label = "failure" if total == 1 else "failures"
-    lines.append(f'                <span class="badge {badge}">{total} {label}</span>')
+    lines.append(f'                <span class="badge {badge} release-badge" data-release="{_e(version)}">{total} {label}</span>')
     lines.append("            </div>")
     lines.append('            <div class="breakdown">')
-    lines.append(f'                <span class="breakdown-item"><strong>{b["build"]}</strong> Build</span>')
-    lines.append(f'                <span class="breakdown-item"><strong>{b["test"]}</strong> Test</span>')
-    lines.append(f'                <span class="breakdown-item"><strong>{b["infrastructure"]}</strong> Infrastructure</span>')
+    lines.append(f'                <span class="breakdown-item"><strong class="bd-build">{b["build"]}</strong> Build</span>')
+    lines.append(f'                <span class="breakdown-item"><strong class="bd-test">{b["test"]}</strong> Test</span>')
+    lines.append(f'                <span class="breakdown-item"><strong class="bd-infra">{b["infrastructure"]}</strong> Infrastructure</span>')
     lines.append("            </div>")
 
     lines.append('            <table class="issues-table">')
@@ -820,8 +885,10 @@ def render_release_section(version, rdata, bug_candidates):
         ftype_css = "ftype-infra" if ftype == "infrastructure" else f"ftype-{ftype}"
         jobs_label = f'{jc} {"job" if jc == 1 else "jobs"}'
 
+        job_dates = sorted({j["date"][:10] for j in issue.get("affected_jobs", []) if j.get("date")})
+        dates_attr = f' data-dates="{" ".join(job_dates)}"' if job_dates else ""
         anchor_id = f'release-{_e(version)}-{issue["number"]}'
-        lines.append(f'            <tr class="issue-row" id="{anchor_id}">')
+        lines.append(f'            <tr class="issue-row" id="{anchor_id}"{dates_attr}>')
         lines.append(f'                <td class="col-sev"><span class="severity-badge {sev_css}">{sev}</span></td>')
         lines.append(f'                <td class="col-ftype"><span class="ftype-badge {ftype_css}">{ftype_label}</span></td>')
         lines.append(f'                <td class="col-title">{_e(issue["title"])}</td>')
@@ -1058,7 +1125,9 @@ def generate_html(component_title, releases_data, all_bug_candidates, pr_data, p
             b = rdata["breakdown"]
             toc.append(
                 f'                <li><a href="#release-{_e(version)}">Release {_e(version)}</a> &mdash; '
-                f'{rdata["total_failed"]} failures ({b["build"]} build, {b["test"]} test, {b["infrastructure"]} infra)</li>'
+                f'<span class="toc-counts" data-release="{_e(version)}">'
+                f'{rdata["total_failed"]} failures ({b["build"]} build, {b["test"]} test, {b["infrastructure"]} infra)'
+                f'</span></li>'
             )
         else:
             toc.append(f'                <li><a href="#release-{_e(version)}">Release {_e(version)}</a> &mdash; no data</li>')
@@ -1098,7 +1167,10 @@ def generate_html(component_title, releases_data, all_bug_candidates, pr_data, p
 
     <div id="tab-periodics" class="tab-content active">
         <div class="toc">
-            <h3>Table of Contents</h3>
+            <div class="toc-header">
+                <h3>Table of Contents</h3>
+                <label class="filter-toggle"><input type="checkbox" id="filter-today" onchange="filterToday(this.checked)"> Today only</label>
+            </div>
             <ul>
 {chr(10).join(toc)}
             </ul>
@@ -1133,6 +1205,7 @@ def main():
     workdir = None
     releases_arg = None
     component = None
+    ignore_keys = set()
 
     args = sys.argv[1:]
     i = 0
@@ -1148,6 +1221,12 @@ def main():
                 print("Error: --component requires an argument", file=sys.stderr)
                 sys.exit(1)
             component = args[i + 1]
+            i += 2
+        elif args[i] == "--ignore":
+            if i + 1 >= len(args):
+                print("Error: --ignore requires an argument", file=sys.stderr)
+                sys.exit(1)
+            ignore_keys = {k.strip() for k in args[i + 1].split(",") if k.strip()}
             i += 2
         elif args[i].startswith("-"):
             print(f"Unknown option: {args[i]}", file=sys.stderr)
@@ -1211,8 +1290,6 @@ def main():
     else:
         print("  PRs: no data")
 
-    print(f"  Open bugs: {'found' if files['open_bugs'] else 'not available'}")
-
     if not found_any:
         print(f"\nError: no analysis files found in {workdir}", file=sys.stderr)
         sys.exit(1)
@@ -1255,7 +1332,7 @@ def main():
     for path in pr_entry["bugs"]:
         all_bug_candidates.extend(load_bug_candidates(path))
 
-    # Collect open bugs from mapping files (deduplicated), fallback to standalone file
+    # Collect open bugs from mapping files (deduplicated)
     all_open_bugs = []
     seen_open_keys = set()
     bug_file_paths = [files["releases"][v]["bugs"] for v in releases if files["releases"].get(v, {}).get("bugs")]
@@ -1266,13 +1343,22 @@ def main():
                 seen_open_keys.add(bug["key"])
                 all_open_bugs.append(bug)
 
-    if all_open_bugs:
-        open_bugs_data = {"date": datetime.now(timezone.utc).strftime("%Y-%m-%d"), "total": len(all_open_bugs), "issues": all_open_bugs}
-    else:
-        open_bugs_data = load_json(files["open_bugs"])
-    bugs_tab_data = build_bugs_tab_data(open_bugs_data, bug_data, pr_entry["bugs"], releases_data, pr_data, all_bug_candidates)
+    open_bugs_data = {"date": datetime.now(timezone.utc).strftime("%Y-%m-%d"), "total": len(all_open_bugs), "issues": all_open_bugs} if all_open_bugs else None
 
-    bugs_summary_path = os.path.join(workdir, "analyze-ci-bugs-summary.json")
+    if ignore_keys:
+        print(f"  Ignoring {len(ignore_keys)} closed bug(s): {', '.join(sorted(ignore_keys))}")
+        if open_bugs_data and open_bugs_data.get("issues"):
+            open_bugs_data["issues"] = [b for b in open_bugs_data["issues"] if b.get("key") not in ignore_keys]
+            open_bugs_data["total"] = len(open_bugs_data["issues"])
+        for version in bug_data:
+            for cand in bug_data[version]:
+                cand["duplicates"] = [d for d in cand.get("duplicates", []) if d.get("key") not in ignore_keys]
+
+    bugs_tab_data = build_bugs_tab_data(open_bugs_data, bug_data, pr_entry["bugs"], releases_data, pr_data, all_bug_candidates, ignore_keys)
+
+    bugs_dir = os.path.join(workdir, "bugs")
+    os.makedirs(bugs_dir, exist_ok=True)
+    bugs_summary_path = os.path.join(bugs_dir, "bug-matches-summary.json")
     with open(bugs_summary_path, "w") as f:
         json.dump(bugs_tab_data, f, indent=2)
 
@@ -1286,7 +1372,7 @@ def main():
     timestamp = datetime.now(timezone.utc)
     html_content = generate_html(component_title, releases_data, all_bug_candidates, pr_data, pr_status, timestamp, pr_error, bugs_tab_data)
 
-    output_path = os.path.join(workdir, f"{component}-ci-doctor-report.html")
+    output_path = os.path.join(workdir, f"report-{component}-ci-doctor.html")
     with open(output_path, "w") as f:
         f.write(html_content)
 

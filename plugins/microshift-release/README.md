@@ -31,9 +31,8 @@ Additional skills are planned for each release testing phase:
 ## Requirements
 
 - VPN (for Brew RPM checks, advisory reports)
-- `ATLASSIAN_API_TOKEN` and `ATLASSIAN_EMAIL` (optional, for Jira/advisory queries)
 - `GITLAB_API_TOKEN` (optional, for 4.20+ advisory reports)
-- Product Pages MCP server (optional, for time range lookups)
+- Atlassian MCP server (for ART ticket queries and OCPBUGS lookups via OAuth)
 - Python 3
 - **Category:** ci-cd
 

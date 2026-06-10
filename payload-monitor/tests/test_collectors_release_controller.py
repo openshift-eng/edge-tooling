@@ -11,6 +11,7 @@ from payload_monitor.models import (
     JobResult,
     JobType,
     PayloadStatus,
+    PreviousAttempt,
     StreamReport,
 )
 
@@ -83,6 +84,94 @@ class TestParseJobs:
         assert len(result) == 2
         topologies = {j.topology for j in result}
         assert topologies == {"SNO", "TNA"}
+
+    def test_parses_retries_and_previous_attempts(self, config):
+        jobs_dict = {
+            "periodic-sno-test": {
+                "url": "https://prow/2",
+                "state": "Failed",
+                "retries": 1,
+                "previousAttemptURLs": ["https://prow/1"],
+            },
+        }
+        result = rc._parse_jobs(jobs_dict, JobType.BLOCKING, config)
+        assert len(result) == 1
+        job = result[0]
+        assert job.retries == 1
+        assert len(job.previous_attempts) == 1
+        assert job.previous_attempts[0].prow_url == "https://prow/1"
+        assert job.previous_attempts[0].result == JobResult.FAILURE
+
+    def test_no_retry_fields_defaults(self, config):
+        jobs_dict = {
+            "periodic-sno-test": {"url": "https://prow/1", "state": "Succeeded"},
+        }
+        result = rc._parse_jobs(jobs_dict, JobType.BLOCKING, config)
+        assert result[0].retries == 0
+        assert result[0].previous_attempts == []
+
+    def test_multiple_previous_attempts(self, config):
+        jobs_dict = {
+            "periodic-sno-test": {
+                "url": "https://prow/3",
+                "state": "Succeeded",
+                "retries": 2,
+                "previousAttemptURLs": ["https://prow/1", "https://prow/2"],
+            },
+        }
+        result = rc._parse_jobs(jobs_dict, JobType.BLOCKING, config)
+        job = result[0]
+        assert job.retries == 2
+        assert len(job.previous_attempts) == 2
+        assert job.previous_attempts[0].prow_url == "https://prow/1"
+        assert job.previous_attempts[1].prow_url == "https://prow/2"
+
+
+    def test_retries_null_defaults_to_zero(self, config):
+        jobs_dict = {
+            "periodic-sno-test": {"url": "https://prow/1", "state": "Succeeded", "retries": None},
+        }
+        result = rc._parse_jobs(jobs_dict, JobType.BLOCKING, config)
+        assert result[0].retries == 0
+
+    def test_retries_non_int_defaults_to_zero(self, config):
+        jobs_dict = {
+            "periodic-sno-test": {"url": "https://prow/1", "state": "Succeeded", "retries": "bad"},
+        }
+        result = rc._parse_jobs(jobs_dict, JobType.BLOCKING, config)
+        assert result[0].retries == 0
+
+    def test_previous_attempts_null_defaults_to_empty(self, config):
+        jobs_dict = {
+            "periodic-sno-test": {
+                "url": "https://prow/1", "state": "Succeeded",
+                "previousAttemptURLs": None,
+            },
+        }
+        result = rc._parse_jobs(jobs_dict, JobType.BLOCKING, config)
+        assert result[0].previous_attempts == []
+
+    def test_previous_attempts_non_list_defaults_to_empty(self, config):
+        jobs_dict = {
+            "periodic-sno-test": {
+                "url": "https://prow/1", "state": "Succeeded",
+                "previousAttemptURLs": "not-a-list",
+            },
+        }
+        result = rc._parse_jobs(jobs_dict, JobType.BLOCKING, config)
+        assert result[0].previous_attempts == []
+
+    def test_previous_attempts_filters_null_entries(self, config):
+        jobs_dict = {
+            "periodic-sno-test": {
+                "url": "https://prow/2", "state": "Failed",
+                "retries": 2,
+                "previousAttemptURLs": [None, "https://prow/1", ""],
+            },
+        }
+        result = rc._parse_jobs(jobs_dict, JobType.BLOCKING, config)
+        assert len(result[0].previous_attempts) == 1
+        assert result[0].previous_attempts[0].prow_url == "https://prow/1"
 
 
 class TestDiscoverStreams:

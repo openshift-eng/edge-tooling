@@ -5,7 +5,7 @@ Evaluates whether MicroShift should participate in upcoming OCP X, Y, or Z
 releases by checking lifecycle status, OCP availability, advisory CVEs,
 code changes, and the 90-day rule.
 
-Usage: precheck_xyz.py [version...] [--verbose]
+Usage: precheck_xyz.py <version...> [--verbose] [--json]
 """
 
 import argparse
@@ -38,18 +38,11 @@ def run_advisory_report(version, repo_root):
         dict: Parsed JSON report, or {"error": "...", "skipped": True} on failure.
     """
     # Check prerequisites
-    missing = []
-    for var in ["ATLASSIAN_API_TOKEN", "ATLASSIAN_EMAIL"]:
-        if not os.environ.get(var, "").strip():
-            missing.append(var)
     parts = version.split(".")
     if len(parts) >= 2 and parts[1].isdigit():
         minor_int = int(parts[1])
         if minor_int >= 20 and not os.environ.get("GITLAB_API_TOKEN", "").strip():
-            missing.append("GITLAB_API_TOKEN")
-
-    if missing:
-        return {"error": f"Missing env vars: {', '.join(missing)}", "skipped": True}
+            return {"error": "Missing env var: GITLAB_API_TOKEN", "skipped": True}
 
     # Check VPN
     if not brew.check_vpn():
@@ -244,10 +237,11 @@ def compute_recommendation(evaluation):
 def _resolve_range_base(version, minor, z):
     """Resolve the git range base for counting commits since a release.
 
-    Tries three strategies in order:
+    Tries four strategies in order:
     1. Exact git tag for the version.
     2. Brew NVR commit hash (embedded in the RPM build metadata).
-    3. Nearest previous z-stream tag.
+    3. Pyxis image tag commit hash (embedded in published container tags).
+    4. Nearest previous z-stream tag.
 
     Args:
         version: Published version string, e.g., "4.21.11".
@@ -272,8 +266,17 @@ def _resolve_range_base(version, minor, z):
         logger.warning("Brew commit %s for %s not found in local clone",
                        commit, version)
 
-    # Strategy 3: nearest previous tag
-    logger.warning("Brew commit not found, searching for nearest tag...")
+    # Strategy 3: Pyxis image tag commit hash
+    commit = pyxis.extract_commit_from_image(version)
+    if commit and git_ops.verify_commit_exists(commit):
+        logger.info("Using Pyxis commit %s for %s", commit, version)
+        return None, commit
+    if commit:
+        logger.warning("Pyxis commit %s for %s not found in local clone",
+                       commit, version)
+
+    # Strategy 4: nearest previous tag
+    logger.warning("No commit found via tag/Brew/Pyxis, searching for nearest tag...")
     nearest_ver, _ = git_ops.find_nearest_version_tag(minor, z - 1)
     if nearest_ver:
         logger.info("Using nearest available tag: %s", nearest_ver)
@@ -373,7 +376,7 @@ def evaluate_version(version, lifecycle_data, repo_root):
     result["commits"] = len(commit_list)
     result["commit_list"] = commit_list
 
-    # 4b: OCPBUGS resolved bugs (fixVersion + commit message references)
+    # 4b: OCPBUGS references from commit messages (enriched via MCP at skill level)
     logger.info("Checking resolved OCPBUGS for %s...", version)
     try:
         result["ocpbugs"] = ocpbugs.query_resolved_bugs(
@@ -707,7 +710,7 @@ def format_text_full(output):
 
 def main():
     parser = argparse.ArgumentParser(description="MicroShift X/Y/Z release evaluation")
-    parser.add_argument("versions", nargs="*", help="X.Y or X.Y.Z versions")
+    parser.add_argument("versions", nargs="+", help="X.Y or X.Y.Z versions")
     parser.add_argument("--verbose", action="store_true",
                         help="Show detailed tables instead of one-line summary")
     parser.add_argument("--json", action="store_true", dest="json_output",
@@ -745,33 +748,7 @@ def main():
         sys.exit(1)
 
     # Step 2: Determine versions to evaluate
-    if args.versions:
-        versions = expand_versions(args.versions, lifecycle_data)
-    else:
-        # No versions specified: query ART Jira for releases due within 7 days
-        logger.info("Querying ART Jira for releases due within 7 days...")
-        art_tickets = art_jira.query_art_releases_due(days_ahead=7)
-        versions = []
-        for ticket in art_tickets:
-            v = ticket["version"]
-            minor = ".".join(v.split(".")[:2])
-            if lifecycle.is_version_active(minor, lifecycle_data):
-                versions.append(v)
-        if not versions:
-            logger.info("No ART releases due within 7 days")
-
-    # Filter out EOL versions (auto-discovered only; explicit versions always evaluated)
-    if not args.versions:
-        active_versions = []
-        for v in versions:
-            minor = ".".join(v.split(".")[:2])
-            if lifecycle.is_version_active(minor, lifecycle_data):
-                active_versions.append(v)
-            else:
-                lc = lifecycle.get_lifecycle_status(minor, lifecycle_data)
-                phase = lc["phase"] if lc else "unknown"
-                logger.info("Skipping %s (%s)", v, phase)
-        versions = active_versions
+    versions = expand_versions(args.versions, lifecycle_data)
 
     # Step 3: Evaluate each version (parallel when multiple)
     evaluations = []

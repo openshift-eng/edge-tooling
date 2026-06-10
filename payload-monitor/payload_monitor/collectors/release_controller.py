@@ -16,6 +16,7 @@ from ..models import (
     JobType,
     Payload,
     PayloadStatus,
+    PreviousAttempt,
     StreamReport,
 )
 
@@ -59,12 +60,25 @@ def _parse_jobs(
         topology = config.classify_topology(name)
         if topology is None:
             continue
+        raw_retries = info.get("retries")
+        try:
+            retries = int(raw_retries) if raw_retries is not None else 0
+        except (TypeError, ValueError):
+            retries = 0
+        raw_urls = info.get("previousAttemptURLs")
+        urls = raw_urls if isinstance(raw_urls, list) else []
         runs.append(JobRun(
             name=name,
             prow_url=info.get("url", ""),
             result=_parse_job_result(info.get("state", "")),
             job_type=job_type,
             topology=topology,
+            retries=retries,
+            previous_attempts=[
+                PreviousAttempt(prow_url=url, result=JobResult.FAILURE)
+                for url in urls
+                if url
+            ],
         ))
     return runs
 

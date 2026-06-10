@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
-from ..models import FailingTest, JobResult, JobRun
+from ..models import FailingTest, JobResult, JobRun, PreviousAttempt
 
 logger = logging.getLogger(__name__)
 
@@ -129,18 +129,49 @@ def enrich_job(job: JobRun) -> None:
         )
 
 
-def enrich_failing_jobs(jobs: list[JobRun], max_workers: int = 4) -> None:
-    """Enrich all failing edge jobs with test failure details."""
-    failing = [j for j in jobs if j.result == JobResult.FAILURE and j.topology]
-    if not failing:
+def enrich_previous_attempt(attempt: PreviousAttempt) -> None:
+    """Enrich a previous attempt with test failure details from Prow artifacts."""
+    if not attempt.prow_url:
         return
-    logger.info(f"Enriching {len(failing)} failing edge jobs with Prow data")
+
+    gcs_base = _prow_url_to_gcs_path(attempt.prow_url)
+    if not gcs_base:
+        logger.debug(f"Could not parse GCS path from {attempt.prow_url}")
+        return
+
+    junit_path = f"{gcs_base}/artifacts/junit_operator.xml"
+    xml_content = _fetch_gcs_file(junit_path)
+    if xml_content:
+        attempt.failing_tests = _parse_junit(xml_content)
+        attempt.error_summary = _extract_error_summary(attempt.failing_tests)
+        logger.debug(
+            f"  previous attempt: {len(attempt.failing_tests)} failing tests"
+        )
+
+
+def enrich_failing_jobs(jobs: list[JobRun], max_workers: int = 4) -> None:
+    """Enrich all failing edge jobs and previous attempts with test failure details."""
+    failing = [j for j in jobs if j.result == JobResult.FAILURE and j.topology]
+    prev_attempts = [
+        pa for j in jobs if j.topology
+        for pa in j.previous_attempts
+    ]
+    if not failing and not prev_attempts:
+        return
+    logger.info(
+        f"Enriching {len(failing)} failing edge jobs and "
+        f"{len(prev_attempts)} previous attempt(s) with Prow data"
+    )
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(enrich_job, job): job for job in failing}
+        futures = {}
+        for job in failing:
+            futures[pool.submit(enrich_job, job)] = f"job:{job.name}"
+        for pa in prev_attempts:
+            futures[pool.submit(enrich_previous_attempt, pa)] = f"attempt:{pa.prow_url}"
         for future in as_completed(futures):
-            job = futures[future]
+            label = futures[future]
             try:
                 future.result()
-            except Exception as e:
-                logger.error(f"Failed to enrich job {job.name}: {e}")
+            except Exception as e:  # noqa: BLE001 — isolate per-job failures in thread pool
+                logger.error(f"Failed to enrich {label}: {e}")
                 continue

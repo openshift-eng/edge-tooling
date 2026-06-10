@@ -9,9 +9,9 @@ Usage:
     aggregate.py --release 4.22 [--workdir DIR]
     aggregate.py --prs [--workdir DIR]
 
-Output files:
-    analyze-ci-release-<version>-summary.json
-    analyze-ci-prs-summary.json
+Output files (under ${WORKDIR}/jobs/):
+    jobs/release-<version>-summary.json
+    jobs/prs-summary.json
 """
 
 import json
@@ -313,12 +313,12 @@ def build_pr_json(pr_jobs, timestamp):
 # ---------------------------------------------------------------------------
 
 def find_release_job_files(workdir, release):
-    pattern = os.path.join(workdir, f"analyze-ci-release-{release}-job-*.txt")
+    pattern = os.path.join(workdir, "jobs", f"release-{release}-job-*.txt")
     return sorted(glob_mod.glob(pattern))
 
 
 def find_pr_job_files(workdir):
-    pattern = os.path.join(workdir, "analyze-ci-prs-job-*.txt")
+    pattern = os.path.join(workdir, "jobs", "prs-job-*.txt")
     return sorted(glob_mod.glob(pattern))
 
 
@@ -403,7 +403,9 @@ def main():
             sys.exit(1)
 
         result = build_release_json(release, jobs, timestamp)
-        output_path = os.path.join(workdir, f"analyze-ci-release-{release}-summary.json")
+        jobs_dir = os.path.join(workdir, "jobs")
+        os.makedirs(jobs_dir, exist_ok=True)
+        output_path = os.path.join(jobs_dir, f"release-{release}-summary.json")
         with open(output_path, "w") as f:
             json.dump(result, f, indent=2)
         print(f"Written: {output_path}", file=sys.stderr)
@@ -434,7 +436,9 @@ def main():
 
             result = build_pr_json(pr_jobs, timestamp)
 
-        output_path = os.path.join(workdir, "analyze-ci-prs-summary.json")
+        jobs_dir = os.path.join(workdir, "jobs")
+        os.makedirs(jobs_dir, exist_ok=True)
+        output_path = os.path.join(jobs_dir, "prs-summary.json")
         with open(output_path, "w") as f:
             json.dump(result, f, indent=2)
         print(f"Written: {output_path}", file=sys.stderr)

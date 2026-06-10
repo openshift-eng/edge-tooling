@@ -60,6 +60,14 @@ class FailingTest:
 
 
 @dataclass
+class PreviousAttempt:
+    prow_url: str
+    result: JobResult
+    failing_tests: list[FailingTest] = field(default_factory=list)
+    error_summary: str = ""
+
+
+@dataclass
 class JobRun:
     name: str
     prow_url: str
@@ -69,6 +77,8 @@ class JobRun:
     failing_tests: list[FailingTest] = field(default_factory=list)
     error_summary: str = ""
     deep_analysis: Optional[DeepAnalysis] = None
+    retries: int = 0
+    previous_attempts: list[PreviousAttempt] = field(default_factory=list)
 
 
 @dataclass

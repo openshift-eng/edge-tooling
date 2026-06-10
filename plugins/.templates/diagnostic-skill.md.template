@@ -1,0 +1,107 @@
+---
+name: {{PLUGIN_NAME}}:{{SKILL_NAME}}
+description: "{{DESCRIPTION}}"
+argument-hint: "[diagnose | validate <procedure> | recovery-guide <scenario>]"
+allowed-tools: Bash, Read, AskUserQuestion
+user-invocable: true
+---
+
+# {{PLUGIN_NAME}}:{{SKILL_NAME}}
+
+## Synopsis
+
+```text
+/{{PLUGIN_NAME}}:{{SKILL_NAME}}
+/{{PLUGIN_NAME}}:{{SKILL_NAME}} validate "proposed procedure description"
+/{{PLUGIN_NAME}}:{{SKILL_NAME}} recovery-guide <scenario>
+```
+
+## Description
+
+Diagnose {{COMPONENT}} issues on {{TOPOLOGY}} clusters. Gathers live cluster
+state via SSH, analyzes it against a validated knowledge base, and reports
+findings with severity classification. Read-only — never modifies cluster state.
+
+## Prerequisites
+
+SSH access to a running cluster via one of:
+
+1. **Hypervisor hop** (dev-scripts): Set `HYPERVISOR` env var or have `two-node-toolbox/` available
+2. **Direct SSH** (bare metal): Set `NODE_0` and `NODE_1` env vars to node IPs
+
+Optional: `BMC_0`, `BMC_1`, `BMC_USER`, `BMC_PASS` for Redfish power state checks.
+
+The `validate` and `recovery-guide` modes do not require SSH access.
+
+## Modes
+
+### diagnose (default)
+
+No argument or `diagnose`. Gathers live cluster state and analyzes it.
+
+1. Run the diagnostic script:
+
+   ```bash
+   bash "${PLUGIN_DIR}/scripts/{{DIAGNOSTIC_SCRIPT}}"
+   ```
+
+2. Read the knowledge base:
+
+   ```text
+   Read ${PLUGIN_DIR}/references/{{KNOWLEDGE_BASE}}
+   ```
+
+3. Parse each `=== Section ===` block from the script output.
+4. Check for immediate blockers (severity table in the knowledge base).
+5. Match the situation to a known scenario (test run cross-reference).
+6. Report findings using the output format below.
+
+### validate
+
+Argument starts with `validate`. Checks a proposed procedure against the knowledge base.
+
+1. Read the knowledge base.
+2. Parse the procedure description from `$ARGUMENTS` (everything after `validate`).
+3. Check each step against the failure modes section.
+4. Report BLOCKER/WARNING/INFO findings for each problematic step.
+
+### recovery-guide
+
+Argument starts with `recovery-guide`. Returns the correct procedure for a scenario.
+
+1. Read the knowledge base.
+2. Match the scenario argument to a procedure in the knowledge base.
+3. Present the procedure with commands for the user to copy and run.
+4. If no match, list available scenarios and ask the user to pick one.
+
+## Output Format
+
+```markdown
+## Diagnostic Report
+
+### Cluster State Summary
+| Component | Status |
+|-----------|--------|
+| Node 0    | (Online / standby / OFFLINE / NotReady) |
+| Node 1    | (Online / standby / OFFLINE / NotReady) |
+| Pacemaker | (Healthy / Degraded / Down) |
+| etcd      | (2 voters / 1 voter + 1 learner / ...) |
+| Fencing   | (Enabled / Disabled) |
+
+### Findings
+| # | Severity | Finding | Recommended Action |
+|---|----------|---------|-------------------|
+
+### Scenario Match
+Closest match: (scenario name from knowledge base)
+
+### Expected Timeline
+(from knowledge base recovery timelines)
+```
+
+## Rules
+
+1. **Never execute** recovery or shutdown commands. Only recommend — all commands in the report are for the user to copy and run.
+2. **Always read** the knowledge base before making recommendations. Do not rely on internal knowledge for topology-specific behavior.
+3. **Report partial data** if some diagnostic commands fail (e.g., API unreachable). Analyze what was gathered and note the gaps.
+4. **No cluster modification.** This skill is read-only.

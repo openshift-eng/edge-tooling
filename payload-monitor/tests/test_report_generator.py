@@ -19,6 +19,7 @@ from payload_monitor.models import (
     MonitorReport,
     Payload,
     PayloadStatus,
+    PreviousAttempt,
     Regression,
     StreamReport,
     SuggestedBug,
@@ -32,6 +33,7 @@ from payload_monitor.report.generator import (
     generate_html,
     generate_json,
     load_json,
+    patch_analysis_html,
 )
 
 
@@ -517,6 +519,141 @@ class TestJsonRoundTripNewFields:
         assert loaded.jira_errors == ["JIRA search failed for j1: timeout", "JIRA search failed for j2: 403"]
 
 
+class TestRetriedSuccessesContext:
+    def test_retried_success_in_context(self):
+        pa = PreviousAttempt(prow_url="https://prow/1", result=JobResult.FAILURE)
+        job = JobRun("j1", "https://prow/2", JobResult.SUCCESS, JobType.BLOCKING,
+                     "SNO", retries=1, previous_attempts=[pa])
+        payload = Payload("t", "s", "4.19", PayloadStatus.ACCEPTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        assert len(ctx["retried_successes"]) == 1
+        assert ctx["retried_successes"][0]["job"].name == "j1"
+        assert ctx["retried_successes"][0]["version"] == "4.19"
+
+    def test_retried_success_not_in_all_failing(self):
+        pa = PreviousAttempt(prow_url="https://prow/1", result=JobResult.FAILURE)
+        job = JobRun("j1", "https://prow/2", JobResult.SUCCESS, JobType.BLOCKING,
+                     "SNO", retries=1, previous_attempts=[pa])
+        payload = Payload("t", "s", "4.19", PayloadStatus.ACCEPTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        assert ctx["all_failing"] == []
+
+    def test_no_retried_success_when_no_retries(self):
+        job = JobRun("j1", "url", JobResult.SUCCESS, JobType.BLOCKING, "SNO")
+        payload = Payload("t", "s", "4.19", PayloadStatus.ACCEPTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        assert ctx["retried_successes"] == []
+
+    def test_retried_failure_not_in_retried_successes(self):
+        pa = PreviousAttempt(prow_url="https://prow/1", result=JobResult.FAILURE)
+        job = JobRun("j1", "https://prow/2", JobResult.FAILURE, JobType.BLOCKING,
+                     "SNO", retries=1, previous_attempts=[pa])
+        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        assert ctx["retried_successes"] == []
+        assert len(ctx["all_failing"]) == 1
+
+    def test_retried_success_deduped_across_payloads(self):
+        pa = PreviousAttempt(prow_url="https://prow/1", result=JobResult.FAILURE)
+        job1 = JobRun("j1", "https://prow/2", JobResult.SUCCESS, JobType.BLOCKING,
+                      "SNO", retries=1, previous_attempts=[pa])
+        job2 = JobRun("j1", "https://prow/3", JobResult.SUCCESS, JobType.BLOCKING,
+                      "SNO", retries=1, previous_attempts=[pa])
+        p1 = Payload("t1", "s", "4.19", PayloadStatus.ACCEPTED, jobs=[job1])
+        p2 = Payload("t2", "s", "4.19", PayloadStatus.ACCEPTED, jobs=[job2])
+        stream = StreamReport("s", "4.19", payloads=[p1, p2])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        assert len(ctx["retried_successes"]) == 1
+
+
+class TestRetryJsonRoundTrip:
+    def test_retries_round_trip(self, tmp_path):
+        pa = PreviousAttempt(
+            prow_url="https://prow/1",
+            result=JobResult.FAILURE,
+            failing_tests=[FailingTest(name="t1", error_message="err1")],
+            error_summary="t1: err1",
+        )
+        job = JobRun("j", "https://prow/2", JobResult.FAILURE, JobType.BLOCKING,
+                     "SNO", retries=1, previous_attempts=[pa])
+        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        out = tmp_path / "report.json"
+        generate_json(report, out)
+        loaded = load_json(out)
+
+        loaded_job = loaded.streams[0].payloads[0].jobs[0]
+        assert loaded_job.retries == 1
+        assert len(loaded_job.previous_attempts) == 1
+        loaded_pa = loaded_job.previous_attempts[0]
+        assert loaded_pa.prow_url == "https://prow/1"
+        assert loaded_pa.result == JobResult.FAILURE
+        assert len(loaded_pa.failing_tests) == 1
+        assert loaded_pa.failing_tests[0].name == "t1"
+        assert loaded_pa.error_summary == "t1: err1"
+
+    def test_no_retries_backward_compat(self, tmp_path):
+        data = {
+            "generated_at": "now",
+            "streams": [{
+                "stream": "s", "version": "4.19",
+                "payloads": [{
+                    "tag": "t", "status": "Rejected", "url": "",
+                    "edge_jobs": [{
+                        "name": "j", "result": "F", "job_type": "blocking",
+                        "topology": "SNO", "prow_url": "url",
+                        "error_summary": "", "failing_tests": [],
+                    }],
+                }],
+                "regressions": [],
+            }],
+            "jira_bugs": [],
+            "suggested_bugs": [],
+            "component_regressions": [],
+        }
+        json_path = tmp_path / "report.json"
+        json_path.write_text(json.dumps(data))
+
+        loaded = load_json(json_path)
+        job = loaded.streams[0].payloads[0].jobs[0]
+        assert job.retries == 0
+        assert job.previous_attempts == []
+
+    def test_json_contains_retry_fields(self, tmp_path):
+        pa = PreviousAttempt(prow_url="https://prow/1", result=JobResult.FAILURE)
+        job = JobRun("j", "https://prow/2", JobResult.SUCCESS, JobType.BLOCKING,
+                     "SNO", retries=1, previous_attempts=[pa])
+        payload = Payload("t", "s", "4.19", PayloadStatus.ACCEPTED, jobs=[job])
+        stream = StreamReport("s", "4.19", payloads=[payload])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        out = tmp_path / "report.json"
+        generate_json(report, out)
+        data = json.loads(out.read_text())
+
+        job_data = data["streams"][0]["payloads"][0]["edge_jobs"][0]
+        assert job_data["retries"] == 1
+        assert len(job_data["previous_attempts"]) == 1
+        assert job_data["previous_attempts"][0]["prow_url"] == "https://prow/1"
+        assert job_data["previous_attempts"][0]["result"] == "F"
+
+
 class TestSafeDataclassInit:
     def test_ignores_unknown_keys(self):
         result = _safe_dataclass_init(JiraBug, {
@@ -547,3 +684,97 @@ class TestBlockingJobFirstIdx:
         # blocking is sorted first, so b1 should be at index 1
         assert "blocking_job_first_idx" in ctx
         assert "b1" in ctx["blocking_job_first_idx"]
+
+
+class TestPatchAnalysisHtml:
+    PROW_URL = "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/test-job/123"
+    ANALYSIS = {
+        "by_prow_url": {
+            PROW_URL: {
+                "root_cause": "test root cause",
+                "failure_type": "Infrastructure flake",
+                "impact": "low impact",
+                "suspect_prs": [],
+                "recommendation": "retry",
+            },
+        },
+    }
+
+    def _write_files(self, tmp_path, html_content):
+        html_path = tmp_path / "report.html"
+        analysis_path = tmp_path / "analysis.json"
+        html_path.write_text(html_content)
+        analysis_path.write_text(json.dumps(self.ANALYSIS))
+        return html_path, analysis_path
+
+    def test_patches_non_retry_layout(self, tmp_path):
+        html = (
+            '<p><strong>Prow Job:</strong> '
+            f'<a href="{self.PROW_URL}" target="_blank">View in Prow</a></p>\n'
+            '<div class="claude-suggestion">\n'
+            '  For deeper analysis, use Claude directly:<br>\n'
+            '  <div class="cmd-copy-row">\n'
+            f'    <code>/ci:prow-job-analyze-test-failure {self.PROW_URL}</code>\n'
+            '    <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>\n'
+            '  </div>\n'
+            '</div>'
+        )
+        html_path, analysis_path = self._write_files(tmp_path, html)
+        patch_analysis_html(html_path, analysis_path)
+        result = html_path.read_text()
+        assert "deep-analysis-card" in result
+        assert "test root cause" in result
+        assert "claude-suggestion" not in result
+
+    def test_patches_retry_layout(self, tmp_path):
+        html = (
+            '<div class="previous-attempts">\n'
+            '  <div class="previous-attempt-card">\n'
+            f'    <p><strong>Attempt #1:</strong> <a href="https://prow/prev">View in Prow</a></p>\n'
+            '  </div>\n'
+            '  <div class="previous-attempt-card" style="margin-top:8px">\n'
+            f'    <p><strong>Attempt #2:</strong> <a href="{self.PROW_URL}">View in Prow</a></p>\n'
+            '  </div>\n'
+            '</div>\n'
+            '<div class="claude-suggestion">\n'
+            '  For deeper analysis, use Claude directly:<br>\n'
+            '  <div class="cmd-copy-row">\n'
+            f'    <code>/ci:prow-job-analyze-test-failure {self.PROW_URL}</code>\n'
+            '    <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>\n'
+            '  </div>\n'
+            '</div>'
+        )
+        html_path, analysis_path = self._write_files(tmp_path, html)
+        patch_analysis_html(html_path, analysis_path)
+        result = html_path.read_text()
+        assert "deep-analysis-card" in result
+        assert "test root cause" in result
+        assert "Analysis covers all 2 attempts" in result
+
+    def test_no_match_leaves_html_unchanged(self, tmp_path):
+        html = '<p>No matching prow URL here</p>'
+        html_path, analysis_path = self._write_files(tmp_path, html)
+        patch_analysis_html(html_path, analysis_path)
+        assert html_path.read_text() == html
+
+    def test_retry_scope_note_counts_attempts(self, tmp_path):
+        html = (
+            '<div class="previous-attempts">\n'
+            '  <div class="previous-attempt-card">attempt 1</div>\n'
+            '  <div class="previous-attempt-card">attempt 2</div>\n'
+            '  <div class="previous-attempt-card">\n'
+            f'    <a href="{self.PROW_URL}">View in Prow</a>\n'
+            '  </div>\n'
+            '</div>\n'
+            '<div class="claude-suggestion">\n'
+            '  For deeper analysis, use Claude directly:<br>\n'
+            '  <div class="cmd-copy-row">\n'
+            f'    <code>/ci:prow-job-analyze-test-failure {self.PROW_URL}</code>\n'
+            '    <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>\n'
+            '  </div>\n'
+            '</div>'
+        )
+        html_path, analysis_path = self._write_files(tmp_path, html)
+        patch_analysis_html(html_path, analysis_path)
+        result = html_path.read_text()
+        assert "Analysis covers all 3 attempts" in result

@@ -1,4 +1,4 @@
-# MicroShift CI Plugin
+# MicroShift CI Doctor Plugin
 
 ## Installation
 
@@ -7,17 +7,18 @@
 /plugin install microshift-ci
 ```
 
-## What Runs in CI
+## What Runs In CI
 
 A periodic Prow job (`periodic-ci-openshift-eng-edge-tooling-main-microshift-ci-doctor`)
-runs daily and performs three phases automatically:
+runs daily and performs these phases automatically:
 
-1. **Analysis** - `/microshift-ci:doctor 4.18,4.19,4.20,4.21,4.22,5.0,main`
-   (50 min budget, 100 turns)
-2. **Bug creation dry-run** - `/microshift-ci:create-bugs <releases>`
-   (10 min budget, 50 turns)
-3. **Close duplicate rebase PRs** - closes older rebase PRs superseded by newer ones
-4. **Rebase PR restart** - restarts failed rebase bot PR tests
+1. **Close duplicate rebase PRs** - closes older rebase PRs superseded by newer ones
+2. **Analysis** - `/microshift-ci:doctor <releases>`
+3. **Bug creation** - `/microshift-ci:create-bugs <releases> --create`
+4. **Close stale bugs** - `/microshift-ci:close-stale-bugs --close` - closes AI-generated, unassigned, unlinked bugs inactive for more than 10 days
+5. **Fix test bugs dry-run** - `/microshift-ci:fix-test-bugs <releases>` - reports which bugs are eligible for auto-fix
+6. **Report refresh** - `/microshift-ci:doctor-refresh <releases>` - re-generates the HTML report with new bug links
+7. **Rebase PR restart** - restarts failed rebase bot PR tests
 
 The job produces an HTML report, per-job analysis files, bug mapping JSON,
 and a session archive for local continuation. All artifacts are available
@@ -25,9 +26,12 @@ in the Prow job's artifact directory.
 
 ## Daily Workflow
 
+The commands below use `<releases>` as a placeholder for the comma-separated
+release list. The current CI default is `4.18,4.19,4.20,4.21,4.22,5.0,main`.
+
 Start from the CI job results - don't re-run doctor locally.
 
-### 1. Open the CI job
+### 1. Open The CI Job
 
 Find the latest run at
 [MicroShift CI Doctor](https://prow.ci.openshift.org/?job=periodic-ci-openshift-eng-edge-tooling-main-microshift-ci-doctor).
@@ -36,7 +40,7 @@ The Prow Spyglass of a job page contains the `MicroShift CI Doctor Report`
 section, which is the main entry point. The report shows all failures grouped
 by release with JIRA correlation.
 
-### 2. Continue locally
+### 2. Continue Locally
 
 The Prow Spyglass of a job page contains the `Continue This MicroShift CI Session Locally`
 section, containing the command for downloading the CI session artifacts into
@@ -53,25 +57,31 @@ commands work on the downloaded data.
 > (build logs, SOS reports) are not included. Use `/microshift-ci:prow-job`
 > to fetch those for specific jobs.
 
-### 3. Review bug candidates
+### 3. Review Open Bugs
 
-```text
-/microshift-ci:create-bugs 4.20,4.21,4.22,5.0,main --auto
-```
+The CI job automatically creates JIRA bugs for new failures in the `USHIFT`
+project with the label `microshift-ci-ai-generated`. The **Bugs** tab in
+the HTML report shows all currently open bugs with links to the corresponding
+failures.
 
-Dry-run: shows what bugs would be created or skipped, with decisions
-(duplicate, stale regression, infrastructure, or new).
+Alternatively, list all unresolved AI-generated bugs in JIRA using the
+[JIRA query](https://redhat.atlassian.net/issues?jql=project%20%3D%20USHIFT%20AND%20labels%20%3D%20%22microshift-ci-ai-generated%22%20AND%20resolution%20%3D%20Unresolved%20ORDER%20BY%20created%20DESC).
 
-### 4. Create bugs
+To review what was created, skipped (duplicate, stale regression, infrastructure),
+or already tracked, check the `report-create-bugs.txt` file in the
+working directory.
 
-```text
-/microshift-ci:create-bugs 4.20,4.21,4.22,5.0,main --auto --create
-```
+Each bug should be reviewed and either acted on or closed:
 
-Executes: creates JIRA bugs in USHIFT, skips duplicates and infrastructure failures.
-Drop `--auto` for interactive per-candidate prompts.
+- **Actionable** - assign to the appropriate developer or attempt an
+  auto-fix (see [Fix Eligible Bugs](#4-fix-eligible-bugs))
+- **Duplicate** - close as duplicate, linking to the existing bug
+- **Infrastructure / transient** - close as not-a-bug if the failure
+  is environmental and not expected to recur
+- **Not reproducible** - close if the failure has not been seen in
+  subsequent CI runs
 
-### 5. Investigate specific failures
+To investigate a specific failure in more detail:
 
 ```text
 /microshift-ci:prow-job <prow-url>
@@ -83,16 +93,38 @@ Drop `--auto` for interactive per-candidate prompts.
 - `test-job` - comprehensive job metadata and all scenario results
 - `test-scenario` - deep dive into one scenario's test results
 
-### 6. Refresh report after changes
+### 4. Fix Eligible Bugs
 
 ```text
-/microshift-ci:doctor-refresh 4.20,4.21,4.22,5.0,main
+/microshift-ci:fix-test-bugs <releases>
 ```
 
-Re-runs JIRA correlation and regenerates the HTML report from existing
-job analysis files (does not re-analyze jobs).
+Loads merged candidates from the create-bugs output, groups related bugs by
+shared root cause, evaluates each group against eligibility gates, and reports
+which groups can be auto-fixed in `test/`, `scripts/`, or `docs/`.
 
-## PR Job Management
+Gates:
+
+1. **No existing PR** - checks GitHub for OPEN/MERGED PRs matching any key in the group
+2. **In-scope files** - fix target must be in `test/`, `scripts/`, or `docs/`
+3. **Code-fixable** - root cause is a test/script issue, not a product bug
+
+To attempt fixes (opens draft PRs in openshift/microshift):
+
+```text
+/microshift-ci:fix-test-bugs <releases> --fix
+```
+
+`--fix` attempts all eligible fixes without prompting.
+Each group gets its own branch and draft PR for independent review.
+
+Can also target specific bugs:
+
+```text
+/microshift-ci:fix-test-bugs USHIFT-1234,USHIFT-5678 --fix
+```
+
+## Appendix A: PR Job Management
 
 The CI job automatically closes duplicate rebase PRs and restarts failed
 rebase bot PR tests. To run manually:
@@ -117,7 +149,7 @@ bash plugins/microshift-ci/scripts/prow-jobs-for-pull-requests.sh \
   --mode restart --author 'microshift-rebase-script[bot]' --execute
 ```
 
-## More Info
+## Appendix B: More Information
 
-See the [plugin README](../../plugins/microshift-ci/README.md) for prerequisites,
+See the plugin [README](../../plugins/microshift-ci/README.md) for prerequisites,
 full skill list, and usage examples.

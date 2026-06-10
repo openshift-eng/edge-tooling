@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 
 set -euo pipefail
 
@@ -14,7 +14,7 @@ if [[ ! -d "${ENVDIR}" ]]; then
 fi
 "${ENVDIR}/bin/python3" -m pip install -r "${SCRIPTDIR}/requirements.txt" >&2
 
-CMD="${1:?Usage: precheck.sh <xyz|nightly|ecrc> [args...]}"
+CMD="${1:?Usage: precheck.sh <xyz|nightly|ecrc|enrich> [args...]}"
 shift
 
 case "${CMD}" in
@@ -27,9 +27,12 @@ case "${CMD}" in
     ecrc)
         "${ENVDIR}/bin/python3" "${SCRIPTDIR}/precheck_ecrc.py" "$@"
         ;;
+    enrich)
+        "${ENVDIR}/bin/python3" "${SCRIPTDIR}/enrich_ocpbugs.py" "$@"
+        ;;
     *)
         echo "Unknown command: ${CMD}" >&2
-        echo "Usage: precheck.sh <xyz|nightly|ecrc> [args...]" >&2
+        echo "Usage: precheck.sh <xyz|nightly|ecrc|enrich> [args...]" >&2
         exit 1
         ;;
 esac

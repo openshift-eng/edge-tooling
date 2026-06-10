@@ -47,7 +47,7 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
    ```
 
 3. The script deterministically:
-   - For each release: fetches failed periodic jobs, downloads artifacts, writes `<WORKDIR>/analyze-ci-release-<version>-jobs.json`
+   - For each release: fetches failed periodic jobs, downloads artifacts, writes `<WORKDIR>/jobs/release-<version>-jobs.json`
    - Outputs a JSON summary listing all releases, job counts, and file paths
 4. Read the JSON output to know which releases have jobs to analyze and how many
 
@@ -78,7 +78,7 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
    Agent: subagent_type=general_purpose, prompt="Analyze this Prow job and save the report:
    1. Run /lvms-ci:prow-job <ARTIFACTS_DIR>
    2. After the analysis completes, save the FULL report output (including the --- STRUCTURED SUMMARY --- block) to:
-      <WORKDIR>/analyze-ci-release-<RELEASE>-job-<N>-<JOB_ID>.txt
+      <WORKDIR>/jobs/release-<RELEASE>-job-<N>-<JOB_ID>.txt
       Use the Write tool to save the file. The file must contain the complete analysis report."
    ```
 
@@ -102,7 +102,7 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 
 2. The script deterministically:
    - Runs `aggregate.py` for each release → `summary.json` files
-   - Runs `create-report.py` → `lvm-operator-ci-doctor-report.html`
+   - Runs `create-report.py` → `report-lvm-operator-ci-doctor.html`
 3. Report the script's output to the user
 
 ### Step 4: Report Completion
@@ -120,7 +120,7 @@ Summary:
     Release main: 3 failed periodic jobs
     Release 4.22: 0 failed periodic jobs
 
-HTML report generated: <WORKDIR>/lvm-operator-ci-doctor-report.html
+HTML report generated: <WORKDIR>/report-lvm-operator-ci-doctor.html
 ```
 
 ## Examples

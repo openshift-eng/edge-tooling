@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 set -euo pipefail
 
 # Prow Jobs for Pull Requests
@@ -12,6 +12,8 @@ PROW_VIEW="https://prow.ci.openshift.org/view/gs/test-platform-results"
 GH_REPO="openshift/microshift"
 GCS_PR_PREFIX="pr-logs/pull/openshift_microshift"
 SIGNATURE=$'\n'"*Added by $(basename "${0}")* :robot:"$'\n'
+SCRIPT_TMPDIR=$(mktemp -d)
+trap 'rm -rf "${SCRIPT_TMPDIR}"' EXIT
 
 # Get open PRs as JSON array
 # Args: filter, author, extra_fields (comma-separated, appended to default fields)
@@ -117,15 +119,15 @@ mode_summary() {
     [[ "$(echo "${pr_data}" | jq 'length')" -eq 0 ]] && { echo "[]"; return; }
 
     echo "Fetching job results..." >&2
-    output_tmp=$(mktemp)
+    local output_tmp="${SCRIPT_TMPDIR}/summary-output"
+    echo -n "" > "${output_tmp}"
 
     while IFS=$'\t' read -r pr_number pr_title pr_url; do
-        local tmpdir
-        tmpdir=$(mktemp -d)
+        local tmpdir="${SCRIPT_TMPDIR}/summary-pr-${pr_number}"
+        mkdir -p "${tmpdir}"
 
         if ! fetch_pr_results "${pr_number}" "${tmpdir}"; then
             echo "PR #${pr_number}: incomplete job results, skipping" >&2
-            rm -rf "${tmpdir}"
             continue
         fi
 
@@ -141,7 +143,6 @@ mode_summary() {
                 *)       other=$((other + 1)) ;;
             esac
         done
-        rm -rf "${tmpdir}"
 
         jq -nc --argjson n "${pr_number}" --arg t "${pr_title}" --arg u "${pr_url}" \
             --argjson p "${passed}" --argjson f "${failed}" \
@@ -151,7 +152,6 @@ mode_summary() {
     done < <(echo "${pr_data}" | jq -r '.[] | [.number, .title, .url] | @tsv')
 
     jq -s '.' "${output_tmp}"
-    rm -f "${output_tmp}"
 }
 
 # Detail mode: JSON array of PRs with full job lists
@@ -164,21 +164,20 @@ mode_detail() {
     [[ "$(echo "${pr_data}" | jq 'length')" -eq 0 ]] && { echo "[]"; return; }
 
     echo "Fetching job results..." >&2
-    output_tmp=$(mktemp)
+    local output_tmp="${SCRIPT_TMPDIR}/detail-output"
+    echo -n "" > "${output_tmp}"
 
     while IFS=$'\t' read -r pr_number pr_title pr_url; do
-        local tmpdir
-        tmpdir=$(mktemp -d)
+        local tmpdir="${SCRIPT_TMPDIR}/detail-pr-${pr_number}"
+        mkdir -p "${tmpdir}"
 
         if ! fetch_pr_results "${pr_number}" "${tmpdir}"; then
             echo "PR #${pr_number}: incomplete job results, skipping" >&2
-            rm -rf "${tmpdir}"
             continue
         fi
 
         local jobs_json
         jobs_json=$(collect_jobs_json "${tmpdir}")
-        rm -rf "${tmpdir}"
 
         jq -nc --argjson n "${pr_number}" --arg t "${pr_title}" --arg u "${pr_url}" \
             --argjson jobs "${jobs_json}" \
@@ -186,7 +185,6 @@ mode_detail() {
     done < <(echo "${pr_data}" | jq -r '.[] | [.number, .title, .url] | @tsv')
 
     jq -s '.' "${output_tmp}"
-    rm -f "${output_tmp}"
 }
 
 # Approve mode: add /verified to PRs where all jobs pass
@@ -202,12 +200,11 @@ mode_approve() {
     echo "Fetching job results..." >&2
 
     while IFS=$'\t' read -r pr_number pr_title pr_url; do
-        local tmpdir
-        tmpdir=$(mktemp -d)
+        local tmpdir="${SCRIPT_TMPDIR}/approve-pr-${pr_number}"
+        mkdir -p "${tmpdir}"
 
         if ! fetch_pr_results "${pr_number}" "${tmpdir}"; then
             echo "PR #${pr_number}: incomplete job results, skipping"
-            rm -rf "${tmpdir}"
             continue
         fi
 
@@ -219,7 +216,6 @@ mode_approve() {
             total=$((total + 1))
             [[ "${status}" == "SUCCESS" ]] && success=$((success + 1))
         done
-        rm -rf "${tmpdir}"
 
         if [[ "${total}" -eq 0 ]]; then
             echo "PR #${pr_number}: No jobs found, skipping"
@@ -261,12 +257,11 @@ mode_restart() {
     echo "Fetching job results..." >&2
 
     while IFS=$'\t' read -r pr_number pr_title pr_url; do
-        local tmpdir
-        tmpdir=$(mktemp -d)
+        local tmpdir="${SCRIPT_TMPDIR}/restart-pr-${pr_number}"
+        mkdir -p "${tmpdir}"
 
         if ! fetch_pr_results "${pr_number}" "${tmpdir}"; then
             echo "PR #${pr_number}: incomplete job results, skipping"
-            rm -rf "${tmpdir}"
             continue
         fi
 
@@ -280,12 +275,9 @@ mode_restart() {
         done
 
         if [[ ${#failed_jobs[@]} -eq 0 ]]; then
-            rm -rf "${tmpdir}"
             echo "PR #${pr_number}: No failed jobs, skipping"
             continue
         fi
-
-        rm -rf "${tmpdir}"
 
         # Fetch short /test names from prowjob.json for each failed job
         local comment=""

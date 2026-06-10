@@ -350,6 +350,44 @@
   </div>
   {% endif %}
 
+  {# RETRIED: Blocking jobs that passed only after retry — flaky but not blocking #}
+  {% if retried_successes %}
+  <div class="fs-section fs-section-retried">
+    <div class="fs-section-header">
+      <div class="fs-severity-icon fs-icon-retried" title="Blocking jobs that needed a retry to pass">&#8635;</div>
+      <div class="fs-section-content">
+        <div class="fs-priority-label">Warning — Passed After Retry</div>
+        <div class="fs-section-title">{{ retried_successes|length }} Blocking Job{{ 's' if retried_successes|length != 1 else '' }} Succeeded on Retry</div>
+        <div class="fs-section-desc">first attempt failed — may indicate flakiness or transient infrastructure issues</div>
+      </div>
+    </div>
+    <div class="fs-inline-jobs">
+      {% for item in retried_successes %}
+      <div class="fs-blocking-row">
+        <div class="fs-blocking-main">
+          <span class="badge {{ item.job.topology | lower }}">{{ item.job.topology }}</span>
+          <a class="fs-blocking-name" href="{{ item.job.prow_url }}" target="_blank">{{ item.job.name }}</a>
+          <span class="badge green">Succeeded</span>
+          <span class="fs-blocking-versions">{{ item.version }}</span>
+        </div>
+        <div class="fs-blocking-test" style="font-size:12px">
+          <span style="color:var(--text-muted)">Payload:</span>
+          <a href="{{ item.payload_url }}" target="_blank" style="font-size:12px">{{ item.payload_tag }}</a>
+          &middot;
+          {% if item.job.previous_attempts %}
+          <span style="color:var(--text-muted)">Attempt #1:</span>
+          <a href="{{ item.job.previous_attempts[0].prow_url }}" target="_blank" style="font-size:12px">Prow</a>
+          &middot;
+          {% endif %}
+          <span style="color:var(--text-muted)">Attempt #{{ item.job.previous_attempts|length + 1 }}:</span>
+          <a href="{{ item.job.prow_url }}" target="_blank" style="font-size:12px">Prow</a>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
   {# WARNING: Informing failures — surface escalation risks by name #}
   {% if ns.informing_failures > 0 %}
   <div class="fs-section fs-section-warning">
@@ -457,7 +495,9 @@
   <tbody>
     {% for item in all_failing %}
     <tr class="job-row" data-topology="{{ item.job.topology }}" data-jobtype="{{ item.job.job_type.value }}" data-version="{{ item.version }}" data-row-index="{{ loop.index }}">
-      <td><a href="{{ item.job.prow_url }}" target="_blank">{{ item.job.name }}</a></td>
+      <td>
+        <a href="{{ item.job.prow_url }}" target="_blank">{{ item.job.name }}</a>
+      </td>
       <td>{{ item.version }}</td>
       <td><a href="{{ item.payload_url }}" target="_blank">{{ item.payload_tag }}</a></td>
       <td>
@@ -511,7 +551,52 @@
   </summary>
   <div class="content">
     <p><strong>Payload:</strong> <a href="{{ detail.payload_url }}" target="_blank">{{ detail.payload_tag }}</a></p>
+    {% if detail.job.previous_attempts %}
+    <div class="previous-attempts">
+      {% for attempt in detail.job.previous_attempts %}
+      <div class="previous-attempt-card">
+        <p><strong>Attempt #{{ loop.index }}:</strong> <a href="{{ attempt.prow_url }}" target="_blank">View in Prow</a>
+          <span class="badge blocking">Failed</span>
+        </p>
+        {% if attempt.failing_tests %}
+        <details>
+          <summary>Failing Tests ({{ attempt.failing_tests|length }})</summary>
+          <div class="content">
+            {% for test in attempt.failing_tests %}
+            <details style="margin-left:12px">
+              <summary>{{ test.name }}</summary>
+              <div class="content"><pre>{{ test.error_message }}</pre></div>
+            </details>
+            {% endfor %}
+          </div>
+        </details>
+        {% elif attempt.error_summary %}
+        <p style="color:var(--text-muted);font-size:13px;margin:4px 0 0 0">{{ attempt.error_summary }}</p>
+        {% endif %}
+      </div>
+      {% endfor %}
+      <div class="previous-attempt-card" style="margin-top:8px">
+        <p><strong>Attempt #{{ detail.job.previous_attempts|length + 1 }}:</strong> <a href="{{ detail.job.prow_url }}" target="_blank">View in Prow</a>
+          <span class="badge {{ 'green' if detail.job.result.value == 'S' else 'blocking' }}">{{ 'Succeeded' if detail.job.result.value == 'S' else 'Failed' }}</span>
+        </p>
+        {% if detail.job.failing_tests %}
+        <details>
+          <summary>Failing Tests ({{ detail.job.failing_tests|length }})</summary>
+          <div class="content">
+            {% for test in detail.job.failing_tests %}
+            <details style="margin-left:12px">
+              <summary>{{ test.name }}</summary>
+              <div class="content"><pre>{{ test.error_message }}</pre></div>
+            </details>
+            {% endfor %}
+          </div>
+        </details>
+        {% endif %}
+      </div>
+    </div>
+    {% else %}
     <p><strong>Prow Job:</strong> <a href="{{ detail.job.prow_url }}" target="_blank">View in Prow</a></p>
+    {% endif %}
 
     {# Inline JIRA matches for this job #}
     {% set job_bugs = jira_matches_by_job.get(detail.job.name, []) %}
@@ -538,6 +623,9 @@
 
     {% if detail.job.deep_analysis %}
     <div class="deep-analysis-card">
+      {% if detail.job.previous_attempts %}
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Analysis covers all {{ detail.job.previous_attempts|length + 1 }} attempts — same root cause identified</div>
+      {% endif %}
       <h3>AI Root Cause Analysis</h3>
       <div class="da-field">
         <span class="da-label">Root Cause:</span>
@@ -583,7 +671,7 @@
     </div>
     {% endif %}
 
-    {% if detail.job.failing_tests %}
+    {% if not detail.job.previous_attempts and detail.job.failing_tests %}
     <h3>Failing Tests ({{ detail.job.failing_tests | length }})</h3>
     {% for test in detail.job.failing_tests %}
     <details style="margin-left:12px">
@@ -658,14 +746,10 @@
           <span class="key">{{ r.jira_bug }}</span>
         </a>
         {% endif %}
-        {% if r.test_id %}
         <div class="cmd-copy-row" style="margin:0">
-          <code style="font-size:11px">/ci:triage-regression {{ r.test_id }} --topology {{ r.topology }}</code>
+          <code style="font-size:11px">/ci:ask-sippy Why is {{ r.test_name }} regressing on {{ r.version }}? What tests are failing?</code>
           <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>
         </div>
-        {% elif r.triage_url %}
-        <a href="{{ r.triage_url }}" target="_blank" style="font-size:11px;color:var(--accent)">Triage in Sippy &#8599;</a>
-        {% endif %}
       </td>
     </tr>
     {% endfor %}
@@ -756,15 +840,10 @@
         </span>
       </td>
       <td class="action-cell">
-        {% if cr.detail_url %}
-        <a href="{{ cr.detail_url }}" target="_blank" style="font-size:11px;color:var(--accent)">View Detail &#8599;</a>
-        {% endif %}
-        {% if cr.test_id %}
         <div class="cmd-copy-row" style="margin:0">
-          <code style="font-size:11px">/ci:triage-regression {{ cr.test_id }} --version {{ cr.version }}</code>
+          <code style="font-size:11px">/ci:ask-sippy Why is test "{{ cr.test_name }}" regressing on {{ cr.comparison }} vs HA for {{ cr.version }}? What variants are affected and what changed recently?</code>
           <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>
         </div>
-        {% endif %}
       </td>
     </tr>
     {% endfor %}

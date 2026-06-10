@@ -27,6 +27,7 @@ from ..models import (
     MonitorReport,
     Payload,
     PayloadStatus,
+    PreviousAttempt,
     Regression,
     StreamReport,
     SuggestedBug,
@@ -95,6 +96,24 @@ def _build_template_context(report: MonitorReport) -> dict:
             for ft in item["job"].failing_tests:
                 if ft.name not in blocking_job_tests[name]:
                     blocking_job_tests[name].append(ft.name)
+
+    # Collect blocking jobs that succeeded only after retry (flaky passes)
+    retried_successes = []
+    retried_seen = set()
+    for stream in report.streams:
+        for payload in stream.payloads:
+            for job in payload.edge_jobs:
+                if (job.job_type == JobType.BLOCKING
+                        and job.result == JobResult.SUCCESS
+                        and job.retries > 0
+                        and job.name not in retried_seen):
+                    retried_seen.add(job.name)
+                    retried_successes.append({
+                        "job": job,
+                        "version": stream.version,
+                        "payload_tag": payload.tag,
+                        "payload_url": payload.url,
+                    })
 
     # Collect all regressions
     all_regressions = []
@@ -166,6 +185,7 @@ def _build_template_context(report: MonitorReport) -> dict:
         "blocking_job_versions": blocking_job_versions,
         "blocking_job_tests": blocking_job_tests,
         "blocking_job_first_idx": blocking_job_first_idx,
+        "retried_successes": retried_successes,
     }
 
 
@@ -248,6 +268,19 @@ def generate_json(report: MonitorReport, output_path: Path) -> None:
                         for t in j.failing_tests
                     ],
                     "deep_analysis": asdict(j.deep_analysis) if j.deep_analysis else None,
+                    "retries": j.retries,
+                    "previous_attempts": [
+                        {
+                            "prow_url": pa.prow_url,
+                            "result": pa.result.value,
+                            "failing_tests": [
+                                {"name": t.name, "error": t.error_message}
+                                for t in pa.failing_tests
+                            ],
+                            "error_summary": pa.error_summary,
+                        }
+                        for pa in j.previous_attempts
+                    ],
                 })
             stream_data["payloads"].append(payload_data)
         data["streams"].append(stream_data)
@@ -328,6 +361,7 @@ def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
         card_html = _render_analysis_card(da)
 
         # Find the "View in Prow" link for this job and inject the card after its parent <p>
+        # Pattern A: no-retry jobs — "Prow Job:" label
         pattern = (
             rf'(<p><strong>Prow Job:</strong> <a href="{escaped_url}" target="_blank">View in Prow</a></p>)'
             r'(\s*)'
@@ -340,6 +374,35 @@ def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
             count=1,
             flags=re.DOTALL,
         )
+        if not count:
+            # Pattern B: retry jobs — the prow URL appears inside an Attempt card
+            # and the claude-suggestion div references it separately; replace the suggestion
+            suggestion_pattern = (
+                rf'(<div class="previous-attempts">.*?)'
+                rf'(<div class="claude-suggestion">\s*'
+                rf'For deeper analysis, use Claude directly:<br>\s*'
+                rf'<div class="cmd-copy-row">\s*'
+                rf'<code>/ci:prow-job-analyze-test-failure {escaped_url}</code>\s*'
+                rf'<button class="copy-btn"[^>]*>Copy</button>\s*'
+                rf'</div>\s*</div>)'
+            )
+            m = re.search(suggestion_pattern, content, flags=re.DOTALL)
+            if m:
+                attempt_count = m.group(1).count("previous-attempt-card")
+                scope_note = (
+                    f'<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">'
+                    f'Analysis covers all {attempt_count} attempts &mdash; same root cause identified</div>\n    '
+                )
+                patched_card = card_html.replace(
+                    '<div class="deep-analysis-card">',
+                    f'<div class="deep-analysis-card">\n    {scope_note}',
+                    1,
+                )
+                new_content = content[:m.start(2)] + patched_card + content[m.end(2):]
+                count = 1
+            else:
+                new_content = content
+                count = 0
         if count:
             content = new_content
             patched += 1
@@ -353,7 +416,8 @@ def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
                 rf'(\s*[^<]*?\([^)]*\)\s*</summary>\s*'
                 rf'<div class="content">\s*'
                 rf'<p><strong>Payload:</strong>[^<]*<a[^>]*>[^<]*</a></p>\s*'
-                rf'<p><strong>Prow Job:</strong> <a href="{escaped_url}")'
+                rf'(?:<div class="previous-attempts">(?=.*?<a href="{escaped_url}").*?</div>\s*|'
+                rf'<p><strong>Prow Job:</strong> <a href="{escaped_url}"))'
             )
             content = re.sub(badge_pattern, rf'\1 {badge_html}\2', content, count=1, flags=re.DOTALL)
 
@@ -442,6 +506,18 @@ def load_json(json_path: Path) -> MonitorReport:
                     FailingTest(name=t.get("name", ""), error_message=t.get("error", ""))
                     for t in j.get("failing_tests", [])
                 ]
+                prev_attempts = [
+                    PreviousAttempt(
+                        prow_url=pa.get("prow_url", ""),
+                        result=JobResult(pa.get("result", "F")),
+                        failing_tests=[
+                            FailingTest(name=t.get("name", ""), error_message=t.get("error", ""))
+                            for t in pa.get("failing_tests", [])
+                        ],
+                        error_summary=pa.get("error_summary", ""),
+                    )
+                    for pa in j.get("previous_attempts", [])
+                ]
                 jobs.append(JobRun(
                     name=j.get("name", ""),
                     prow_url=j.get("prow_url", ""),
@@ -451,6 +527,8 @@ def load_json(json_path: Path) -> MonitorReport:
                     failing_tests=failing_tests,
                     error_summary=j.get("error_summary", ""),
                     deep_analysis=deep_analysis,
+                    retries=j.get("retries", 0),
+                    previous_attempts=prev_attempts,
                 ))
             payloads.append(Payload(
                 tag=p.get("tag", ""),

@@ -46,8 +46,8 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
    ```
 
 3. The script deterministically:
-   - For each release: fetches failed periodic jobs, downloads artifacts, writes `<WORKDIR>/analyze-ci-release-<version>-jobs.json`
-   - For rebase PRs: fetches PRs with failures, downloads artifacts, writes `<WORKDIR>/analyze-ci-prs-jobs.json` and `<WORKDIR>/analyze-ci-prs-status.json`
+   - For each release: fetches failed periodic jobs, downloads artifacts, writes `<WORKDIR>/jobs/release-<version>-jobs.json`
+   - For rebase PRs: fetches PRs with failures, downloads artifacts, writes `<WORKDIR>/jobs/prs-jobs.json` and `<WORKDIR>/jobs/prs-status.json`
    - Outputs a JSON summary listing all releases, job counts, and file paths
 4. Read the JSON output to know which releases have jobs to analyze and how many
 
@@ -100,7 +100,7 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
    Agent: subagent_type=general_purpose, prompt="Analyze this Prow job and save the report:
    1. Run /microshift-ci:prow-job <ARTIFACTS_DIR>
    2. After the analysis completes, save the FULL report output (including the --- STRUCTURED SUMMARY --- block) to:
-      <WORKDIR>/analyze-ci-release-<RELEASE>-job-<N>-<JOB_ID>.txt
+      <WORKDIR>/jobs/release-<RELEASE>-job-<N>-<JOB_ID>.txt
       Use the Write tool to save the file. The file must contain the complete analysis report."
    ```
 
@@ -110,7 +110,7 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
    Agent: subagent_type=general_purpose, prompt="Analyze this Prow job and save the report:
    1. Run /microshift-ci:prow-job <ARTIFACTS_DIR>
    2. After the analysis completes, save the FULL report output (including the --- STRUCTURED SUMMARY --- block) to:
-      <WORKDIR>/analyze-ci-prs-job-<N>-pr<PR>-<JOB_NAME_SUFFIX>.txt
+      <WORKDIR>/jobs/prs-job-<N>-pr<PR>-<JOB_NAME_SUFFIX>.txt
       Use the Write tool to save the file. The file must contain the complete analysis report."
    ```
 
@@ -124,25 +124,22 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 
 **Actions**:
 
-1. For each release version, launch `microshift-ci:create-bugs` in dry-run mode as an **Agent**:
+1. Collect all release versions from `<ARGUMENTS>` into a comma-separated list (e.g., `4.19,4.20,4.21,4.22`)
+2. Check for rebase PR source identifiers from the PR jobs JSON (e.g., `rebase-release-4.22`). Append them to the source list.
+3. Launch a **single** `microshift-ci:create-bugs` **foreground** agent in dry-run mode with all sources:
 
    ```text
-   Agent: subagent_type=general_purpose, prompt="Run /microshift-ci:create-bugs <version>"
+   Agent: subagent_type=general_purpose, prompt="Run /microshift-ci:create-bugs <all-sources-comma-separated>"
    ```
 
-2. If rebase PR analysis produced job files, also launch `microshift-ci:create-bugs` for rebase PRs (check the PR jobs JSON to identify rebase PR source identifiers like `rebase-release-4.22`):
-
-   ```text
-   Agent: subagent_type=general_purpose, prompt="Run /microshift-ci:create-bugs rebase-release-<version>"
-   ```
-
-3. Launch all create-bugs agents in a **single message** as **foreground** agents (do NOT use `run_in_background`). They run concurrently.
-4. Each agent produces `<WORKDIR>/analyze-ci-bugs-<source>.json` (including open bugs data for the Bugs tab)
-5. When all agents return, immediately proceed to Step 4 in the same turn. Do NOT stop or end your turn between Step 3 and Step 4.
+4. The agent produces:
+   - `<WORKDIR>/bugs/bug-matches-<source>.json` for each source (mapping files with open bugs data for the Bugs tab)
+   - `<WORKDIR>/report-create-bugs.txt` — merged report covering all releases and rebase sources
+5. When the agent returns, immediately proceed to Step 4 in the same turn. Do NOT stop or end your turn between Step 3 and Step 4.
 
 **Error Handling**:
 
-- If create-bugs fails for a release, note the failure but do not block other releases or HTML generation
+- If create-bugs fails, note the failure but do not block HTML generation
 
 ### Step 4: Finalize — Aggregate and Generate HTML Report
 
@@ -160,7 +157,7 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 
 2. The script deterministically:
    - Runs `aggregate.py` for each release and for PRs → `summary.json` files
-   - Runs `create-report.py` → `microshift-ci-doctor-report.html`
+   - Runs `create-report.py` → `report-microshift-ci-doctor.html`
 3. Report the script's output to the user
 
 ### Step 5: Report Completion
@@ -182,7 +179,7 @@ Summary:
   Pull Requests:
     2 rebase PRs with 5 total failed jobs
 
-HTML report generated: <WORKDIR>/microshift-ci-doctor-report.html
+HTML report generated: <WORKDIR>/report-microshift-ci-doctor.html
 ```
 
 ## Examples
@@ -226,10 +223,11 @@ HTML report generated: <WORKDIR>/microshift-ci-doctor-report.html
 - **Deterministic scripts** handle: data collection, artifact download, aggregation, HTML generation
 - **LLM agents** handle: per-job root cause analysis (Step 2), Jira bug search and open bugs query (Step 3)
 - `/microshift-ci:doctor-refresh` regenerates the HTML report from existing data. Use it after `/microshift-ci:create-bugs --create` to include newly created bugs
-- All agents (all releases + PRs) are launched in a single parallel wave — no per-release agents
+- Step 2 agents (per-job analysis) are launched in a single parallel wave
+- Step 3 uses a single create-bugs agent with all sources (releases + rebase) comma-separated
 - The `prepare` script downloads all artifacts upfront so prow-job agents use local paths (no redundant downloads)
 - The `finalize` script runs aggregation and HTML generation in one call
-- All intermediate files use prescribed filenames in `<WORKDIR>` — no improvised names
+- All intermediate files use prescribed filenames in `<WORKDIR>` subdirectories (`jobs/`, `bugs/`) — no improvised names
 - The HTML report is self-contained (no external CSS/JS dependencies)
 - If a release analysis fails, it is noted in the report but does not block other releases
 - If no rebase PRs are open, the Pull Requests tab shows "No open rebase pull requests found"
