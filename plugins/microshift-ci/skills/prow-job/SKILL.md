@@ -183,23 +183,41 @@ Error: {The exact error, including additional log context if it relates to the f
 Suggested Remediation: {Based on where the error occurs, think hard about how to correct the error ONLY if it requires fixing. Infrastructure failures may not require code changes.}
 ```
 
-After the human-readable report above, append a machine-readable block for downstream automation. This block MUST appear at the very end of the report, after all prose and analysis:
+After the human-readable report above, append a machine-readable JSON block for downstream automation. This block MUST appear at the very end of the report, after all prose and analysis. The block is a JSON array with one object per failure:
 
 ```text
 --- STRUCTURED SUMMARY ---
-SEVERITY: {1-5, same as Error Severity above}
-STACK_LAYER: {AWS Infra, External Infrastructure, build phase, deploy phase, test setup phase, Test Configuration, test, teardown - same as Stack Layer above}
-STEP_NAME: {same as Step Name above}
-ERROR_SIGNATURE: {a concise, unique one-line description of the root cause - not the full error, just enough to identify and deduplicate this failure}
-ROOT_CAUSE: {one-line description of WHY the failure happened — the underlying mechanism, not the surface symptom. ~80 chars max. See rules below}
-RAW_ERROR: {the primary error message copied VERBATIM from the log file - see rules below}
-INFRASTRUCTURE_FAILURE: {true if Stack Layer is AWS Infra or the failure is due to CI infrastructure rather than product code, false otherwise}
-JOB_URL: {the full prow job URL — when given a URL as input, use it directly; when given a local artifacts dir, reconstruct from the build-log.txt "Link to job on registry info site" line or from the directory path structure}
-JOB_NAME: {the full job name — extract from the JOB_URL path, or from the build-log.txt "Running step" lines, or from the artifacts directory structure}
-RELEASE: {the release branch — extract from JOB_NAME (e.g. 4.22 from release-4.22), or from finished.json metadata repos field, or default to "main"}
-FINISHED: {the job finish date in YYYY-MM-DD format, extracted from finished.json timestamp field or build log timestamps}
+[
+  {
+    "severity": 3,
+    "stack_layer": "test",
+    "step_name": "openshift-microshift-e2e-metal-tests",
+    "error_signature": "cert-manager not ready within greenboot 10m timeout on ARM",
+    "root_cause": "greenboot health check timeout during slow ARM service deployment",
+    "raw_error": "cert-manager webhook not ready after 600s",
+    "infrastructure_failure": false,
+    "job_url": "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/periodic-ci-openshift-microshift-release-4.22-periodics-e2e-aws-tests-arm-nightly/123456",
+    "job_name": "periodic-ci-openshift-microshift-release-4.22-periodics-e2e-aws-tests-arm-nightly",
+    "release": "4.22",
+    "finished": "2026-06-01"
+  }
+]
 --- END STRUCTURED SUMMARY ---
 ```
+
+**Field descriptions:**
+
+- `severity`: 1-5, same as Error Severity above
+- `stack_layer`: one of: AWS Infra, External Infrastructure, build phase, deploy phase, test setup phase, Test Configuration, test, teardown
+- `step_name`: the CI step where the error occurred
+- `error_signature`: a concise, unique one-line description of the root cause — not the full error, just enough to identify and deduplicate this failure
+- `root_cause`: one-line description of WHY the failure happened — the underlying mechanism, not the surface symptom (~80 chars max, see rules below)
+- `raw_error`: the primary error message copied VERBATIM from the log file (see rules below)
+- `infrastructure_failure`: true if stack_layer is AWS Infra or the failure is due to CI infrastructure rather than product code, false otherwise
+- `job_url`: the full prow job URL — when given a URL as input, use it directly; when given a local artifacts dir, reconstruct from the build-log.txt "Link to job on registry info site" line or from the directory path structure
+- `job_name`: the full job name — extract from the job_url path, or from the build-log.txt "Running step" lines, or from the artifacts directory structure
+- `release`: the release branch — extract from job_name (e.g. 4.22 from release-4.22), or from finished.json metadata repos field, or default to "main"
+- `finished`: the job finish date in YYYY-MM-DD format, extracted from finished.json timestamp field or build log timestamps
 
 ### RAW_ERROR rules
 
@@ -246,3 +264,15 @@ The `ROOT_CAUSE` field captures the underlying mechanism behind the failure — 
 | Pod-network-disruption monitor poller CrashLoopBackOff on ARM64 | OCP MonitorTest framework incompatible with MicroShift single-node topology |
 | cert-manager not ready within greenboot 10m timeout on ARM | greenboot health check timeout during slow ARM service deployment |
 | InvalidClientTokenId when calling CreateStack | expired or invalid AWS credentials in CI environment |
+
+### Multiple independent failures
+
+When a job has multiple independent test failures across different scenarios, produce **one entry per failure** in the JSON array. Each entry must be self-contained with all fields populated.
+
+**Rules:**
+
+1. **One entry per independent failure** — failures are independent when they occur in different test scenarios with different root causes (e.g., cert-manager timeout in one scenario and storage PV error in another)
+2. **Same root cause = one entry** — when multiple scenarios fail with the same root cause, produce ONE entry. Do NOT split them into separate entries.
+3. **At most 5 entries per job** — if more than 5 independent failures exist, report the 5 most severe
+4. **Cascading failures are NOT independent** — when one failure causes others (e.g., a setup failure causing all subsequent tests to fail), report only the root failure
+5. **Single failures are still an array** — even when there is only one failure, wrap it in a JSON array
