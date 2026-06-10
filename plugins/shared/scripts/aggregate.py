@@ -22,6 +22,7 @@ import glob as glob_mod
 from datetime import datetime, timezone
 
 from classify import classify_breakdown
+from parse import parse_structured_summary
 
 
 # ---------------------------------------------------------------------------
@@ -36,48 +37,6 @@ STOP_WORDS = frozenset({
 })
 
 SIMILARITY_THRESHOLD = 0.50
-
-
-# ---------------------------------------------------------------------------
-# Parsing per-job report files
-# ---------------------------------------------------------------------------
-
-def parse_structured_summary(filepath):
-    """Extract the STRUCTURED SUMMARY block from a per-job report file."""
-    with open(filepath, "r") as f:
-        content = f.read()
-
-    m = re.search(
-        r"--- STRUCTURED SUMMARY ---\n(.+?)\n--- END STRUCTURED SUMMARY ---",
-        content, re.DOTALL,
-    )
-    if not m:
-        return None
-
-    data = {}
-    for line in m.group(1).strip().split("\n"):
-        if ":" in line:
-            key, val = line.split(":", 1)
-            data[key.strip()] = val.strip()
-
-    try:
-        severity = int(data.get("SEVERITY", "3"))
-    except ValueError:
-        severity = 3
-
-    return {
-        "severity": severity,
-        "stack_layer": data.get("STACK_LAYER", ""),
-        "step_name": data.get("STEP_NAME", ""),
-        "error_signature": data.get("ERROR_SIGNATURE", ""),
-        "raw_error": data.get("RAW_ERROR", ""),
-        "root_cause": data.get("ROOT_CAUSE", ""),
-        "infrastructure_failure": data.get("INFRASTRUCTURE_FAILURE", "false").lower() == "true",
-        "job_url": data.get("JOB_URL", ""),
-        "job_name": data.get("JOB_NAME", ""),
-        "release": data.get("RELEASE", ""),
-        "finished": data.get("FINISHED", ""),
-    }
 
 
 def parse_prose_fields(filepath):
@@ -389,14 +348,15 @@ def main():
         print(f"Found {len(files)} job files for release {release}", file=sys.stderr)
         jobs = []
         for filepath in files:
-            summary = parse_structured_summary(filepath)
-            if summary is None:
+            summaries = parse_structured_summary(filepath)
+            if not summaries:
                 print(f"  WARNING: no STRUCTURED SUMMARY in {os.path.basename(filepath)}", file=sys.stderr)
                 continue
             error_text, remediation_text = parse_prose_fields(filepath)
-            summary["error_text"] = error_text
-            summary["remediation_text"] = remediation_text
-            jobs.append(summary)
+            for summary in summaries:
+                summary["error_text"] = error_text
+                summary["remediation_text"] = remediation_text
+            jobs.extend(summaries)
 
         if not jobs:
             print("No valid job reports found", file=sys.stderr)
@@ -420,19 +380,20 @@ def main():
             print(f"Found {len(files)} PR job files", file=sys.stderr)
             pr_jobs = {}
             for filepath in files:
-                summary = parse_structured_summary(filepath)
-                if summary is None:
+                summaries = parse_structured_summary(filepath)
+                if not summaries:
                     print(f"  WARNING: no STRUCTURED SUMMARY in {os.path.basename(filepath)}", file=sys.stderr)
                     continue
                 error_text, remediation_text = parse_prose_fields(filepath)
-                summary["error_text"] = error_text
-                summary["remediation_text"] = remediation_text
-                summary["pr_title"] = ""
-                summary["pr_url"] = ""
+                for summary in summaries:
+                    summary["error_text"] = error_text
+                    summary["remediation_text"] = remediation_text
+                    summary["pr_title"] = ""
+                    summary["pr_url"] = ""
 
                 m = re.search(r"-pr(\d+)-", os.path.basename(filepath))
                 pr_number = int(m.group(1)) if m else 0
-                pr_jobs.setdefault(pr_number, []).append(summary)
+                pr_jobs.setdefault(pr_number, []).extend(summaries)
 
             result = build_pr_json(pr_jobs, timestamp)
 
