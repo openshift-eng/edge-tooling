@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from payload_monitor.models import (
+    AttemptAnalysis,
     ComponentRegression,
     DeepAnalysis,
     EscalationRisk,
@@ -175,6 +176,38 @@ class TestRenderAnalysisCard:
         assert "javascript:" not in html
         assert "https://github.com/pr/1" in html
 
+    def test_per_attempt_breakdown_when_different_root_causes(self):
+        da = {
+            "root_cause": "Multiple failures", "failure_type": "Mixed",
+            "impact": "SNO", "suspect_prs": [], "recommendation": "investigate",
+            "same_root_cause": False,
+            "attempt_analyses": [
+                {"prow_url": "https://prow/1", "root_cause": "DNS failure", "failure_type": "Infrastructure flake"},
+                {"prow_url": "https://prow/2", "root_cause": "Test regression", "failure_type": "Test regression"},
+            ],
+        }
+        html = _render_analysis_card(da)
+        assert "Per-Attempt Breakdown" in html
+        assert "Attempt #1" in html
+        assert "DNS failure" in html
+        assert "Attempt #2" in html
+        assert "Test regression" in html
+
+    def test_no_per_attempt_breakdown_when_same_root_cause(self):
+        da = {
+            "root_cause": "DNS failure", "failure_type": "Infrastructure flake",
+            "impact": "SNO", "suspect_prs": [], "recommendation": "retry",
+            "same_root_cause": True,
+        }
+        html = _render_analysis_card(da)
+        assert "Per-Attempt Breakdown" not in html
+
+    def test_no_per_attempt_breakdown_when_field_missing(self):
+        da = {"root_cause": "x", "failure_type": "y", "impact": "z",
+              "suspect_prs": [], "recommendation": "r"}
+        html = _render_analysis_card(da)
+        assert "Per-Attempt Breakdown" not in html
+
 
 class TestGenerateHtml:
     def test_generates_html(self, sample_report):
@@ -282,6 +315,59 @@ class TestLoadJson:
         assert loaded_da is not None
         assert loaded_da.root_cause == "DNS"
         assert loaded_da.suspect_prs == ["https://github.com/pr/1"]
+
+    def test_loads_deep_analysis_with_attempt_analyses(self, tmp_path):
+        da = DeepAnalysis(
+            root_cause="Multiple causes", failure_type="Mixed",
+            impact="All", recommendation="Investigate",
+            same_root_cause=False,
+            attempt_analyses=[
+                AttemptAnalysis(prow_url="https://prow/1", root_cause="DNS", failure_type="Infra"),
+                AttemptAnalysis(prow_url="https://prow/2", root_cause="OOM", failure_type="Platform issue"),
+            ],
+        )
+        job = JobRun("j", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO", deep_analysis=da)
+        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
+        report = MonitorReport(
+            generated_at="now",
+            streams=[StreamReport("s", "4.19", payloads=[payload])],
+        )
+
+        out = tmp_path / "report.json"
+        generate_json(report, out)
+        loaded = load_json(out)
+
+        loaded_da = loaded.streams[0].payloads[0].jobs[0].deep_analysis
+        assert loaded_da.same_root_cause is False
+        assert len(loaded_da.attempt_analyses) == 2
+        assert loaded_da.attempt_analyses[0].root_cause == "DNS"
+        assert loaded_da.attempt_analyses[1].prow_url == "https://prow/2"
+
+    def test_loads_deep_analysis_backward_compat(self, tmp_path):
+        """Old JSON without same_root_cause/attempt_analyses loads with defaults."""
+        da = DeepAnalysis(root_cause="DNS", failure_type="Infra",
+                          impact="All", recommendation="Fix")
+        job = JobRun("j", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO", deep_analysis=da)
+        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
+        report = MonitorReport(
+            generated_at="now",
+            streams=[StreamReport("s", "4.19", payloads=[payload])],
+        )
+
+        out = tmp_path / "report.json"
+        generate_json(report, out)
+
+        # Simulate old JSON by stripping new fields
+        data = json.loads(out.read_text())
+        da_data = data["streams"][0]["payloads"][0]["edge_jobs"][0]["deep_analysis"]
+        da_data.pop("same_root_cause", None)
+        da_data.pop("attempt_analyses", None)
+        out.write_text(json.dumps(data))
+
+        loaded = load_json(out)
+        loaded_da = loaded.streams[0].payloads[0].jobs[0].deep_analysis
+        assert loaded_da.same_root_cause is True
+        assert loaded_da.attempt_analyses == []
 
     def test_loads_regressions(self, tmp_path):
         reg = Regression(
@@ -700,24 +786,31 @@ class TestPatchAnalysisHtml:
         },
     }
 
-    def _write_files(self, tmp_path, html_content):
-        html_path = tmp_path / "report.html"
-        analysis_path = tmp_path / "analysis.json"
-        html_path.write_text(html_content)
-        analysis_path.write_text(json.dumps(self.ANALYSIS))
-        return html_path, analysis_path
-
-    def test_patches_non_retry_layout(self, tmp_path):
-        html = (
-            '<p><strong>Prow Job:</strong> '
-            f'<a href="{self.PROW_URL}" target="_blank">View in Prow</a></p>\n'
-            '<div class="claude-suggestion">\n'
+    def _suggestion_div(self, attempt_count=1):
+        """Build a claude-suggestion div with data attributes matching the template."""
+        return (
+            f'<div class="claude-suggestion" data-prow-url="{self.PROW_URL}"'
+            f' data-attempt-count="{attempt_count}">\n'
             '  For deeper analysis, use Claude directly:<br>\n'
             '  <div class="cmd-copy-row">\n'
             f'    <code>/ci:prow-job-analyze-test-failure {self.PROW_URL}</code>\n'
             '    <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>\n'
             '  </div>\n'
             '</div>'
+        )
+
+    def _write_files(self, tmp_path, html_content, analysis=None):
+        html_path = tmp_path / "report.html"
+        analysis_path = tmp_path / "analysis.json"
+        html_path.write_text(html_content)
+        analysis_path.write_text(json.dumps(analysis or self.ANALYSIS))
+        return html_path, analysis_path
+
+    def test_patches_non_retry_layout(self, tmp_path):
+        html = (
+            '<p><strong>Prow Job:</strong> '
+            f'<a href="{self.PROW_URL}" target="_blank">View in Prow</a></p>\n'
+            + self._suggestion_div(attempt_count=1)
         )
         html_path, analysis_path = self._write_files(tmp_path, html)
         patch_analysis_html(html_path, analysis_path)
@@ -736,13 +829,7 @@ class TestPatchAnalysisHtml:
             f'    <p><strong>Attempt #2:</strong> <a href="{self.PROW_URL}">View in Prow</a></p>\n'
             '  </div>\n'
             '</div>\n'
-            '<div class="claude-suggestion">\n'
-            '  For deeper analysis, use Claude directly:<br>\n'
-            '  <div class="cmd-copy-row">\n'
-            f'    <code>/ci:prow-job-analyze-test-failure {self.PROW_URL}</code>\n'
-            '    <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>\n'
-            '  </div>\n'
-            '</div>'
+            + self._suggestion_div(attempt_count=2)
         )
         html_path, analysis_path = self._write_files(tmp_path, html)
         patch_analysis_html(html_path, analysis_path)
@@ -750,6 +837,7 @@ class TestPatchAnalysisHtml:
         assert "deep-analysis-card" in result
         assert "test root cause" in result
         assert "Analysis covers all 2 attempts" in result
+        assert "same root cause identified" in result
 
     def test_no_match_leaves_html_unchanged(self, tmp_path):
         html = '<p>No matching prow URL here</p>'
@@ -757,24 +845,100 @@ class TestPatchAnalysisHtml:
         patch_analysis_html(html_path, analysis_path)
         assert html_path.read_text() == html
 
-    def test_retry_scope_note_counts_attempts(self, tmp_path):
+    def test_attempt_count_from_data_attribute(self, tmp_path):
+        """Attempt count comes from data-attempt-count, not from scanning HTML."""
         html = (
             '<div class="previous-attempts">\n'
-            '  <div class="previous-attempt-card">attempt 1</div>\n'
-            '  <div class="previous-attempt-card">attempt 2</div>\n'
-            '  <div class="previous-attempt-card">\n'
-            f'    <a href="{self.PROW_URL}">View in Prow</a>\n'
-            '  </div>\n'
+            '  <div class="previous-attempt-card">other job attempt 1</div>\n'
+            '  <div class="previous-attempt-card">other job attempt 2</div>\n'
             '</div>\n'
-            '<div class="claude-suggestion">\n'
-            '  For deeper analysis, use Claude directly:<br>\n'
-            '  <div class="cmd-copy-row">\n'
-            f'    <code>/ci:prow-job-analyze-test-failure {self.PROW_URL}</code>\n'
-            '    <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>\n'
-            '  </div>\n'
-            '</div>'
+            + self._suggestion_div(attempt_count=3)
         )
         html_path, analysis_path = self._write_files(tmp_path, html)
         patch_analysis_html(html_path, analysis_path)
         result = html_path.read_text()
         assert "Analysis covers all 3 attempts" in result
+
+    def _retry_html(self, attempt_count=2):
+        return (
+            '<div class="previous-attempts">\n'
+            '  <div class="previous-attempt-card">\n'
+            f'    <p><strong>Attempt #1:</strong> <a href="https://prow/prev">View in Prow</a></p>\n'
+            '  </div>\n'
+            '  <div class="previous-attempt-card" style="margin-top:8px">\n'
+            f'    <p><strong>Attempt #2:</strong> <a href="{self.PROW_URL}">View in Prow</a></p>\n'
+            '  </div>\n'
+            '</div>\n'
+            + self._suggestion_div(attempt_count=attempt_count)
+        )
+
+    def test_retry_different_root_causes(self, tmp_path):
+        analysis = {"by_prow_url": {self.PROW_URL: {
+            "root_cause": "Multiple failures", "failure_type": "Mixed",
+            "impact": "SNO", "suspect_prs": [], "recommendation": "investigate",
+            "same_root_cause": False,
+            "attempt_analyses": [
+                {"prow_url": "https://prow/prev", "root_cause": "DNS", "failure_type": "Infra"},
+                {"prow_url": self.PROW_URL, "root_cause": "OOM", "failure_type": "Platform issue"},
+            ],
+        }}}
+        html_path, analysis_path = self._write_files(tmp_path, self._retry_html(), analysis)
+        patch_analysis_html(html_path, analysis_path)
+        result = html_path.read_text()
+        assert "different root causes found" in result
+        assert "Per-Attempt Breakdown" in result
+        assert "DNS" in result
+        assert "OOM" in result
+
+    def test_retry_same_root_cause_explicit(self, tmp_path):
+        analysis = {"by_prow_url": {self.PROW_URL: {
+            "root_cause": "DNS failure", "failure_type": "Infra",
+            "impact": "SNO", "suspect_prs": [], "recommendation": "retry",
+            "same_root_cause": True,
+            "attempt_analyses": [],
+        }}}
+        html_path, analysis_path = self._write_files(tmp_path, self._retry_html(), analysis)
+        patch_analysis_html(html_path, analysis_path)
+        result = html_path.read_text()
+        assert "same root cause identified" in result
+        assert "Per-Attempt Breakdown" not in result
+
+    def test_no_scope_note_for_single_attempt(self, tmp_path):
+        html_path, analysis_path = self._write_files(
+            tmp_path, self._suggestion_div(attempt_count=1),
+        )
+        patch_analysis_html(html_path, analysis_path)
+        result = html_path.read_text()
+        assert "deep-analysis-card" in result
+        assert "Analysis covers all" not in result
+
+    def test_badge_inserted_via_data_attribute(self, tmp_path):
+        html = (
+            f'<details class="detail-row" data-prow-url="{self.PROW_URL}">\n'
+            '  <summary>\n'
+            '    <span class="badge sno">SNO</span>\n'
+            '    <span class="badge blocking">blocking</span>\n'
+            '    job-name (4.19)\n'
+            '  </summary>\n'
+            '  <div class="content">\n'
+            + self._suggestion_div(attempt_count=1) + '\n'
+            '  </div>\n'
+            '</details>'
+        )
+        html_path, analysis_path = self._write_files(tmp_path, html)
+        patch_analysis_html(html_path, analysis_path)
+        result = html_path.read_text()
+        assert "ai-analyzed" in result
+
+    def test_header_status_updated_via_data_attribute(self, tmp_path):
+        html = (
+            '<div class="meta" style="margin-top:4px" data-enrichment-status="data-only">\n'
+            '  <span style="color:var(--text-muted)">○ Data only</span>\n'
+            '</div>\n'
+            + self._suggestion_div(attempt_count=1)
+        )
+        html_path, analysis_path = self._write_files(tmp_path, html)
+        patch_analysis_html(html_path, analysis_path)
+        result = html_path.read_text()
+        assert "AI-enriched via Claude" in result
+        assert "data-only" not in result

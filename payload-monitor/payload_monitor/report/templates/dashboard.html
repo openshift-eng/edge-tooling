@@ -22,7 +22,7 @@
       <span style="color:var(--green)">● AI-enriched via Claude</span>
     </div>
     {% elif has_blocking %}
-    <div class="meta" style="margin-top:4px">
+    <div class="meta" style="margin-top:4px" data-enrichment-status="data-only">
       <span style="color:var(--text-muted)">○ Data only</span>
       <span style="margin-left:4px">— run <code style="font-size:12px;color:var(--accent)">/edge-ocp-ci:generate-dashboard</code> for AI analysis</span>
     </div>
@@ -537,7 +537,7 @@
 {% if all_failing %}
 <h2>Nightly Payload — Failure Analysis</h2>
 {% for detail in all_failing %}
-<details id="detail-{{ loop.index }}" class="detail-row" data-topology="{{ detail.job.topology }}" data-jobtype="{{ detail.job.job_type.value }}" data-version="{{ detail.version }}" data-row-index="{{ loop.index }}">
+<details id="detail-{{ loop.index }}" class="detail-row" data-topology="{{ detail.job.topology }}" data-jobtype="{{ detail.job.job_type.value }}" data-version="{{ detail.version }}" data-row-index="{{ loop.index }}" data-prow-url="{{ detail.job.prow_url }}">
   <summary>
     <span class="badge {{ detail.job.topology | lower }}">{{ detail.job.topology }}</span>
     <span class="badge {{ detail.job.job_type.value }}">{{ detail.job.job_type.value }}</span>
@@ -622,47 +622,19 @@
     {% endif %}
 
     {% if detail.job.deep_analysis %}
-    <div class="deep-analysis-card">
-      {% if detail.job.previous_attempts %}
-      <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Analysis covers all {{ detail.job.previous_attempts|length + 1 }} attempts — same root cause identified</div>
-      {% endif %}
-      <h3>AI Root Cause Analysis</h3>
-      <div class="da-field">
-        <span class="da-label">Root Cause:</span>
-        <span>{{ detail.job.deep_analysis.root_cause }}</span>
-      </div>
-      <div class="da-field">
-        <span class="da-label">Failure Type:</span>
-        <span class="badge da-type">{{ detail.job.deep_analysis.failure_type }}</span>
-      </div>
-      <div class="da-field">
-        <span class="da-label">Impact:</span>
-        <span>{{ detail.job.deep_analysis.impact }}</span>
-      </div>
-      {% if detail.job.deep_analysis.suspect_prs %}
-      <div class="da-field">
-        <span class="da-label">Suspect PRs:</span>
-        <ul style="margin:4px 0 0 20px">
-          {% for pr in detail.job.deep_analysis.suspect_prs %}
-          <li><a href="{{ pr }}" target="_blank">{{ pr }}</a></li>
-          {% endfor %}
-        </ul>
-      </div>
-      {% endif %}
-      <div class="da-field da-recommendation">
-        <span class="da-label">Recommendation:</span>
-        <span>{{ detail.job.deep_analysis.recommendation }}</span>
-      </div>
-      <div class="claude-suggestion" style="margin-top:12px">
-        Investigate suspect PRs in this payload:<br>
-        <div class="cmd-copy-row">
-          <code>/ci:fetch-new-prs-in-payload {{ detail.payload_tag }}</code>
-          <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>
-        </div>
-      </div>
-    </div>
+    {% set da = detail.job.deep_analysis %}
+    {% set root_cause = da.root_cause %}
+    {% set failure_type = da.failure_type %}
+    {% set impact = da.impact %}
+    {% set suspect_prs = da.suspect_prs %}
+    {% set recommendation = da.recommendation %}
+    {% set same_root_cause = da.same_root_cause %}
+    {% set attempt_analyses = da.attempt_analyses %}
+    {% set attempt_count = detail.job.previous_attempts|length + 1 %}
+    {% set payload_tag = detail.payload_tag %}
+    {% include "_analysis_card.html" %}
     {% else %}
-    <div class="claude-suggestion">
+    <div class="claude-suggestion" data-prow-url="{{ detail.job.prow_url }}" data-attempt-count="{{ detail.job.previous_attempts|length + 1 }}">
       For deeper analysis, use Claude directly:<br>
       <div class="cmd-copy-row">
         <code>/ci:prow-job-analyze-test-failure {{ detail.job.prow_url }}</code>

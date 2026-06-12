@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Optional
 
 
-import html
 import json
 import logging
 import re
@@ -16,6 +15,7 @@ from urllib.parse import urlparse
 from jinja2 import Environment, FileSystemLoader
 
 from ..models import (
+    AttemptAnalysis,
     ComponentRegression,
     DeepAnalysis,
     EscalationRisk,
@@ -38,6 +38,10 @@ from .timing_section import render_timing_section
 logger = logging.getLogger(__name__)
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+_JINJA_ENV = Environment(
+    loader=FileSystemLoader(str(TEMPLATES_DIR)),
+    autoescape=True,
+)
 
 _TAG_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})-(\d{2})(\d{2})(\d{2})$")
 
@@ -102,7 +106,7 @@ def _build_template_context(report: MonitorReport) -> dict:
     retried_seen = set()
     for stream in report.streams:
         for payload in stream.payloads:
-            for job in payload.edge_jobs:
+            for job in payload.jobs:
                 if (job.job_type == JobType.BLOCKING
                         and job.result == JobResult.SUCCESS
                         and job.retries > 0
@@ -195,16 +199,11 @@ def generate_html(report: MonitorReport, output_path: Optional[Path] = None) -> 
     Returns the HTML content as a string. If output_path is provided,
     also writes to that file.
     """
-    env = Environment(
-        loader=FileSystemLoader(str(TEMPLATES_DIR)),
-        autoescape=True,
-    )
-
     # Load CSS and JS to inline
     css = (TEMPLATES_DIR / "styles.css").read_text()
     js = (TEMPLATES_DIR / "scripts.js").read_text()
 
-    template = env.get_template("dashboard.html")
+    template = _JINJA_ENV.get_template("dashboard.html")
     context = _build_template_context(report)
     context["css"] = css
     context["js"] = js
@@ -251,11 +250,10 @@ def generate_json(report: MonitorReport, output_path: Path) -> None:
             payload_data = {
                 "tag": payload.tag,
                 "status": payload.status.value,
-                "phase": payload.status.value,
                 "url": payload.url,
                 "edge_jobs": [],
             }
-            for j in payload.edge_jobs:
+            for j in payload.jobs:
                 payload_data["edge_jobs"].append({
                     "name": j.name,
                     "result": j.result.value,
@@ -301,49 +299,29 @@ def _safe_urls(urls: list[str]) -> list[str]:
     return safe
 
 
-def _render_analysis_card(da: dict) -> str:
+def _render_analysis_card(da: dict, attempt_count: int = 1) -> str:
     """Render an AI analysis card as an HTML string."""
-    e = html.escape
-    parts = [
-        '<div class="deep-analysis-card">',
-        '  <h3>AI Root Cause Analysis</h3>',
-        '  <div class="da-field">',
-        '    <span class="da-label">Root Cause:</span>',
-        f'    <span>{e(da.get("root_cause", ""))}</span>',
-        '  </div>',
-        '  <div class="da-field">',
-        '    <span class="da-label">Failure Type:</span>',
-        f'    <span class="badge da-type">{e(da.get("failure_type", ""))}</span>',
-        '  </div>',
-        '  <div class="da-field">',
-        '    <span class="da-label">Impact:</span>',
-        f'    <span>{e(da.get("impact", ""))}</span>',
-        '  </div>',
-    ]
-    prs = _safe_urls(da.get("suspect_prs", []))
-    if prs:
-        parts.append('  <div class="da-field">')
-        parts.append('    <span class="da-label">Suspect PRs:</span>')
-        parts.append('    <ul style="margin:4px 0 0 20px">')
-        for pr in prs:
-            parts.append(f'      <li><a href="{e(pr)}" target="_blank">{e(pr)}</a></li>')
-        parts.append('    </ul>')
-        parts.append('  </div>')
-    parts.extend([
-        '  <div class="da-field da-recommendation">',
-        '    <span class="da-label">Recommendation:</span>',
-        f'    <span>{e(da.get("recommendation", ""))}</span>',
-        '  </div>',
-        '</div>',
-    ])
-    return "\n    ".join(parts)
+    template = _JINJA_ENV.get_template("_analysis_card.html")
+    return template.render(
+        root_cause=da.get("root_cause", ""),
+        failure_type=da.get("failure_type", ""),
+        impact=da.get("impact", ""),
+        suspect_prs=_safe_urls(da.get("suspect_prs", [])),
+        recommendation=da.get("recommendation", ""),
+        same_root_cause=da.get("same_root_cause", True),
+        attempt_analyses=da.get("attempt_analyses", []),
+        attempt_count=attempt_count,
+    )
 
 
 def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
     """Patch AI analysis cards directly into an existing HTML report.
 
-    Finds each job's detail section by its prow URL and injects the
-    analysis card HTML. Updates the header status indicator.
+    Uses data attributes placed in the template for reliable injection:
+    - ``data-prow-url`` on ``.claude-suggestion`` divs marks where cards go
+    - ``data-attempt-count`` carries the retry count for scope notes
+    - ``data-prow-url`` on ``<details>`` elements identifies where to add badges
+    - ``data-enrichment-status="data-only"`` marks the header status div
     """
     with open(analysis_path) as f:
         data = json.load(f)
@@ -355,82 +333,55 @@ def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
 
     content = html_path.read_text()
     patched = 0
+    badge_html = '<span class="badge ai-analyzed">AI Analyzed</span>'
+
+    def _insert_badge(m):
+        summary_content = m.group(2)
+        if "ai-analyzed" in summary_content:
+            return m.group(0)
+        return f'{m.group(1)}\n  <summary>{summary_content} {badge_html}{m.group(3)}'
 
     for prow_url, da in by_url.items():
         escaped_url = re.escape(prow_url)
-        card_html = _render_analysis_card(da)
 
-        # Find the "View in Prow" link for this job and inject the card after its parent <p>
-        # Pattern A: no-retry jobs — "Prow Job:" label
-        pattern = (
-            rf'(<p><strong>Prow Job:</strong> <a href="{escaped_url}" target="_blank">View in Prow</a></p>)'
-            r'(\s*)'
-            r'(?:<div class="claude-suggestion">.*?</div>\s*)?'
+        # Find the claude-suggestion div with matching data-prow-url
+        suggestion_pattern = (
+            rf'<div class="claude-suggestion" data-prow-url="{escaped_url}"'
+            r' data-attempt-count="(\d+)">'
+            r'.*?</div>\s*</div>'
         )
-        new_content, count = re.subn(
-            pattern,
-            lambda m: f"{m.group(1)}{m.group(2)}{card_html}\n",
+        m = re.search(suggestion_pattern, content, flags=re.DOTALL)
+        if not m:
+            continue
+
+        attempt_count = int(m.group(1))
+        card_html = _render_analysis_card(da, attempt_count=attempt_count)
+
+        content = content[:m.start()] + card_html + content[m.end():]
+        patched += 1
+
+        # Add "AI Analyzed" badge to the <details> element for this job
+        details_pattern = (
+            rf'(<details [^>]*data-prow-url="{escaped_url}"[^>]*>)\s*<summary>'
+            r'(.*?)'
+            r'(</summary>)'
+        )
+        content = re.sub(details_pattern, _insert_badge, content, count=1, flags=re.DOTALL)
+
+    # Update header: replace "Data only" status using data attribute
+    if patched > 0:
+        new_status = (
+            '<div class="meta" style="margin-top:4px">'
+            '<span style="color:var(--green)">● AI-enriched via Claude</span>'
+            '</div>'
+        )
+        content = re.sub(
+            r'<div class="meta"[^>]*data-enrichment-status="data-only"[^>]*>.*?</div>',
+            new_status,
             content,
             count=1,
             flags=re.DOTALL,
         )
-        if not count:
-            # Pattern B: retry jobs — the prow URL appears inside an Attempt card
-            # and the claude-suggestion div references it separately; replace the suggestion
-            suggestion_pattern = (
-                rf'(<div class="previous-attempts">.*?)'
-                rf'(<div class="claude-suggestion">\s*'
-                rf'For deeper analysis, use Claude directly:<br>\s*'
-                rf'<div class="cmd-copy-row">\s*'
-                rf'<code>/ci:prow-job-analyze-test-failure {escaped_url}</code>\s*'
-                rf'<button class="copy-btn"[^>]*>Copy</button>\s*'
-                rf'</div>\s*</div>)'
-            )
-            m = re.search(suggestion_pattern, content, flags=re.DOTALL)
-            if m:
-                attempt_count = m.group(1).count("previous-attempt-card")
-                scope_note = (
-                    f'<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">'
-                    f'Analysis covers all {attempt_count} attempts &mdash; same root cause identified</div>\n    '
-                )
-                patched_card = card_html.replace(
-                    '<div class="deep-analysis-card">',
-                    f'<div class="deep-analysis-card">\n    {scope_note}',
-                    1,
-                )
-                new_content = content[:m.start(2)] + patched_card + content[m.end(2):]
-                count = 1
-            else:
-                new_content = content
-                count = 0
-        if count:
-            content = new_content
-            patched += 1
-
-            # Add "AI Analyzed" badge in the summary for this job
-            badge_html = '<span class="badge ai-analyzed">AI Analyzed</span>'
-            # Find summary line containing this prow URL's detail section
-            # The detail block has the prow link inside; find the summary just before it
-            badge_pattern = (
-                rf'(</span>\s*<span class="badge (?:blocking|informing)">[^<]+</span>)'
-                rf'(\s*[^<]*?\([^)]*\)\s*</summary>\s*'
-                rf'<div class="content">\s*'
-                rf'<p><strong>Payload:</strong>[^<]*<a[^>]*>[^<]*</a></p>\s*'
-                rf'(?:<div class="previous-attempts">(?=.*?<a href="{escaped_url}").*?</div>\s*|'
-                rf'<p><strong>Prow Job:</strong> <a href="{escaped_url}"))'
-            )
-            content = re.sub(badge_pattern, rf'\1 {badge_html}\2', content, count=1, flags=re.DOTALL)
-
-    # Update header: replace "Data only" with "AI-enriched"
-    if patched > 0:
-        old_status = (
-            '<span style="color:var(--text-muted)">○ Data only</span>'
-            '\n      <span style="margin-left:4px">— run '
-            '<code style="font-size:12px;color:var(--accent)">/edge-ocp-ci:generate-dashboard</code>'
-            ' for AI analysis</span>'
-        )
-        new_status = '<span style="color:var(--green)">● AI-enriched via Claude</span>'
-        content = content.replace(old_status, new_status, 1)
 
     html_path.write_text(content)
     logger.info(f"Patched {patched} analysis card(s) into {html_path}")
@@ -461,17 +412,30 @@ def merge_analysis(report: MonitorReport, analysis_path: Path) -> None:
         for payload in stream.payloads:
             for job in payload.jobs:
                 if job.prow_url in by_url:
-                    da = by_url[job.prow_url]
-                    job.deep_analysis = DeepAnalysis(
-                        root_cause=da.get("root_cause", ""),
-                        failure_type=da.get("failure_type", ""),
-                        impact=da.get("impact", ""),
-                        suspect_prs=_safe_urls(da.get("suspect_prs", [])),
-                        recommendation=da.get("recommendation", ""),
-                    )
+                    job.deep_analysis = _build_deep_analysis(by_url[job.prow_url])
                     merged += 1
 
     logger.info(f"Merged deep analysis for {merged} job(s)")
+
+
+def _build_deep_analysis(da_raw: dict) -> DeepAnalysis:
+    """Build a DeepAnalysis from a raw dict, sanitizing URLs."""
+    return DeepAnalysis(
+        root_cause=da_raw.get("root_cause", ""),
+        failure_type=da_raw.get("failure_type", ""),
+        impact=da_raw.get("impact", ""),
+        suspect_prs=_safe_urls(da_raw.get("suspect_prs", [])),
+        recommendation=da_raw.get("recommendation", ""),
+        same_root_cause=da_raw.get("same_root_cause", True),
+        attempt_analyses=[
+            AttemptAnalysis(
+                prow_url=aa.get("prow_url", ""),
+                root_cause=aa.get("root_cause", ""),
+                failure_type=aa.get("failure_type", ""),
+            )
+            for aa in da_raw.get("attempt_analyses", [])
+        ],
+    )
 
 
 def _safe_dataclass_init(cls, data: dict):
@@ -495,13 +459,7 @@ def load_json(json_path: Path) -> MonitorReport:
                 da_raw = j.get("deep_analysis")
                 deep_analysis = None
                 if da_raw:
-                    deep_analysis = DeepAnalysis(
-                        root_cause=da_raw.get("root_cause", ""),
-                        failure_type=da_raw.get("failure_type", ""),
-                        impact=da_raw.get("impact", ""),
-                        suspect_prs=_safe_urls(da_raw.get("suspect_prs", [])),
-                        recommendation=da_raw.get("recommendation", ""),
-                    )
+                    deep_analysis = _build_deep_analysis(da_raw)
                 failing_tests = [
                     FailingTest(name=t.get("name", ""), error_message=t.get("error", ""))
                     for t in j.get("failing_tests", [])

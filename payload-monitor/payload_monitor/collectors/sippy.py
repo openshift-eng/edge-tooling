@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import requests
 
 from ..config import Config
@@ -90,18 +92,34 @@ def identify_regressions(
     return regressions
 
 
+def _collect_version(version: str, config: Config) -> tuple[str, list[Regression]]:
+    """Collect regressions for a single version."""
+    edge_jobs = fetch_edge_jobs(version, config)
+    regressions = identify_regressions(edge_jobs)
+    if regressions:
+        logger.info(
+            f"  {version}: {len(regressions)} edge job regressions detected"
+        )
+    return version, regressions
+
+
 def collect(config: Config, versions: list[str]) -> dict[str, list[Regression]]:
-    """Collect Sippy regressions for all configured versions.
+    """Collect Sippy regressions for all configured versions in parallel.
 
     Returns a dict mapping version -> list of regressions.
     """
     results = {}
-    for version in versions:
-        edge_jobs = fetch_edge_jobs(version, config)
-        regressions = identify_regressions(edge_jobs)
-        if regressions:
-            logger.info(
-                f"  {version}: {len(regressions)} edge job regressions detected"
-            )
-        results[version] = regressions
+    with ThreadPoolExecutor(max_workers=min(len(versions) or 1, 10)) as pool:
+        futures = {
+            pool.submit(_collect_version, v, config): v
+            for v in versions
+        }
+        for future in as_completed(futures):
+            v = futures[future]
+            try:
+                version, regressions = future.result()
+                results[version] = regressions
+            except Exception as e:
+                logger.error(f"Sippy collection failed for {v}: {e}")
+                results[v] = []
     return results

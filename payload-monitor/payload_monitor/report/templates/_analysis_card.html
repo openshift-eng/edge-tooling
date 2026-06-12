@@ -1,0 +1,59 @@
+<div class="deep-analysis-card">
+  {% if attempt_count is defined and attempt_count > 1 %}
+  {% if same_root_cause %}
+  <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Analysis covers all {{ attempt_count }} attempts &mdash; same root cause identified</div>
+  {% else %}
+  <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Analysis covers all {{ attempt_count }} attempts &mdash; different root causes found</div>
+  {% endif %}
+  {% endif %}
+  <h3>AI Root Cause Analysis</h3>
+  <div class="da-field">
+    <span class="da-label">Root Cause:</span>
+    <span>{{ root_cause }}</span>
+  </div>
+  <div class="da-field">
+    <span class="da-label">Failure Type:</span>
+    <span class="badge da-type">{{ failure_type }}</span>
+  </div>
+  <div class="da-field">
+    <span class="da-label">Impact:</span>
+    <span>{{ impact }}</span>
+  </div>
+  {% if suspect_prs %}
+  <div class="da-field">
+    <span class="da-label">Suspect PRs:</span>
+    <ul style="margin:4px 0 0 20px">
+      {% for pr in suspect_prs %}
+      <li><a href="{{ pr }}" target="_blank">{{ pr }}</a></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+  <div class="da-field da-recommendation">
+    <span class="da-label">Recommendation:</span>
+    <span>{{ recommendation }}</span>
+  </div>
+  {% if not same_root_cause and attempt_analyses %}
+  <div class="da-field">
+    <span class="da-label">Per-Attempt Breakdown:</span>
+    <ul style="margin:4px 0 0 20px">
+      {% for aa in attempt_analyses %}
+      <li>
+        <a href="{{ aa.prow_url }}" target="_blank">Attempt #{{ loop.index }}</a>
+        <span class="badge da-type">{{ aa.failure_type }}</span>
+        {{ aa.root_cause }}
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+  {% if payload_tag is defined and payload_tag %}
+  <div class="claude-suggestion" style="margin-top:12px">
+    Investigate suspect PRs in this payload:<br>
+    <div class="cmd-copy-row">
+      <code>/ci:fetch-new-prs-in-payload {{ payload_tag }}</code>
+      <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>
+    </div>
+  </div>
+  {% endif %}
+</div>

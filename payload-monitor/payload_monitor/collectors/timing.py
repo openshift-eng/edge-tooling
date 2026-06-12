@@ -6,6 +6,7 @@ from typing import Optional
 import json
 import logging
 import math
+import statistics as stats_mod
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
@@ -125,16 +126,18 @@ def save_cache(report: TimingReport, cache_path: Path) -> None:
 def prune_cache(report: TimingReport, max_age_days: int = 30) -> None:
     """Remove runs older than max_age_days from the report."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
-    to_remove = []
-    for run_id, run in report.runs.items():
+
+    def _is_recent(run: TimingRun) -> bool:
         try:
             run_time = datetime.fromisoformat(run.start_time.replace("Z", "+00:00"))
-            if run_time < cutoff:
-                to_remove.append(run_id)
+            return run_time >= cutoff
         except ValueError:
-            to_remove.append(run_id)
-    for run_id in to_remove:
-        del report.runs[run_id]
+            return False
+
+    report.runs = {
+        run_id: run for run_id, run in report.runs.items()
+        if _is_recent(run)
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -155,24 +158,17 @@ def compute_stats(runs: list[TimingRun]) -> dict:
 
     durations = sorted(r.duration_seconds for r in runs)
     n = len(durations)
-    avg = sum(durations) / n
-    median = (durations[n // 2] + durations[(n - 1) // 2]) / 2
-
-    if n == 1:
-        stddev = 0.0
-    else:
-        variance = sum((d - avg) ** 2 for d in durations) / (n - 1)
-        stddev = math.sqrt(variance)
-
+    avg = stats_mod.mean(durations)
+    median = stats_mod.median(durations)
+    stddev = stats_mod.stdev(durations) if n > 1 else 0.0
     cv = (stddev / avg * 100) if avg > 0 else 0
 
-    def percentile(sorted_data, p):
-        k = (len(sorted_data) - 1) * (p / 100)
-        f = math.floor(k)
-        c = math.ceil(k)
-        if f == c:
-            return sorted_data[int(k)]
-        return sorted_data[f] * (c - k) + sorted_data[c] * (k - f)
+    # quantiles(n=100) requires at least 2 data points
+    if n >= 2:
+        cuts = stats_mod.quantiles(durations, n=100, method="inclusive")
+        p90, p95, p99 = cuts[89], cuts[94], cuts[98]
+    else:
+        p90 = p95 = p99 = durations[0]
 
     return {
         "count": n,
@@ -180,9 +176,9 @@ def compute_stats(runs: list[TimingRun]) -> dict:
         "median": median,
         "min": durations[0],
         "max": durations[-1],
-        "p90": percentile(durations, 90),
-        "p95": percentile(durations, 95),
-        "p99": percentile(durations, 99),
+        "p90": p90,
+        "p95": p95,
+        "p99": p99,
         "cv": round(cv, 1),
         "stddev": round(stddev, 1),
     }
@@ -192,9 +188,9 @@ def compute_stats(runs: list[TimingRun]) -> dict:
 # Sippy API fetching
 # ---------------------------------------------------------------------------
 
-def fetch_tna_tnf_jobs(release: str, config: Config) -> list[dict]:
-    """Fetch all jobs from Sippy for a release, filter for SNO/TNA/TNF topologies."""
-    logger.info(f"Fetching SNO/TNA/TNF jobs for release {release}")
+def fetch_edge_jobs(release: str, config: Config) -> list[dict]:
+    """Fetch all jobs from Sippy for a release, filter for edge topologies."""
+    logger.info(f"Fetching edge topology jobs for release {release}")
     try:
         resp = _session.get(JOBS_URL, params={"release": release}, timeout=30)
         resp.raise_for_status()
@@ -206,16 +202,16 @@ def fetch_tna_tnf_jobs(release: str, config: Config) -> list[dict]:
     if not isinstance(all_jobs, list):
         return []
 
-    tna_tnf = []
+    edge_jobs = []
     for job in all_jobs:
         name = job.get("name", "")
         topology = config.classify_topology(name)
         if topology in ("SNO", "TNA", "TNF"):
             job["_topology"] = topology
-            tna_tnf.append(job)
+            edge_jobs.append(job)
 
-    logger.info(f"  Found {len(tna_tnf)} SNO/TNA/TNF jobs for {release}")
-    return tna_tnf
+    logger.info(f"  Found {len(edge_jobs)} SNO/TNA/TNF jobs for {release}")
+    return edge_jobs
 
 
 def fetch_job_runs(job_name: str, release: str) -> list[dict]:
@@ -369,7 +365,7 @@ def collect(
     version_jobs: dict[str, list[dict]] = {}
     with ThreadPoolExecutor(max_workers=len(versions)) as pool:
         futures = {
-            pool.submit(fetch_tna_tnf_jobs, version, config): version
+            pool.submit(fetch_edge_jobs, version, config): version
             for version in versions
         }
         for future in as_completed(futures):

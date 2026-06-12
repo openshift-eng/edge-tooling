@@ -109,9 +109,10 @@ class TestCollectJobsByType:
         report = _make_report(_make_stream("4.19", [payload]))
 
         result = _collect_jobs_by_type(report, JobType.BLOCKING)
-        assert set(result[0].keys()) == {"name", "prow_url", "topology", "version", "payload_tag"}
+        assert set(result[0].keys()) == {"name", "prow_url", "topology", "version", "payload_tag", "previous_attempt_urls"}
         assert result[0]["payload_tag"] == "4.19.0-0.nightly-tag"
         assert result[0]["prow_url"] == "https://prow/1"
+        assert result[0]["previous_attempt_urls"] == []
 
 
 class TestEmitJobSection:
@@ -120,7 +121,7 @@ class TestEmitJobSection:
         _emit_job_section("BLOCKING", jobs)
         lines = capsys.readouterr().out.strip().splitlines()
         assert lines[0] == "BLOCKING_JOBS_START"
-        assert lines[1] == "BLOCKING|j1|https://prow/1|SNO|4.19|tag1"
+        assert lines[1] == "BLOCKING|j1|https://prow/1|SNO|4.19|tag1|"
         assert lines[2] == "BLOCKING_JOBS_END"
 
     def test_emits_informing_section(self, capsys):
@@ -128,8 +129,15 @@ class TestEmitJobSection:
         _emit_job_section("INFORMING", jobs)
         lines = capsys.readouterr().out.strip().splitlines()
         assert lines[0] == "INFORMING_JOBS_START"
-        assert lines[1] == "INFORMING|j1|https://prow/2|TNA|4.20|tag2"
+        assert lines[1] == "INFORMING|j1|https://prow/2|TNA|4.20|tag2|"
         assert lines[2] == "INFORMING_JOBS_END"
+
+    def test_emits_previous_attempt_urls(self, capsys):
+        jobs = [{"name": "j1", "prow_url": "https://prow/3", "topology": "SNO", "version": "4.19",
+                 "payload_tag": "tag1", "previous_attempt_urls": ["https://prow/1", "https://prow/2"]}]
+        _emit_job_section("BLOCKING", jobs)
+        lines = capsys.readouterr().out.strip().splitlines()
+        assert lines[1] == "BLOCKING|j1|https://prow/3|SNO|4.19|tag1|https://prow/1;https://prow/2"
 
     def test_empty_list_produces_no_output(self, capsys):
         _emit_job_section("BLOCKING", [])

@@ -108,45 +108,45 @@ def _extract_error_summary(failing_tests: list[FailingTest]) -> str:
     return "; ".join(summaries)
 
 
+def _fetch_junit_failures(prow_url: str) -> tuple[list[FailingTest], str]:
+    """Fetch and parse junit failures from a Prow URL.
+
+    Returns (failing_tests, error_summary). Returns ([], "") on any error.
+    """
+    gcs_base = _prow_url_to_gcs_path(prow_url)
+    if not gcs_base:
+        logger.debug(f"Could not parse GCS path from {prow_url}")
+        return [], ""
+
+    junit_path = f"{gcs_base}/artifacts/junit_operator.xml"
+    xml_content = _fetch_gcs_file(junit_path)
+    if not xml_content:
+        return [], ""
+
+    tests = _parse_junit(xml_content)
+    return tests, _extract_error_summary(tests)
+
+
 def enrich_job(job: JobRun) -> None:
     """Enrich a failing job with test failure details from Prow artifacts."""
     if not job.prow_url:
         return
-
-    gcs_base = _prow_url_to_gcs_path(job.prow_url)
-    if not gcs_base:
-        logger.debug(f"Could not parse GCS path from {job.prow_url}")
-        return
-
-    # Fetch the top-level junit_operator.xml
-    junit_path = f"{gcs_base}/artifacts/junit_operator.xml"
-    xml_content = _fetch_gcs_file(junit_path)
-    if xml_content:
-        job.failing_tests = _parse_junit(xml_content)
-        job.error_summary = _extract_error_summary(job.failing_tests)
-        logger.debug(
-            f"  {job.name}: {len(job.failing_tests)} failing tests"
-        )
+    tests, summary = _fetch_junit_failures(job.prow_url)
+    if tests:
+        job.failing_tests = tests
+        job.error_summary = summary
+        logger.debug(f"  {job.name}: {len(tests)} failing tests")
 
 
 def enrich_previous_attempt(attempt: PreviousAttempt) -> None:
     """Enrich a previous attempt with test failure details from Prow artifacts."""
     if not attempt.prow_url:
         return
-
-    gcs_base = _prow_url_to_gcs_path(attempt.prow_url)
-    if not gcs_base:
-        logger.debug(f"Could not parse GCS path from {attempt.prow_url}")
-        return
-
-    junit_path = f"{gcs_base}/artifacts/junit_operator.xml"
-    xml_content = _fetch_gcs_file(junit_path)
-    if xml_content:
-        attempt.failing_tests = _parse_junit(xml_content)
-        attempt.error_summary = _extract_error_summary(attempt.failing_tests)
-        logger.debug(
-            f"  previous attempt: {len(attempt.failing_tests)} failing tests"
-        )
+    tests, summary = _fetch_junit_failures(attempt.prow_url)
+    if tests:
+        attempt.failing_tests = tests
+        attempt.error_summary = summary
+        logger.debug(f"  previous attempt: {len(tests)} failing tests")
 
 
 def enrich_failing_jobs(jobs: list[JobRun], max_workers: int = 4) -> None:

@@ -44,12 +44,21 @@ class Topology:
 
 
 @dataclass
+class AttemptAnalysis:
+    prow_url: str
+    root_cause: str = ""
+    failure_type: str = ""
+
+
+@dataclass
 class DeepAnalysis:
     root_cause: str = ""
     failure_type: str = ""
     impact: str = ""
     suspect_prs: list[str] = field(default_factory=list)
     recommendation: str = ""
+    same_root_cause: bool = True
+    attempt_analyses: list[AttemptAnalysis] = field(default_factory=list)
 
 
 @dataclass
@@ -89,10 +98,6 @@ class Payload:
     status: PayloadStatus
     url: str = ""
     jobs: list[JobRun] = field(default_factory=list)
-
-    @property
-    def edge_jobs(self) -> list[JobRun]:
-        return self.jobs
 
     @property
     def failing_edge_jobs(self) -> list[JobRun]:

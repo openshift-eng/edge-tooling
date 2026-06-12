@@ -226,7 +226,7 @@ class TestFetchTnaTnfJobs:
         mock_resp.raise_for_status = MagicMock()
         mock_session.get.return_value = mock_resp
 
-        jobs = timing.fetch_tna_tnf_jobs("4.22", config)
+        jobs = timing.fetch_edge_jobs("4.22", config)
         assert len(jobs) == 3
         topos = {j["_topology"] for j in jobs}
         assert topos == {"SNO", "TNA", "TNF"}
@@ -234,7 +234,7 @@ class TestFetchTnaTnfJobs:
     @patch.object(timing, "_session")
     def test_http_error_returns_empty(self, mock_session, config):
         mock_session.get.side_effect = requests.RequestException("timeout")
-        assert timing.fetch_tna_tnf_jobs("4.22", config) == []
+        assert timing.fetch_edge_jobs("4.22", config) == []
 
     @patch.object(timing, "_session")
     def test_non_list_response(self, mock_session, config):
@@ -242,7 +242,7 @@ class TestFetchTnaTnfJobs:
         mock_resp.json.return_value = {"error": "bad"}
         mock_resp.raise_for_status = MagicMock()
         mock_session.get.return_value = mock_resp
-        assert timing.fetch_tna_tnf_jobs("4.22", config) == []
+        assert timing.fetch_edge_jobs("4.22", config) == []
 
 
 class TestFetchJobRuns:

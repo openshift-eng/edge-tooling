@@ -27,9 +27,15 @@ TAGS_URL = f"{BASE_URL}/api/v1/releasestream/{{stream}}/tags"
 RELEASE_URL = f"{BASE_URL}/api/v1/releasestream/{{stream}}/release/{{tag}}"
 _session = create_session()
 
+_NIGHTLY_SUFFIX = ".0-0.nightly"
+
 
 def _stream_name(version: str) -> str:
-    return f"{version}.0-0.nightly"
+    return f"{version}{_NIGHTLY_SUFFIX}"
+
+
+def version_from_stream(stream: str) -> str:
+    return stream.split(_NIGHTLY_SUFFIX)[0]
 
 
 def _parse_job_result(state: str) -> JobResult:
@@ -131,7 +137,7 @@ def fetch_release_detail(stream: str, tag: str) -> Optional[dict]:
 def fetch_payload(stream: str, tag_data: dict, config: Config) -> Payload:
     """Fetch full payload data including job results."""
     tag = tag_data["name"]
-    version = stream.split(".0-0.nightly")[0]
+    version = version_from_stream(stream)
 
     detail = fetch_release_detail(stream, tag)
     jobs = []
@@ -156,7 +162,7 @@ def fetch_payload(stream: str, tag_data: dict, config: Config) -> Payload:
 
 def _collect_stream(stream: str, config: Config) -> StreamReport:
     """Collect payload data for a single stream, parallelizing tag fetches."""
-    version = stream.split(".0-0.nightly")[0]
+    version = version_from_stream(stream)
     logger.info(f"Collecting payloads for {stream}")
     tags = fetch_tags(stream, limit=config.payloads_per_stream)
 
@@ -185,12 +191,11 @@ def _collect_stream(stream: str, config: Config) -> StreamReport:
     payloads.sort(key=lambda p: tag_order.get(p.tag, 0))
 
     for payload in payloads:
-        edge_jobs = payload.edge_jobs
-        if edge_jobs:
+        if payload.jobs:
             failing = payload.failing_edge_jobs
             logger.info(
                 f"  {payload.tag}: {payload.status.value} — "
-                f"{len(edge_jobs)} edge jobs, {len(failing)} failing"
+                f"{len(payload.jobs)} edge jobs, {len(failing)} failing"
             )
 
     return StreamReport(stream=stream, version=version, payloads=payloads)
@@ -213,7 +218,7 @@ def collect(config: Config, streams: Optional[list[str]] = None) -> list[StreamR
                 reports[stream] = future.result()
             except Exception as e:
                 logger.error(f"Failed to collect stream {stream}: {e}")
-                version = stream.split(".0-0.nightly")[0]
+                version = version_from_stream(stream)
                 reports[stream] = StreamReport(stream=stream, version=version, payloads=[])
 
     # Preserve original stream order

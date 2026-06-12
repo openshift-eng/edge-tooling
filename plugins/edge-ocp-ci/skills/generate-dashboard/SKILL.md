@@ -101,8 +101,10 @@ The tool outputs:
 Parse the blocking job lines from the tool's stdout. Each line between the markers has the format:
 
 ```text
-BLOCKING|job_name|prow_url|topology|version|payload_tag
+BLOCKING|job_name|prow_url|topology|version|payload_tag|prev_url1;prev_url2
 ```
+
+The 7th field contains semicolon-separated Prow URLs for previous failed attempts (empty if no retries). Split on `;` to get individual URLs.
 
 If no `BLOCKING_JOBS_START` marker appears in the output, there are no blocking failures — skip to Step 6.
 
@@ -116,16 +118,21 @@ Use the following prompt for each blocking job. When there is **exactly 1 blocki
 Analyze this failing blocking edge job and return a JSON deep_analysis object.
 
 Job: {job_name}
-Prow URL: {prow_url}
+Prow URL (latest attempt): {prow_url}
+Previous Attempt URLs: {prev_url1}, {prev_url2} (or "none" if no previous attempts)
 Topology: {topology}
 Version: {version}
 Payload: {payload_tag}
 
 Steps:
-1. Use `ci:fetch-job-run-summary` with the Prow URL to get all failed tests grouped by SIG
-2. Use `ci:fetch-prowjob-json` with the Prow URL to get job metadata
+1. Use `ci:fetch-job-run-summary` with EACH Prow URL (latest + all previous attempts) to get failed tests grouped by SIG for each attempt
+2. Use `ci:fetch-prowjob-json` with the latest Prow URL to get job metadata
+3. Compare the failure patterns across attempts:
+   - Are the same tests failing with the same errors?
+   - Are different tests failing or different error messages?
+   - Does the failure mode change between attempts?
 
-Then based on failure type:
+Then based on failure type of the latest attempt:
 - If install failure (error contains "install should succeed", "bootstrap", or failed in pre/setup phase):
   Use `ci:prow-job-analyze-install-failure` (or `ci:prow-job-analyze-metal-install-failure` if job name contains "metal")
 - If test failure (job passed install but failed during test phase):
@@ -138,12 +145,27 @@ For JIRA context: use `ci:fetch-jira-issue` for any linked bugs.
 Return ONLY a JSON object with these fields:
 {
   "prow_url": "{prow_url}",
-  "root_cause": "One-sentence explanation",
+  "root_cause": "Overall root cause (synthesize across all attempts if same cause, or describe the dominant pattern)",
   "failure_type": "Infrastructure flake | Test regression | Install failure | Platform issue",
   "impact": "How this affects payload acceptance and which topologies",
   "suspect_prs": ["https://github.com/org/repo/pull/123"],
-  "recommendation": "Specific next action"
+  "recommendation": "Specific next action",
+  "same_root_cause": true or false,
+  "attempt_analyses": [
+    {
+      "prow_url": "attempt_1_url",
+      "root_cause": "Root cause for this attempt",
+      "failure_type": "Infrastructure flake"
+    }
+  ]
 }
+
+Rules for same_root_cause and attempt_analyses:
+- Set same_root_cause to true if all attempts fail for the same fundamental reason (same tests, same errors, same infrastructure issue)
+- Set same_root_cause to false if attempts fail for different reasons (different tests failing, different error types)
+- When same_root_cause is true, attempt_analyses can be omitted or empty
+- When same_root_cause is false, attempt_analyses MUST contain one entry per attempt (previous + latest), ordered by attempt number
+- If there are NO previous attempts (single attempt), omit attempt_analyses and set same_root_cause to true
 ```
 
 When using subagents, launch all in parallel using multiple Agent tool calls in the same response. Collect their results and proceed to Step 5.
@@ -159,7 +181,9 @@ When using subagents, launch all in parallel using multiple Agent tool calls in 
      "failure_type": "Analysis error",
      "impact": "Unable to determine — manual investigation needed",
      "suspect_prs": [],
-     "recommendation": "Run /ci:prow-job-analyze-test-failure {prow_url} manually for detailed analysis"
+     "recommendation": "Run /ci:prow-job-analyze-test-failure {prow_url} manually for detailed analysis",
+     "same_root_cause": true,
+     "attempt_analyses": []
    }
    ```
 
@@ -174,15 +198,19 @@ Collect the deep analysis results (from subagents or inline analysis) and write 
 {
   "by_prow_url": {
     "https://prow.ci.openshift.org/view/gs/.../123": {
-      "root_cause": "One-sentence explanation of the root cause",
+      "root_cause": "Overall root cause synthesized across all attempts",
       "failure_type": "Infrastructure flake | Test regression | Install failure | Platform issue",
       "impact": "How this affects payload acceptance and which topologies",
       "suspect_prs": ["https://github.com/org/repo/pull/123"],
-      "recommendation": "Specific next action (file bug, wait for fix, investigate PR, etc.)"
+      "recommendation": "Specific next action (file bug, wait for fix, investigate PR, etc.)",
+      "same_root_cause": true,
+      "attempt_analyses": []
     }
   }
 }
 ```
+
+When `same_root_cause` is false, `attempt_analyses` contains per-attempt breakdown with `prow_url`, `root_cause`, and `failure_type` for each attempt. When true or when there is only one attempt, `attempt_analyses` can be empty.
 
 This file is intentionally small — it contains only the AI analysis results, not the full report data. This minimizes token usage.
 

@@ -59,12 +59,6 @@ class TestTopology:
 
 
 class TestPayload:
-    def test_edge_jobs_returns_all_jobs(self):
-        job1 = JobRun("j1", "", JobResult.SUCCESS, JobType.BLOCKING, "SNO")
-        job2 = JobRun("j2", "", JobResult.FAILURE, JobType.INFORMING, "TNA")
-        payload = Payload("tag", "stream", "4.19", PayloadStatus.ACCEPTED, jobs=[job1, job2])
-        assert payload.edge_jobs == [job1, job2]
-
     def test_failing_edge_jobs_filters_failures(self):
         job1 = JobRun("j1", "", JobResult.SUCCESS, JobType.BLOCKING, "SNO")
         job2 = JobRun("j2", "", JobResult.FAILURE, JobType.INFORMING, "TNA")

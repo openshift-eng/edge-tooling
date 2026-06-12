@@ -13,7 +13,11 @@ import click
 
 from .analyzer import analyze
 from .collectors import component_readiness, prow, sippy, timing
-from .collectors.release_controller import collect as collect_payloads, discover_streams
+from .collectors.release_controller import (
+    collect as collect_payloads,
+    discover_streams,
+    version_from_stream,
+)
 from .config import Config
 from .models import JobResult, JobType, MonitorReport
 from .report.generator import (
@@ -40,19 +44,17 @@ def _emit_job_section(label: str, jobs: list[dict]) -> None:
         return
     print(f"{label}_JOBS_START")
     for j in jobs:
-        print(f"{label}|{j['name']}|{j['prow_url']}|{j['topology']}|{j['version']}|{j['payload_tag']}")
+        prev = ";".join(j.get("previous_attempt_urls", []))
+        print(f"{label}|{j['name']}|{j['prow_url']}|{j['topology']}|{j['version']}|{j['payload_tag']}|{prev}")
     print(f"{label}_JOBS_END")
 
 
 def _collect_jobs_by_type(report: MonitorReport, job_type: JobType) -> list[dict]:
-    """Collect edge job failures of a given type from the report.
-
-    Returns a list of dicts with keys: name, prow_url, topology, version, payload_tag.
-    """
+    """Collect edge job failures of a given type from the report."""
     jobs = []
     for stream in report.streams:
         for payload in stream.payloads:
-            for j in payload.edge_jobs:
+            for j in payload.jobs:
                 if j.result == JobResult.FAILURE and j.job_type == job_type:
                     jobs.append({
                         "name": j.name,
@@ -60,6 +62,7 @@ def _collect_jobs_by_type(report: MonitorReport, job_type: JobType) -> list[dict
                         "topology": j.topology or "",
                         "version": stream.version,
                         "payload_tag": payload.tag,
+                        "previous_attempt_urls": [pa.prow_url for pa in j.previous_attempts],
                     })
     return jobs
 
@@ -154,7 +157,7 @@ def main(
     # Step 1: Discover versions and resolve stream names
     logger.info("Step 1: Discovering active versions...")
     stream_names = discover_streams(config)
-    active_versions = [s.split(".0-0.nightly")[0] for s in stream_names]
+    active_versions = [version_from_stream(s) for s in stream_names]
     logger.info(f"  Versions: {active_versions}")
 
     # Step 2: Collect data in parallel — RC payloads, Sippy regressions, and

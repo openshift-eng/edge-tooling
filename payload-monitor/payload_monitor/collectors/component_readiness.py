@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse
 
 import requests
 
@@ -30,9 +31,6 @@ def _test_detail_url(view: str, test_id: str, links: dict) -> str:
     """
     api_url = links.get("test_details", "")
     if api_url:
-        # The API URL contains query params we need — extract them
-        # and redirect to the UI page
-        from urllib.parse import urlparse
         parsed = urlparse(api_url)
         return f"{BASE_URL}/sippy-ng/component_readiness/test_details?{parsed.query}"
     if test_id:
