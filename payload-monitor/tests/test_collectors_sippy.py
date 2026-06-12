@@ -11,8 +11,8 @@ from payload_monitor.models import Regression
 
 
 class TestFetchEdgeJobs:
-    @patch.object(sippy, "_session")
-    def test_filters_edge_jobs(self, mock_session, config):
+    def test_filters_edge_jobs(self, config):
+        mock_session = MagicMock()
         mock_resp = MagicMock()
         mock_resp.json.return_value = [
             {"name": "periodic-sno-test", "id": 1},
@@ -22,7 +22,7 @@ class TestFetchEdgeJobs:
         mock_resp.raise_for_status = MagicMock()
         mock_session.get.return_value = mock_resp
 
-        jobs = sippy.fetch_edge_jobs("4.19", config)
+        jobs = sippy.fetch_edge_jobs("4.19", config, session=mock_session)
         assert len(jobs) == 2
         names = {j["name"] for j in jobs}
         assert "periodic-sno-test" in names
@@ -31,19 +31,19 @@ class TestFetchEdgeJobs:
         sno_job = [j for j in jobs if j["name"] == "periodic-sno-test"][0]
         assert sno_job["_topology"] == "SNO"
 
-    @patch.object(sippy, "_session")
-    def test_http_error_returns_empty(self, mock_session, config):
+    def test_http_error_returns_empty(self, config):
+        mock_session = MagicMock()
         mock_session.get.side_effect = requests.RequestException("timeout")
-        assert sippy.fetch_edge_jobs("4.19", config) == []
+        assert sippy.fetch_edge_jobs("4.19", config, session=mock_session) == []
 
-    @patch.object(sippy, "_session")
-    def test_unexpected_response_format(self, mock_session, config):
+    def test_unexpected_response_format(self, config):
+        mock_session = MagicMock()
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"error": "bad request"}
         mock_resp.raise_for_status = MagicMock()
         mock_session.get.return_value = mock_resp
 
-        assert sippy.fetch_edge_jobs("4.19", config) == []
+        assert sippy.fetch_edge_jobs("4.19", config, session=mock_session) == []
 
 
 class TestIdentifyRegressions:

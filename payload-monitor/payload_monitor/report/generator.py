@@ -429,11 +429,12 @@ def _build_deep_analysis(da_raw: dict) -> DeepAnalysis:
         same_root_cause=da_raw.get("same_root_cause", True),
         attempt_analyses=[
             AttemptAnalysis(
-                prow_url=aa.get("prow_url", ""),
+                prow_url=aa["prow_url"],
                 root_cause=aa.get("root_cause", ""),
                 failure_type=aa.get("failure_type", ""),
             )
             for aa in da_raw.get("attempt_analyses", [])
+            if aa.get("prow_url")
         ],
     )
 

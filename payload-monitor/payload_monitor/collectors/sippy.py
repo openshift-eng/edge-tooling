@@ -15,15 +15,17 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://sippy.dptools.openshift.org"
 JOBS_URL = f"{BASE_URL}/api/jobs"
-_session = create_session()
 
 
-def fetch_edge_jobs(release: str, config: Config) -> list[dict]:
+def fetch_edge_jobs(
+    release: str, config: Config, session: requests.Session | None = None
+) -> list[dict]:
     """Fetch jobs from Sippy and filter for edge topologies."""
     logger.info(f"Fetching Sippy jobs for release {release}")
 
+    s = session or create_session()
     try:
-        resp = _session.get(JOBS_URL, params={"release": release}, timeout=30)
+        resp = s.get(JOBS_URL, params={"release": release}, timeout=30)
         resp.raise_for_status()
         all_jobs = resp.json()
     except requests.RequestException as e:
@@ -94,13 +96,17 @@ def identify_regressions(
 
 def _collect_version(version: str, config: Config) -> tuple[str, list[Regression]]:
     """Collect regressions for a single version."""
-    edge_jobs = fetch_edge_jobs(version, config)
-    regressions = identify_regressions(edge_jobs)
-    if regressions:
-        logger.info(
-            f"  {version}: {len(regressions)} edge job regressions detected"
-        )
-    return version, regressions
+    session = create_session()
+    try:
+        edge_jobs = fetch_edge_jobs(version, config, session=session)
+        regressions = identify_regressions(edge_jobs)
+        if regressions:
+            logger.info(
+                f"  {version}: {len(regressions)} edge job regressions detected"
+            )
+        return version, regressions
+    finally:
+        session.close()
 
 
 def collect(config: Config, versions: list[str]) -> dict[str, list[Regression]]:
@@ -119,7 +125,7 @@ def collect(config: Config, versions: list[str]) -> dict[str, list[Regression]]:
             try:
                 version, regressions = future.result()
                 results[version] = regressions
-            except Exception as e:
+            except Exception as e:  # broad catch: isolate per-version failures
                 logger.error(f"Sippy collection failed for {v}: {e}")
                 results[v] = []
     return results
