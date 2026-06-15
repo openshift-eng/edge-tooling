@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Optional
 import json
 import logging
-import math
 import statistics as stats_mod
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
