@@ -16,7 +16,7 @@
       "name": "edge-ocp-ci",
       "source": "./plugins/edge-ocp-ci",
       "description": "Edge OCP Payload Monitor — monitor OpenShift nightly payloads for edge topology (SNO/TNA/TNF) failures with AI-enriched analysis",
-      "version": "1.0.1"
+      "version": "1.0.2"
     },
     {
       "name": "edge-scrum",
