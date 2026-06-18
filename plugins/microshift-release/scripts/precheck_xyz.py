@@ -84,8 +84,9 @@ def interpret_cves(advisory_report):
     Rules from the MicroShift release process:
     - Empty cves dict -> no CVEs -> no action
     - CVE with empty dict (no Jira ticket) -> does NOT affect MicroShift -> no action
-    - CVE with resolution "Done" -> MUST release
-    - CVE with resolution "Done-Errata" or "Not a Bug" -> no action (already shipped)
+    - CVE with resolution "Done" -> MUST release (fix landed but not yet shipped)
+    - CVE with resolution "Done-Errata" -> no action (fix already shipped in a prior errata)
+    - CVE with resolution "Not a Bug" -> no action (CVE does not affect MicroShift)
     - CVE with any other status -> flag as NEEDS REVIEW
 
     Args:
@@ -122,7 +123,7 @@ def interpret_cves(advisory_report):
                 must_release_cves.append({
                     "cve": cve_id,
                     "jira": jira_ticket.get("id", ""),
-                    "reason": "Fix completed",
+                    "reason": "Fix done, it must be released, new z-stream should be requested",
                 })
             elif resolution in ("Done-Errata", "Not a Bug"):
                 continue
