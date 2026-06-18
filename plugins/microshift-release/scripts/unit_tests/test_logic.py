@@ -110,7 +110,7 @@ class TestInterpretCves(unittest.TestCase):
         result = interpret_cves(report)
         self.assertEqual(result["impact"], "none")
 
-    def test_cve_must_release(self):
+    def test_cve_done_errata_skipped(self):
         report = {
             "RHSA-2026:12345": {
                 "type": "image",
@@ -126,7 +126,7 @@ class TestInterpretCves(unittest.TestCase):
             }
         }
         result = interpret_cves(report)
-        self.assertEqual(result["impact"], "must_release")
+        self.assertEqual(result["impact"], "none")
 
     def test_cve_needs_review(self):
         report = {
