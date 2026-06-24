@@ -9,23 +9,10 @@ import requests
 
 PYXIS_BASE_URL = "https://catalog.redhat.com/api/containers/v1"
 PYXIS_STAGE_BASE_URL = "https://catalog.stage.redhat.com/api/containers/v1"
-BOOTC_REPO_PATH = (
-    "repositories/registry/registry.access.redhat.com"
-    "/repository/openshift4/microshift-bootc-rhel9/images"
-)
-BOOTC_STAGE_REPO_PATH = (
-    "repositories/registry/registry.stage.redhat.io"
-    "/repository/openshift4/microshift-bootc-rhel9/images"
-)
 CONTAINERFILE_URL_TEMPLATE = (
     "https://raw.githubusercontent.com/openshift/microshift"
     "/{commit}/packaging/images/bootc/Containerfile"
 )
-
-_CATALOG_URLS = {
-    "prod": f"{PYXIS_BASE_URL}/{BOOTC_REPO_PATH}",
-    "stage": f"{PYXIS_STAGE_BASE_URL}/{BOOTC_STAGE_REPO_PATH}",
-}
 
 _BOOTC_REPO_TEMPLATE = {
     "prod": (
@@ -113,10 +100,8 @@ def _catalog_url(catalog="prod", rhel=9):
     Returns:
         str: Full API URL for the bootc images endpoint.
     """
-    if rhel != 9:
-        template = _BOOTC_REPO_TEMPLATE.get(catalog, _BOOTC_REPO_TEMPLATE["prod"])
-        return template.format(rhel=rhel)
-    return _CATALOG_URLS.get(catalog, _CATALOG_URLS["prod"])
+    template = _BOOTC_REPO_TEMPLATE.get(catalog, _BOOTC_REPO_TEMPLATE["prod"])
+    return template.format(rhel=rhel)
 
 
 def _fetch_page(page, catalog="prod"):
@@ -560,7 +545,8 @@ def check_catalog_image(version, catalog="prod", arch="amd64", rhel=9):
             if catalog == "stage" and e.response.status_code == 403:
                 logger.warning("Stage catalog unreachable (403), "
                                "falling back to prod")
-                return check_catalog_image(version, catalog="prod")
+                return check_catalog_image(version, catalog="prod",
+                                           arch=arch, rhel=rhel)
             return {"valid": False,
                     "reason": f"Catalog query failed ({catalog}): {e}",
                     "image": None, "catalog": catalog}
@@ -648,42 +634,7 @@ def check_catalog_image_graphql(version, catalog="prod", arch="amd64", rhel=9):
                 "image": None, "catalog": catalog}
 
     graphql_url = _GRAPHQL_URLS.get(catalog, _GRAPHQL_URLS["prod"])
-    variables = {
-        "id": repo_id,
-        "page": 0,
-        "page_size": 250,
-        "filter": {
-            "and": [
-                {"repositories_elemMatch": {
-                    "and": [{"repository": {"eq": repo_name}}]
-                }}
-            ]
-        },
-        "sort_by": [
-            {"field": "repositories.push_date", "order": "DESC"},
-            {"field": "repositories.repository", "order": "ASC"},
-        ],
-    }
-
-    try:
-        resp = requests.post(
-            graphql_url,
-            json={"query": _GRAPHQL_IMAGES_QUERY, "variables": variables},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        result = resp.json()
-    except (requests.RequestException, json.JSONDecodeError) as exc:
-        return {"valid": False,
-                "reason": f"GraphQL query failed ({catalog}): {exc}",
-                "image": None, "catalog": catalog}
-
-    repo_data = (result.get("data", {})
-                 .get("ContainerRepository", {})
-                 .get("data", {}))
-    images_data = (repo_data.get("edges", {})
-                   .get("images", {})
-                   .get("data", []))
+    page_size = 250
 
     # GA/Z-stream: tags contain "assembly.X.Y.Z"
     # EC/RC: tags contain "vX.Y.Z-ec.N" or "vX.Y.Z-rc.N"
@@ -693,36 +644,76 @@ def check_catalog_image_graphql(version, catalog="prod", arch="amd64", rhel=9):
         re.compile(rf"^v{re.escape(version)}$"),
     ]
 
-    for image in images_data:
-        if image.get("architecture") != arch:
-            continue
-        for repo in image.get("repositories", []):
-            for t in repo.get("tags", []):
-                tag_name = t.get("name", "")
-                if any(p.search(tag_name) for p in tag_patterns):
-                    all_tags = [{"name": tg["name"]}
-                                for r in image.get("repositories", [])
-                                for tg in r.get("tags", [])]
-                    parsed = image.get("parsed_data") or {}
-                    labels = _parse_labels(parsed.get("labels"))
-                    env = _parse_env_variables(parsed.get("env_variables"))
-                    commit_id = (labels.get(_LABEL_COMMIT_ID)
-                                 or env.get("SOURCE_GIT_COMMIT"))
-                    commit_short = env.get("OS_GIT_COMMIT")
-                    metadata = {
-                        "image_id": image.get("_id"),
-                        "docker_image_digest": image.get("docker_image_digest"),
-                        "commit_id": commit_id,
-                        "commit_short": commit_short,
-                        "tags": all_tags,
-                        "matched_tag": tag_name,
-                    }
-                    return {
-                        "valid": True,
-                        "reason": f"Image found in {catalog} catalog (tag {tag_name})",
-                        "image": metadata,
-                        "catalog": catalog,
-                    }
+    for page in range(5):
+        variables = {
+            "id": repo_id,
+            "page": page,
+            "page_size": page_size,
+            "filter": {
+                "and": [
+                    {"repositories_elemMatch": {
+                        "and": [{"repository": {"eq": repo_name}}]
+                    }}
+                ]
+            },
+            "sort_by": [
+                {"field": "repositories.push_date", "order": "DESC"},
+                {"field": "repositories.repository", "order": "ASC"},
+            ],
+        }
+
+        try:
+            resp = requests.post(
+                graphql_url,
+                json={"query": _GRAPHQL_IMAGES_QUERY, "variables": variables},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+        except (requests.RequestException, json.JSONDecodeError) as exc:
+            return {"valid": False,
+                    "reason": f"GraphQL query failed ({catalog}): {exc}",
+                    "image": None, "catalog": catalog}
+
+        data = result.get("data") or {}
+        repo_data = (data.get("ContainerRepository") or {}).get("data") or {}
+        images_data = (((repo_data.get("edges") or {})
+                        .get("images") or {})
+                       .get("data", []))
+
+        for image in images_data:
+            if image.get("architecture") != arch:
+                continue
+            for repo in image.get("repositories", []):
+                for t in repo.get("tags", []):
+                    tag_name = t.get("name", "")
+                    if any(p.search(tag_name) for p in tag_patterns):
+                        all_tags = [{"name": tg.get("name", "")}
+                                    for r in image.get("repositories", [])
+                                    for tg in r.get("tags", [])]
+                        parsed = image.get("parsed_data") or {}
+                        labels = _parse_labels(parsed.get("labels"))
+                        env = _parse_env_variables(parsed.get("env_variables"))
+                        commit_id = (labels.get(_LABEL_COMMIT_ID)
+                                     or env.get("SOURCE_GIT_COMMIT"))
+                        commit_short = env.get("OS_GIT_COMMIT")
+                        metadata = {
+                            "image_id": image.get("_id"),
+                            "docker_image_digest": image.get("docker_image_digest"),
+                            "commit_id": commit_id,
+                            "commit_short": commit_short,
+                            "tags": all_tags,
+                            "matched_tag": tag_name,
+                        }
+                        return {
+                            "valid": True,
+                            "reason": f"Image found in {catalog} catalog (tag {tag_name})",
+                            "image": metadata,
+                            "catalog": catalog,
+                        }
+
+        if len(images_data) < page_size:
+            break
 
     return {"valid": False,
             "reason": f"Image for {version} ({arch}) not found in {catalog} catalog",

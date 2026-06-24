@@ -316,7 +316,7 @@ class TestFormatFull(unittest.TestCase):
              "reason": "approved", "details": []},
         ]
         vi = _version("4.18.3")
-        out = format_text_full("4.18.3", vi, results)
+        out = format_text_full("4.18.3", results, vi)
         self.assertIn("## amd64_el9", out)
         self.assertIn("## Global", out)
 

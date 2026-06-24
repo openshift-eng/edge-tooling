@@ -31,9 +31,6 @@ logger = logging.getLogger(__name__)
 
 _ARCHES = ["amd64", "arm64"]
 
-# 4.22.2+ ships el10 bootc images alongside el9
-_EL10_BOOTC_MIN = (4, 22, 2)
-
 _EXPECTED_REPO_TEMPLATE = "registry.stage.redhat.io/openshift{major}/microshift-bootc-rhel{rhel}"
 
 _PER_VARIANT_CHECKS = [
@@ -168,16 +165,15 @@ def check_image_sha(vk, arch, rhel, advisory_details):
                  [f"Full: sha256:{sha}"])
 
 
-def check_in_catalog(vk, arch, rhel, version, catalog, version_info):
-    """Image is published in the specified catalog (via GraphQL API)."""
-    check_id = f"{vk}_catalog_{catalog}_present"
-    if catalog == "prod" and version_info["type"] in ("EC", "RC"):
+def check_in_catalog(vk, catalog_env, catalog_result, version_info):
+    """Image is published in the specified catalog (uses prefetched result)."""
+    check_id = f"{vk}_catalog_{catalog_env}_present"
+    if catalog_env == "prod" and version_info["type"] in ("EC", "RC"):
         return _skip(check_id, f"N/A ({version_info['type']} not shipped to prod)")
-    result = pyxis.check_catalog_image_graphql(version, catalog, arch=arch, rhel=rhel)
-    if result.get("valid"):
-        return _pass(check_id, f"Found in {catalog} catalog")
-    return _fail(check_id, f"Not found in {catalog} catalog",
-                 [result.get("reason", "")])
+    if catalog_result.get("valid"):
+        return _pass(check_id, f"Found in {catalog_env} catalog")
+    return _fail(check_id, f"Not found in {catalog_env} catalog",
+                 [catalog_result.get("reason", "")])
 
 
 def check_tag_commit_id(vk, catalog_result):
@@ -248,7 +244,7 @@ def check_no_xy0_tag(vk, catalog_result, version_info):
     tags = image_meta.get("tags", [])
     minor = version_info["minor"]
     xy0_pattern = re.compile(rf"assembly\.{re.escape(minor)}\.0\b")
-    xy0_tags = [t["name"] for t in tags if xy0_pattern.search(t.get("name", ""))]
+    xy0_tags = [t.get("name", "") for t in tags if xy0_pattern.search(t.get("name", ""))]
     if xy0_tags:
         return _fail(check_id, f"Found {minor}.0 tag on z-stream image",
                      [f"Tags: {', '.join(xy0_tags)}"])
@@ -422,6 +418,8 @@ def check_shipment_mr_approved(shipment):
         return _fail(check_id, shipment.get("reason", "Shipment MR not found"))
 
     mr_iid = shipment.get("mr_iid")
+    if mr_iid is None:
+        return _warn(check_id, "Shipment MR found but missing merge request ID")
     project_id = artifacts._get_gitlab_project_id()
     if project_id is None:
         return _warn(check_id, "Cannot access GitLab project for approval check")
@@ -481,7 +479,8 @@ def run_advisory_promotion_checks(version_info):
             try:
                 catalog[key] = future.result()
             except Exception as exc:
-                catalog[key] = {"valid": False, "reason": str(exc), "image": None}
+                catalog[key] = {"valid": False, "reason": str(exc),
+                                "image": None, "catalog": key[2]}
 
     # Run all checks
     major = int(version_info["minor"].split(".")[0])
@@ -498,9 +497,9 @@ def run_advisory_promotion_checks(version_info):
                 f"{vk}_advisory_repository"
             futures[ex.submit(check_image_sha, vk, arch, rhel, advisory_details)] = \
                 f"{vk}_advisory_image_sha"
-            futures[ex.submit(check_in_catalog, vk, arch, rhel, version, "stage", version_info)] = \
+            futures[ex.submit(check_in_catalog, vk, "stage", stage_cat, version_info)] = \
                 f"{vk}_catalog_stage_present"
-            futures[ex.submit(check_in_catalog, vk, arch, rhel, version, "prod", version_info)] = \
+            futures[ex.submit(check_in_catalog, vk, "prod", prod_cat, version_info)] = \
                 f"{vk}_catalog_prod_present"
             futures[ex.submit(check_tag_commit_id, vk, cat)] = \
                 f"{vk}_catalog_tag_commit"
@@ -550,18 +549,21 @@ def _section_key(check_id, variant_keys):
 
 
 def format_text_short(version, results, version_info):
-    """Format checks grouped by variant section. SKIPs hidden."""
+    """Format checks grouped by variant section."""
     if not results:
         max_id_len = 20
     else:
         max_id_len = max(len(r["check"]) for r in results)
+
+    # Status emojis render as 2 terminal columns (wide glyph) but len() returns 1
+    _ICON_DISPLAY_WIDTH = 2
 
     def _fmt_line(r):
         icon = _STATUS_EMOJI.get(r["status"], r["status"])
         cid = r["check"].ljust(max_id_len)
         lines = [f"{icon}  {cid}  {r['reason']}"]
         if r["status"] == "FAIL" and r.get("details"):
-            pad = " " * (len(icon) + 2 + max_id_len + 2)
+            pad = " " * (_ICON_DISPLAY_WIDTH + 2 + max_id_len + 2)
             for d in r["details"]:
                 lines.append(f"{pad}{d}")
         return lines
@@ -587,7 +589,7 @@ def format_text_short(version, results, version_info):
     return "\n".join(output)
 
 
-def format_text_full(version, version_info, results):
+def format_text_full(version, results, version_info):
     """Format a detailed markdown report grouped by variant."""
     lines = [f"# Advisory Promotion: {version} ({version_info['type']})", ""]
 
@@ -666,7 +668,7 @@ def main():
         return
 
     if args.verbose:
-        print(format_text_full(args.version, version_info, results))
+        print(format_text_full(args.version, results, version_info))
     else:
         print(format_text_short(args.version, results, version_info))
 
