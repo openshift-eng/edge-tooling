@@ -479,6 +479,7 @@ def run_advisory_promotion_checks(version_info):
             try:
                 catalog[key] = future.result()
             except Exception as exc:
+                logger.exception("Catalog fetch failed for %s", key)
                 catalog[key] = {"valid": False, "reason": str(exc),
                                 "image": None, "catalog": key[2]}
 
@@ -528,6 +529,7 @@ def run_advisory_promotion_checks(version_info):
             try:
                 results[check_id] = future.result()
             except Exception as exc:
+                logger.exception("Check %s raised unexpected error", check_id)
                 results[check_id] = _fail(check_id, f"Unexpected error: {exc}")
 
     return [results[c] for c in all_ids if c in results]

@@ -693,17 +693,17 @@ def fetch_advisory_details(advisory_url):
     try:
         resp = _http_get(advisory_url, verify=False, timeout=15)
         if resp.status_code != 200:
-            logger.debug("Advisory YAML fetch returned HTTP %d: %s",
-                         resp.status_code, advisory_url)
+            logger.warning("Advisory YAML fetch returned HTTP %d: %s",
+                           resp.status_code, advisory_url)
             return None
         content = _yaml.safe_load(resp.text)
     except (requests.RequestException, _yaml.YAMLError) as exc:
-        logger.debug("Advisory YAML fetch/parse failed for %s: %s",
-                     advisory_url, exc)
+        logger.warning("Advisory YAML fetch/parse failed for %s: %s",
+                       advisory_url, exc)
         return None
 
     if not isinstance(content, dict):
-        logger.debug("Advisory YAML is not a mapping: %s", advisory_url)
+        logger.warning("Advisory YAML is not a mapping: %s", advisory_url)
         return None
     spec = content.get("spec", {})
     raw_images = spec.get("content", {}).get("images", [])
