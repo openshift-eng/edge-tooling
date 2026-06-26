@@ -1,4 +1,5 @@
 .reports
+eval/runs/
 .mcp.json
 !plugins/**/.mcp.json
 .DS_Store
@@ -9,3 +10,4 @@ gh-notifier/pr-dashboard.html
 markdownlint-cli2-junit.xml
 markdownlint-cli2-results.json
 .env
+plugins/edge-ocp-rc/jobs/*.txt

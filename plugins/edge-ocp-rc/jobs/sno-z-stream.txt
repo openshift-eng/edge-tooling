@@ -1,1 +1,0 @@
-periodic-ci-openshift-release-main-nightly-4.22-e2e-aws-ovn-single-node-4vcpu-32gb-compute-upgrade

@@ -1,8 +1,0 @@
-periodic-ci-openshift-release-main-nightly-4.22-e2e-agent-ovn-two-node-arbiter
-periodic-ci-openshift-release-main-nightly-4.22-e2e-agent-ovn-two-node-arbiter-dualstack
-periodic-ci-openshift-release-main-nightly-4.22-e2e-agent-ovn-two-node-arbiter-ipv6
-periodic-ci-openshift-release-main-nightly-4.22-e2e-agent-ovn-two-node-arbiter-none-platform
-periodic-ci-openshift-release-main-nightly-4.22-e2e-metal-ovn-two-node-arbiter
-periodic-ci-openshift-release-main-nightly-4.22-e2e-metal-ovn-two-node-arbiter-openshift-test-private-tests
-periodic-ci-openshift-release-main-nightly-4.22-e2e-metal-ovn-two-node-arbiter-techpreview
-periodic-ci-openshift-release-main-nightly-4.22-e2e-metal-ovn-two-node-arbiter-workload-partitioning

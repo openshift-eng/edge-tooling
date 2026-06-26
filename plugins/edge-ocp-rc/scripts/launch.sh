@@ -32,6 +32,11 @@ to_image() {
 detect_release() {
     local version_tag="${1:-}"
 
+    if [[ -n "$version_tag" && "$version_tag" =~ ^([0-9]+\.[0-9]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+        return
+    fi
+
     for f in "$JOB_FILE" "$JOB_FILE_Z" "$JOB_FILE_Y"; do
         if [[ -f "$f" ]]; then
             local from_jobs
@@ -42,11 +47,6 @@ detect_release() {
             fi
         fi
     done
-
-    if [[ -n "$version_tag" && "$version_tag" =~ ^([0-9]+\.[0-9]+) ]]; then
-        echo "${BASH_REMATCH[1]}"
-        return
-    fi
 
     echo ""
 }
@@ -145,7 +145,7 @@ if ! $DRY_RUN && ! $LIST_ONLY && ! $REFRESH; then
     fi
 fi
 
-if [[ -n "$RELEASE_IMAGE" ]]; then
+if [[ -n "$RELEASE_IMAGE" ]] && ! $REFRESH; then
     if [[ "$RELEASE_IMAGE" == "${IMAGE_BASE}:"* ]]; then
         RELEASE_TAG="${RELEASE_IMAGE#*:}"
         echo "Verifying image tag: $RELEASE_TAG"

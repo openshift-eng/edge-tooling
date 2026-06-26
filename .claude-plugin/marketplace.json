@@ -13,6 +13,12 @@
       "version": "1.0.0"
     },
     {
+      "name": "edge-ic",
+      "source": "./plugins/edge-ic",
+      "description": "Individual contributor workflow automation for TODO management, status reporting, and Jira updates",
+      "version": "1.2.0"
+    },
+    {
       "name": "edge-ocp-ci",
       "source": "./plugins/edge-ocp-ci",
       "description": "Edge OCP Payload Monitor — monitor OpenShift nightly payloads for edge topology (SNO/TNA/TNF) failures with AI-enriched analysis",
@@ -22,6 +28,12 @@
       "name": "edge-scrum",
       "source": "./plugins/edge-scrum",
       "description": "Agents, skills, and workflows relevant to scrum process management for the OpenShift Edge Team",
+      "version": "1.0.0"
+    },
+    {
+      "name": "git-commits",
+      "source": "./plugins/git-commits",
+      "description": "Structured commit workflow — small, logical commits that tell a coherent implementation story",
       "version": "1.0.0"
     },
     {
@@ -79,6 +91,12 @@
       "version": "2.0.1"
     },
     {
+      "name": "skills-review",
+      "source": "./plugins/skills-review",
+      "description": "Lint SKILL.md files for quality, correctness, and adherence to skill guidelines",
+      "version": "1.0.0"
+    },
+    {
       "name": "threat-model",
       "source": "./plugins/threat-model",
       "description": "Analyze PRs for security threats with STRIDE/DFD analysis, MITRE ATT&CK and OWASP mapping for OpenShift edge topologies (TNA, TNF, SNO, LVMS)",
@@ -89,18 +107,6 @@
       "source": "./plugins/two-node",
       "description": "Two-node topology (TNA/TNF) workflow automation — RHEL verification, Jira integration, and more",
       "version": "1.1.0"
-    },
-    {
-      "name": "edge-ic",
-      "source": "./plugins/edge-ic",
-      "description": "Individual contributor workflow automation for TODO management, status reporting, and Jira updates",
-      "version": "1.2.0"
-    },
-    {
-      "name": "skills-review",
-      "source": "./plugins/skills-review",
-      "description": "Lint SKILL.md files for quality, correctness, and adherence to skill guidelines",
-      "version": "1.0.0"
     }
   ]
 }

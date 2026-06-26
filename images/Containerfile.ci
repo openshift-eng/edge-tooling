@@ -8,5 +8,6 @@ COPY . /opt/app-root/src/edge-tooling
 
 WORKDIR /opt/app-root/src/edge-tooling
 
+RUN dnf install -y skopeo && dnf clean all
 RUN bash -c 'source images/install_tools.sh && install_gh_token && install_google_cloud_cli && install_python_tools'
 ENV PATH="$HOME/.local/bin:$PATH"

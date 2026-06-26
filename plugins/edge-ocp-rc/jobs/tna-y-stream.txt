@@ -1,3 +1,0 @@
-periodic-ci-openshift-release-main-nightly-4.22-upgrade-from-stable-4.21-e2e-metal-ovn-two-node-arbiter-upgrade
-periodic-ci-openshift-release-main-nightly-4.22-upgrade-from-stable-4.21-e2e-metal-ovn-two-node-arbiter-upgrade-day-2-workers
-periodic-ci-openshift-release-main-nightly-4.22-upgrade-from-stable-4.21-e2e-metal-ovn-two-node-arbiter-upgrade-workers

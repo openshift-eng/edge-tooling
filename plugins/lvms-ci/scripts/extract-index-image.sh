@@ -1,0 +1,1 @@
+../../shared/scripts/extract-index-image.sh

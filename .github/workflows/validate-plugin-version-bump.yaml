@@ -1,0 +1,114 @@
+name: Validate Plugin Version Bumps
+
+on:
+  pull_request:
+
+jobs:
+  check-version-bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check version bumps for changed plugins
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -e
+
+          if [[ ! "$BASE_REF" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
+            echo "::error::Invalid base ref: $BASE_REF"
+            exit 1
+          fi
+
+          # Discover the remote name (don't assume 'origin')
+          remote=$(git remote | head -n1)
+
+          # Fetch the base branch to ensure we have it
+          git fetch "$remote" "$BASE_REF"
+
+          # Find the merge-base between PR head and base branch
+          base=$(git merge-base "$remote/$BASE_REF" HEAD)
+
+          # Find plugins with changes (excluding README.md and OWNERS files)
+          changed_plugins=$(git diff --name-only "$base" HEAD -- 'plugins/' | \
+            grep -v 'README.md$' | \
+            grep -v 'OWNERS$' | \
+            cut -d'/' -f2 | sort -u)
+
+          if [ -z "$changed_plugins" ]; then
+            echo "No plugin code changes detected"
+            exit 0
+          fi
+
+          errors=0
+          for plugin in $changed_plugins; do
+            plugin_json="plugins/$plugin/.claude-plugin/plugin.json"
+
+            if [ ! -f "$plugin_json" ]; then
+              echo "SKIP: $plugin - no plugin.json"
+              continue
+            fi
+
+            # Get current version
+            current=$(jq -r '.version' "$plugin_json")
+
+            # Get base version
+            if git show "$base:$plugin_json" > /tmp/old_plugin.json 2>/dev/null; then
+              old=$(jq -r '.version' /tmp/old_plugin.json)
+            else
+              old="0.0.0"  # New plugin
+            fi
+
+            if [ "$current" = "$old" ]; then
+              echo "::error file=$plugin_json::Plugin '$plugin' has code changes but version not bumped ($old)"
+              errors=$((errors + 1))
+            else
+              # Verify the version actually increased (no downgrades)
+              # Use sort -V (version sort) to compare semver strings
+              lower=$(printf '%s\n%s' "$old" "$current" | sort -V | head -n1)
+              if [ "$lower" != "$old" ]; then
+                echo "::error file=$plugin_json::Plugin '$plugin' version downgraded: $old -> $current (must increase)"
+                errors=$((errors + 1))
+              else
+                echo "OK: $plugin plugin.json version bumped $old -> $current"
+              fi
+            fi
+
+            # Check marketplace.json entry matches plugin.json
+            marketplace_json=".claude-plugin/marketplace.json"
+            if [ -f "$marketplace_json" ]; then
+              mp_version=$(jq -r --arg name "$plugin" '.plugins[] | select(.name == $name) | .version' "$marketplace_json")
+              if [ -z "$mp_version" ] || [ "$mp_version" = "null" ]; then
+                echo "::error file=$marketplace_json::Plugin '$plugin' has no entry in marketplace.json"
+                errors=$((errors + 1))
+              elif [ "$mp_version" != "$current" ]; then
+                echo "::error file=$marketplace_json::Plugin '$plugin' marketplace.json version ($mp_version) does not match plugin.json ($current)"
+                errors=$((errors + 1))
+              fi
+
+              # Check marketplace.json version was not downgraded vs base
+              if [ -n "$mp_version" ] && [ "$mp_version" != "null" ] && git show "$base:$marketplace_json" > /tmp/old_marketplace.json 2>/dev/null; then
+                old_mp=$(jq -r --arg name "$plugin" '.plugins[] | select(.name == $name) | .version' /tmp/old_marketplace.json)
+                if [ -n "$old_mp" ] && [ "$old_mp" != "null" ]; then
+                  mp_lower=$(printf '%s\n%s' "$old_mp" "$mp_version" | sort -V | head -n1)
+                  if [ "$mp_lower" != "$old_mp" ]; then
+                    echo "::error file=$marketplace_json::Plugin '$plugin' marketplace.json version downgraded: $old_mp -> $mp_version (must increase)"
+                    errors=$((errors + 1))
+                  fi
+                fi
+              fi
+            fi
+          done
+
+          if [ $errors -gt 0 ]; then
+            echo ""
+            echo "::error::$errors plugin(s) need version bumps. Update .claude-plugin/plugin.json and .claude-plugin/marketplace.json for each."
+            exit 1
+          fi
