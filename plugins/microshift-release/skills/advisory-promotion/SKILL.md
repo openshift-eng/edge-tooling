@@ -159,7 +159,7 @@ On failure, details appear below the failing check:
 For EC/RC, prod catalog checks are skipped:
 
 ```text
-⏭️   amd64_el9_catalog_prod_present    N/A (EC not shipped to prod)
+⏭️  amd64_el9_catalog_prod_present    N/A (EC not shipped to prod)
 ```
 
 **Verbose (--verbose):** Markdown table with full evidence per check, grouped by variant.

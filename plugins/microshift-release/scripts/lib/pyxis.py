@@ -7,8 +7,14 @@ from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
+try:
+    from requests_gssapi import HTTPSPNEGOAuth
+    _KERBEROS_AUTH = HTTPSPNEGOAuth()
+except ImportError:
+    _KERBEROS_AUTH = None
+
 PYXIS_BASE_URL = "https://catalog.redhat.com/api/containers/v1"
-PYXIS_STAGE_BASE_URL = "https://catalog.stage.redhat.com/api/containers/v1"
+PYXIS_STAGE_BASE_URL = "https://pyxis.stage.engineering.redhat.com/v1"
 CONTAINERFILE_URL_TEMPLATE = (
     "https://raw.githubusercontent.com/openshift/microshift"
     "/{commit}/packaging/images/bootc/Containerfile"
@@ -20,7 +26,7 @@ _BOOTC_REPO_TEMPLATE = {
         "/repository/openshift4/microshift-bootc-rhel{rhel}/images"
     ),
     "stage": (
-        PYXIS_STAGE_BASE_URL + "/repositories/registry/registry.stage.redhat.io"
+        PYXIS_STAGE_BASE_URL + "/repositories/registry/registry.access.redhat.com"
         "/repository/openshift4/microshift-bootc-rhel{rhel}/images"
     ),
 }
@@ -88,6 +94,16 @@ _LABEL_COMMIT_URL = "io.openshift.build.commit.url"
 _LABEL_SOURCE_LOCATION = "io.openshift.build.source-location"
 
 logger = logging.getLogger(__name__)
+
+
+def _catalog_auth(catalog):
+    """Return auth object for Pyxis requests. Stage requires Kerberos."""
+    if catalog == "stage":
+        if _KERBEROS_AUTH is None:
+            logger.warning("requests-gssapi not installed — stage Pyxis "
+                           "requires Kerberos (pip install requests-gssapi)")
+        return _KERBEROS_AUTH
+    return None
 
 
 def _catalog_url(catalog="prod", rhel=9):
@@ -538,19 +554,13 @@ def check_catalog_image(version, catalog="prod", arch="amd64", rhel=9):
             "page": page,
         }
         try:
-            resp = requests.get(url, params=params, timeout=30)
+            resp = requests.get(url, params=params, timeout=30,
+                                auth=_catalog_auth(catalog),
+                                verify=(catalog != "stage"))
             resp.raise_for_status()
             data = resp.json()
-        except requests.HTTPError as e:
-            if catalog == "stage" and e.response.status_code == 403:
-                logger.warning("Stage catalog unreachable (403), "
-                               "falling back to prod")
-                return check_catalog_image(version, catalog="prod",
-                                           arch=arch, rhel=rhel)
-            return {"valid": False,
-                    "reason": f"Catalog query failed ({catalog}): {e}",
-                    "image": None, "catalog": catalog}
-        except (requests.RequestException, json.JSONDecodeError) as e:
+        except (requests.HTTPError, requests.RequestException,
+                json.JSONDecodeError) as e:
             return {"valid": False,
                     "reason": f"Catalog query failed ({catalog}): {e}",
                     "image": None, "catalog": catalog}
@@ -594,10 +604,12 @@ def _find_repo_id(catalog, repo_name):
     url = f"{base}/repositories"
     params = {"filter": f"repository=={repo_name}", "page_size": 1}
     try:
-        resp = requests.get(url, params=params, timeout=15)
+        resp = requests.get(url, params=params, timeout=15,
+                            auth=_catalog_auth(catalog),
+                            verify=(catalog != "stage"))
         if resp.status_code != 200:
-            logger.debug("Repo search returned HTTP %d for %s on %s",
-                         resp.status_code, repo_name, catalog)
+            logger.warning("Repo search returned HTTP %d for %s on %s",
+                           resp.status_code, repo_name, catalog)
             return None
         data = resp.json()
         items = data.get("data", [])
@@ -612,9 +624,10 @@ def _find_repo_id(catalog, repo_name):
 
 
 def check_catalog_image_graphql(version, catalog="prod", arch="amd64", rhel=9):
-    """Check if a bootc image exists in the catalog via the GraphQL API.
+    """Check if a bootc image exists in the catalog.
 
-    Uses the Pyxis GraphQL endpoint which works for both stage and prod.
+    Uses the Pyxis GraphQL API for prod, REST API for stage (no GraphQL
+    on the stage Pyxis instance).
 
     Args:
         version: Full version string, e.g., "4.21.8".
@@ -625,6 +638,9 @@ def check_catalog_image_graphql(version, catalog="prod", arch="amd64", rhel=9):
     Returns:
         dict: {valid: bool, reason: str, image: dict | None, catalog: str}
     """
+    if catalog == "stage":
+        return check_catalog_image(version, catalog="stage", arch=arch, rhel=rhel)
+
     major = version.split(".")[0]
     repo_name = _BOOTC_REPO_NAME.format(major=major, rhel=rhel)
     repo_id = _find_repo_id(catalog, repo_name)

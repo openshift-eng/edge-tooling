@@ -20,7 +20,7 @@ from validate_artifacts import (
     _STATUS_EMOJI as _BASE_STATUS_EMOJI, _BOOTC_MIN_MINOR,
 )
 
-_STATUS_EMOJI = {**_BASE_STATUS_EMOJI, "SKIP": "⏭️ "}
+_STATUS_EMOJI = {**_BASE_STATUS_EMOJI, "SKIP": "⏭️"}
 
 logging.basicConfig(
     level=logging.INFO,
