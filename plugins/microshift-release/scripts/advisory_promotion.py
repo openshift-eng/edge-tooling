@@ -42,6 +42,7 @@ _PER_VARIANT_CHECKS = [
     "catalog_tag_commit",
     "catalog_tag_date",
     "catalog_no_xy0_tag",
+    "catalog_chi",
 ]
 
 _GLOBAL_CHECKS = [
@@ -165,9 +166,11 @@ def check_image_sha(vk, arch, rhel, advisory_details):
                  [f"Full: sha256:{sha}"])
 
 
-def check_in_catalog(vk, catalog_env, catalog_result, version_info):
+def check_in_catalog(vk, catalog_env, catalog_result, version_info, phase="stage"):
     """Image is published in the specified catalog (uses prefetched result)."""
     check_id = f"{vk}_catalog_{catalog_env}_present"
+    if catalog_env == "prod" and phase == "stage":
+        return _skip(check_id, "N/A (stage mode)")
     if catalog_env == "prod" and version_info["type"] in ("EC", "RC"):
         return _skip(check_id, f"N/A ({version_info['type']} not shipped to prod)")
     if catalog_result.get("valid"):
@@ -249,6 +252,23 @@ def check_no_xy0_tag(vk, catalog_result, version_info):
         return _fail(check_id, f"Found {minor}.0 tag on z-stream image",
                      [f"Tags: {', '.join(xy0_tags)}"])
     return _pass(check_id, f"No {minor}.0 tags ({len(tags)} checked)")
+
+
+def check_chi_freshness(vk, catalog_result):
+    """Container Health Index grade is acceptable for promotion."""
+    check_id = f"{vk}_catalog_chi"
+    if not catalog_result or not catalog_result.get("image"):
+        return _warn(check_id, "Catalog image metadata unavailable")
+
+    image_meta = catalog_result["image"]
+    grade = image_meta.get("freshness_grade")
+    if not grade:
+        return _warn(check_id, "No CHI grade available")
+
+    if grade == "A":
+        return _pass(check_id, f"CHI grade {grade}")
+    return _fail(check_id, f"CHI grade {grade} (expected A)",
+                 [f"Container health has degraded — review before promotion"])
 
 
 # ── Global checks ────────────────────────────────────────────────
@@ -440,7 +460,7 @@ def check_shipment_mr_approved(shipment):
 # ── Orchestrator ─────────────────────────────────────────────────
 
 
-def run_advisory_promotion_checks(version_info):
+def run_advisory_promotion_checks(version_info, phase="stage"):
     """Run all advisory promotion checks and return results in canonical order."""
     all_ids = _all_check_ids(version_info)
     minor = version_info["minor"]
@@ -463,13 +483,14 @@ def run_advisory_promotion_checks(version_info):
         logger.info("Fetching advisory YAML...")
         advisory_details = artifacts.fetch_advisory_details(advisory_url)
 
-    # Fetch catalog data per variant via GraphQL (stage first, fallback to prod)
-    logger.info("Querying catalog...")
+    # Fetch catalog data per variant
+    catalog_envs = ("stage", "prod") if phase == "prod" else ("stage",)
+    logger.info("Querying catalog (%s)...", "/".join(catalog_envs))
     catalog = {}
     with ThreadPoolExecutor(max_workers=8) as ex:
         cat_futures = {}
         for arch, rhel in variants:
-            for env in ("stage", "prod"):
+            for env in catalog_envs:
                 key = (arch, rhel, env)
                 cat_futures[ex.submit(
                     pyxis.check_catalog_image_graphql, version, env, arch=arch, rhel=rhel
@@ -498,9 +519,9 @@ def run_advisory_promotion_checks(version_info):
                 f"{vk}_advisory_repository"
             futures[ex.submit(check_image_sha, vk, arch, rhel, advisory_details)] = \
                 f"{vk}_advisory_image_sha"
-            futures[ex.submit(check_in_catalog, vk, "stage", stage_cat, version_info)] = \
+            futures[ex.submit(check_in_catalog, vk, "stage", stage_cat, version_info, phase)] = \
                 f"{vk}_catalog_stage_present"
-            futures[ex.submit(check_in_catalog, vk, "prod", prod_cat, version_info)] = \
+            futures[ex.submit(check_in_catalog, vk, "prod", prod_cat, version_info, phase)] = \
                 f"{vk}_catalog_prod_present"
             futures[ex.submit(check_tag_commit_id, vk, cat)] = \
                 f"{vk}_catalog_tag_commit"
@@ -508,6 +529,8 @@ def run_advisory_promotion_checks(version_info):
                 f"{vk}_catalog_tag_date"
             futures[ex.submit(check_no_xy0_tag, vk, cat, version_info)] = \
                 f"{vk}_catalog_no_xy0_tag"
+            futures[ex.submit(check_chi_freshness, vk, stage_cat)] = \
+                f"{vk}_catalog_chi"
 
         futures[ex.submit(check_advisory_type, advisory_details, version_info)] = \
             "advisory_type"
@@ -632,6 +655,8 @@ def parse_args():
     )
     parser.add_argument("version",
                         help="Version string, e.g., 4.18.3, 4.19.0")
+    parser.add_argument("--prod", action="store_true",
+                        help="Check both stage and prod catalogs (default: stage only)")
     parser.add_argument("--verbose", action="store_true",
                         help="Show detailed markdown report")
     parser.add_argument("--json", dest="json_output", action="store_true",
@@ -657,7 +682,8 @@ def main():
     logger.info("Checking advisory promotion for %s (%s)...",
                 args.version, version_info["type"])
 
-    results = run_advisory_promotion_checks(version_info)
+    phase = "prod" if args.prod else "stage"
+    results = run_advisory_promotion_checks(version_info, phase=phase)
 
     if args.json_output:
         output = {

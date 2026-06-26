@@ -8,11 +8,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from advisory_promotion import (  # noqa: E402
     check_in_advisory,
+    check_in_catalog,
     check_repository,
     check_image_sha,
     check_tag_commit_id,
     check_tag_build_date,
     check_no_xy0_tag,
+    check_chi_freshness,
     check_image_sha_distinct,
     check_shipment_mr_approved,
     format_text_short,
@@ -42,12 +44,13 @@ def _image(arch="amd64", rhel=9, sha="abc123"):
     }
 
 
-def _catalog(tags=None, commit_id=None, valid=True):
+def _catalog(tags=None, commit_id=None, valid=True, freshness_grade=None):
     image = {
         "tags": tags or [],
         "commit_id": commit_id,
         "commit_short": commit_id[:7] if commit_id else None,
         "image_id": "test-id",
+        "freshness_grade": freshness_grade,
     }
     return {"valid": valid, "image": image, "catalog": "stage"}
 
@@ -92,14 +95,14 @@ class TestCheckIds(unittest.TestCase):
         ids = _all_check_ids(_version("4.18.3"))
         self.assertTrue(all("el10" not in i for i in ids))
         el9_ids = [i for i in ids if i.startswith("amd64_el9_")]
-        self.assertEqual(len(el9_ids), 8)
+        self.assertEqual(len(el9_ids), 9)
 
     def test_el9_el10(self):
         ids = _all_check_ids(_version("4.22.2"))
         el9_variant = [i for i in ids if i.startswith(("amd64_el9_", "arm64_el9_"))]
         el10_variant = [i for i in ids if i.startswith(("amd64_el10_", "arm64_el10_"))]
-        self.assertEqual(len(el9_variant), 16)  # 8 per arch * 2 arches
-        self.assertEqual(len(el10_variant), 16)
+        self.assertEqual(len(el9_variant), 18)  # 9 per arch * 2 arches
+        self.assertEqual(len(el10_variant), 18)
         self.assertIn("advisory_sha_distinct_el9", ids)
         self.assertIn("advisory_sha_distinct_el10", ids)
         self.assertIn("advisory_sha_distinct_el9", ids)
@@ -229,6 +232,51 @@ class TestNoXY0Tag(unittest.TestCase):
     def test_xy0_skipped(self):
         r = check_no_xy0_tag("amd64_el9", _catalog(), _version("4.18.0"))
         self.assertEqual(r["status"], "SKIP")
+
+
+# ── Per-variant: chi_freshness ────────────────────────────────────
+
+
+class TestCHIFreshness(unittest.TestCase):
+    def test_grade_a(self):
+        r = check_chi_freshness("amd64_el9", _catalog(freshness_grade="A"))
+        self.assertEqual(r["status"], "PASS")
+        self.assertIn("A", r["reason"])
+
+    def test_grade_d(self):
+        r = check_chi_freshness("amd64_el9", _catalog(freshness_grade="D"))
+        self.assertEqual(r["status"], "FAIL")
+        self.assertIn("D", r["reason"])
+
+    def test_no_grade(self):
+        r = check_chi_freshness("amd64_el9", _catalog())
+        self.assertEqual(r["status"], "WARN")
+
+    def test_no_catalog(self):
+        r = check_chi_freshness("amd64_el9", None)
+        self.assertEqual(r["status"], "WARN")
+
+
+# ── Per-variant: check_in_catalog (stage/prod phase) ──────────────
+
+
+class TestCheckInCatalog(unittest.TestCase):
+    def test_stage_mode_skips_prod(self):
+        r = check_in_catalog("amd64_el9", "prod", {}, _version("4.18.3"), phase="stage")
+        self.assertEqual(r["status"], "SKIP")
+        self.assertIn("stage mode", r["reason"])
+
+    def test_prod_mode_checks_prod(self):
+        r = check_in_catalog("amd64_el9", "prod", {"valid": True}, _version("4.18.3"), phase="prod")
+        self.assertEqual(r["status"], "PASS")
+
+    def test_ec_skips_prod_regardless(self):
+        r = check_in_catalog("amd64_el9", "prod", {}, _version("5.0.0-ec.3"), phase="prod")
+        self.assertEqual(r["status"], "SKIP")
+
+    def test_stage_always_checked(self):
+        r = check_in_catalog("amd64_el9", "stage", {"valid": True}, _version("4.18.3"), phase="stage")
+        self.assertEqual(r["status"], "PASS")
 
 
 # ── Global: image_sha_distinct ───────────────────────────────────

@@ -213,6 +213,10 @@ def _parse_image_metadata(image):
     )
     assembly_version = assembly_match.group(1) if assembly_match else None
 
+    freshness = image.get("freshness_grades") or []
+    freshness_grade = freshness[-1].get("grade") if freshness else None
+    container_grades = image.get("container_grades") or {}
+
     return {
         "image_id": image.get("_id"),
         "commit_id": commit_id,
@@ -225,6 +229,8 @@ def _parse_image_metadata(image):
         "version_tags": version_tags,
         "assembly_version": assembly_version,
         "last_update_date": image.get("last_update_date"),
+        "freshness_grade": freshness_grade,
+        "container_grade_status": container_grades.get("status"),
     }
 
 

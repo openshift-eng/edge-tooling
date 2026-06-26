@@ -1,6 +1,6 @@
 ---
 name: microshift-release:advisory-promotion
-argument-hint: <version> [--verbose]
+argument-hint: <version> [--prod] [--verbose]
 description: Validate Konflux bootc advisory promotion for QE sign-off — verify advisory YAML, catalog presence, shipment MR, and commit provenance
 user-invocable: true
 allowed-tools: Bash
@@ -11,7 +11,7 @@ allowed-tools: Bash
 ## Synopsis
 
 ```bash
-/microshift-release:advisory-promotion <version> [--verbose]
+/microshift-release:advisory-promotion <version> [--prod] [--verbose]
 ```
 
 ## Description
@@ -41,6 +41,7 @@ Supports Z-stream, X/Y GA, RC, and EC release types. Requires version 4.18+.
   - X/Y (GA): `4.22.0`
   - RC: `4.22.0-rc.2`
   - EC: `5.0.0-ec.3`
+- `--prod` (optional): Check both stage and prod catalogs (default: stage only, prod checks skipped)
 - `--verbose` (optional): Show detailed markdown report with evidence per check
 
 ## Scripts Directory
@@ -54,12 +55,12 @@ SCRIPTS_DIR=plugins/microshift-release/scripts
 ### Step 1: Parse Arguments
 
 1. Extract `version` from `$ARGUMENTS` — the first non-flag token
-2. Pass through `--verbose` and `--json` flags if present
+2. Pass through `--prod`, `--verbose`, and `--json` flags if present
 
 ### Step 2: Run the Script
 
 ```bash
-bash $SCRIPTS_DIR/advisory_promotion.sh <version> [--verbose]
+bash $SCRIPTS_DIR/advisory_promotion.sh <version> [--prod] [--verbose]
 ```
 
 Display stderr only if the script exits non-zero.
@@ -99,6 +100,7 @@ All per-image checks run independently per variant (`{arch}_el{rhel}`). For vers
 | `{v}_catalog_tag_commit` | Assembly tag commit hash matches catalog image labels |
 | `{v}_catalog_tag_date` | Assembly tag contains a valid build date timestamp |
 | `{v}_catalog_no_xy0_tag` | Z-stream only: no X.Y.0 assembly tag on the image |
+| `{v}_catalog_chi` | Container Health Index grade is A (acceptable for promotion) |
 
 ### Global checks
 
@@ -181,7 +183,8 @@ For EC/RC, prod catalog checks are skipped:
 - VPN is required for GitLab API access and Brew RPM commit comparison
 - GITLAB_API_TOKEN enables shipment MR checks; without it those checks show WARN
 - Catalog checks use the Pyxis GraphQL API (works for both stage and prod)
-- For EC/RC, `catalog_prod_present` is skipped (not yet shipped to prod)
+- Default mode is stage — prod catalog checks are skipped. Use `--prod` to check both catalogs
+- For EC/RC, `catalog_prod_present` is always skipped (not shipped to prod)
 - For versions 4.22.2+, el10 bootc images are also checked
 - Repository names are version-aware: `openshift4` for 4.x, `openshift5` for 5.x
 - Only supports versions 4.18+ (Konflux bootc builds)
