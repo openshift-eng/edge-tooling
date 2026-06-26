@@ -268,7 +268,7 @@ def check_chi_freshness(vk, catalog_result):
     if grade == "A":
         return _pass(check_id, f"CHI grade {grade}")
     return _fail(check_id, f"CHI grade {grade} (expected A)",
-                 [f"Container health has degraded — review before promotion"])
+                 ["Container health has degraded — review before promotion"])
 
 
 # ── Global checks ────────────────────────────────────────────────
