@@ -70,6 +70,13 @@ query GET_REPOSITORY_BY_ID_IMAGES_HISTORY(
               }
               env_variables
             }
+            freshness_grades {
+              grade
+            }
+            container_grades {
+              status
+              status_message
+            }
             repositories {
               repository
               push_date
@@ -699,9 +706,8 @@ def check_catalog_image_graphql(version, catalog="prod", arch="amd64", rhel=9):
 
         data = result.get("data") or {}
         repo_data = (data.get("ContainerRepository") or {}).get("data") or {}
-        images_data = (((repo_data.get("edges") or {})
-                        .get("images") or {})
-                       .get("data", []))
+        edges = (repo_data.get("edges") or {})
+        images_data = (edges.get("images") or {}).get("data", [])
 
         for image in images_data:
             if image.get("architecture") != arch:
@@ -713,17 +719,14 @@ def check_catalog_image_graphql(version, catalog="prod", arch="amd64", rhel=9):
                         all_tags = [{"name": tg.get("name", "")}
                                     for r in image.get("repositories", [])
                                     for tg in r.get("tags", [])]
-                        parsed = image.get("parsed_data") or {}
-                        labels = _parse_labels(parsed.get("labels"))
-                        env = _parse_env_variables(parsed.get("env_variables"))
-                        commit_id = (labels.get(_LABEL_COMMIT_ID)
-                                     or env.get("SOURCE_GIT_COMMIT"))
-                        commit_short = env.get("OS_GIT_COMMIT")
+                        base_meta = _parse_image_metadata(image)
                         metadata = {
                             "image_id": image.get("_id"),
                             "docker_image_digest": image.get("docker_image_digest"),
-                            "commit_id": commit_id,
-                            "commit_short": commit_short,
+                            "commit_id": base_meta["commit_id"],
+                            "commit_short": base_meta["commit_short"],
+                            "freshness_grade": base_meta.get("freshness_grade"),
+                            "container_grade_status": base_meta.get("container_grade_status"),
                             "tags": all_tags,
                             "matched_tag": tag_name,
                         }

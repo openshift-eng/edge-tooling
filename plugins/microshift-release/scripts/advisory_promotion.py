@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import sys
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from lib import artifacts, brew, pyxis
@@ -38,11 +39,15 @@ _PER_VARIANT_CHECKS = [
     "advisory_repository",
     "advisory_image_sha",
     "catalog_stage_present",
+    "catalog_stage_tag_commit",
+    "catalog_stage_tag_date",
+    "catalog_stage_no_xy0_tag",
+    "catalog_stage_chi",
     "catalog_prod_present",
-    "catalog_tag_commit",
-    "catalog_tag_date",
-    "catalog_no_xy0_tag",
-    "catalog_chi",
+    "catalog_prod_tag_commit",
+    "catalog_prod_tag_date",
+    "catalog_prod_no_xy0_tag",
+    "catalog_prod_chi",
 ]
 
 _GLOBAL_CHECKS = [
@@ -67,11 +72,7 @@ def _rhel_versions(version_info):
 
 def _variants(version_info):
     """Return list of (arch, rhel) tuples for this version."""
-    result = []
-    for arch in _ARCHES:
-        for rhel in _rhel_versions(version_info):
-            result.append((arch, rhel))
-    return result
+    return [(arch, rhel) for arch in _ARCHES for rhel in _rhel_versions(version_info)]
 
 
 def _variant_key(arch, rhel):
@@ -80,14 +81,13 @@ def _variant_key(arch, rhel):
 
 
 def _all_check_ids(version_info):
-    ids = []
-    for arch, rhel in _variants(version_info):
-        vk = _variant_key(arch, rhel)
-        for suffix in _PER_VARIANT_CHECKS:
-            ids.append(f"{vk}_{suffix}")
+    rhel_vers = _rhel_versions(version_info)
+    ids = [f"{_variant_key(arch, rhel)}_{suffix}"
+           for arch, rhel in _variants(version_info)
+           for suffix in _PER_VARIANT_CHECKS]
     for gc in _GLOBAL_CHECKS:
         rhel_match = re.search(r"el(\d+)", gc)
-        if rhel_match and int(rhel_match.group(1)) not in _rhel_versions(version_info):
+        if rhel_match and int(rhel_match.group(1)) not in rhel_vers:
             continue
         ids.append(gc)
     return ids
@@ -179,9 +179,16 @@ def check_in_catalog(vk, catalog_env, catalog_result, version_info, phase="stage
                  [catalog_result.get("reason", "")])
 
 
-def check_tag_commit_id(vk, catalog_result):
+def _catalog_not_fetched(catalog_result):
+    """True when catalog data was not fetched (empty dict from stage-only mode)."""
+    return not catalog_result or (not catalog_result.get("valid") and not catalog_result.get("reason"))
+
+
+def check_tag_commit_id(vk, catalog_env, catalog_result):
     """Assembly tag commit hash matches the catalog image's source commit."""
-    check_id = f"{vk}_catalog_tag_commit"
+    check_id = f"{vk}_catalog_{catalog_env}_tag_commit"
+    if _catalog_not_fetched(catalog_result):
+        return _skip(check_id, f"N/A ({catalog_env} not queried)")
     assembly_tag, image_meta = _get_assembly_tag(catalog_result)
     if image_meta is None:
         return _warn(check_id, "Catalog image metadata unavailable")
@@ -206,9 +213,11 @@ def check_tag_commit_id(vk, catalog_result):
                  [f"Tag: {assembly_tag}"])
 
 
-def check_tag_build_date(vk, catalog_result):
+def check_tag_build_date(vk, catalog_env, catalog_result):
     """Assembly tag contains a valid build date timestamp."""
-    check_id = f"{vk}_catalog_tag_date"
+    check_id = f"{vk}_catalog_{catalog_env}_tag_date"
+    if _catalog_not_fetched(catalog_result):
+        return _skip(check_id, f"N/A ({catalog_env} not queried)")
     assembly_tag, image_meta = _get_assembly_tag(catalog_result)
     if image_meta is None:
         return _warn(check_id, "Catalog image metadata unavailable")
@@ -232,9 +241,11 @@ def check_tag_build_date(vk, catalog_result):
     return _pass(check_id, formatted, [f"Tag: {assembly_tag}"])
 
 
-def check_no_xy0_tag(vk, catalog_result, version_info):
+def check_no_xy0_tag(vk, catalog_env, catalog_result, version_info):
     """For z-streams, verify no X.Y.0 assembly tag on this variant's image."""
-    check_id = f"{vk}_catalog_no_xy0_tag"
+    check_id = f"{vk}_catalog_{catalog_env}_no_xy0_tag"
+    if _catalog_not_fetched(catalog_result):
+        return _skip(check_id, f"N/A ({catalog_env} not queried)")
     if version_info["type"] != "Z":
         return _skip(check_id, f"N/A ({version_info['type']}, not z-stream)")
     if version_info["z"] == 0:
@@ -249,14 +260,16 @@ def check_no_xy0_tag(vk, catalog_result, version_info):
     xy0_pattern = re.compile(rf"assembly\.{re.escape(minor)}\.0\b")
     xy0_tags = [t.get("name", "") for t in tags if xy0_pattern.search(t.get("name", ""))]
     if xy0_tags:
-        return _fail(check_id, f"Found {minor}.0 tag on z-stream image",
+        return _fail(check_id, f"Found {minor}.0 tag on image",
                      [f"Tags: {', '.join(xy0_tags)}"])
     return _pass(check_id, f"No {minor}.0 tags ({len(tags)} checked)")
 
 
-def check_chi_freshness(vk, catalog_result):
+def check_chi_freshness(vk, catalog_env, catalog_result):
     """Container Health Index grade is acceptable for promotion."""
-    check_id = f"{vk}_catalog_chi"
+    check_id = f"{vk}_catalog_{catalog_env}_chi"
+    if _catalog_not_fetched(catalog_result):
+        return _skip(check_id, f"N/A ({catalog_env} not queried)")
     if not catalog_result or not catalog_result.get("image"):
         return _warn(check_id, "Catalog image metadata unavailable")
 
@@ -305,9 +318,7 @@ def check_shipment_filename(shipment, version_info):
 
     version = version_info["version"]
     minor = version_info["minor"]
-    major = minor.split(".")[0]
-    minor_num = minor.split(".")[1]
-    minor_dash = f"{major}-{minor_num}"
+    minor_dash = minor.replace(".", "-")
 
     expected_prefix = f"shipment/ocp/openshift-{minor}/openshift-{minor_dash}/"
     if not yaml_file.startswith(expected_prefix):
@@ -359,7 +370,7 @@ def check_shipment_nvr_commit(shipment, version_info):
                      [f"Shipment NVR: {shipment_nvr}"])
 
     vtype = version_info["type"]
-    brew_type = vtype if vtype in ("RC", "EC") else ("XY" if vtype == "XY" else "Z")
+    brew_type = vtype if vtype in ("RC", "EC", "XY") else "Z"
     build_info = brew.get_build_info(version_info["version"], brew_type)
     if not build_info.get("found"):
         return _warn(check_id,
@@ -512,25 +523,24 @@ def run_advisory_promotion_checks(version_info, phase="stage"):
             vk = _variant_key(arch, rhel)
             stage_cat = catalog.get((arch, rhel, "stage"), {})
             prod_cat = catalog.get((arch, rhel, "prod"), {})
-            cat = stage_cat if stage_cat.get("valid") else prod_cat
             futures[ex.submit(check_in_advisory, vk, arch, rhel, advisory_details)] = \
                 f"{vk}_advisory_image_present"
             futures[ex.submit(check_repository, vk, arch, rhel, major, advisory_details)] = \
                 f"{vk}_advisory_repository"
             futures[ex.submit(check_image_sha, vk, arch, rhel, advisory_details)] = \
                 f"{vk}_advisory_image_sha"
-            futures[ex.submit(check_in_catalog, vk, "stage", stage_cat, version_info, phase)] = \
-                f"{vk}_catalog_stage_present"
-            futures[ex.submit(check_in_catalog, vk, "prod", prod_cat, version_info, phase)] = \
-                f"{vk}_catalog_prod_present"
-            futures[ex.submit(check_tag_commit_id, vk, cat)] = \
-                f"{vk}_catalog_tag_commit"
-            futures[ex.submit(check_tag_build_date, vk, cat)] = \
-                f"{vk}_catalog_tag_date"
-            futures[ex.submit(check_no_xy0_tag, vk, cat, version_info)] = \
-                f"{vk}_catalog_no_xy0_tag"
-            futures[ex.submit(check_chi_freshness, vk, stage_cat)] = \
-                f"{vk}_catalog_chi"
+            for env, cat_data in (("stage", stage_cat), ("prod", prod_cat)):
+                futures[ex.submit(check_in_catalog, vk, env, cat_data, version_info, phase)] = \
+                    f"{vk}_catalog_{env}_present"
+                futures[ex.submit(check_tag_commit_id, vk, env, cat_data)] = \
+                    f"{vk}_catalog_{env}_tag_commit"
+                futures[ex.submit(check_tag_build_date, vk, env, cat_data)] = \
+                    f"{vk}_catalog_{env}_tag_date"
+                futures[ex.submit(check_no_xy0_tag, vk, env, cat_data, version_info)] = \
+                    f"{vk}_catalog_{env}_no_xy0_tag"
+                futures[ex.submit(check_chi_freshness, vk, env, cat_data)] = \
+                    f"{vk}_catalog_{env}_chi"
+
 
         futures[ex.submit(check_advisory_type, advisory_details, version_info)] = \
             "advisory_type"
@@ -573,12 +583,19 @@ def _section_key(check_id, variant_keys):
     return "Global"
 
 
+def _group_by_section(results, version_info):
+    """Group results by variant section, returning (variant_keys, by_section)."""
+    variant_keys = [_variant_key(a, r) for a, r in _variants(version_info)]
+    by_section = {}
+    for r in results:
+        section = _section_key(r["check"], variant_keys)
+        by_section.setdefault(section, []).append(r)
+    return variant_keys, by_section
+
+
 def format_text_short(version, results, version_info):
     """Format checks grouped by variant section."""
-    if not results:
-        max_id_len = 20
-    else:
-        max_id_len = max(len(r["check"]) for r in results)
+    max_id_len = max((len(r["check"]) for r in results), default=20)
 
     # Status emojis render as 2 terminal columns (wide glyph) but len() returns 1
     _ICON_DISPLAY_WIDTH = 2
@@ -593,13 +610,7 @@ def format_text_short(version, results, version_info):
                 lines.append(f"{pad}{d}")
         return lines
 
-    variants = _variants(version_info)
-    variant_keys = [_variant_key(a, r) for a, r in variants]
-
-    by_section = {}
-    for r in results:
-        section = _section_key(r["check"], variant_keys)
-        by_section.setdefault(section, []).append(r)
+    variant_keys, by_section = _group_by_section(results, version_info)
 
     output = [f"Advisory Promotion: {version}", ""]
     for section in [*variant_keys, "Global"]:
@@ -618,13 +629,7 @@ def format_text_full(version, results, version_info):
     """Format a detailed markdown report grouped by variant."""
     lines = [f"# Advisory Promotion: {version} ({version_info['type']})", ""]
 
-    variants = _variants(version_info)
-    variant_keys = [_variant_key(a, r) for a, r in variants]
-
-    by_section = {}
-    for r in results:
-        section = _section_key(r["check"], variant_keys)
-        by_section.setdefault(section, []).append(r)
+    variant_keys, by_section = _group_by_section(results, version_info)
 
     for section in [*variant_keys, "Global"]:
         section_results = by_section.get(section, [])
@@ -641,9 +646,7 @@ def format_text_full(version, results, version_info):
             lines.append(f"| {icon} | `{r['check']}` | {detail} |")
         lines.append("")
 
-    counts = {}
-    for r in results:
-        counts[r["status"]] = counts.get(r["status"], 0) + 1
+    counts = Counter(r["status"] for r in results)
     summary_parts = [f"{v} {k}" for k, v in sorted(counts.items())]
     lines.append(f"**Summary:** {', '.join(summary_parts)}")
     return "\n".join(lines)

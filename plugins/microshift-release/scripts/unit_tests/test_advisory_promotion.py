@@ -95,14 +95,14 @@ class TestCheckIds(unittest.TestCase):
         ids = _all_check_ids(_version("4.18.3"))
         self.assertTrue(all("el10" not in i for i in ids))
         el9_ids = [i for i in ids if i.startswith("amd64_el9_")]
-        self.assertEqual(len(el9_ids), 9)
+        self.assertEqual(len(el9_ids), 13)
 
     def test_el9_el10(self):
         ids = _all_check_ids(_version("4.22.2"))
         el9_variant = [i for i in ids if i.startswith(("amd64_el9_", "arm64_el9_"))]
         el10_variant = [i for i in ids if i.startswith(("amd64_el10_", "arm64_el10_"))]
-        self.assertEqual(len(el9_variant), 18)  # 9 per arch * 2 arches
-        self.assertEqual(len(el10_variant), 18)
+        self.assertEqual(len(el9_variant), 26)  # 13 per arch * 2 arches
+        self.assertEqual(len(el10_variant), 26)
         self.assertIn("advisory_sha_distinct_el9", ids)
         self.assertIn("advisory_sha_distinct_el10", ids)
         self.assertIn("advisory_sha_distinct_el9", ids)
@@ -184,17 +184,17 @@ class TestImageSha(unittest.TestCase):
 class TestTagCommitId(unittest.TestCase):
     def test_matches(self):
         tags = [{"name": "v4.18-202606151054.p2.g7f7539e.assembly.4.18.3.el9"}]
-        r = check_tag_commit_id("amd64_el9", _catalog(tags=tags, commit_id="7f7539e123456"))
+        r = check_tag_commit_id("amd64_el9", "stage", _catalog(tags=tags, commit_id="7f7539e123456"))
         self.assertEqual(r["status"], "PASS")
 
     def test_mismatch(self):
         tags = [{"name": "v4.18-202606151054.p2.g7f7539e.assembly.4.18.3.el9"}]
-        r = check_tag_commit_id("amd64_el9", _catalog(tags=tags, commit_id="abc1234567890"))
+        r = check_tag_commit_id("amd64_el9", "stage", _catalog(tags=tags, commit_id="abc1234567890"))
         self.assertEqual(r["status"], "FAIL")
 
     def test_no_catalog(self):
-        r = check_tag_commit_id("amd64_el9", None)
-        self.assertEqual(r["status"], "WARN")
+        r = check_tag_commit_id("amd64_el9", "stage", None)
+        self.assertEqual(r["status"], "SKIP")
 
 
 # ── Per-variant: tag_build_date ──────────────────────────────────
@@ -203,13 +203,13 @@ class TestTagCommitId(unittest.TestCase):
 class TestTagBuildDate(unittest.TestCase):
     def test_valid(self):
         tags = [{"name": "v4.18-202606151054.p2.g7f7539e.assembly.4.18.3.el9"}]
-        r = check_tag_build_date("amd64_el9", _catalog(tags=tags))
+        r = check_tag_build_date("amd64_el9", "stage", _catalog(tags=tags))
         self.assertEqual(r["status"], "PASS")
         self.assertIn("2026-06-15 10:54", r["reason"])
 
     def test_no_catalog(self):
-        r = check_tag_build_date("amd64_el9", None)
-        self.assertEqual(r["status"], "WARN")
+        r = check_tag_build_date("amd64_el9", "stage", None)
+        self.assertEqual(r["status"], "SKIP")
 
 
 # ── Per-variant: no_xy0_tag ──────────────────────────────────────
@@ -218,7 +218,7 @@ class TestTagBuildDate(unittest.TestCase):
 class TestNoXY0Tag(unittest.TestCase):
     def test_zstream_clean(self):
         tags = [{"name": "v4.18-202606151054.p2.g7f7539e.assembly.4.18.3.el9"}]
-        r = check_no_xy0_tag("amd64_el9", _catalog(tags=tags), _version("4.18.3"))
+        r = check_no_xy0_tag("amd64_el9", "stage", _catalog(tags=tags), _version("4.18.3"))
         self.assertEqual(r["status"], "PASS")
 
     def test_zstream_has_xy0(self):
@@ -226,11 +226,11 @@ class TestNoXY0Tag(unittest.TestCase):
             {"name": "v4.18-202606151054.p2.g7f7539e.assembly.4.18.3.el9"},
             {"name": "v4.18-202601011200.p2.gabc1234.assembly.4.18.0.el9"},
         ]
-        r = check_no_xy0_tag("amd64_el9", _catalog(tags=tags), _version("4.18.3"))
+        r = check_no_xy0_tag("amd64_el9", "stage", _catalog(tags=tags), _version("4.18.3"))
         self.assertEqual(r["status"], "FAIL")
 
     def test_xy0_skipped(self):
-        r = check_no_xy0_tag("amd64_el9", _catalog(), _version("4.18.0"))
+        r = check_no_xy0_tag("amd64_el9", "stage", _catalog(), _version("4.18.0"))
         self.assertEqual(r["status"], "SKIP")
 
 
@@ -239,22 +239,22 @@ class TestNoXY0Tag(unittest.TestCase):
 
 class TestCHIFreshness(unittest.TestCase):
     def test_grade_a(self):
-        r = check_chi_freshness("amd64_el9", _catalog(freshness_grade="A"))
+        r = check_chi_freshness("amd64_el9", "stage", _catalog(freshness_grade="A"))
         self.assertEqual(r["status"], "PASS")
         self.assertIn("A", r["reason"])
 
     def test_grade_d(self):
-        r = check_chi_freshness("amd64_el9", _catalog(freshness_grade="D"))
+        r = check_chi_freshness("amd64_el9", "stage", _catalog(freshness_grade="D"))
         self.assertEqual(r["status"], "FAIL")
         self.assertIn("D", r["reason"])
 
     def test_no_grade(self):
-        r = check_chi_freshness("amd64_el9", _catalog())
+        r = check_chi_freshness("amd64_el9", "stage", _catalog())
         self.assertEqual(r["status"], "WARN")
 
-    def test_no_catalog(self):
-        r = check_chi_freshness("amd64_el9", None)
-        self.assertEqual(r["status"], "WARN")
+    def test_not_fetched(self):
+        r = check_chi_freshness("amd64_el9", "prod", None)
+        self.assertEqual(r["status"], "SKIP")
 
 
 # ── Per-variant: check_in_catalog (stage/prod phase) ──────────────
