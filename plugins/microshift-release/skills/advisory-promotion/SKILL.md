@@ -96,11 +96,15 @@ All per-image checks run independently per variant (`{arch}_el{rhel}`). For vers
 | Check | Description |
 |---|---|
 | `{v}_catalog_stage_present` | Image found in stage catalog |
-| `{v}_catalog_prod_present` | Image found in prod catalog (skipped for EC/RC) |
-| `{v}_catalog_tag_commit` | Assembly tag commit hash matches catalog image labels |
-| `{v}_catalog_tag_date` | Assembly tag contains a valid build date timestamp |
-| `{v}_catalog_no_xy0_tag` | Z-stream only: no X.Y.0 assembly tag on the image |
-| `{v}_catalog_chi` | Container Health Index grade is A (acceptable for promotion) |
+| `{v}_catalog_stage_tag_commit` | Assembly tag commit hash matches stage catalog image labels |
+| `{v}_catalog_stage_tag_date` | Assembly tag contains a valid build date timestamp (stage) |
+| `{v}_catalog_stage_no_xy0_tag` | Z-stream only: no X.Y.0 assembly tag on stage image |
+| `{v}_catalog_stage_chi` | Container Health Index grade is A (stage) |
+| `{v}_catalog_prod_present` | Image found in prod catalog (skipped in stage mode / EC/RC) |
+| `{v}_catalog_prod_tag_commit` | Assembly tag commit hash matches prod catalog image labels |
+| `{v}_catalog_prod_tag_date` | Assembly tag contains a valid build date timestamp (prod) |
+| `{v}_catalog_prod_no_xy0_tag` | Z-stream only: no X.Y.0 assembly tag on prod image |
+| `{v}_catalog_prod_chi` | Container Health Index grade is A (prod) |
 
 ### Global checks
 
@@ -128,40 +132,54 @@ All per-image checks run independently per variant (`{arch}_el{rhel}`). For vers
 Advisory Promotion: 4.20.26
 
 ── amd64_el9 ───────────────────────────────────────────────
-✅  amd64_el9_advisory_image_present  amd64/el9 present
-✅  amd64_el9_advisory_repository     registry.stage.redhat.io/openshift4/microshift-bootc-rhel9
-✅  amd64_el9_advisory_image_sha      sha256:f839eb91f716
-✅  amd64_el9_catalog_stage_present   Found in stage catalog
-✅  amd64_el9_catalog_prod_present    Found in prod catalog
-✅  amd64_el9_catalog_tag_commit      Commit b79e4b0 matches catalog
-✅  amd64_el9_catalog_tag_date        2026-06-19 09:02
-✅  amd64_el9_catalog_no_xy0_tag      No 4.20.0 tags (7 checked)
+✅  amd64_el9_advisory_image_present       amd64/el9 present
+✅  amd64_el9_advisory_repository          registry.stage.redhat.io/openshift4/microshift-bootc-rhel9
+✅  amd64_el9_advisory_image_sha           sha256:f839eb91f716
+✅  amd64_el9_catalog_stage_present        Found in stage catalog
+✅  amd64_el9_catalog_stage_tag_commit     Commit b79e4b0 matches catalog
+✅  amd64_el9_catalog_stage_tag_date       2026-06-19 09:02
+✅  amd64_el9_catalog_stage_no_xy0_tag     No 4.20.0 tags (7 checked)
+✅  amd64_el9_catalog_stage_chi            CHI grade A
+⏭️  amd64_el9_catalog_prod_present         N/A (stage mode)
+⏭️  amd64_el9_catalog_prod_tag_commit      N/A (prod not queried)
+⏭️  amd64_el9_catalog_prod_tag_date        N/A (prod not queried)
+⏭️  amd64_el9_catalog_prod_no_xy0_tag      N/A (prod not queried)
+⏭️  amd64_el9_catalog_prod_chi             N/A (prod not queried)
 
 ── arm64_el9 ───────────────────────────────────────────────
-✅  arm64_el9_advisory_image_present  arm64/el9 present
+✅  arm64_el9_advisory_image_present       arm64/el9 present
 ...
 
 ── Global ──────────────────────────────────────────────────
-✅  advisory_type                     spec.type = RHBA
-✅  shipment_type                     releaseNotes.type = RHBA
-✅  shipment_filename                 shipment/ocp/openshift-4.20/openshift-4-20/prod/4.20.26.microshift-bootc...yaml
-✅  shipment_nvr_commit               Commit b79e4b0 matches Brew
-✅  advisory_sha_distinct_el9         SHAs are distinct
-✅  shipment_mr_approved              MR !594 approved by tlove, knarra, adobes
+✅  advisory_type                          spec.type = RHBA
+✅  shipment_type                          releaseNotes.type = RHBA
+✅  shipment_filename                      shipment/ocp/openshift-4.20/openshift-4-20/prod/4.20.26.microshift-bootc...yaml
+✅  shipment_nvr_commit                    Commit b79e4b0 matches Brew
+✅  advisory_sha_distinct_el9              SHAs are distinct
+✅  shipment_mr_approved                   MR !594 approved by tlove, knarra, adobes
+```
+
+With `--prod`, both stage and prod catalog checks run:
+
+```text
+✅  amd64_el9_catalog_stage_present        Found in stage catalog
+✅  amd64_el9_catalog_stage_chi            CHI grade A
+✅  amd64_el9_catalog_prod_present         Found in prod catalog
+✅  amd64_el9_catalog_prod_chi             CHI grade A
 ```
 
 On failure, details appear below the failing check:
 
 ```text
-❌  amd64_el9_advisory_repository     Wrong repository: registry.redhat.io/openshift4/microshift-bootc-rhel9
-                                     Expected: registry.stage.redhat.io/openshift4/microshift-bootc-rhel9
-                                     Got: registry.redhat.io/openshift4/microshift-bootc-rhel9
+❌  amd64_el9_advisory_repository          Wrong repository: registry.redhat.io/openshift4/microshift-bootc-rhel9
+                                           Expected: registry.stage.redhat.io/openshift4/microshift-bootc-rhel9
+                                           Got: registry.redhat.io/openshift4/microshift-bootc-rhel9
 ```
 
-For EC/RC, prod catalog checks are skipped:
+For EC/RC, prod catalog checks are always skipped:
 
 ```text
-⏭️  amd64_el9_catalog_prod_present    N/A (EC not shipped to prod)
+⏭️  amd64_el9_catalog_prod_present         N/A (EC not shipped to prod)
 ```
 
 **Verbose (--verbose):** Markdown table with full evidence per check, grouped by variant.
