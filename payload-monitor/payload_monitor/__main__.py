@@ -90,14 +90,88 @@ def _collect_jobs_by_type(report: MonitorReport, job_type: JobType) -> list[dict
               help="Number of payloads to analyze per stream (1-10, default 5)")
 @click.option("--merge-analysis", "merge_analysis_path", type=click.Path(exists=True), default=None,
               help="Merge analysis JSON into an existing HTML report (or into --from-json data)")
+@click.option("--pr-payload-url", type=str, default=None,
+              help="Triage a PR payload run (e.g., https://pr-payload-tests.ci.openshift.org/runs/ci/...)")
+@click.option("--pr", "pr_ref", type=str, default=None,
+              help="PR reference for triage (e.g., 'openshift/origin#31276' or full URL)")
+@click.option("--format", "output_format", type=click.Choice(["markdown", "json"]),
+              default="markdown", help="Output format for PR triage (default: markdown)")
+@click.option("--discover", is_flag=True, default=False,
+              help="Discover which payload jobs match the PR's changed files (use with --pr)")
 def main(
     versions, output_path, from_json, export_json,
     open_browser, verbose, skip_prow, skip_sippy, with_timing,
-    payloads, merge_analysis_path,
+    payloads, merge_analysis_path, pr_payload_url, pr_ref, output_format,
+    discover,
 ):
     """Edge OCP Payload Monitor — monitor OpenShift nightly payloads for edge topology failures."""
     _setup_logging(verbose)
     logger = logging.getLogger("payload_monitor")
+
+    # --- PR payload job discovery mode ---
+    if discover:
+        if not pr_ref:
+            logger.error("--pr is required when using --discover")
+            raise SystemExit(1)
+
+        from .collectors.payload_job_discovery import (
+            discover_payload_jobs,
+            find_release_repo,
+            format_discovery_json,
+            format_discovery_markdown,
+        )
+        from .collectors.pr_payload import fetch_pr_changed_files
+
+        release_repo = find_release_repo()
+        if not release_repo:
+            logger.error("Cannot find openshift/release repo. Set RELEASE_REPO_DIR or clone it locally.")
+            raise SystemExit(1)
+
+        changed_files = fetch_pr_changed_files(pr_ref)
+        if not changed_files:
+            logger.error(f"No changed files found for {pr_ref}")
+            raise SystemExit(1)
+
+        result = discover_payload_jobs(pr_ref, changed_files, release_repo)
+
+        if output_format == "json":
+            print(format_discovery_json(result))
+        else:
+            print(format_discovery_markdown(result))
+        return
+
+    # --- PR payload triage mode ---
+    if pr_payload_url:
+        if not pr_ref:
+            logger.error("--pr is required when using --pr-payload-url")
+            raise SystemExit(1)
+
+        from .collectors.pr_payload import (
+            build_triage_result,
+            classify_failures,
+            fetch_pr_changed_files,
+            fetch_pr_diff,
+            fetch_pr_payload_run,
+            format_triage_json,
+            format_triage_markdown,
+        )
+
+        jobs = fetch_pr_payload_run(pr_payload_url)
+        if not jobs:
+            logger.error("No jobs found at the provided URL")
+            raise SystemExit(1)
+
+        pr_files = fetch_pr_changed_files(pr_ref)
+        diff_content = fetch_pr_diff(pr_ref)
+        verdicts = classify_failures(jobs, pr_files, diff_content)
+        result = build_triage_result(pr_payload_url, pr_ref, jobs)
+        result.verdicts = verdicts
+
+        if output_format == "json":
+            print(format_triage_json(result))
+        else:
+            print(format_triage_markdown(result))
+        return
 
     # Build config
     config = Config()
