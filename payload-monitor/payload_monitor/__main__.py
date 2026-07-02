@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import webbrowser
@@ -27,6 +28,14 @@ from .report.generator import (
     merge_analysis,
     patch_analysis_html,
 )
+
+
+def _load_doctor_fragment(path: str | None) -> str | None:
+    """Load a doctor HTML fragment from a JSON file."""
+    if path is None:
+        return None
+    with open(path) as f:
+        return json.load(f)["html"]
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -90,14 +99,22 @@ def _collect_jobs_by_type(report: MonitorReport, job_type: JobType) -> list[dict
               help="Number of payloads to analyze per stream (1-10, default 5)")
 @click.option("--merge-analysis", "merge_analysis_path", type=click.Path(exists=True), default=None,
               help="Merge analysis JSON into an existing HTML report (or into --from-json data)")
+@click.option("--microshift-doctor-html", type=click.Path(exists=True), default=None,
+              help="Path to MicroShift CI doctor HTML fragment (JSON with 'html' key)")
+@click.option("--lvms-doctor-html", type=click.Path(exists=True), default=None,
+              help="Path to LVMS CI doctor HTML fragment (JSON with 'html' key)")
 def main(
     versions, output_path, from_json, export_json,
     open_browser, verbose, skip_prow, skip_sippy, with_timing,
-    payloads, merge_analysis_path,
+    payloads, merge_analysis_path, microshift_doctor_html, lvms_doctor_html,
 ):
     """Edge OCP Payload Monitor — monitor OpenShift nightly payloads for edge topology failures."""
     _setup_logging(verbose)
     logger = logging.getLogger("payload_monitor")
+
+    # Load doctor fragments if provided
+    microshift_frag = _load_doctor_fragment(microshift_doctor_html)
+    lvms_frag = _load_doctor_fragment(lvms_doctor_html)
 
     # Build config
     config = Config()
@@ -129,7 +146,10 @@ def main(
         if merge_analysis_path:
             logger.info(f"Merging analysis from {merge_analysis_path}")
             merge_analysis(report, Path(merge_analysis_path))
-        generate_html(report, html_path)
+        generate_html(
+            report, html_path,
+            microshift_html=microshift_frag, lvms_html=lvms_frag,
+        )
         logger.info(f"Report regenerated: {html_path.resolve()}")
         if open_browser:
             webbrowser.open(f"file://{html_path.resolve()}")
@@ -251,7 +271,10 @@ def main(
         data_errors.append(f"Analysis: {e}")
 
     # Generate HTML report
-    generate_html(report, html_path)
+    generate_html(
+        report, html_path,
+        microshift_html=microshift_frag, lvms_html=lvms_frag,
+    )
 
     # Optionally export full JSON
     if export_json:

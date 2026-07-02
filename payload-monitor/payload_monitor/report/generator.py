@@ -197,7 +197,13 @@ def _build_template_context(report: MonitorReport) -> dict:
     }
 
 
-def generate_html(report: MonitorReport, output_path: Optional[Path] = None) -> str:
+def generate_html(
+    report: MonitorReport,
+    output_path: Optional[Path] = None,
+    *,
+    microshift_html: Optional[str] = None,
+    lvms_html: Optional[str] = None,
+) -> str:
     """Generate a self-contained HTML report.
 
     Returns the HTML content as a string. If output_path is provided,
@@ -211,6 +217,8 @@ def generate_html(report: MonitorReport, output_path: Optional[Path] = None) -> 
     context = _build_template_context(report)
     context["css"] = css
     context["js"] = js
+    context["microshift_html"] = microshift_html
+    context["lvms_html"] = lvms_html
 
     rendered_html = template.render(**context)
 

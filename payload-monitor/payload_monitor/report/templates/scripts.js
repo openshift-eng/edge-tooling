@@ -522,3 +522,27 @@ document.addEventListener('DOMContentLoaded', function() {
     if (e.target.closest('.svg-tip')) tip.style.display = 'none';
   });
 })();
+
+// Doctor detail-row toggle
+document.querySelectorAll('.doctor-col-title').forEach(function(el) {
+  el.addEventListener('click', function() {
+    this.classList.toggle('active');
+    var row = this.closest('tr').nextElementSibling;
+    if (row && row.classList.contains('doctor-detail-row')) {
+      row.classList.toggle('show');
+    }
+  });
+});
+
+// Doctor sub-tabs (Periodics / Pull Requests / Bugs / Image Health)
+document.querySelectorAll('.doctor-sub-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    var parent = this.closest('.tab-panel');
+    if (!parent) return;
+    parent.querySelectorAll('.doctor-sub-btn').forEach(function(b) { b.classList.remove('active'); });
+    parent.querySelectorAll('.doctor-sub-panel').forEach(function(p) { p.classList.remove('active'); });
+    this.classList.add('active');
+    var panel = document.getElementById(this.dataset.doctorTab);
+    if (panel) panel.classList.add('active');
+  });
+});

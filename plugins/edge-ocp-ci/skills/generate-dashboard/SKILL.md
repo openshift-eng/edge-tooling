@@ -80,10 +80,10 @@ This avoids re-creating the venv or re-running `pip install` on every invocation
 Run the payload monitor Python tool to collect data and generate the base report:
 
 ```bash
-cd "$TOOL_DIR" && .venv/bin/python -m payload_monitor --output reports/report-$(date +%Y-%m-%d).html [OPTIONS]
+cd "$TOOL_DIR" && .venv/bin/python -m payload_monitor --output reports/report-$(date +%Y-%m-%d).html --json [OPTIONS]
 ```
 
-Pass through any relevant flags (`--versions`, `--payloads`, `--skip-prow`, `--skip-sippy`, `--with-timing`).
+Pass through any relevant flags (`--versions`, `--payloads`, `--skip-prow`, `--skip-sippy`, `--with-timing`). The `--json` flag is required so Step 3b can regenerate the HTML with doctor fragments using `--from-json`.
 
 **Timeout guidance:** When using `--with-timing`, set the Bash tool timeout to at least **10 minutes** (600000 ms). On a cold start (first run after deployment, or if the previous run's cache artifact is unavailable), the timing collector may need to backfill up to 7 days of run data. Subsequent warm runs with a seeded cache typically complete in under 2 minutes.
 
@@ -97,6 +97,175 @@ The tool outputs:
 
 - An HTML report (self-contained interactive dashboard)
 - Blocking job summary printed to stdout (pipe-delimited lines between `BLOCKING_JOBS_START` and `BLOCKING_JOBS_END` markers)
+
+### Step 3b: MicroShift and LVMS CI Doctor Analysis
+
+**Goal**: Collect CI health data for MicroShift and LVMS, run per-job root cause analysis, and generate HTML fragments for embedding in the dashboard.
+
+Compute paths once (substitute `<YYMMDD>` from `date +%y%m%d`):
+
+```text
+SHARED_SCRIPTS = <repo-root>/plugins/shared/scripts
+MICROSHIFT_WORKDIR = /tmp/microshift-ci-claude-workdir.<YYMMDD>
+LVMS_WORKDIR = /tmp/lvm-operator-ci-claude-workdir.<YYMMDD>
+```
+
+Use the same comma-separated version list from Step 1 as `<VERSIONS>`.
+
+#### 3b.1: Prepare - Collect and Download Artifacts (deterministic)
+
+```bash
+bash "$SHARED_SCRIPTS/doctor.sh" prepare \
+  --component microshift --workdir "$MICROSHIFT_WORKDIR" \
+  --rebase --repo openshift/microshift <VERSIONS>
+```
+
+```bash
+bash "$SHARED_SCRIPTS/doctor.sh" prepare \
+  --component lvm-operator --workdir "$LVMS_WORKDIR" <VERSIONS>
+```
+
+Each command outputs a JSON summary to stdout listing releases, job counts, and file paths. Capture this output. The JSON has the structure:
+
+```json
+{
+  "workdir": "/tmp/...",
+  "releases": [
+    {"release": "4.22", "jobs": 3, "jobs_file": "/tmp/.../jobs/release-4.22-jobs.json"}
+  ],
+  "prs": {"jobs": 2, "jobs_file": "/tmp/.../jobs/prs-jobs.json"}
+}
+```
+
+If a release has `"error"` in its entry, data collection failed for that release - skip it.
+
+#### 3b.2: PCP Performance Graphs (deterministic, MicroShift only)
+
+```bash
+bash "$SHARED_SCRIPTS/doctor.sh" graphs \
+  --component microshift --workdir "$MICROSHIFT_WORKDIR"
+```
+
+Outputs PNG graphs to `$MICROSHIFT_WORKDIR/graphs/<build_id>/`. Requires `pcp2json` and `matplotlib` - skip if not installed.
+
+#### 3b.3: Per-Job Root Cause Analysis (LLM agents)
+
+Use the JSON summary from 3b.1 to build agent prompts. Do NOT read the job JSON files into the main conversation - the prepare script already printed all job details.
+
+**For each failed MicroShift release job**, launch a foreground Agent:
+
+```text
+Agent: subagent_type=general_purpose, prompt="Analyze this Prow job and save the report:
+Job: <JOB_NAME>
+URL: <JOB_URL>
+Performance graphs (if generated): <MICROSHIFT_WORKDIR>/graphs/<BUILD_ID>/
+MicroShift source (if present): <MICROSHIFT_WORKDIR>/src/microshift/ (for main)
+  or <MICROSHIFT_WORKDIR>/src/microshift-release-<RELEASE>/ (for release branches)
+1. Run /microshift-ci:prow-job <ARTIFACTS_DIR>
+2. Your goal is the UNDERLYING root cause, not the first error in the log - follow the
+   skill's drill-down and causal-chain requirements, consulting the sosreport and the
+   performance graphs when relevant.
+3. After the analysis completes, save the FULL report output (including the
+   --- STRUCTURED SUMMARY --- block) to:
+   <MICROSHIFT_WORKDIR>/jobs/release-<RELEASE>-job-<N>-<BUILD_ID>.txt
+   Use the Write tool to save the file.
+4. After saving, reply with EXACTLY one line: DONE <output-file-path>."
+```
+
+**For each failed MicroShift PR job** (FAILURE status only):
+
+```text
+Agent: subagent_type=general_purpose, prompt="Analyze this Prow job and save the report:
+Job: <JOB_NAME> (PR #<PR_NUMBER>)
+URL: <JOB_URL>
+Performance graphs (if generated): <MICROSHIFT_WORKDIR>/graphs/<BUILD_ID>/
+MicroShift source (if present): <MICROSHIFT_WORKDIR>/src/microshift/
+1. Run /microshift-ci:prow-job <ARTIFACTS_DIR>
+2. Your goal is the UNDERLYING root cause, not the first error in the log.
+3. Save the FULL report to:
+   <MICROSHIFT_WORKDIR>/jobs/prs-job-<N>-pr<PR_NUMBER>-<JOB_NAME_SUFFIX>.txt
+4. Reply with EXACTLY one line: DONE <output-file-path>."
+```
+
+**For each failed LVMS job**:
+
+```text
+Agent: subagent_type=general_purpose, prompt="Analyze this Prow job and save the report:
+1. Run /lvms-ci:prow-job <ARTIFACTS_DIR>
+2. After the analysis completes, save the FULL report output (including the
+   --- STRUCTURED SUMMARY --- block) to:
+   <LVMS_WORKDIR>/jobs/release-<RELEASE>-job-<N>-<BUILD_ID>.txt
+   Use the Write tool to save the file."
+```
+
+Substitute `<JOB_NAME>`, `<JOB_URL>`, `<BUILD_ID>`, `<ARTIFACTS_DIR>` from the prepare JSON (`job`, `url`, `build_id`, `artifacts_dir` fields). `<N>` is the 1-based job index within the release.
+
+Launch **ALL** agents (MicroShift + LVMS, releases + PRs) in a **single message** as **foreground** agents. They run concurrently.
+
+#### 3b.4: Bug Correlation (LLM agent, MicroShift only)
+
+After all analysis agents complete, launch a single foreground agent for MicroShift bug correlation:
+
+```text
+Agent: subagent_type=general_purpose, prompt="Run /microshift-ci:create-bugs <all-sources>"
+```
+
+Where `<all-sources>` is a comma-separated list of all release versions plus any rebase PR source identifiers (e.g., `4.19,4.20,4.21,4.22,rebase-release-4.22`). The agent produces `<MICROSHIFT_WORKDIR>/bugs/bug-matches-<source>.json` files used by the HTML report's Bugs tab.
+
+If this fails, note the error but do not block subsequent steps.
+
+#### 3b.5: Finalize - Aggregate and Generate Reports (deterministic)
+
+**IMPORTANT**: This step is MANDATORY. Run it even if analysis agents failed.
+
+```bash
+bash "$SHARED_SCRIPTS/doctor.sh" finalize \
+  --component microshift --workdir "$MICROSHIFT_WORKDIR" <VERSIONS>
+```
+
+```bash
+bash "$SHARED_SCRIPTS/doctor.sh" finalize \
+  --component lvm-operator --workdir "$LVMS_WORKDIR" <VERSIONS>
+```
+
+Each command runs `aggregate.py` per release, collects container image health data from the Red Hat catalog, and runs `create-report.py` to generate a standalone HTML doctor report.
+
+#### 3b.6: Generate Fragments for Dashboard (deterministic)
+
+```bash
+python3 "$SHARED_SCRIPTS/create-report.py" \
+  --component microshift --format fragment \
+  --workdir "$MICROSHIFT_WORKDIR" <VERSIONS>
+```
+
+```bash
+python3 "$SHARED_SCRIPTS/create-report.py" \
+  --component lvm-operator --format fragment \
+  --workdir "$LVMS_WORKDIR" <VERSIONS>
+```
+
+Each produces a JSON file at `<WORKDIR>/report-<component>-ci-doctor-fragment.json` containing an `html` key with the embeddable content.
+
+#### 3b.7: Combine Fragments into Dashboard (deterministic)
+
+Regenerate the payload-monitor HTML with doctor tabs:
+
+```bash
+cd "$TOOL_DIR" && .venv/bin/python -m payload_monitor \
+  --from-json reports/<actual-report-stem>.json \
+  --output reports/<actual-report-path>.html \
+  --microshift-doctor-html "$MICROSHIFT_WORKDIR/report-microshift-ci-doctor-fragment.json" \
+  --lvms-doctor-html "$LVMS_WORKDIR/report-lvm-operator-ci-doctor-fragment.json"
+```
+
+Use the actual report paths from Step 3. Only pass `--microshift-doctor-html` / `--lvms-doctor-html` if the respective fragment was generated successfully.
+
+#### Error Handling
+
+- If prepare fails for a component, skip all subsequent steps for that component
+- If analysis agents fail or time out, proceed to finalize - reports will note missing analysis
+- If finalize or fragment generation fails for a component, skip that component's fragment
+- The dashboard works with zero, one, or both doctor tabs
 
 ### Step 4: Parse Blocking Jobs from Output and Analyze Failures
 

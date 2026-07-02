@@ -40,6 +40,12 @@
   {% if timing_html %}
   <button class="tab-btn" data-tab="timing-insights">Timing Insights</button>
   {% endif %}
+  {% if microshift_html %}
+  <button class="tab-btn" data-tab="microshift-ci">MicroShift CI</button>
+  {% endif %}
+  {% if lvms_html %}
+  <button class="tab-btn" data-tab="lvms-ci">LVMS CI</button>
+  {% endif %}
 </div>
 
 <!-- Tab: Payload Health -->
@@ -912,6 +918,18 @@
 {% if timing_html %}
 <div class="tab-panel" id="tab-timing-insights">
 {{ timing_html | safe }}
+</div>
+{% endif %}
+
+{% if microshift_html %}
+<div class="tab-panel" id="tab-microshift-ci">
+{{ microshift_html | safe }}
+</div>
+{% endif %}
+
+{% if lvms_html %}
+<div class="tab-panel" id="tab-lvms-ci">
+{{ lvms_html | safe }}
 </div>
 {% endif %}
 
