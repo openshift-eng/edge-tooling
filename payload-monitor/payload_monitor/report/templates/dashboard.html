@@ -40,12 +40,9 @@
   {% if timing_html %}
   <button class="tab-btn" data-tab="timing-insights">Timing Insights</button>
   {% endif %}
-  {% if microshift_html %}
-  <button class="tab-btn" data-tab="microshift-ci">MicroShift CI</button>
-  {% endif %}
-  {% if lvms_html %}
-  <button class="tab-btn" data-tab="lvms-ci">LVMS CI</button>
-  {% endif %}
+  {% for label, html in doctor_fragments.items() %}
+  <button class="tab-btn" data-tab="{{ label | lower | replace(' ', '-') }}">{{ label }}</button>
+  {% endfor %}
 </div>
 
 <!-- Tab: Payload Health -->
@@ -921,17 +918,11 @@
 </div>
 {% endif %}
 
-{% if microshift_html %}
-<div class="tab-panel" id="tab-microshift-ci">
-{{ microshift_html | safe }}
+{% for label, html in doctor_fragments.items() %}
+<div class="tab-panel" id="tab-{{ label | lower | replace(' ', '-') }}">
+{{ html | safe }}
 </div>
-{% endif %}
-
-{% if lvms_html %}
-<div class="tab-panel" id="tab-lvms-ci">
-{{ lvms_html | safe }}
-</div>
-{% endif %}
+{% endfor %}
 
 <script>{{ js | safe }}</script>
 </body>

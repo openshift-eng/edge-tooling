@@ -228,44 +228,52 @@ bash "$SHARED_SCRIPTS/doctor.sh" finalize \
   --component lvm-operator --workdir "$LVMS_WORKDIR" <VERSIONS>
 ```
 
-Each command runs `aggregate.py` per release, collects container image health data from the Red Hat catalog, and runs `create-report.py` to generate a standalone HTML doctor report.
+Each command runs `aggregate.py` per release, collects container image health data from the Red Hat catalog, and runs `create-report.py --format both` to generate both a standalone HTML doctor report and an embeddable HTML fragment at `<WORKDIR>/report-<component>-ci-doctor-fragment.html`.
 
-#### 3b.6: Generate Fragments for Dashboard (deterministic)
+#### 3b.6: Inject Fragments into Report JSON and Regenerate (deterministic)
 
-```bash
-python3 "$SHARED_SCRIPTS/create-report.py" \
-  --component microshift --format fragment \
-  --workdir "$MICROSHIFT_WORKDIR" <VERSIONS>
+Read each fragment HTML file and inject it into the payload-monitor report JSON under the `doctor_fragments` key. Use a short Python one-liner or `jq`:
+
+```python
+import json
+
+report_json = "reports/<actual-report-stem>.json"  # from Step 3
+with open(report_json) as f:
+    data = json.load(f)
+
+data.setdefault("doctor_fragments", {})
+# Only inject fragments that were generated successfully
+for label, component, workdir in [
+    ("MicroShift CI", "microshift", MICROSHIFT_WORKDIR),
+    ("LVMS CI", "lvm-operator", LVMS_WORKDIR),
+]:
+    path = f"{workdir}/report-{component}-ci-doctor-fragment.html"
+    try:
+        with open(path) as f:
+            data["doctor_fragments"][label] = f.read()
+    except FileNotFoundError:
+        pass  # finalize failed for this component, skip
+
+with open(report_json, "w") as f:
+    json.dump(data, f, indent=2)
 ```
 
-```bash
-python3 "$SHARED_SCRIPTS/create-report.py" \
-  --component lvm-operator --format fragment \
-  --workdir "$LVMS_WORKDIR" <VERSIONS>
-```
-
-Each produces a JSON file at `<WORKDIR>/report-<component>-ci-doctor-fragment.json` containing an `html` key with the embeddable content.
-
-#### 3b.7: Combine Fragments into Dashboard (deterministic)
-
-Regenerate the payload-monitor HTML with doctor tabs:
+Then regenerate the HTML:
 
 ```bash
 cd "$TOOL_DIR" && .venv/bin/python -m payload_monitor \
   --from-json reports/<actual-report-stem>.json \
-  --output reports/<actual-report-path>.html \
-  --microshift-doctor-html "$MICROSHIFT_WORKDIR/report-microshift-ci-doctor-fragment.json" \
-  --lvms-doctor-html "$LVMS_WORKDIR/report-lvm-operator-ci-doctor-fragment.json"
+  --output reports/<actual-report-path>.html
 ```
 
-Use the actual report paths from Step 3. Only pass `--microshift-doctor-html` / `--lvms-doctor-html` if the respective fragment was generated successfully.
+Doctor tabs appear automatically for any entries in `doctor_fragments`. No extra CLI flags needed.
 
 #### Error Handling
 
 - If prepare fails for a component, skip all subsequent steps for that component
 - If analysis agents fail or time out, proceed to finalize - reports will note missing analysis
-- If finalize or fragment generation fails for a component, skip that component's fragment
-- The dashboard works with zero, one, or both doctor tabs
+- If finalize fails for a component, its fragment won't exist and is simply not injected
+- The dashboard works with zero, one, or any number of doctor tabs
 
 ### Step 4: Parse Blocking Jobs from Output and Analyze Failures
 

@@ -413,10 +413,10 @@ cmd_finalize() {
         --workdir "${WORKDIR}" "${releases_arg}" || \
         echo "  WARNING: index image extraction failed" >&2
 
-    # Generate HTML report
-    echo "=== Generating HTML report ===" >&2
+    # Generate HTML report + embeddable fragment
+    echo "=== Generating HTML report + fragment ===" >&2
     python3 "${SCRIPT_DIR}/create-report.py" \
-        --component "${COMPONENT}" --workdir "${WORKDIR}" "${releases_arg}"
+        --component "${COMPONENT}" --workdir "${WORKDIR}" --format both "${releases_arg}"
 }
 
 # ---------------------------------------------------------------------------
@@ -496,9 +496,9 @@ cmd_refresh() {
         --workdir "${WORKDIR}" "${releases_arg}" || \
         echo "  WARNING: index image extraction failed" >&2
 
-    # Generate HTML report (reads existing summary + bug files)
-    echo "=== Generating HTML report ===" >&2
-    local -a report_args=(--component "${COMPONENT}" --workdir "${WORKDIR}")
+    # Generate HTML report + embeddable fragment
+    echo "=== Generating HTML report + fragment ===" >&2
+    local -a report_args=(--component "${COMPONENT}" --workdir "${WORKDIR}" --format both)
     if [[ -n "${ignore_keys}" ]]; then
         report_args+=(--ignore "${ignore_keys}")
     fi

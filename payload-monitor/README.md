@@ -127,8 +127,6 @@ Options:
   --from-json PATH             Regenerate HTML from a JSON file (skips data collection)
   --json                       Also export full report data as JSON
   --merge-analysis PATH        Patch analysis JSON into an existing HTML report
-  --microshift-doctor-html PATH  MicroShift CI doctor fragment (JSON with 'html' key)
-  --lvms-doctor-html PATH       LVMS CI doctor fragment (JSON with 'html' key)
   --open                       Open report in browser after generation
   --skip-prow                  Skip Prow artifact fetching (faster, less detail)
   --skip-sippy                 Skip Sippy regression check
@@ -193,28 +191,24 @@ The dashboard can include MicroShift CI and LVMS CI doctor reports as additional
 
 ### Fragment Workflow
 
-1. **Collect and analyze**: `doctor.sh prepare` collects failed jobs and downloads artifacts. LLM agents analyze each job. `doctor.sh finalize` aggregates results and generates standalone HTML reports.
-2. **Generate fragments**: `create-report.py --format fragment` produces a JSON file containing embeddable HTML with doctor-prefixed CSS classes (`doctor-*`) that integrate with the payload-monitor dark theme.
-3. **Combine**: Pass fragment JSON paths via `--microshift-doctor-html` and/or `--lvms-doctor-html` to add them as dashboard tabs.
+1. **Collect and analyze**: `doctor.sh prepare` collects failed jobs and downloads artifacts. LLM agents analyze each job.
+2. **Finalize**: `doctor.sh finalize` aggregates results and generates both a standalone HTML report and an embeddable HTML fragment (`--format both`) with doctor-prefixed CSS classes (`doctor-*`) that integrate with the payload-monitor dark theme.
+3. **Inject into JSON**: The orchestrating skill reads fragment HTML files and injects them into the payload-monitor JSON under the `doctor_fragments` key (keyed by component slug, e.g. `microshift-ci`, `lvms-ci`).
+4. **Regenerate**: `--from-json` picks up the fragments automatically and renders them as dashboard tabs.
 
 ### Example
 
 ```bash
-# Generate doctor fragments (after running doctor analysis)
-cd plugins/shared/scripts
-python3 create-report.py --component microshift --format fragment \
-  --workdir /tmp/microshift-ci-claude-workdir.260702 4.19,4.20,4.21,4.22
-python3 create-report.py --component lvm-operator --format fragment \
-  --workdir /tmp/lvm-operator-ci-claude-workdir.260702 4.19,4.20,4.21,4.22
+# doctor.sh finalize produces both HTML report + fragment in one run
+# Fragments are at <workdir>/report-<component>-ci-doctor-fragment.html
 
-# Generate dashboard with doctor tabs
+# Inject fragments into existing report JSON (done by orchestrating skill via Python/jq)
+# Then regenerate:
 cd payload-monitor
-python -m payload_monitor \
-  --microshift-doctor-html /tmp/microshift-ci-claude-workdir.260702/report-microshift-ci-doctor-fragment.json \
-  --lvms-doctor-html /tmp/lvm-operator-ci-claude-workdir.260702/report-lvm-operator-ci-doctor-fragment.json
+python -m payload_monitor --from-json reports/report-2026-07-02.json --output reports/report-2026-07-02.html
 ```
 
-The dashboard works with zero, one, or both doctor tabs. When a fragment is not provided, the corresponding tab is not shown.
+Doctor tabs appear automatically for any entries in `doctor_fragments`. No extra CLI flags needed.
 
 ## Development
 
