@@ -59,12 +59,6 @@ def find_release_repo() -> Optional[str]:
         candidates.append(home / base / "release")
         candidates.append(home / base / "openshift" / "release")
 
-    # Also check the dev-env repos layout
-    dev_env_dirs = [
-        home / "Documents/Projects/tnf-dev-env/repos/release",
-    ]
-    candidates.extend(dev_env_dirs)
-
     for c in candidates:
         ci_config = c / "ci-operator" / "config"
         if ci_config.is_dir():

@@ -18,6 +18,7 @@ from ..models import (
     PRTriageResult,
 )
 from .http import create_session
+from .payload_job_discovery import _parse_pr_ref as _parse_pr_ref_3
 from .prow import _fetch_gcs_file, _prow_url_to_gcs_path
 
 logger = logging.getLogger(__name__)
@@ -202,10 +203,11 @@ def build_triage_result(
 
 def _parse_pr_ref(pr_ref: str) -> Optional[tuple[str, str]]:
     """Parse a PR reference into (repo, number). Returns None if unparsable."""
-    m = re.match(r'(?:https?://github\.com/)?([^/]+/[^/#]+)(?:/pull/|#)(\d+)', pr_ref)
-    if not m:
+    parsed = _parse_pr_ref_3(pr_ref)
+    if not parsed:
         return None
-    return m.group(1), m.group(2)
+    org, repo, number = parsed
+    return f"{org}/{repo}", number
 
 
 def fetch_pr_changed_files(pr_ref: str) -> list[str]:

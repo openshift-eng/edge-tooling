@@ -213,30 +213,28 @@ main() {
         local triage_json
         triage_json=$(run_triage "${payload_url}" "${pr_ref}" "${pm_dir}")
 
-        # Build combined output
-        local output
-        output=$(echo "${triage_json}" | jq --arg mode "triage" --argjson stale "${is_stale}" '. + {mode: $mode, stale: $stale}')
-
-        if [[ "${is_stale}" == "true" ]]; then
-            output=$(echo "${output}" | jq --arg reason "${stale_reason}" '. + {stale_reason: $reason}')
-        fi
-
+        # Build combined output in a single jq call
+        local disc_arg="null"
         if [[ -n "${discovery_json}" ]]; then
-            local discovery_section
-            discovery_section=$(echo "${discovery_json}" | jq '{suggestions: .suggestions, version: .version}')
-            output=$(echo "${output}" | jq --argjson disc "${discovery_section}" '. + {discovery: $disc}')
+            disc_arg=$(echo "${discovery_json}" | jq '{suggestions: .suggestions, version: .version}')
         fi
-
+        local val_arg="null"
         if [[ -n "${validation_json}" ]]; then
-            output=$(echo "${output}" | jq --argjson val "${validation_json}" '. + {validation: $val}')
+            val_arg="${validation_json}"
         fi
 
-        # Use discovery-derived trigger_command if available
-        if [[ -n "${existing_cmd}" ]]; then
-            output=$(echo "${output}" | jq --arg cmd "${existing_cmd}" '. + {trigger_command: $cmd}')
-        fi
-
-        echo "${output}"
+        echo "${triage_json}" | jq \
+            --arg mode "triage" \
+            --argjson stale "${is_stale}" \
+            --arg stale_reason "${stale_reason}" \
+            --argjson disc "${disc_arg}" \
+            --argjson val "${val_arg}" \
+            --arg cmd "${existing_cmd}" \
+            '. + {mode: $mode, stale: $stale}
+            | if $stale then . + {stale_reason: $stale_reason} else . end
+            | if $disc != null then . + {discovery: $disc} else . end
+            | if $val != null then . + {validation: $val} else . end
+            | if $cmd != "" then . + {trigger_command: $cmd} else . end'
         exit 0
     fi
 
