@@ -15,6 +15,8 @@ set -euo pipefail
 #
 # Output (stdout): JSON array of job objects with "artifacts_dir" added:
 #   [{"job":"...","url":"...","build_id":"...","artifacts_dir":"/tmp/.../artifacts/BUILD_ID"}, ...]
+# Jobs whose download failed are kept with "artifacts_dir": "" and
+# "download_error": "artifact download failed" so they are never silently lost.
 #
 # Progress/errors: stderr
 
@@ -162,13 +164,14 @@ main() {
 
     echo "Done: ${ok} downloaded/cached, ${fail} failed." >&2
 
-    # Exclude failed downloads, then add artifacts_dir
-    local output_json="${jobs_json}"
-    while IFS= read -r bid; do
-        [[ -z "${bid}" ]] && continue
-        output_json=$(echo "${output_json}" | jq --arg id "${bid}" '[.[] | select(.build_id != $id)]')
-    done <<< "${failed_ids}"
-    echo "${output_json}" | jq --arg workdir "${WORKDIR}" '[.[] | . + {artifacts_dir: ($workdir + "/artifacts/" + .build_id)}]'
+    # Keep failed downloads in the list (marked) so downstream reporting
+    # never loses a detected job; only successful jobs get an artifacts_dir.
+    local failed_json
+    failed_json=$(printf '%s\n' "${failed_ids}" | jq -R -s '[split("\n")[] | select(length > 0)]')
+    echo "${jobs_json}" | jq --arg workdir "${WORKDIR}" --argjson failed "${failed_json}" '
+        [.[] | if ((.build_id // "") as $b | $failed | index($b))
+           then . + {artifacts_dir: "", download_error: "artifact download failed"}
+           else . + {artifacts_dir: ($workdir + "/artifacts/" + .build_id)} end]'
 }
 
 main "${@}"
