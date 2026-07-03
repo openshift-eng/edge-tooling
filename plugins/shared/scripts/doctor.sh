@@ -338,10 +338,15 @@ cmd_finalize() {
             echo "  WARNING: aggregation failed for ${release}" >&2
     done
 
-    # Aggregate PRs (if job files exist)
-    local pr_files
+    # Aggregate PRs when per-job report files exist OR failed PR jobs were
+    # detected — even if every analysis went missing, the summary must list
+    # the detected jobs as unanalyzed rather than not exist at all.
+    local pr_files pr_detected=""
     pr_files=$(find "${WORKDIR}/jobs" -name 'prs-job-*.txt' 2>/dev/null | head -1)
-    if [[ -n "${pr_files}" ]]; then
+    if jq -e 'length > 0' "${WORKDIR}/jobs/prs-jobs.json" >/dev/null 2>&1; then
+        pr_detected="yes"
+    fi
+    if [[ -n "${pr_files}" ]] || [[ -n "${pr_detected}" ]]; then
         echo "=== Aggregating PRs ===" >&2
         python3 "${SCRIPT_DIR}/aggregate.py" \
             --prs --workdir "${WORKDIR}" >/dev/null || \
