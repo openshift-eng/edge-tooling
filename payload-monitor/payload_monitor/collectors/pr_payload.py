@@ -73,7 +73,7 @@ def _list_gcs_dir(gcs_path: str) -> list[str]:
             capture_output=True, text=True, timeout=30,
         )
         if result.returncode == 0:
-            return [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
+            return [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
         return []
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return []

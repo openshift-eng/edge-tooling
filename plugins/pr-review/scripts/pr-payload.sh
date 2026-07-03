@@ -65,7 +65,7 @@ find_payload_monitor_dir() {
 
     for candidate in "${candidates[@]}"; do
         if [[ -d "${candidate}" ]]; then
-            echo "$(cd "${candidate}" && pwd)"
+            (cd "${candidate}" && pwd)
             return
         fi
     done
