@@ -1256,20 +1256,20 @@ details pre {
 .doctor-anchor-link:hover { color: var(--accent); }
 
 .doctor-severity { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
-.doctor-severity.critical { background: rgba(248,81,73,0.2); color: var(--red); }
-.doctor-severity.high { background: rgba(219,109,40,0.2); color: var(--orange); }
-.doctor-severity.medium { background: rgba(210,153,34,0.2); color: var(--yellow); }
-.doctor-severity.low { background: rgba(63,185,80,0.2); color: var(--green); }
+.doctor-severity-critical { background: rgba(248,81,73,0.2); color: var(--red); }
+.doctor-severity-high { background: rgba(219,109,40,0.2); color: var(--orange); }
+.doctor-severity-medium { background: rgba(210,153,34,0.2); color: var(--yellow); }
+.doctor-severity-low { background: rgba(63,185,80,0.2); color: var(--green); }
 .doctor-ftype { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
-.doctor-ftype.test { background: rgba(88,166,255,0.15); color: var(--accent); }
-.doctor-ftype.build { background: rgba(188,140,255,0.15); color: var(--purple); }
-.doctor-ftype.infra { background: rgba(219,109,40,0.15); color: var(--orange); }
+.doctor-ftype-test { background: rgba(88,166,255,0.15); color: var(--accent); }
+.doctor-ftype-build { background: rgba(188,140,255,0.15); color: var(--purple); }
+.doctor-ftype-infra { background: rgba(219,109,40,0.15); color: var(--orange); }
 
 .doctor-root-cause { background: rgba(210,153,34,0.1); border-left: 3px solid var(--yellow); padding: 8px 12px; margin: 8px 0; font-size: 13px; border-radius: 0 4px 4px 0; }
 .doctor-confidence { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; margin-left: 6px; vertical-align: middle; }
-.doctor-confidence.high { background: rgba(63,185,80,0.15); color: var(--green); }
-.doctor-confidence.medium { background: rgba(210,153,34,0.15); color: var(--yellow); }
-.doctor-confidence.low { background: rgba(248,81,73,0.15); color: var(--red); }
+.doctor-confidence-high { background: rgba(63,185,80,0.15); color: var(--green); }
+.doctor-confidence-medium { background: rgba(210,153,34,0.15); color: var(--yellow); }
+.doctor-confidence-low { background: rgba(248,81,73,0.15); color: var(--red); }
 
 .doctor-scenarios { margin: 6px 0; font-size: 13px; }
 .doctor-scenario-chip { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; background: var(--surface-hover); color: var(--text-muted); margin: 0 3px 2px 0; font-family: monospace; }
