@@ -60,6 +60,21 @@ Based on the results, suggest:
 
 > **Note:** To re-trigger, copy the original `/payload-job <periodic-job-name>` comment from the PR — not just `/payload-job` alone, and never `/retest` (which only re-runs regular CI checks).
 
+## Error Handling
+
+If `payload-monitor` exits non-zero, report the error to the user:
+
+- **Payload page expired or unavailable**: HTTP error fetching the page. Ask the user to verify the URL is still valid (payload runs expire after a few days).
+- **No jobs found on the page**: The URL resolved but contained no Prow job links. The run may still be initializing — suggest waiting a few minutes and retrying.
+- **`gh` auth failure**: GitHub API access rejected. Ask the user to run `gh auth login` and re-authenticate.
+- **`gsutil` auth failure**: GCS artifact lookups fail; individual jobs show as `UNKNOWN`. Ask the user to run `gcloud auth login` and retry.
+- **Tool error (non-zero exit)**: Re-run with `--verbose` to see diagnostic output, then report the error message to the user.
+
+Between phases, guard checks:
+1. After fetching the payload page — verify job URLs were found before proceeding.
+2. After GCS lookups — note any `UNKNOWN` results (auth or connectivity issue) before classifying.
+3. After fetching the PR diff — if `gh` returns no diff, warn the user and skip classification (do not auto-classify as FLAKY).
+
 ## Prerequisites
 
 - `python3` with `requests`, `click` installed
