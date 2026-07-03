@@ -163,7 +163,7 @@ def main(
             jobs = fetch_pr_payload_run(pr_payload_url)
         except requests.RequestException as exc:
             click.echo(f"Error fetching payload page: {exc}", err=True)
-            raise SystemExit(1)
+            raise SystemExit(1) from exc
         if not jobs:
             logger.error("No jobs found at the provided URL")
             raise SystemExit(1)
