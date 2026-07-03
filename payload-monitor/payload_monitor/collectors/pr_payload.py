@@ -10,6 +10,8 @@ import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
+import requests
+
 from ..models import (
     FailingTest,
     FailureVerdict,
@@ -160,8 +162,12 @@ def _fetch_single_job(prow_url: str) -> PRPayloadJob:
 def fetch_pr_payload_run(url: str, max_workers: int = 4) -> list[PRPayloadJob]:
     """Fetch a pr-payload-tests run URL and return all jobs with results."""
     logger.info(f"Fetching PR payload run: {url}")
-    resp = _session.get(url)
-    resp.raise_for_status()
+    try:
+        resp = _session.get(url)
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        logger.warning("Payload page fetch failed: %s", exc)
+        return []
 
     prow_urls = _parse_prow_urls(resp.text)
     if not prow_urls:

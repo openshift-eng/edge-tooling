@@ -3,6 +3,8 @@ name: edge-ocp-ci:pr-payload-triage
 description: "Triage a PR payload test run — classify failures as PR-caused vs. flaky by matching failing tests against the PR diff"
 argument-hint: "<pr-payload-url> <pr-ref>"
 user-invocable: true
+allowed-tools:
+  - Bash
 ---
 
 # PR Payload Triage Skill
@@ -52,7 +54,7 @@ The tool prints a markdown triage report to stdout. Present it to the user as-is
 
 Based on the results, suggest:
 
-- **All FLAKY**: "All failures are unrelated to your PR. Safe to re-trigger." Then find the original `/payload-job` trigger comment on the PR and suggest re-posting it verbatim.
+- **All FLAKY**: "All failures are unrelated to your PR. Safe to re-trigger." Then find the original `/payload-job` trigger comment on the PR and ask the user to confirm before posting it as a PR comment; never auto-post.
 - **Some PR CAUSED**: "Job X failed in a test your PR modified. Check the error and Prow link before re-triggering."
 - **All PR CAUSED**: "All failures are in tests your PR touches. Investigate before re-triggering."
 

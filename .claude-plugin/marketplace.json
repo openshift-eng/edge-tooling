@@ -22,7 +22,7 @@
       "name": "edge-ocp-ci",
       "source": "./plugins/edge-ocp-ci",
       "description": "Edge OCP Payload Monitor — monitor OpenShift nightly payloads for edge topology (SNO/TNA/TNF) failures with AI-enriched analysis",
-      "version": "1.0.2"
+      "version": "1.2.0"
     },
     {
       "name": "edge-scrum",
@@ -88,7 +88,7 @@
       "name": "pr-review",
       "source": "./plugins/pr-review",
       "description": "PR lifecycle toolkit — vet findings, triage CodeRabbit reviews, filter noise, and autonomous yolo-agent for CI monitoring and auto-fixes",
-      "version": "2.0.1"
+      "version": "2.1.0"
     },
     {
       "name": "skills-review",

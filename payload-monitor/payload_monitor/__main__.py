@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
+import requests
 import click
 
 from .analyzer import analyze
@@ -138,6 +139,8 @@ def main(
             print(format_discovery_json(result))
         else:
             print(format_discovery_markdown(result))
+        if result.error:
+            raise SystemExit(1)
         return
 
     # --- PR payload triage mode ---
@@ -156,7 +159,11 @@ def main(
             format_triage_markdown,
         )
 
-        jobs = fetch_pr_payload_run(pr_payload_url)
+        try:
+            jobs = fetch_pr_payload_run(pr_payload_url)
+        except requests.RequestException as exc:
+            click.echo(f"Error fetching payload page: {exc}", err=True)
+            raise SystemExit(1)
         if not jobs:
             logger.error("No jobs found at the provided URL")
             raise SystemExit(1)

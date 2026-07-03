@@ -87,8 +87,9 @@ def _get_pr_branch(org: str, repo: str, number: str) -> str:
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
+        logger.warning("gh pr view failed for %s/%s#%s: %s", org, repo, number, result.stderr.strip())
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
+        logger.warning("gh pr view timed out or gh not found for %s/%s#%s", org, repo, number)
     return "main"
 
 

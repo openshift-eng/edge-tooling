@@ -161,7 +161,7 @@ main() {
     existing_cmd=$(fetch_trigger_command "${comments}" 2>/dev/null || true)
     if [[ -n "${existing_cmd}" && -n "${discovery_json}" ]]; then
         local suggestion_names
-        suggestion_names=$(echo "${discovery_json}" | jq -r '.suggestions[].as_name' 2>/dev/null || true)
+        suggestion_names=$(echo "${discovery_json}" | jq -r '.suggestions[].periodic_name' 2>/dev/null || true)
 
         local job_name
         job_name=$(echo "${existing_cmd}" | sed 's|^/payload-job ||')

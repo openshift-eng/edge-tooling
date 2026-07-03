@@ -279,9 +279,9 @@ The JSON contains:
 When `stale: false` — results are current. Present the triage verdicts
 as the Payload Track report. **Do NOT reinterpret, override, or
 second-guess the verdicts.** The tool's diff-aware classification is
-authoritative. When suggesting a re-trigger, post the exact
-`trigger_command` string as a PR comment — NOT just `/payload-job` and
-NOT `/retest`.
+authoritative. When suggesting a re-trigger, ask the user to confirm
+before posting the exact `trigger_command` string as a PR comment.
+Never auto-post. NOT just `/payload-job` and NOT `/retest`.
 
 When `stale: true` — a new commit was pushed after the payload was
 triggered, so the results are from old code. Present the old triage
