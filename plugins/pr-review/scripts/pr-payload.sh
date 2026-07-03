@@ -128,12 +128,9 @@ run_triage() {
     triage_output=$(cd "${pm_dir}" && python3 -m payload_monitor \
         --pr-payload-url "${payload_url}" \
         --pr "${pr_ref}" \
-        --format json 2>/dev/null) \
-        || die "payload-monitor triage failed"
+        --format json 2>/dev/null) || return 1
 
-    echo "${triage_output}" | jq -c '.' >/dev/null 2>&1 \
-        || die "payload-monitor returned invalid JSON"
-
+    echo "${triage_output}" | jq -c '.' >/dev/null 2>&1 || return 1
     echo "${triage_output}"
 }
 
@@ -211,8 +208,13 @@ main() {
 
         # Triage mode — we have actual payload run results
         local triage_json
-        triage_json=$(run_triage "${payload_url}" "${pr_ref}" "${pm_dir}")
+        if ! triage_json=$(run_triage "${payload_url}" "${pr_ref}" "${pm_dir}"); then
+            # Triage failed (expired page, no jobs found) — fall through to discovery
+            payload_url=""
+        fi
+    fi
 
+    if [[ -n "${payload_url}" ]]; then
         # Build combined output in a single jq call
         local disc_arg="null"
         if [[ -n "${discovery_json}" ]]; then
