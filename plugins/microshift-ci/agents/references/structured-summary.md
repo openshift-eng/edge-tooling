@@ -52,7 +52,6 @@ Append after all prose. **Both markers are required** — the parser skips the r
 | `confidence` | `high` / `medium` / `low` (see rules below) |
 | `analysis_gaps` | Array of strings naming missing evidence. Empty `[]` when nothing skipped |
 | `scenarios` | Array of scenario names where this failure occurred. Empty `[]` for non-scenario jobs |
-| `missing_patterns` | (optional) Array of `{"file_type", "grep_pattern", "reason"}` for patterns to add to `extract-evidence.py` |
 
 ### CONFIDENCE rules
 

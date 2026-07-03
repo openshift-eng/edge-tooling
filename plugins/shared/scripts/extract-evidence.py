@@ -431,7 +431,7 @@ def _extract_rf_failures(path):
     results = []
     for h in hits:
         line_num, text = _parse_grep_line(h)
-        results.append({"line": line_num, "text": text[:300]})
+        results.append({"file": path, "line": line_num, "text": text[:300]})
     return results
 
 
@@ -443,7 +443,7 @@ def _extract_boot_and_run_alerts(path):
             line_num, text = _parse_grep_line(h)
             if not text or re.match(r"^\d+:\s*#", text):
                 continue
-            alerts.append({"pattern": label, "line": line_num, "text": text[:300]})
+            alerts.append({"pattern": label, "file": path, "line": line_num, "text": text[:300]})
     return alerts
 
 
@@ -463,6 +463,9 @@ def _extract_journal_alerts(journal_path):
         for h in hits:
             line_num, text = _parse_grep_line(h)
             entries.append({
+                # Alerts from all of a scenario's journals are merged, so
+                # each entry must carry its own file for unambiguous citation.
+                "file": journal_path,
                 "line": line_num,
                 "text": text[:300],
                 "timestamp": _parse_journal_timestamp(text),

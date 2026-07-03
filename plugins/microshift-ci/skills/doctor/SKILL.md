@@ -123,7 +123,7 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
    | Placeholder | Value |
    |---|---|
    | `{EVIDENCE_PACK}` | `<WORKDIR>/evidence/evidence-<BUILD_ID>.json` |
-   | `{JOB_NAME}` | `job` field (for PR jobs, append ` (PR #<PR>)`) |
+   | `{JOB_NAME}` | `job` field (for PR jobs, append a space and `(PR #<PR>)`) |
    | `{JOB_URL}` | `url` field |
    | `{OUTPUT_FILE}` | Release: `<WORKDIR>/jobs/release-<RELEASE>-job-<N>-<JOB_ID>.txt`. PR: `<WORKDIR>/jobs/prs-job-<N>-pr<PR>-<JOB_NAME_SUFFIX>.txt` |
 
@@ -142,21 +142,29 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
    ```text
    Agent: subagent_type=general_purpose, prompt="Fix citation errors in a CI analysis report.
 
-   The report at <FAILED_FILE> has causal-chain links that cite the evidence JSON,
-   general knowledge, or lack file paths. The specific errors are:
+   The report at <FAILED_FILE> has causal-chain links whose citations failed
+   verification against the actual artifact files. The specific errors are:
    <PASTE ERRORS FOR THIS FILE FROM VALIDATION OUTPUT>
 
-   Fix the report:
+   Fix the report by RE-GROUNDING each flagged link in the real artifacts:
    1. Read the report at <FAILED_FILE>
-   2. For each flagged causal-chain link, find the actual artifact file and line number.
-      The artifacts are under <ARTIFACTS_DIR>. Use Grep to locate the quoted text in the
-      artifact files. The evidence pack at <WORKDIR>/evidence/evidence-<BUILD_ID>.json
-      has file and line fields for each extracted alert — use those to map back to real
-      artifact paths.
-   3. If no artifact supports a causal-chain link, remove that link entirely.
+   2. For each flagged link:
+      - 'found at line N' → re-read that line in the cited file; if it supports
+        the cause, update the citation to that line.
+      - 'cited file not found' → Grep the quoted text under <ARTIFACTS_DIR> and
+        cite the file:line where it actually appears. The evidence pack at
+        <WORKDIR>/evidence/evidence-<BUILD_ID>.json has file and line fields for
+        each extracted alert.
+      - 'quote not found' → re-read the cited file around the cited line and
+        replace the quote with the verbatim text that supports the cause.
+   3. NEVER delete a link merely to pass validation. Only if a real search finds
+      no supporting artifact: remove the link, add the unverified claim to
+      analysis_gaps (e.g. "unverified: <cause>"), and downgrade confidence.
    4. Rewrite the corrected report (BOTH the human-readable Causal Chain section AND the
       STRUCTURED SUMMARY JSON causal_chain array) back to <FAILED_FILE>.
-   5. Reply with EXACTLY: FIXED <FAILED_FILE>"
+   5. Verify your fix: python3 plugins/microshift-ci/scripts/validate-reports.py <FAILED_FILE>
+      must print OK. Iterate until it does.
+   6. Reply with EXACTLY: FIXED <FAILED_FILE>"
    ```
 
    Launch all fix agents in a single message (parallel). Then proceed to Step 3.
