@@ -21,6 +21,7 @@ Accepts a comma-separated list of MicroShift release versions, runs analysis for
 ## Arguments
 
 - `<ARGUMENTS>` (required): Comma-separated list of release versions (e.g., `4.19,4.20,4.21,4.22`)
+- `--prepared` (optional, used by CI): the caller has already run the deterministic preparation phases (`prepare`, `graphs`, `evidence`) and will run `finalize` itself. Skip Steps 1–1c and Step 4 — start at the Step 1d plan script and stop after Step 3.
 
 ## Work Directory
 
@@ -31,6 +32,8 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 ```
 
 ## Implementation Steps
+
+With `--prepared`: run only Step 1d, Step 2, Step 3, and Step 5.
 
 ### Step 1: Prepare — Collect and Download All Artifacts
 
@@ -148,7 +151,9 @@ Produces `<WORKDIR>/evidence/evidence-<BUILD_ID>.json` per job — the structure
 
 ### Step 4: Finalize — Aggregate and Generate HTML Report
 
-**IMPORTANT**: This step is MANDATORY. The task is incomplete without it. You MUST run this even if previous steps produced errors.
+Skip this step when `--prepared` — the CI step runs finalize itself after this session ends.
+
+**IMPORTANT**: Otherwise this step is MANDATORY. The task is incomplete without it. You MUST run this even if previous steps produced errors.
 
 ```text
 bash plugins/microshift-ci/scripts/doctor.sh finalize --component microshift --workdir <WORKDIR> <ARGUMENTS>
@@ -158,7 +163,7 @@ Aggregates per-release and PR summaries and generates `report-microshift-ci-doct
 
 ### Step 5: Report Completion
 
-Display the path to the generated HTML file and summarize: failed job counts per release, analysis groups (agents vs deterministic), rebase PR status, and bug correlation results.
+Display the path to the generated HTML file and summarize: failed job counts per release, analysis groups (agents vs deterministic), rebase PR status, and bug correlation results. With `--prepared`, there is no HTML yet — summarize the analysis and note that the caller generates the report.
 
 ## Example
 
