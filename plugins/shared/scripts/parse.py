@@ -84,6 +84,7 @@ def parse_structured_summary(filepath):
             "finished": data.get("finished", ""),
             "remediation": data.get("remediation", ""),
             "confidence": data.get("confidence", ""),
+            "fingerprint": data.get("fingerprint", ""),
             "causal_chain": [
                 link for link in (data.get("causal_chain") or [])
                 if isinstance(link, dict) and "cause" in link
@@ -174,19 +175,35 @@ def cluster_by_similarity(items, key_fn):
 
 
 def group_by_signature(jobs):
-    """Two-pass grouping: first by step_name, then by signature similarity.
+    """Group failure entries, preferring the deterministic fingerprint.
 
-    Grouping by step_name first prevents jobs from different CI steps
-    (e.g. conformance vs metal-tests) from being merged together even
-    when their error signatures share enough tokens to exceed the
-    similarity threshold.
+    Entries that carry a `fingerprint` (computed by extract-evidence.py
+    from deterministic artifact facts and injected at fan-out) group by
+    exact key — identical failures across releases, PRs, and runs land in
+    the same bucket by construction.
+
+    Entries without a fingerprint (legacy reports) fall back to two-pass
+    grouping: first by step_name, then by signature similarity.  Grouping
+    by step_name first prevents jobs from different CI steps (e.g.
+    conformance vs metal-tests) from being merged together even when
+    their error signatures share enough tokens to exceed the similarity
+    threshold.
     """
-    by_step = {}
+    by_fingerprint = {}
+    legacy = []
     for job in jobs:
+        fp = job.get("fingerprint", "")
+        if fp:
+            by_fingerprint.setdefault(fp, []).append(job)
+        else:
+            legacy.append(job)
+
+    all_groups = list(by_fingerprint.values())
+
+    by_step = {}
+    for job in legacy:
         step = normalize_step_name(job.get("step_name", ""))
         by_step.setdefault(step, []).append(job)
-
-    all_groups = []
     for step_jobs in by_step.values():
         all_groups.extend(cluster_by_similarity(step_jobs, grouping_text))
     return all_groups

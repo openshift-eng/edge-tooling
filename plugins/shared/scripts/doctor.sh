@@ -516,6 +516,57 @@ cmd_evidence() {
 }
 
 # ---------------------------------------------------------------------------
+# plan
+# ---------------------------------------------------------------------------
+
+cmd_plan() {
+    while [[ ${#} -gt 0 ]]; do
+        case "${1}" in
+            --workdir) WORKDIR="${2}"; shift 2 ;;
+            --component) COMPONENT="${2}"; shift 2 ;;
+            -*) echo "Unknown option: ${1}" >&2; return 1 ;;
+            *) echo "Unknown argument: ${1}" >&2; return 1 ;;
+        esac
+    done
+
+    [[ -z "${COMPONENT}" ]] && { echo "Error: --component is required" >&2; return 1; }
+
+    WORKDIR="${WORKDIR:-/tmp/${COMPONENT}-ci-claude-workdir.$(date +%y%m%d)}"
+
+    local template="${SCRIPT_DIR}/../agents/analyze-evidence.md"
+    if [[ ! -f "${template}" ]]; then
+        echo "Error: agent template not found: ${template}" >&2
+        return 1
+    fi
+
+    echo "=== Planning analysis groups ===" >&2
+    python3 "${SCRIPT_DIR}/plan-analysis.py" plan \
+        --workdir "${WORKDIR}" --template "${template}"
+}
+
+# ---------------------------------------------------------------------------
+# fanout
+# ---------------------------------------------------------------------------
+
+cmd_fanout() {
+    while [[ ${#} -gt 0 ]]; do
+        case "${1}" in
+            --workdir) WORKDIR="${2}"; shift 2 ;;
+            --component) COMPONENT="${2}"; shift 2 ;;
+            -*) echo "Unknown option: ${1}" >&2; return 1 ;;
+            *) echo "Unknown argument: ${1}" >&2; return 1 ;;
+        esac
+    done
+
+    [[ -z "${COMPONENT}" ]] && { echo "Error: --component is required" >&2; return 1; }
+
+    WORKDIR="${WORKDIR:-/tmp/${COMPONENT}-ci-claude-workdir.$(date +%y%m%d)}"
+
+    echo "=== Fanning out group reports to per-job files ===" >&2
+    python3 "${SCRIPT_DIR}/plan-analysis.py" fanout --workdir "${WORKDIR}"
+}
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -526,6 +577,8 @@ usage() {
     echo "  prepare  --component C [--workdir DIR] <releases> [--rebase] [--repo ORG/NAME]  Collect jobs, download artifacts, optional source checkout" >&2
     echo "  graphs   --component C [--workdir DIR] [--timezone TZ]       Generate PCP performance graphs" >&2
     echo "  evidence --component C [--workdir DIR]                        Extract structured evidence from artifacts" >&2
+    echo "  plan     --component C [--workdir DIR]                        Group jobs by fingerprint, render agent prompts" >&2
+    echo "  fanout   --component C [--workdir DIR]                        Explode group reports into per-job report files" >&2
     echo "  finalize --component C [--workdir DIR] <releases>             Aggregate results and generate HTML" >&2
     echo "  refresh  --component C [--workdir DIR] [--ignore KEY1,KEY2,...] <releases>  Regenerate HTML from existing workdir data" >&2
     echo "" >&2
@@ -547,6 +600,8 @@ main() {
         prepare)  cmd_prepare "${@}" ;;
         graphs)   cmd_graphs "${@}" ;;
         evidence) cmd_evidence "${@}" ;;
+        plan)     cmd_plan "${@}" ;;
+        fanout)   cmd_fanout "${@}" ;;
         finalize) cmd_finalize "${@}" ;;
         refresh)  cmd_refresh "${@}" ;;
         *) echo "Unknown command: ${cmd}" >&2; usage ;;

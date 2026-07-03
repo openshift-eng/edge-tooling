@@ -109,33 +109,45 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 
 3. If the script fails for some jobs, note the errors but continue — agents can fall back to raw artifacts.
 
-### Step 2: Analyze Each Job
+### Step 1d: Plan Analysis Groups
 
-**Goal**: Get detailed root cause analysis for each failed job using evidence packs and pre-downloaded artifacts.
+**Goal**: Deterministically group failed jobs by failure fingerprint so each distinct failure is analyzed exactly once.
 
 **Actions**:
 
-1. Use the JSON summary output from Step 1 to build agent prompts. Do NOT read the job JSON files into the main conversation — the prepare script already printed all job details (artifacts_dir, build_id, job name) and agents receive artifacts_dir directly in their prompt.
-2. Read `plugins/microshift-ci/agents/analyze-evidence.md` once. For **every** failed job across all releases and PRs, substitute the `{VARIABLE}` placeholders and launch a separate **Agent** (using the `Agent` tool). For PR jobs, only launch agents for jobs with FAILURE status.
-
-   Substitute these placeholders from the prepare script's JSON output (`job`, `url`, `build_id` fields):
-
-   | Placeholder | Value |
-   |---|---|
-   | `{EVIDENCE_PACK}` | `<WORKDIR>/evidence/evidence-<BUILD_ID>.json` |
-   | `{JOB_NAME}` | `job` field (for PR jobs, append a space and `(PR #<PR>)`) |
-   | `{JOB_URL}` | `url` field |
-   | `{OUTPUT_FILE}` | Release: `<WORKDIR>/jobs/release-<RELEASE>-job-<N>-<JOB_ID>.txt`. PR: `<WORKDIR>/jobs/prs-job-<N>-pr<PR>-<JOB_NAME_SUFFIX>.txt` |
-
-3. Launch **ALL** agents (all releases + PRs) in a **single message** as **foreground** agents (do NOT use `run_in_background`). Foreground agents in the same message run concurrently — this is just as fast as background agents but keeps your turn active until all complete.
-4. Say "Analyzing N jobs in parallel..." in your message text alongside the Agent tool calls.
-5. When all agents return, **validate all output files**:
+1. Run the plan script:
 
    ```text
-   python3 plugins/microshift-ci/scripts/validate-reports.py <WORKDIR>/jobs/release-*-job-*.txt <WORKDIR>/jobs/prs-job-*.txt
+   bash plugins/microshift-ci/scripts/doctor.sh plan --component microshift --workdir <WORKDIR>
    ```
 
-   If the script exits 0 (all pass), proceed to Step 3.
+2. The script deterministically:
+   - Groups all failed jobs (releases + PRs) by the failure fingerprint from their evidence packs
+   - Writes template reports directly for pure-infrastructure and no-failure groups — those need NO agent
+   - Renders a fully substituted agent prompt file per remaining group under `<WORKDIR>/prompts/`
+   - Writes `<WORKDIR>/analysis-plan.json` and prints a JSON summary whose `agent_groups` array lists each group's `prompt_file` and `report_file`
+
+### Step 2: Analyze Each Group
+
+**Goal**: Get detailed root cause analysis for each failure group using evidence packs and pre-downloaded artifacts.
+
+**Actions**:
+
+1. For **every** entry in the plan summary's `agent_groups`, launch a separate **Agent** (using the `Agent` tool) with exactly this prompt — the prompt files are fully pre-rendered, do NOT read or modify them yourself:
+
+   ```text
+   Read <PROMPT_FILE> and follow its instructions exactly.
+   ```
+
+2. Launch **ALL** group agents in a **single message** as **foreground** agents (do NOT use `run_in_background`). Foreground agents in the same message run concurrently — this is just as fast as background agents but keeps your turn active until all complete.
+3. Say "Analyzing N failure groups (M jobs) in parallel..." in your message text alongside the Agent tool calls. If `agent_groups` is empty, skip directly to step 5 (fan-out).
+4. When all agents return, **validate the group reports**:
+
+   ```text
+   python3 plugins/microshift-ci/scripts/validate-reports.py <WORKDIR>/jobs/analysis-group-*.txt
+   ```
+
+   If the script exits 0 (all pass), continue to step 5.
 
    If it exits 1, it prints a `--- VALIDATION FAILURES ---` block listing each failed file and its errors. For each failed file, launch a **fix agent**:
 
@@ -146,15 +158,16 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
    verification against the actual artifact files. The specific errors are:
    <PASTE ERRORS FOR THIS FILE FROM VALIDATION OUTPUT>
 
-   Fix the report by RE-GROUNDING each flagged link in the real artifacts:
-   1. Read the report at <FAILED_FILE>
+   Fix the report by RE-GROUNDING each flagged link in the real artifacts.
+   The group's jobs, evidence packs, and artifacts directories are listed in
+   <PROMPT_FILE>.
+   1. Read the report at <FAILED_FILE> and the job list in <PROMPT_FILE>
    2. For each flagged link:
       - 'found at line N' → re-read that line in the cited file; if it supports
         the cause, update the citation to that line.
-      - 'cited file not found' → Grep the quoted text under <ARTIFACTS_DIR> and
-        cite the file:line where it actually appears. The evidence pack at
-        <WORKDIR>/evidence/evidence-<BUILD_ID>.json has file and line fields for
-        each extracted alert.
+      - 'cited file not found' → Grep the quoted text under the group's
+        artifacts directories and cite the file:line where it actually appears.
+        The evidence packs have file and line fields for each extracted alert.
       - 'quote not found' → re-read the cited file around the cited line and
         replace the quote with the verbatim text that supports the cause.
    3. NEVER delete a link merely to pass validation. Only if a real search finds
@@ -167,7 +180,13 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
    6. Reply with EXACTLY: FIXED <FAILED_FILE>"
    ```
 
-   Launch all fix agents in a single message (parallel). Then proceed to Step 3.
+   Launch all fix agents in a single message (parallel). Then continue to step 5.
+
+5. **Fan out** the group reports into the per-job report files consumed by aggregation and bug correlation:
+
+   ```text
+   bash plugins/microshift-ci/scripts/doctor.sh fanout --component microshift --workdir <WORKDIR>
+   ```
 
 6. Proceed to Step 3. Do NOT stop or end your turn between Step 2 and Step 3.
 
@@ -267,7 +286,7 @@ HTML report generated: <WORKDIR>/report-microshift-ci-doctor.html
 
 ## Related Skills and Agents
 
-- **agents/analyze-evidence.md**: Evidence-aware job analysis agent (used by Step 2 — read, substitute, spawn)
+- **agents/analyze-evidence.md**: Evidence-aware group analysis agent template (rendered per group by the Step 1d plan script; spawned in Step 2)
 - **microshift-ci:prow-job**: Standalone job analysis from URL or artifacts directory (for manual use)
 - **microshift-ci:create-bugs**: Bug correlation and creation (used in Step 3; can also be run with `--create` after this command)
 - **microshift-ci:doctor-refresh**: Regenerate the HTML report from existing data (e.g., after `/microshift-ci:create-bugs --create`)
@@ -277,8 +296,9 @@ HTML report generated: <WORKDIR>/report-microshift-ci-doctor.html
 - **Deterministic scripts** handle: data collection, artifact download, evidence extraction, aggregation, HTML generation
 - **LLM agents** handle: per-job root cause analysis (Step 2), Jira bug search and open bugs query (Step 3)
 - Step 1c evidence extraction pre-processes all artifacts so Step 2 agents (from `plugins/microshift-ci/agents/analyze-evidence.md`) receive structured evidence packs and can skip exploratory log scanning
+- Step 1d groups jobs by deterministic failure fingerprint: one agent per distinct failure (not per job), pure-infrastructure and no-failure groups resolved without any agent, and per-job report files produced by the deterministic fan-out in Step 2
 - `/microshift-ci:doctor-refresh` regenerates the HTML report from existing data. Use it after `/microshift-ci:create-bugs --create` to include newly created bugs
-- Step 2 agents (per-job analysis) are launched in a single parallel wave
+- Step 2 agents (per-group analysis) are launched in a single parallel wave
 - Step 3 uses a single create-bugs agent with all sources (releases + rebase) comma-separated
 - The `prepare` script downloads all artifacts upfront so analysis agents use local paths (no redundant downloads)
 - The `prepare` script also clones the MicroShift source to `<WORKDIR>/src/microshift` with per-release worktrees (`--repo openshift/microshift`); clone failure is non-fatal — agents record the absence in `analysis_gaps` and proceed

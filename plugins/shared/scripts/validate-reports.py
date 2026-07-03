@@ -86,11 +86,12 @@ def _candidate_roots(workdir, build_id):
     build_dir = os.path.join(artifacts_root, build_id) if build_id else ""
     if build_dir and os.path.isdir(build_dir):
         roots.append(build_dir)
-    elif verifiable:
-        # Unknown or missing build id — try every downloaded build.
+    if verifiable:
+        # Group reports may cite artifacts of any member job, so all
+        # downloaded builds are candidate roots (own build dir first).
         roots.extend(
             d for d in sorted(glob_mod.glob(os.path.join(artifacts_root, "*")))
-            if os.path.isdir(d)
+            if os.path.isdir(d) and d != build_dir
         )
     for src_dir in sorted(glob_mod.glob(os.path.join(workdir, "src", "*"))):
         if os.path.isdir(src_dir):

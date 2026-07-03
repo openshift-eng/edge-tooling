@@ -1,31 +1,34 @@
 # Analyze Evidence Agent
 
-Analyze a MicroShift Prow CI job from a pre-extracted evidence pack. Your goal is the UNDERLYING root cause, not the first error in the log. Follow the drill-down and causal-chain requirements below, consulting the sosreport and performance graphs when relevant.
+Analyze a group of MicroShift Prow CI jobs that share the same deterministic failure fingerprint — they failed the same way, so ONE analysis covers all of them. Your goal is the UNDERLYING root cause, not the first error in the log. Follow the drill-down and causal-chain requirements below, consulting the sosreport and performance graphs when relevant.
 
 ## Inputs
 
-- `{EVIDENCE_PACK}` — path to evidence pack JSON
-- `{JOB_NAME}` — full Prow job name
-- `{JOB_URL}` — full Prow job URL
-- `{OUTPUT_FILE}` — path to save the analysis report
+Jobs in this group (same failure fingerprint):
+
+{GROUP_JOBS}
+
+Output file for the analysis report: `{OUTPUT_FILE}`
 
 ## Instructions
 
-### 1. Read the evidence pack and references
+### 1. Read the evidence and references
 
-Read `{EVIDENCE_PACK}` and `plugins/microshift-ci/agents/references/microshift-ci-primer.md`.
+Read `plugins/microshift-ci/agents/references/microshift-ci-primer.md` and every evidence pack listed above. The packs describe the same failure in different jobs (often different releases) — note what varies between them (release, OS, scenario set); it constrains the root cause.
+
+If an evidence pack is missing, work from that job's raw artifacts directory instead and record the gap in `analysis_gaps`.
 
 ### 2. Assess the failure
 
-- `infrastructure_indicators.is_infra_failure` true → confirm from matched patterns and anchor error, produce report.
 - `scenario-e2e` → examine each scenario's alerts, failures, and journal. Use `failure_timeline` to distinguish cascade from independent failures.
 - `conformance` → examine `conformance_failures`.
 - `build`/`config`/`rebase` → examine `build_errors`.
-- No `failed_step` and no error indicators → job passed. Severity 1, `infrastructure_failure: false`. Do NOT drill down.
+- `infrastructure_indicators.is_infra_failure` true alongside test evidence → weigh whether infrastructure caused the test failures (shared-hypervisor contention, CI capacity) before blaming product or tests.
+- No failure evidence anywhere → severity 1, `infrastructure_failure: false`, note it in `analysis_gaps`. Do NOT drill down.
 
 ### 3. Drill down
 
-Iterate hypothesis → evidence until the cause is actionable.
+Drill down in the group member with the most complete evidence (journal + sosreport + graphs). Iterate hypothesis → evidence until the cause is actionable. When the group has more than one job, spot-check your conclusion against a second member's evidence pack — if it does not hold there, say so in `analysis_gaps`.
 
 **Mandatory raw-log verification** — BEFORE concluding, even when the evidence pack looks sufficient:
 
@@ -57,6 +60,12 @@ Before producing the report, validate every causal-chain link:
 ### 5. Produce the report
 
 Write the report per `plugins/microshift-ci/agents/references/structured-summary.md`. Include both the human-readable analysis and the `--- STRUCTURED SUMMARY ---` JSON block.
+
+Group handling in the structured summary:
+
+- Emit one entry per INDEPENDENT failure (not per job — the group shares the failures).
+- Fill `job_name`, `job_url`, `release`, `finished` from the FIRST job listed above; tooling fans the report out to every group member and patches these fields per job.
+- Do NOT emit a `fingerprint` field; tooling injects it.
 
 ### 6. Save and reply
 

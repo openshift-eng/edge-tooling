@@ -63,7 +63,7 @@ Do NOT inflate confidence — downstream automation acts on it.
 
 ### RAW_ERROR rules
 
-Used for deterministic grouping. Two runs on the same job MUST produce the same value.
+The verbatim anchor readers use to match the report against logs.
 
 1. **Copy-paste exact error text** — do NOT paraphrase
 2. **Pick ONE error** — the first fatal one
@@ -73,20 +73,19 @@ Used for deterministic grouping. Two runs on the same job MUST produce the same 
 
 ### ROOT_CAUSE rules
 
-Used alongside RAW_ERROR for cross-release deduplication. Same underlying problem across releases MUST produce the same ROOT_CAUSE.
-
 | Field | Purpose |
 |---|---|
 | `error_signature` | WHAT failed (bug titles) |
-| `root_cause` | WHY it failed (dedup) |
-| `raw_error` | Verbatim log text (deterministic anchor) |
+| `root_cause` | WHY it failed (mechanism) |
+| `raw_error` | Verbatim log text (anchor) |
 
-1. **~80 chars max** — short enough for token matching
+1. **~80 chars max**
 2. **Focus on mechanism**, not symptom
-3. **Consistent across releases** — same problem = same text
-4. **Stable terms** — no version numbers, timestamps, or job names
+3. **Stable terms** — no version numbers, timestamps, or job names
 
 Describe the specific mechanism, not architectural generalizations ("framework expects annotation X which MicroShift does not set", not "MicroShift is single-node").
+
+Grouping and cross-release deduplication key on the deterministic failure `fingerprint` injected by tooling — do NOT emit a `fingerprint` field yourself.
 
 ### Multiple independent failures
 

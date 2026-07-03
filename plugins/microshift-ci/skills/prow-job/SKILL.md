@@ -47,13 +47,11 @@ The user argument is: `<ARGUMENTS>`
 
    Produces `<WORKDIR>/evidence/evidence-<BUILD_ID>.json`. The `<BUILD_ID>` is the last path component of `<TMP>`.
 
-4. **Analyze**: Read `plugins/microshift-ci/agents/analyze-evidence.md`. Substitute placeholders:
+4. **Analyze**: Read `plugins/microshift-ci/agents/analyze-evidence.md`. The template is group-oriented; render it for a single-job group by substituting:
 
    | Placeholder | Value |
    |---|---|
-   | `{EVIDENCE_PACK}` | `<WORKDIR>/evidence/evidence-<BUILD_ID>.json` |
-   | `{JOB_NAME}` | job name extracted from URL or directory path |
-   | `{JOB_URL}` | the original URL (or reconstruct from artifacts path) |
+   | `{GROUP_JOBS}` | `- <JOB_NAME> — <JOB_URL>`, then indented lines `evidence pack: <WORKDIR>/evidence/evidence-<BUILD_ID>.json` and `artifacts: <TMP>` |
    | `{OUTPUT_FILE}` | `<WORKDIR>/report-<BUILD_ID>.txt` |
 
    Spawn the agent with the substituted content. When it replies `DONE`, read the output file and present the report to the user.

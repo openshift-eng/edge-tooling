@@ -15,6 +15,7 @@ Usage:
 """
 
 import glob as glob_mod
+import hashlib
 import json
 import os
 import re
@@ -24,9 +25,13 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-EVIDENCE_VERSION = 1
+sys.path.insert(0, SCRIPT_DIR)
+
+from parse import normalize_step_name  # noqa: E402
+
+EVIDENCE_VERSION = 2
+FINGERPRINT_VERSION = 1
 
 
 # ---------------------------------------------------------------------------
@@ -382,8 +387,13 @@ def scan_infra_indicators(artifacts_dir):
         for label, pattern in INFRA_INDICATORS:
             hits = _grep_file(fpath, pattern, max_matches=3)
             if hits:
-                _, text = _parse_grep_line(hits[0])
-                matched.append({"label": label, "file": os.path.basename(fpath), "text": text[:200]})
+                line_num, text = _parse_grep_line(hits[0])
+                matched.append({
+                    "label": label,
+                    "file": os.path.relpath(fpath, artifacts_dir),
+                    "line": line_num,
+                    "text": text[:200],
+                })
 
     return {
         "is_infra_failure": len(matched) > 0,
@@ -866,6 +876,82 @@ def _build_failure_timeline(scenarios, meta):
 
 
 # ---------------------------------------------------------------------------
+# Phase K: Deterministic failure fingerprint
+# ---------------------------------------------------------------------------
+#
+# The fingerprint identifies WHAT failed from deterministic facts only, so
+# that identical failures — across releases, PRs, and repeated runs — group
+# together without relying on LLM-authored text.  It deliberately excludes
+# job names, build ids, releases, and timestamps.
+
+_FP_TIMESTAMP_RES = [
+    re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?"),
+    re.compile(r"[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}"),
+    re.compile(r"\d{2}:\d{2}:\d{2}(\.\d+)?"),
+]
+
+
+def _normalize_fp_text(text):
+    """Normalize log/test text for fingerprinting: drop volatile tokens."""
+    for ts_re in _FP_TIMESTAMP_RES:
+        text = ts_re.sub("<TS>", text)
+    text = re.sub(r"\b[0-9a-f]{8,}\b", "<HEX>", text)   # hashes, pod suffixes
+    text = re.sub(r"\b\d+\.\d+\.\d+[.\d-]*\b", "<VER>", text)  # versions, IPs
+    text = re.sub(r"\b\d{3,}\b", "<N>", text)           # ids, durations, ports
+    return " ".join(text.split()).lower()
+
+
+def compute_fingerprint(job_type, failed_step, infra, scenarios,
+                        conformance_failures, build_errors):
+    failing_tests = sorted({
+        _normalize_fp_text(t["name"])
+        for s in scenarios for t in s.get("test_failures", [])
+    } | {
+        _normalize_fp_text(c["test_name"] or c["message"])
+        for c in conformance_failures
+    })
+    phase_failures = sorted({
+        _normalize_fp_text(name)
+        for s in scenarios for name in s.get("infra_phase", {}).get("failures", [])
+    })
+
+    has_test_evidence = bool(failing_tests or phase_failures)
+
+    # Journal problem categories are a weak signal — only used when nothing
+    # test-level failed (e.g. greenboot death before any test ran).
+    journal_categories = []
+    if not has_test_evidence:
+        journal_categories = sorted({
+            cat
+            for s in scenarios
+            for cat, entries in s.get("journal_alerts", {}).items()
+            if entries and cat in _FAILURE_JOURNAL_CATEGORIES
+        })
+
+    inputs = {
+        "job_type": job_type,
+        "failed_step": normalize_step_name(failed_step.get("name", "")),
+        "infra_labels": sorted({m["label"] for m in infra.get("matched_patterns", [])})
+        if infra.get("is_infra_failure") else [],
+        "failing_tests": failing_tests,
+        "phase_failures": phase_failures,
+        "timeout_cascade": any(s.get("timeout_cascade") for s in scenarios),
+        "greenboot_failure": any(
+            s.get("greenboot_status") == "FAILURE" for s in scenarios
+        ),
+        "journal_categories": journal_categories,
+        "build_error": _normalize_fp_text(build_errors[0]["text"])[:200]
+        if build_errors else "",
+    }
+
+    key = hashlib.sha256(
+        json.dumps(inputs, sort_keys=True).encode()
+    ).hexdigest()[:12]
+
+    return {"version": FINGERPRINT_VERSION, "key": key, "inputs": inputs}
+
+
+# ---------------------------------------------------------------------------
 # Main extraction
 # ---------------------------------------------------------------------------
 
@@ -895,6 +981,9 @@ def extract_evidence(artifacts_dir, workdir):
         build_errors = _extract_errors_from_main_log(artifacts_dir)
 
     failure_timeline = _build_failure_timeline(scenarios, meta)
+    fingerprint = compute_fingerprint(
+        job_type, failed_step, infra, scenarios, conformance_failures, build_errors
+    )
 
     source = extract_source_context(workdir, meta["release"], meta["finished_epoch"])
     pcp_graphs = find_pcp_graphs(workdir, meta["build_id"])
@@ -910,6 +999,7 @@ def extract_evidence(artifacts_dir, workdir):
         **{k: v for k, v in meta.items() if k != "finished_epoch"},
         "artifacts_dir": artifacts_dir,
         "job_type": job_type,
+        "fingerprint": fingerprint,
         "failed_step": failed_step,
         "infrastructure_indicators": infra,
         "scenarios": scenarios,
