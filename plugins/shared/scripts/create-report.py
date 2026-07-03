@@ -1203,6 +1203,50 @@ def _render_bug_links(bug_match):
 # HTML rendering
 # ---------------------------------------------------------------------------
 
+def _render_detected_jobs(anchor_prefix, data):
+    """Render the complete detected failed-jobs list for a release/PR section.
+
+    Every detected failed job appears exactly once: analyzed jobs link to
+    their issue's anchor; jobs from missing_analysis (detected by prepare
+    but never analyzed) are marked with a not-analyzed badge so silent
+    losses in the pipeline are visible in the report.
+    """
+    issues = data.get("issues") or []
+    missing = data.get("missing_analysis") or []
+
+    seen = set()
+    rows = []
+    for issue in issues:
+        anchor = f'{anchor_prefix}-{issue["number"]}'
+        for job in issue.get("affected_jobs", []):
+            key = job.get("build_id") or job.get("url") or job.get("name")
+            if key in seen:
+                continue
+            seen.add(key)
+            date = f'<span class="job-date">[{_e(job["date"][:10])}]</span> ' if job.get("date") else ""
+            name = _e(job.get("name", ""))
+            link = f'<a href="{_e(job["url"])}" target="_blank">{name}</a>' if job.get("url") else name
+            rows.append(f'                    <li>{date}{link} &mdash; '
+                        f'<a href="#{anchor}">Issue {issue["number"]}</a></li>')
+    for job in missing:
+        date = f'<span class="job-date">[{_e(job["finished"][:10])}]</span> ' if job.get("finished") else ""
+        name = _e(job.get("job_name", ""))
+        link = f'<a href="{_e(job["job_url"])}" target="_blank">{name}</a>' if job.get("job_url") else name
+        reason = _e(job.get("reason", "analysis missing"))
+        rows.append(f'                    <li>{date}{link} '
+                    f'<span class="badge badge-nodata">not analyzed &mdash; {reason}</span></li>')
+
+    if not rows:
+        return []
+    total = data.get("total_failed", len(rows))
+    return (
+        [f'            <p><strong>Detected failed jobs ({total})</strong></p>',
+         '                <ul class="detected-jobs">']
+        + rows
+        + ['                </ul>']
+    )
+
+
 def render_release_section(version, rdata, bug_candidates, index_info=None):
     if rdata is None:
         return (
@@ -1211,7 +1255,7 @@ def render_release_section(version, rdata, bug_candidates, index_info=None):
             f'                <h2>Release {_e(version)}</h2>\n'
             '                <span class="badge badge-nodata">no data</span>\n'
             '            </div>\n'
-            "            <p>Analysis failed to produce results.</p>\n"
+            "            <p>Analysis failed to produce results (aggregation error &mdash; check finalize logs).</p>\n"
             "        </div>"
         )
 
@@ -1247,7 +1291,13 @@ def render_release_section(version, rdata, bug_candidates, index_info=None):
     lines.append(f'                <span class="breakdown-item"><strong class="bd-build">{b["build"]}</strong> Build</span>')
     lines.append(f'                <span class="breakdown-item"><strong class="bd-test">{b["test"]}</strong> Test</span>')
     lines.append(f'                <span class="breakdown-item"><strong class="bd-infra">{b["infrastructure"]}</strong> Infrastructure</span>')
+    missing = rdata.get("missing_analysis") or []
+    if missing:
+        # No bd-* class: the today-filter JS recomputes only bd-* counts.
+        lines.append(f'                <span class="breakdown-item"><strong>{len(missing)}</strong> Not analyzed</span>')
     lines.append("            </div>")
+
+    lines.extend(_render_detected_jobs(f'release-{_e(version)}', rdata))
 
     lines.append('            <table class="issues-table">')
     for issue in rdata["issues"]:
@@ -1406,11 +1456,17 @@ def render_pr_section(pr_data, bug_candidates, pr_status, pr_error=None):
         lines.append(f'                <span class="breakdown-item"><strong>{b.get("build", 0)}</strong> Build</span>')
         lines.append(f'                <span class="breakdown-item"><strong>{b.get("test", 0)}</strong> Test</span>')
         lines.append(f'                <span class="breakdown-item"><strong>{b.get("infrastructure", 0)}</strong> Infrastructure</span>')
+        pr_missing = (analysis.get("missing_analysis") or []) if analysis else []
+        if pr_missing:
+            lines.append(f'                <span class="breakdown-item"><strong>{len(pr_missing)}</strong> Not analyzed</span>')
         if pr["passed"]:
             lines.append(f'                <span class="breakdown-item"><strong>{pr["passed"]}</strong> Passed</span>')
         if pending:
             lines.append(f'                <span class="breakdown-item"><strong>{pending}</strong> Running</span>')
         lines.append("            </div>")
+
+        if analysis:
+            lines.extend(_render_detected_jobs(f'pr-{pr["number"]}', analysis))
 
         if analysis and analysis.get("issues"):
 
@@ -1696,7 +1752,9 @@ def main():
                     "collection_error": entry["error"],
                 }
             else:
-                # Distinguish "no failures" from "analysis failed" by checking the jobs file
+                # Aggregation itself failed (it writes a summary even when
+                # analyses are missing). Distinguish "no failures" from
+                # "aggregation crashed" by checking the detected jobs file.
                 jobs = load_json(entry["jobs"])
                 if jobs is not None and len(jobs) == 0:
                     rdata = {
