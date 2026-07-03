@@ -45,8 +45,14 @@ def parse_structured_summary(filepath):
     if not m:
         return []
 
+    json_text = m.group(1)
+    # LLM agents sometimes copy raw control characters (tabs, CRs) from
+    # build logs into JSON string values.  Sanitize before parsing.
+    json_text = json_text.replace('\t', '\\t').replace('\r', '\\r')
+    json_text = re.sub(r'[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]', '', json_text)
+
     try:
-        entries = json.loads(m.group(1))
+        entries = json.loads(json_text)
     except json.JSONDecodeError:
         return []
 
