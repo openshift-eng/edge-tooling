@@ -25,7 +25,13 @@ from classify import classify_breakdown
 from parse import parse_structured_summary, group_by_signature
 
 
-def classify_severity(group):
+def classify_frequency(group):
+    """How often this issue hit, by affected-job count.
+
+    Deliberately separate from `severity` (the 1-5 product-impact rubric
+    from the analysis): a one-job release blocker is severe but not
+    frequent; a five-job flake is frequent but not severe.
+    """
     count = len(group)
     if count >= 5:
         return "CRITICAL"
@@ -83,7 +89,8 @@ def _build_issues_from_jobs(jobs):
             "number": i,
             "title": rep["error_signature"],
             "job_count": len(group),
-            "severity": classify_severity(group),
+            "severity": max(j["severity"] for j in group),
+            "frequency": classify_frequency(group),
             "failure_type": failure_type,
             "root_cause": rep.get("root_cause", ""),
             "next_steps": rep.get("remediation", ""),

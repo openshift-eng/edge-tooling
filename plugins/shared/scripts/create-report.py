@@ -115,6 +115,11 @@ CSS = """\
         .severity-medium { background: #fff3cd; color: #856404; }
         .severity-low { background: #d4edda; color: #155724; }
         .severity-critical { background: #721c24; color: #fff; }
+        .sev-5 { background: #721c24; color: #fff; }
+        .sev-4 { background: #f8d7da; color: #721c24; }
+        .sev-3 { background: #ffe5d0; color: #7d4a10; }
+        .sev-2 { background: #fff3cd; color: #856404; }
+        .sev-1 { background: #e2e3e5; color: #41464b; }
         .ftype-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 700; text-transform: uppercase; }
         .ftype-test { background: #cce5ff; color: #004085; }
         .ftype-build { background: #e2d5f1; color: #4a235a; }
@@ -990,6 +995,40 @@ def _render_confidence_badge(issue):
             f' title="Root cause analysis confidence">{conf}</span>')
 
 
+def _severity_cell(issue):
+    """Severity (1-5 product impact) + frequency (job count) badges.
+
+    New summaries carry severity as an int and frequency as a label;
+    older summaries have only the count-based label in `severity` —
+    render whichever is present.
+    """
+    freq_labels = ("HIGH", "MEDIUM", "LOW", "CRITICAL")
+    sev = issue.get("severity", "")
+    parts = []
+    if isinstance(sev, int) or (isinstance(sev, str) and sev.isdigit()):
+        n = max(1, min(5, int(sev)))
+        parts.append(f'<span class="severity-badge sev-{n}" '
+                     f'title="Product-impact severity (5 = release-blocking)">S{n}</span>')
+    else:
+        label = str(sev).upper() or "UNKNOWN"
+        css = f"severity-{label.lower()}" if label in freq_labels else ""
+        parts.append(f'<span class="severity-badge {css}">{label}</span>')
+    freq = str(issue.get("frequency", "")).upper()
+    if freq in freq_labels:
+        parts.append(f'<span class="severity-badge severity-{freq.lower()}" '
+                     f'title="Frequency by affected-job count">{freq}</span>')
+    return " ".join(parts)
+
+
+def _is_critical_issue(issue):
+    if str(issue.get("frequency", "")).upper() == "CRITICAL":
+        return True
+    sev = issue.get("severity", "")
+    if isinstance(sev, int) or (isinstance(sev, str) and sev.isdigit()):
+        return int(sev) >= 5
+    return str(sev).upper() == "CRITICAL"
+
+
 def _render_investigation(issue):
     """Render scenario chips, causal chain, and analysis gaps for an issue.
 
@@ -1227,7 +1266,7 @@ def render_release_section(version, rdata, bug_candidates, index_info=None):
         )
 
     total = rdata["total_failed"]
-    has_critical = any(i.get("severity", "").upper() == "CRITICAL" for i in rdata["issues"])
+    has_critical = any(_is_critical_issue(i) for i in rdata["issues"])
     badge = _badge_class(total, has_critical)
     b = rdata["breakdown"]
 
@@ -1253,8 +1292,6 @@ def render_release_section(version, rdata, bug_candidates, index_info=None):
     for issue in rdata["issues"]:
         bug_match = match_issue_to_bugs(issue["title"], bug_candidates)
         jc = issue["job_count"]
-        sev = issue.get("severity", "UNKNOWN").upper()
-        sev_css = f"severity-{sev.lower()}" if sev in ("HIGH", "MEDIUM", "LOW", "CRITICAL") else ""
         ftype = issue.get("failure_type", "test")
         ftype_label = "INFRA" if ftype == "infrastructure" else ftype.upper()
         ftype_css = "ftype-infra" if ftype == "infrastructure" else f"ftype-{ftype}"
@@ -1264,7 +1301,7 @@ def render_release_section(version, rdata, bug_candidates, index_info=None):
         dates_attr = f' data-dates="{" ".join(job_dates)}"' if job_dates else ""
         anchor_id = f'release-{_e(version)}-{issue["number"]}'
         lines.append(f'            <tr class="issue-row" id="{anchor_id}"{dates_attr}>')
-        lines.append(f'                <td class="col-sev"><span class="severity-badge {sev_css}">{sev}</span></td>')
+        lines.append(f'                <td class="col-sev">{_severity_cell(issue)}</td>')
         lines.append(f'                <td class="col-ftype"><span class="ftype-badge {ftype_css}">{ftype_label}</span></td>')
         lines.append(f'                <td class="col-title">{_e(issue["title"])}</td>')
         lines.append(f'                <td class="col-jobs">{jobs_label}</td>')
@@ -1418,8 +1455,6 @@ def render_pr_section(pr_data, bug_candidates, pr_status, pr_error=None):
             for issue in analysis["issues"]:
                 bug_match = match_issue_to_bugs(issue.get("title", ""), bug_candidates)
                 jc = issue["job_count"]
-                sev = issue.get("severity", "UNKNOWN").upper()
-                sev_css = f"severity-{sev.lower()}" if sev in ("HIGH", "MEDIUM", "LOW", "CRITICAL") else ""
                 ftype = issue.get("failure_type", "test")
                 ftype_label = "INFRA" if ftype == "infrastructure" else ftype.upper()
                 ftype_css = "ftype-infra" if ftype == "infrastructure" else f"ftype-{ftype}"
@@ -1427,7 +1462,7 @@ def render_pr_section(pr_data, bug_candidates, pr_status, pr_error=None):
 
                 anchor_id = f'pr-{pr["number"]}-{issue["number"]}'
                 lines.append(f'            <tr class="issue-row" id="{anchor_id}">')
-                lines.append(f'                <td class="col-sev"><span class="severity-badge {sev_css}">{sev}</span></td>')
+                lines.append(f'                <td class="col-sev">{_severity_cell(issue)}</td>')
                 lines.append(f'                <td class="col-ftype"><span class="ftype-badge {ftype_css}">{ftype_label}</span></td>')
                 lines.append(f'                <td class="col-title">{_e(issue["title"])}</td>')
                 lines.append(f'                <td class="col-jobs">{jobs_label}</td>')
