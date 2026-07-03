@@ -16,7 +16,7 @@ allowed-tools: Bash, Read, Write, Glob, Grep, Agent
 
 ## Description
 
-Accepts a comma-separated list of MicroShift release versions, runs analysis for each release and for open rebase PRs, and produces a single HTML summary file consolidating all results. Uses deterministic scripts for data collection, artifact download, aggregation, and HTML generation. LLM agents are used only for per-job root cause analysis and Jira bug correlation.
+Accepts a comma-separated list of MicroShift release versions, runs analysis for each release and for open rebase PRs, and produces a single HTML summary file consolidating all results. Deterministic scripts handle data collection, artifact download, evidence extraction, failure grouping, aggregation, and HTML generation. LLM agents handle exactly two things: root cause analysis of each distinct failure group (Step 2) and Jira bug correlation (Step 3).
 
 ## Arguments
 
@@ -34,86 +34,38 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 
 ### Step 1: Prepare — Collect and Download All Artifacts
 
-**Goal**: Deterministically collect all failed jobs and download their artifacts before any LLM analysis.
-
-**Actions**:
-
-1. Determine today's `<WORKDIR>` by running `date +%y%m%d` and substituting into `/tmp/microshift-ci-claude-workdir.<YYMMDD>`. Use this value in all subsequent commands.
+1. Determine today's `<WORKDIR>` (see above). Use this value in all subsequent commands.
 2. Run the prepare script:
 
    ```text
    bash plugins/microshift-ci/scripts/doctor.sh prepare --component microshift --workdir <WORKDIR> <ARGUMENTS> --rebase --repo openshift/microshift
    ```
 
-3. The script deterministically:
-   - For each release: fetches failed periodic jobs, downloads artifacts, writes `<WORKDIR>/jobs/release-<version>-jobs.json`
-   - For rebase PRs: fetches PRs with failures, downloads artifacts, writes `<WORKDIR>/jobs/prs-jobs.json` and `<WORKDIR>/jobs/prs-status.json`
-   - Outputs a JSON summary listing all releases, job counts, and file paths
-4. Read the JSON output to know which releases have jobs to analyze and how many
-
-**Job JSON field names** (use these exactly — do NOT guess alternatives like `job_name`):
-
-- `job` — full job name
-- `build_id` — unique build identifier
-- `artifacts_dir` — local path to downloaded artifacts
-- `url` — Prow job URL
-- `status` — job result (`failure`, `FAILURE`, `SUCCESS`, `PENDING`)
-- `pr_number` — PR number (PR jobs only)
+3. The script fetches failed periodic jobs per release and rebase PRs with failures, downloads all artifacts, clones the MicroShift source with per-release worktrees, and prints a JSON summary of releases, job counts, and file paths. Read that summary — do NOT read the job JSON files it references.
 
 **Error Handling**:
 
 - If `<ARGUMENTS>` is empty, show usage and stop
-- If a release has no failed jobs, its jobs JSON will be an empty array — skip analysis for that release
-- If a release has an `"error"` field in the JSON summary, data collection failed for that release — report the error to the user but continue with other releases
+- A release with no failed jobs simply has nothing to analyze
+- A release with an `"error"` field failed data collection — report it to the user but continue with other releases
 
 ### Step 1b: Generate PCP Performance Graphs
 
-**Goal**: Generate performance graphs from PCP archives for all jobs that have pmlogs.
+```text
+bash plugins/microshift-ci/scripts/doctor.sh graphs --component microshift --workdir <WORKDIR>
+```
 
-**Actions**:
-
-1. Run the graphs script (this is deterministic, no LLM needed):
-
-   ```text
-   bash plugins/microshift-ci/scripts/doctor.sh graphs --component microshift --workdir <WORKDIR>
-   ```
-
-2. The script finds PCP archives in downloaded artifacts and generates PNG graphs at `<WORKDIR>/graphs/<build_id>/`:
-   - `1_cpu_usage.png` — CPU usage (user, system, I/O wait)
-   - `2_mem_usage.png` — Memory usage (used, cached)
-   - `3_disk_io.png` — Disk I/O (read/write OPS, await)
-   - `4_disk_usage.png` — Disk usage by partition (% fill)
-3. If prerequisites are missing (`pcp2json`, `matplotlib`), the script errors and stops.
+Generates CPU/memory/disk graphs at `<WORKDIR>/graphs/<build_id>/` for jobs with PCP archives. If prerequisites are missing (`pcp2json`, `matplotlib`), the script errors and stops.
 
 ### Step 1c: Extract Structured Evidence
 
-**Goal**: Deterministically extract structured evidence from all job artifacts before LLM analysis. This gives each analysis agent a pre-extracted overview so it can skip exploratory file scanning and focus on root cause reasoning.
+```text
+bash plugins/microshift-ci/scripts/doctor.sh evidence --component microshift --workdir <WORKDIR>
+```
 
-**Actions**:
-
-1. Run the evidence extraction script:
-
-   ```text
-   bash plugins/microshift-ci/scripts/doctor.sh evidence --component microshift --workdir <WORKDIR>
-   ```
-
-2. The script processes each job's artifacts and produces `<WORKDIR>/evidence/evidence-<BUILD_ID>.json` containing:
-   - Failed step identification (from per-step `finished.json`)
-   - Infrastructure failure indicators (scheduling, AWS errors, CI cluster capacity)
-   - Per-scenario evidence: junit failures, RF failures, boot_and_run alerts, journal alerts (OOM, panics, container restarts, etcd pressure, OVN binding, probe failures), sosreport paths
-   - Conformance test failures
-   - Build/config error lines with context
-   - PCP graph availability
-   - Recent source commits (no path filter — product and test changes)
-   - Pre-extracted sosreports (when journal shows container restarts or crashes)
-
-3. If the script fails for some jobs, note the errors but continue — agents can fall back to raw artifacts.
+Produces `<WORKDIR>/evidence/evidence-<BUILD_ID>.json` per job — the structured evidence packs (failed step, failure fingerprint, per-scenario alerts, sosreport paths) that analysis agents start from. If it fails for some jobs, note the errors and continue — agents fall back to raw artifacts.
 
 ### Step 1d: Plan Analysis Groups
-
-**Goal**: Deterministically group failed jobs by failure fingerprint so each distinct failure is analyzed exactly once.
-
-**Actions**:
 
 1. Run the plan script:
 
@@ -121,19 +73,11 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
    bash plugins/microshift-ci/scripts/doctor.sh plan --component microshift --workdir <WORKDIR>
    ```
 
-2. The script deterministically:
-   - Groups all failed jobs (releases + PRs) by the failure fingerprint from their evidence packs
-   - Writes template reports directly for pure-infrastructure and no-failure groups — those need NO agent
-   - Renders a fully substituted agent prompt file per remaining group under `<WORKDIR>/prompts/`
-   - Writes `<WORKDIR>/analysis-plan.json` and prints a JSON summary whose `agent_groups` array lists each group's `prompt_file` and `report_file`
+   It groups all failed jobs (releases + PRs) by failure fingerprint, writes template verdicts for pure-infrastructure and no-failure groups (no agent needed), and renders one fully substituted agent prompt file per remaining group. Its JSON summary's `agent_groups` array lists each group's `prompt_file` and `report_file`.
 
 ### Step 2: Analyze Each Group
 
-**Goal**: Get detailed root cause analysis for each failure group using evidence packs and pre-downloaded artifacts.
-
-**Actions**:
-
-1. For **every** entry in the plan summary's `agent_groups`, launch a separate **Agent** (using the `Agent` tool) with exactly this prompt — the prompt files are fully pre-rendered, do NOT read or modify them yourself:
+1. For **every** entry in `agent_groups`, launch a separate **Agent** with exactly this prompt — the prompt files are fully pre-rendered, do NOT read or modify them yourself:
 
    ```text
    Read <PROMPT_FILE> and follow its instructions exactly.
@@ -192,86 +136,34 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 
 ### Step 3: Run Bug Correlation (Dry-Run)
 
-**Goal**: Search Jira for existing bugs matching each failure. Results are embedded in the HTML report.
-
-**Actions**:
-
-1. Collect all release versions from `<ARGUMENTS>` into a comma-separated list (e.g., `4.19,4.20,4.21,4.22`)
-2. Check for rebase PR source identifiers from the PR jobs JSON (e.g., `rebase-release-4.22`). Append them to the source list.
-3. Launch a **single** `microshift-ci:create-bugs` **foreground** agent in dry-run mode with all sources:
+1. Build the source list: all release versions from `<ARGUMENTS>` plus any rebase PR source identifiers from the PR jobs (e.g., `rebase-release-4.22`).
+2. Launch a **single** `microshift-ci:create-bugs` **foreground** agent in dry-run mode with all sources:
 
    ```text
    Agent: subagent_type=general_purpose, prompt="Run /microshift-ci:create-bugs <all-sources-comma-separated>"
    ```
 
-4. The agent produces:
-   - `<WORKDIR>/bugs/bug-matches-<source>.json` for each source (mapping files with open bugs data for the Bugs tab)
-   - `<WORKDIR>/report-create-bugs.txt` — merged report covering all releases and rebase sources
-5. When the agent returns, immediately proceed to Step 4 in the same turn. Do NOT stop or end your turn between Step 3 and Step 4.
-
-**Error Handling**:
-
-- If create-bugs fails, note the failure but do not block HTML generation
+   It produces `<WORKDIR>/bugs/bug-matches-<source>.json` per source and `<WORKDIR>/report-create-bugs.txt`.
+3. When the agent returns, immediately proceed to Step 4 in the same turn. Do NOT stop or end your turn between Step 3 and Step 4. If create-bugs fails, note the failure but do not block HTML generation.
 
 ### Step 4: Finalize — Aggregate and Generate HTML Report
 
 **IMPORTANT**: This step is MANDATORY. The task is incomplete without it. You MUST run this even if previous steps produced errors.
 
-**Goal**: Deterministically aggregate results and generate the HTML report.
+```text
+bash plugins/microshift-ci/scripts/doctor.sh finalize --component microshift --workdir <WORKDIR> <ARGUMENTS>
+```
 
-**Actions**:
-
-1. Run the finalize script:
-
-   ```text
-   bash plugins/microshift-ci/scripts/doctor.sh finalize --component microshift --workdir <WORKDIR> <ARGUMENTS>
-   ```
-
-2. The script deterministically:
-   - Runs `aggregate.py` for each release and for PRs → `summary.json` files
-   - Runs `create-report.py` → `report-microshift-ci-doctor.html`
-3. Report the script's output to the user
+Aggregates per-release and PR summaries and generates `report-microshift-ci-doctor.html`.
 
 ### Step 5: Report Completion
 
-**Actions**:
+Display the path to the generated HTML file and summarize: failed job counts per release, analysis groups (agents vs deterministic), rebase PR status, and bug correlation results.
 
-1. Display the path to the generated HTML file
-2. Summarize: failed job counts per release, rebase PR status, bug correlation results
-
-**Example Output**:
-
-```text
-Summary:
-  Periodics:
-    Release 4.19: 3 failed periodic jobs
-    Release 4.20: ERROR - data collection failed
-    Release 4.21: 0 failed periodic jobs
-    Release 4.22: 12 failed periodic jobs
-  Pull Requests:
-    2 rebase PRs with 5 total failed jobs
-
-HTML report generated: <WORKDIR>/report-microshift-ci-doctor.html
-```
-
-## Examples
-
-### Example 1: Analyze Multiple Releases
+## Example
 
 ```bash
 /microshift-ci:doctor 4.19,4.20,4.21,4.22
-```
-
-### Example 2: Analyze Two Releases
-
-```bash
-/microshift-ci:doctor 4.21,4.22
-```
-
-### Example 3: Single Release (still produces HTML)
-
-```bash
-/microshift-ci:doctor 4.22
 ```
 
 ## Prerequisites
@@ -281,8 +173,7 @@ HTML report generated: <WORKDIR>/report-microshift-ci-doctor.html
 - MCP Jira server must be configured (for bug correlation)
 - Internet access to fetch job data from Prow/GCS
 - Bash shell, Python 3
-- `pcp-export-pcp2json` — for PCP graph generation
-- `matplotlib` Python package — for PCP graph plotting
+- `pcp-export-pcp2json` and `matplotlib` — for PCP graph generation
 
 ## Related Skills and Agents
 
@@ -293,17 +184,7 @@ HTML report generated: <WORKDIR>/report-microshift-ci-doctor.html
 
 ## Notes
 
-- **Deterministic scripts** handle: data collection, artifact download, evidence extraction, aggregation, HTML generation
-- **LLM agents** handle: per-job root cause analysis (Step 2), Jira bug search and open bugs query (Step 3)
-- Step 1c evidence extraction pre-processes all artifacts so Step 2 agents (from `plugins/microshift-ci/agents/analyze-evidence.md`) receive structured evidence packs and can skip exploratory log scanning
-- Step 1d groups jobs by deterministic failure fingerprint: one agent per distinct failure (not per job), pure-infrastructure and no-failure groups resolved without any agent, and per-job report files produced by the deterministic fan-out in Step 2
-- `/microshift-ci:doctor-refresh` regenerates the HTML report from existing data. Use it after `/microshift-ci:create-bugs --create` to include newly created bugs
-- Step 2 agents (per-group analysis) are launched in a single parallel wave
-- Step 3 uses a single create-bugs agent with all sources (releases + rebase) comma-separated
-- The `prepare` script downloads all artifacts upfront so analysis agents use local paths (no redundant downloads)
-- The `prepare` script also clones the MicroShift source to `<WORKDIR>/src/microshift` with per-release worktrees (`--repo openshift/microshift`); clone failure is non-fatal — agents record the absence in `analysis_gaps` and proceed
-- The `finalize` script runs aggregation and HTML generation in one call
-- All intermediate files use prescribed filenames in `<WORKDIR>` subdirectories (`jobs/`, `bugs/`) — no improvised names
+- One agent analyzes each distinct failure fingerprint (not each job); pure-infrastructure and no-failure groups are resolved by script with no agent at all
+- All intermediate files use prescribed filenames in `<WORKDIR>` subdirectories (`jobs/`, `bugs/`, `evidence/`, `prompts/`) — no improvised names
 - The HTML report is self-contained (no external CSS/JS dependencies)
 - If a release analysis fails, it is noted in the report but does not block other releases
-- If no rebase PRs are open, the Pull Requests tab shows "No open rebase pull requests found"
