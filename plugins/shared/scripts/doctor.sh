@@ -489,6 +489,33 @@ cmd_refresh() {
 }
 
 # ---------------------------------------------------------------------------
+# evidence
+# ---------------------------------------------------------------------------
+
+cmd_evidence() {
+    while [[ ${#} -gt 0 ]]; do
+        case "${1}" in
+            --workdir) WORKDIR="${2}"; shift 2 ;;
+            --component) COMPONENT="${2}"; shift 2 ;;
+            -*) echo "Unknown option: ${1}" >&2; return 1 ;;
+            *) echo "Unknown argument: ${1}" >&2; return 1 ;;
+        esac
+    done
+
+    [[ -z "${COMPONENT}" ]] && { echo "Error: --component is required" >&2; return 1; }
+
+    WORKDIR="${WORKDIR:-/tmp/${COMPONENT}-ci-claude-workdir.$(date +%y%m%d)}"
+
+    if [[ ! -d "${WORKDIR}/jobs" ]]; then
+        echo "No jobs directory found in ${WORKDIR}, skipping evidence extraction." >&2
+        return 0
+    fi
+
+    echo "=== Extracting evidence ===" >&2
+    python3 "${SCRIPT_DIR}/extract-evidence.py" --batch --workdir "${WORKDIR}"
+}
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -498,6 +525,7 @@ usage() {
     echo "Commands:" >&2
     echo "  prepare  --component C [--workdir DIR] <releases> [--rebase] [--repo ORG/NAME]  Collect jobs, download artifacts, optional source checkout" >&2
     echo "  graphs   --component C [--workdir DIR] [--timezone TZ]       Generate PCP performance graphs" >&2
+    echo "  evidence --component C [--workdir DIR]                        Extract structured evidence from artifacts" >&2
     echo "  finalize --component C [--workdir DIR] <releases>             Aggregate results and generate HTML" >&2
     echo "  refresh  --component C [--workdir DIR] [--ignore KEY1,KEY2,...] <releases>  Regenerate HTML from existing workdir data" >&2
     echo "" >&2
@@ -518,6 +546,7 @@ main() {
     case "${cmd}" in
         prepare)  cmd_prepare "${@}" ;;
         graphs)   cmd_graphs "${@}" ;;
+        evidence) cmd_evidence "${@}" ;;
         finalize) cmd_finalize "${@}" ;;
         refresh)  cmd_refresh "${@}" ;;
         *) echo "Unknown command: ${cmd}" >&2; usage ;;
