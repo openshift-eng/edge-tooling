@@ -21,6 +21,13 @@ fanout mode
 Usage:
     plan-analysis.py plan   --workdir DIR --template FILE
     plan-analysis.py fanout --workdir DIR
+
+Exit codes:
+    0  success (fanout: every planned group report was fanned out)
+    1  fanout: no analysis-plan.json (run plan first)
+    2  usage error
+    3  fanout incomplete: group reports missing or unparseable; the printed
+       JSON's retry_groups lists them with their prompt_file for re-launch
 """
 
 import glob as glob_mod
@@ -449,10 +456,25 @@ def cmd_fanout(workdir):
                 f.write("\n--- END STRUCTURED SUMMARY ---\n")
             written += 1
 
+    by_key = {g.get("key"): g for g in plan if isinstance(g, dict)}
+    retry_groups = [
+        {
+            "key": key,
+            "reason": reason,
+            # prompt_file is null for deterministic groups,
+            # which cannot be re-launched (their reports are script-written).
+            "prompt_file": by_key.get(key, {}).get("prompt_file"),
+            "report_file": by_key.get(key, {}).get("report_file", ""),
+        }
+        for key, reason in [(k, "missing") for k in missing]
+        + [(k, "unparseable") for k in unparseable]
+    ]
+
     result = {
         "written": written,
         "missing_reports": missing,
         "unparseable_reports": unparseable,
+        "retry_groups": retry_groups,
     }
     print(
         f"Fanned out {written} per-job reports"
@@ -461,7 +483,7 @@ def cmd_fanout(workdir):
         file=sys.stderr,
     )
     print(json.dumps(result, indent=2))
-    return 0
+    return 3 if retry_groups else 0
 
 
 # ---------------------------------------------------------------------------
