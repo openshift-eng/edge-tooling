@@ -105,11 +105,18 @@ def ensure_fork_remote():
         ["git", "remote", "get-url", username],
         cwd=repo_dir, capture_output=True, text=True,
     )
+    fork_url = f"https://github.com/{username}/microshift.git"
     if result.returncode == 0:
+        if result.stdout.strip() == fork_url:
+            return username
+        logger.info("Updating fork remote '%s' URL...", username)
+        subprocess.run(
+            ["git", "remote", "set-url", username, fork_url],
+            cwd=repo_dir, capture_output=True, text=True, check=True,
+        )
         return username
 
     logger.info("Adding fork remote '%s'...", username)
-    fork_url = f"https://github.com/{username}/microshift.git"
     subprocess.run(
         ["git", "remote", "add", username, fork_url],
         cwd=repo_dir, capture_output=True, text=True, check=True,

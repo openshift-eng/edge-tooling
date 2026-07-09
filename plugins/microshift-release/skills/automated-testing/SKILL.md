@@ -136,6 +136,7 @@ The script exits non-zero with a JSON `message` field. Common errors:
 | Version < 4.21 | Jenkins pipelines, not Prow CI |
 | Nightly version | Phase 2 does not apply |
 | `gh` failure | Not authenticated or no permissions |
+| `git push` failure | Fork of `openshift/microshift` doesn't exist, or no push access |
 | Branch exists | Delete it or use existing PR |
 | `gsutil` not found | Install Google Cloud SDK |
 | `aws` not found | Install and configure AWS CLI |
