@@ -30,7 +30,7 @@ bash plugins/microshift-release/scripts/prow_testing.sh <action> <version> [--ex
 |---|---|---|
 | `aws` CLI (configured) | Step 0 (preflight), Step 5 (upload) | Yes |
 | `gh` CLI (authenticated) | All PR operations | Yes |
-| Push access to `openshift/microshift` | Step 1 (create PR) | Yes |
+| GitHub fork of `openshift/microshift` | Step 1 (create PR) | Yes |
 | `gsutil` CLI | Step 4 (download) | Yes |
 
 ## Arguments

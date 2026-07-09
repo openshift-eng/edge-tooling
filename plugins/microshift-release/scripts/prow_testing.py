@@ -446,6 +446,8 @@ def cmd_create_pr(args):
 
     head_branch = f"release-testing-{v['version']}"
 
+    gh_username = git_ops.get_gh_username()
+
     if not args.execute:
         print(json.dumps({
             "action": "create-pr",
@@ -454,6 +456,7 @@ def cmd_create_pr(args):
             "repo": prow.GH_REPO,
             "base_branch": v["branch"],
             "head_branch": head_branch,
+            "fork": f"{gh_username}/microshift",
             "pr_title": v["pr_title"],
             "mode": "draft",
         }))
@@ -462,6 +465,9 @@ def cmd_create_pr(args):
     logger.info("Ensuring MicroShift repo clone exists...")
     repo_dir = git_ops.ensure_microshift_repo()
     git_ops.fetch_branch(v["branch"])
+
+    logger.info("Setting up fork remote...")
+    fork_remote = git_ops.ensure_fork_remote()
 
     logger.info("Creating branch %s from origin/%s...", head_branch, v["branch"])
     subprocess.run(
@@ -475,9 +481,9 @@ def cmd_create_pr(args):
         cwd=repo_dir, capture_output=True, text=True, check=True,
     )
 
-    logger.info("Pushing %s to origin...", head_branch)
+    logger.info("Pushing %s to %s...", head_branch, fork_remote)
     push_result = subprocess.run(
-        ["git", "push", "origin", head_branch],
+        ["git", "push", fork_remote, head_branch],
         cwd=repo_dir, capture_output=True, text=True,
     )
     if push_result.returncode != 0:
@@ -498,7 +504,7 @@ def cmd_create_pr(args):
             "gh", "pr", "create",
             "--repo", prow.GH_REPO,
             "--base", v["branch"],
-            "--head", head_branch,
+            "--head", f"{gh_username}:{head_branch}",
             "--title", v["pr_title"],
             "--body", body,
             "--draft",

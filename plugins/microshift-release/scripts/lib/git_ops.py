@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 MICROSHIFT_REMOTE = "https://github.com/openshift/microshift.git"
 _microshift_dir = None
+_gh_username = None
 
 
 def _get_edge_tooling_root():
@@ -60,6 +61,60 @@ def ensure_microshift_repo():
 
     _microshift_dir = output_dir
     return _microshift_dir
+
+
+def get_gh_username():
+    """Get the authenticated GitHub user's login name.
+
+    Returns:
+        str: GitHub username.
+
+    Raises:
+        RuntimeError: If gh CLI is not authenticated.
+    """
+    global _gh_username
+    if _gh_username:
+        return _gh_username
+
+    result = subprocess.run(
+        ["gh", "api", "user", "-q", ".login"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        raise RuntimeError(
+            "Could not determine GitHub username. "
+            "Ensure 'gh' is authenticated: gh auth login"
+        )
+    _gh_username = result.stdout.strip()
+    return _gh_username
+
+
+def ensure_fork_remote():
+    """Ensure the user's GitHub fork is configured as a git remote.
+
+    Uses the authenticated GitHub user's login to add a remote
+    pointing to their fork of MicroShift (github.com/{user}/microshift).
+
+    Returns:
+        str: Remote name (the GitHub username).
+    """
+    username = get_gh_username()
+    repo_dir = ensure_microshift_repo()
+
+    result = subprocess.run(
+        ["git", "remote", "get-url", username],
+        cwd=repo_dir, capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        return username
+
+    logger.info("Adding fork remote '%s'...", username)
+    fork_url = f"https://github.com/{username}/microshift.git"
+    subprocess.run(
+        ["git", "remote", "add", username, fork_url],
+        cwd=repo_dir, capture_output=True, text=True, check=True,
+    )
+    return username
 
 
 def get_repo_root():
