@@ -18,7 +18,7 @@ Update today's TODO file based on what was accomplished in this conversation.
 3. For each outcome, build a proposed change (don't write yet):
    - If it matches an existing `- [ ]` item, propose changing it to `- [x]` (keep any ticket reference and sub-lines).
    - If it represents progress but not completion, leave `- [ ]` and propose appending a brief status note (as a `Note:` sub-line) only if an equivalent note is not already present.
-   - If it's a new task not in the file, propose appending it to the appropriate section (Priority, In Progress, Waiting on Review — if it's a PR the user just opened, Review Requests — if someone asked the user to review a PR, or Backlog) only if no equivalent item already exists.
+   - If it's a new task not in the file, extract any URLs and Jira keys into link sub-lines first (classify per `plugins/edge-ic/references/TODO_FILE_FORMAT.md`), then propose appending it to the appropriate section (Priority, In Progress, Waiting on Review — if it's a PR the user just opened, Review Requests — if someone asked the user to review a PR, or Backlog) only if no equivalent item already exists.
    - If a PR, Doc, or Jira link was mentioned for an item that doesn't already have that link as a sub-line, propose adding it (classify per `plugins/edge-ic/references/TODO_FILE_FORMAT.md`).
 4. **Confirm before completing:** for each item proposed to move to `- [x]`, show the user the specific item and ask them to confirm before applying it. Apply confirmed completions; skip declined ones. Additions of new tasks, status notes, and links don't require this per-item confirmation — cover them in the summary instead.
 5. Show the user a short summary of all changes (not the full file), then write the updated file.

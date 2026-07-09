@@ -22,7 +22,7 @@ Examples: `/edge-ic:daily-show`, `/edge-ic:daily-show 2026-07-01`, `/edge-ic:dai
 
 ## Steps
 
-1. Parse `$ARGUMENTS`: extract a date token (if present), a `--section=` value, and a `--limit=` value. Any remaining/unrecognized token is ignored.
+1. Parse `$ARGUMENTS`: extract a date token (if present), a `--section=` value, and a `--limit=` value. Reject any remaining/unrecognized token and show the valid forms instead of silently ignoring it.
 2. Determine the target date: use the parsed date if present, otherwise run `date +%Y-%m-%d` for today.
 3. Read `$HOME/.daily/YYYY/MM/YYYY-MM-DD.md` for the target date. If the file doesn't exist, tell the user and stop — do not create it.
 4. **If `--section` was given:** keep only the matching sections, in their original file order. If any named section doesn't exist in the TODO format, tell the user the valid section names and stop.

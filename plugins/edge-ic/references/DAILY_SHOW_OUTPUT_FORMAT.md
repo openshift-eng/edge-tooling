@@ -6,13 +6,13 @@ Render as plain Markdown — **not** inside a fenced code block. A heading marks
 
 ## Template
 
-### Section icons to be used:
+### Section icons to be used
 
 - Priority: `⚠`
 - Completed: `✓`
 - All other sections use `»`
 
-### Status Icons to be used:
+### Status Icons to be used
 
 - Any completed items should use `✓`
 - Any in progress items (or items waiting on review) should use `➲`
@@ -27,7 +27,6 @@ Render as plain Markdown — **not** inside a fenced code block. A heading marks
 - {Status Icon} **{ticket-or-PR-ref}**: {not started item description}
   - {Type}: {value}
 ```
-
 
 ## Rules
 
