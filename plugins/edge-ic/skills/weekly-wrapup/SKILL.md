@@ -34,7 +34,7 @@ Automate the weekly wrap-up process by reviewing active work, gathering status u
 
 - Interactive by default - User must confirm each status update
 - Use currentUser() in JQL
-- Preserve context in carry-over items
+- Preserve context in carry-over items, including all indented link sub-lines beneath them
 - Support --dry-run to preview before committing
 
 ### TODO File Format and Validation

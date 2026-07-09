@@ -110,7 +110,7 @@ V:█  █  W:█   █  X:▀▄ ▄▀  Y:█  █  Z:▀▀▀█
 All borders target **60 visual columns** wide (outer `╭`/`╰` to outer `╮`/`╯`).
 
 - **All borders**: **60 raw chars** (`╭` + 58×`─` + `╮`). Section markers use `»` (narrow, 1 visual column) so all borders are uniformly 60 raw = 60 visual
-- **Content lines**: left `│` + 2-space indent; right `│` aligned at column 60 where content fits; long summaries wrap to a continuation line; bare URLs may extend past the border for usability
+- **Content lines**: every line closes with `│` — no exceptions. Left `│` + 2-space indent; pad with spaces so the closing `│` lands at column 60 where content fits; long summaries wrap to a continuation line. If a single line (e.g., a bare URL) doesn't fit within 60 columns, don't truncate or wrap it — let it run past column 60, then close with a single space and `│` immediately after the content
 - **Corners**: `╭` top-left, `╮` top-right, `╰` bottom-left, `╯` bottom-right
 - **Section title**: embedded in top border: `╭─ » {title} ─...─╮`
 

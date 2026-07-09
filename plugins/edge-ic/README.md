@@ -42,6 +42,86 @@ Generate a weekly summary from the past week's TODO files.
 
 ---
 
+### `/edge-ic:daily-show`
+
+Display the TODO list for today, or for a specific past day. Supports filtering to specific sections and limiting the number of items shown.
+
+**Usage:**
+
+```text
+/edge-ic:daily-show
+/edge-ic:daily-show 2026-07-01
+/edge-ic:daily-show --section=priority,progress
+/edge-ic:daily-show --limit=5
+```
+
+**Arguments:**
+
+- date (`YYYY-MM-DD`): show a past day's TODO instead of today's
+- `--section=<name>[,<name>...]`: show only the named section(s) (`Priority`, `In Progress`, `Waiting on Review`, `Review Requests`, `Completed`, `Backlog`, `Key Issues Tracked`, or common aliases)
+- `--limit=<n>`: show only the first `<n>` items
+
+**Output:**
+
+- Full TODO file contents as written, including tracked links and notes
+- Read-only — never modifies the file
+
+---
+
+### `/edge-ic:daily-done`
+
+Mark a specific task in today's TODO file as done.
+
+**Usage:**
+
+```text
+/edge-ic:daily-done OCPEDGE-2510
+/edge-ic:daily-done the TNF deploy item
+```
+
+**Output:**
+
+- Matched item checked off (`- [x]`) and moved to Completed
+- All tracked links and notes preserved
+
+---
+
+### `/edge-ic:daily-link`
+
+Add a PR, doc, Jira, or note link to an existing TODO task.
+
+**Usage:**
+
+```text
+/edge-ic:daily-link OCPEDGE-2510 PR https://github.com/openshift/installer/pull/1234
+/edge-ic:daily-link item 2 Note: needs metal cluster to reproduce
+```
+
+**Output:**
+
+- Indented link sub-line added beneath the matched task
+- Link type auto-classified from the URL when not specified
+
+---
+
+### `/edge-ic:task-info`
+
+Show detailed info about a specific TODO task, including live Jira and PR status.
+
+**Usage:**
+
+```text
+/edge-ic:task-info OCPEDGE-2510
+```
+
+**Output:**
+
+- Task description, section, and all tracked links/notes
+- Live status pulled from Jira (via MCP) and GitHub (via `gh`)
+- Offers to backfill a missing Jira link when the task has a bare ticket key
+
+---
+
 ### `/edge-ic:sprint-status`
 
 Query all tickets in a sprint and display them grouped by status.

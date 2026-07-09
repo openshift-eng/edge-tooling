@@ -111,7 +111,7 @@ If a backup was created, inform the user: "Previous config backed up to `morning
 
 Write the YAML config to `$HOME/.config/edge-ic/morning.yaml` using the collected values. Then proceed to Step 2.
 
-Steps 2-8 are fully independent. **Issue all their tool calls in a single response turn so they execute in parallel** — do not wait for one step to finish before starting the next. In Claude Code this means batching all MCP and Bash calls together. Only render output (Step 10) after all steps complete. Skip any step whose corresponding section is disabled in config.
+Steps 2, 3, 4, 6, 7, 8, and 9 are fully independent data-gathering steps. **Issue all their tool calls in a single response turn so they execute in parallel** — do not wait for one step to finish before starting the next. In Claude Code this means batching all MCP and Bash calls together. Step 5 depends on Step 4's results (it writes the carry-over items Step 4 gathered) and must run after it completes. Only render output (Step 11) after all gathering and writing steps complete. Skip any step whose corresponding section is disabled in config.
 
 ## Step 2: Gather QA Tasks
 
@@ -258,19 +258,34 @@ If `daily_notes.format` is `auto`, detect:
 
 Store results as a list of raw text strings.
 
-## Step 5: Gather Open PRs
+## Step 5: Write Carry-Over to Today's TODO
+
+Skip if `sections.carry_over` is `false` in config, `daily_notes.enabled` is `false`, or Step 4 found no carry-over items.
+
+**Resolve today's file path** using the same `daily_notes.path` template as Step 4, with today's date instead of yesterday's.
+
+**If today's file does not exist:** create it using the structure in `plugins/edge-ic/references/TODO_FILE_FORMAT.md` (`# TODO - {today}` header, all seven sections present even if empty). Populate sections from the carry-over items gathered in Step 4:
+
+- Items sourced from a TODO-format file: place each item in the same section it came from (Priority, In Progress, Waiting on Review, Review Requests, or Backlog), preserving its checkbox state and any indented link sub-lines exactly.
+- Items sourced from org-mode or freeform notes (no section info available): place them in Backlog.
+
+**If today's file already exists:** for each carry-over item, check whether an equivalent item is already present (extract a Jira key from the item's text or its indented `Jira:` sub-line if either has one, and match on that key; otherwise fall back to a near-exact text match). Skip items that already exist. Append genuinely new carry-over items to the section implied by their source (as above), preserving sub-lines.
+
+Track which items were newly carried over so Step 11 (render) can mention them in the briefing. Write the file.
+
+## Step 6: Gather Open PRs
 
 Skip if `sections.open_prs` is `false` in config.
 
 **Fetch open PRs directly via `gh`** (primary source — always up to date):
 
 ```bash
-gh search prs --author=@me --state=open --json repository,number,title,createdAt,url --limit 50
+gh search prs --author=@me --state=open --json repository,number,title,createdAt,url,reviewDecision --limit 50
 ```
 
 Compute `days_open` from `createdAt` (today's date minus `createdAt` in days — be precise, do not eyeball). **Discard any PR where `days_open` > 200** — these are stale/abandoned PRs that add noise. Set `days_idle` and `missing_labels` to "?" (the CI dashboard is no longer fetched). If the `gh` command fails for any reason (not installed, not authenticated, network error), skip this section with a note: "Could not fetch open PRs — skipping."
 
-**Skip the per-PR review thread fetch entirely** — it adds N sequential round-trips and the briefing doesn't need it. Set `unresolved: null` for all PRs. The PR link is enough to check threads on demand.
+**Skip the per-PR review thread fetch entirely** — it adds N sequential round-trips and the briefing doesn't need it. Set `unresolved: null` for all PRs. The PR link is enough to check threads on demand. `reviewDecision` comes free in the same search call, so no extra round-trip is needed to know whether a PR is still waiting on reviewers.
 
 Store results as a list of:
 
@@ -279,8 +294,9 @@ Store results as a list of:
 - `title`: string
 - `days_open`: string (e.g., "12d")
 - `link`: full GitHub PR URL
+- `review_decision`: `reviewDecision` value (`APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED`, or empty)
 
-## Step 6: Gather PRs Awaiting Your Review
+## Step 7: Gather PRs Awaiting Your Review
 
 Skip if `sections.review_queue` is `false` in config.
 
@@ -307,7 +323,7 @@ Store results as a list of:
 - `days_open`: string (e.g., "5d")
 - `link`: full GitHub PR URL
 
-## Step 7: Check Quarterly Reminders
+## Step 8: Check Quarterly Reminders
 
 Skip if `sections.quarterly_reminders` is `false` in config.
 
@@ -343,7 +359,7 @@ If `days_left <= 14`, store a reminder with:
   - "Complete Quarterly Connection in Workday"
   - "Submit RewardZone points: https://rewardzone.redhat.com/"
 
-## Step 8: Check RHEL Verification Queue
+## Step 9: Check RHEL Verification Queue
 
 Skip if `sections.rhel_queue` is `false` in config or `rhel_verification.enabled` is `false`.
 
@@ -364,20 +380,22 @@ Store results as:
 - `count`: number of tickets found
 - `tickets`: list of key + summary
 
-## Step 9: Deduplicate
+## Step 10: Deduplicate
 
-Before rendering, remove duplicate tickets across sections. A ticket that appears in multiple data sources is shown only in the highest-priority section.
+Before rendering, merge items that represent the same underlying work across sections — not just exact duplicates within one section.
 
-**Priority order** (highest first):
+**Extract an identifier for every item, from every section** — either a Jira key or a KR/OKR reference:
 
-1. QA Ready (Step 2)
-2. Sprint Backlog (Step 3)
-3. Carry-over (Step 4)
-4. RHEL Queue (Step 8)
+- QA Ready, Sprint Backlog, and RHEL Queue items already have a `key` field — use it directly.
+- Carry-over items: extract a key from a `TICKET-123`-style pattern in the item's text, or from an indented `Jira:` sub-line.
+- Open PRs and Review Queue items: extract a key from a `TICKET-123`-style pattern in the PR title (e.g., `OCPEDGE-2747: feat: ...`, `[OCPEDGE-2747] ...`).
+- If no Jira key is found on either side, also check for a `KR <N>.<N>` or `OKR <N>.<N>` reference anywhere in the item's text/title; normalize `OKR` to `KR` before comparing (so `OKR 1.2` and `KR 1.2` are the same identifier). Items with neither a Jira key nor a KR/OKR reference keep no identifier and are never merged, even if their text looks topically similar — only an exact identifier match (Jira key or normalized KR reference) triggers a merge.
 
-For each ticket key found in a higher-priority section, remove it from all lower-priority sections. Carry-over items are matched by JIRA key if they contain one (e.g., a line like `OCPEDGE-2700: some task` matches key `OCPEDGE-2700`).
+**Priority order** (highest first, for which section's presentation wins when identifiers match): QA Ready (Step 2), Sprint Backlog (Step 3), Carry-over (Step 4), RHEL Queue (Step 9), Open PRs (Step 6) / Review Queue (Step 7).
 
-## Step 10: Render Output
+For each identifier that appears in more than one section, keep the entry only in the highest-priority section — but when a PR (Open PRs/Review Queue) shares an identifier with a higher-priority ticket, don't just drop the PR: attach it as a secondary reference on the surviving entry (e.g., "also: PR #495") so the ticket-to-implementation link isn't lost.
+
+## Step 11: Render Output
 
 **Do NOT read the output format reference file.** All rendering rules are inline below for speed.
 
@@ -394,7 +412,7 @@ For each ticket key found in a higher-priority section, remove it from all lower
 
 If the user configured a custom title, fall back to spaced capital letters (e.g., `D A I L Y`). Do not attempt pixel rendering for custom titles.
 
-**All panels** use `╭╮╰╯│─` box-drawing, 60 chars wide. Section header: `╭─ » {title} ─...─╮`. Skip empty sections.
+**All panels** use `╭╮╰╯│─` box-drawing, 60 raw chars wide (`╭`/`╰` + 58×`─` + `╮`/`╯` for plain borders) — skip empty sections. Section header borders embed the title near the start instead of a plain run of dashes, but still total 60 raw characters (e.g., `╭─ » Sprint Backlog ───────────────────────────────────────╮`) — see `references/MORNING_OUTPUT_FORMAT.md` for the full construction rule if a border comes out misaligned.
 
 **Header panel:**
 
@@ -411,6 +429,8 @@ Progress bar: 10 slots, filled by story points ratio. Positions 1-3: 🟥, 4-5: 
 
 **Section order:** QA Ready, Sprint Backlog, Carry-over, Open PRs, Review Queue, RHEL Queue, Reminders.
 
+**Carry-over panel:** list the items gathered in Step 4. If any were newly written into today's TODO file by Step 5, append a short note below the panel: "✓ {n} item(s) carried into today's TODO."
+
 **QA Ready panel** — split into two sub-groups:
 
 - `▸ Your QA` (`qa_assigned: true`) — tickets where you are the QA Contact
@@ -423,13 +443,53 @@ Omit a sub-group if empty. Skip panel if both empty.
 - Ticket keys: **bold** (`**KEY**`)
 - JIRA links: `https://redhat.atlassian.net/browse/{KEY}`
 - Sprint name: always **bold**
-- URLs may extend past the right `│`
+- Every content line closes with `│` — pad to column 60 when it fits; if a URL or long line doesn't fit, don't truncate or wrap it, just close with a space and `│` right after the content instead of at column 60
 
 **Reminders:** Sprint urgency if days_remaining <= 3 (⚠ or 🔴 if last day). Quarterly reminder if within 14 days.
 
 **All empty:** "Nothing on your plate — enjoy the quiet morning"
 
 **Errors:** Append `╭─ ⚠ Notes ─...╮` panel with `⚠` per failed source.
+
+## Step 12: Offer to Add Surfaced Items to Today's TODO
+
+Skip if `daily_notes.enabled` is `false` in config, or if Steps 2, 3, 6, 7, and 9 all returned no items.
+
+After the briefing renders, ask the user:
+> "Want me to add any of these to today's TODO — QA Ready, Sprint Backlog, Open PRs, Review Queue, RHEL Queue, all, or none?"
+
+Carry-over items were already written by Step 5 — don't re-offer those. Reminders aren't tasks — don't offer those either.
+
+If the user selects one or more categories:
+
+- Resolve today's file path (same template as Step 5); create it if it still doesn't exist, using `plugins/edge-ic/references/TODO_FILE_FORMAT.md`.
+- **Compute an identity for every candidate item** using the same extraction as Step 10 (the item's `key` field, a `TICKET-123`-style pattern, or a normalized `KR <N>.<N>`/`OKR <N>.<N>` reference). Items with no extractable identifier are identified by near-exact text instead.
+- **Merge before writing, don't append category by category:** pool candidates from every selected category together and group them by identity. If two or more candidates share an identity (e.g., a Sprint Backlog ticket and an Open PR whose title references that ticket), collapse them into a single TODO item — use the ticket's summary as the description and attach a sub-line for every link across the group (`Jira:` for the ticket, `PR:` for the PR, etc.), never just one.
+- **Check each merged candidate against the existing file** (matching a `Jira:`/`PR:` sub-line, an inline key, or near-exact text — including anything Step 5 already carried over). If an equivalent item already exists, skip creating a new one; if the existing item is missing a link sub-line the candidate has (e.g., it only has `Jira:` and the candidate also has a `PR:`), add the missing sub-line to the existing item instead of duplicating it.
+- Place each genuinely new item in a section:
+  - **QA Ready** items and **Sprint Backlog** issues whose status category is "In Progress" → **In Progress**
+  - **Open PRs** whose `review_decision` is empty or `REVIEW_REQUIRED` → **Waiting on Review** (these are PRs you opened that are still waiting on others)
+  - **Review Queue** PRs → **Review Requests** (these are other people's PRs where you're a requested reviewer)
+  - **Sprint Backlog** issues in any other status, **Open PRs** already `APPROVED` or `CHANGES_REQUESTED`, and **RHEL Queue** tickets → **Backlog**
+- Show the user what was added or merged, then write the file.
+
+If the user declines, or nothing was surfaced in any offerable category, skip silently.
+
+## Step 13: Prompt for Additional Tasks
+
+Skip if `daily_notes.enabled` is `false` in config.
+
+After Step 12 completes, ask the user:
+> "Anything else to add to today's list that wasn't captured above?"
+
+If the user lists one or more tasks:
+
+- Resolve today's file path (same template as Step 5). If it still doesn't exist (e.g., `sections.carry_over` was disabled or Step 4 found nothing to carry over), create it using `plugins/edge-ic/references/TODO_FILE_FORMAT.md`.
+- For each task, extract URLs and Jira keys into link sub-lines using the same rules as `commands/daily-add.md` (classify by domain, auto-generate a `Jira` sub-line for bare ticket keys).
+- Append urgent items to Priority, everything else to Backlog.
+- Show the user what was added, then write the file.
+
+If the user has nothing to add, skip silently.
 
 ## Usage
 
