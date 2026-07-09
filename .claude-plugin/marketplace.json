@@ -82,7 +82,7 @@
       "name": "microshift-release",
       "source": "./plugins/microshift-release",
       "description": "Set of tools to perform MicroShift Release Testing activities",
-      "version": "1.3.0"
+      "version": "1.4.0"
     },
     {
       "name": "pr-review",
