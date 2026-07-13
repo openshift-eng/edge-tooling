@@ -87,19 +87,18 @@ def interpret_cves(advisory_report):
     - CVE with resolution "Done" -> MUST release (fix landed but not yet shipped)
     - CVE with resolution "Done-Errata" -> no action (fix already shipped in a prior errata)
     - CVE with resolution "Not a Bug" -> no action (CVE does not affect MicroShift)
-    - CVE with any other status -> flag as NEEDS REVIEW
+    - CVE with any other status (in progress) -> no action (fix not yet landed)
 
     Args:
         advisory_report: Parsed JSON from advisory_publication_report.sh.
 
     Returns:
-        dict: {"impact": "none"|"must_release"|"needs_review", "details": [...]}
+        dict: {"impact": "none"|"must_release", "details": [...]}
     """
     if not advisory_report or advisory_report.get("skipped"):
         return {"impact": "unknown", "details": ["Advisory report was skipped"]}
 
     must_release_cves = []
-    needs_review_cves = []
     advisory_types_checked = []
 
     for advisory_name, advisory_data in advisory_report.items():
@@ -127,23 +126,11 @@ def interpret_cves(advisory_report):
                 })
             elif resolution in ("Done-Errata", "Not a Bug"):
                 continue
-            else:
-                needs_review_cves.append({
-                    "cve": cve_id,
-                    "jira": jira_ticket.get("id", ""),
-                    "reason": f"Fix {status.lower()}" if status else "Unknown status",
-                })
 
     if must_release_cves:
         return {
             "impact": "must_release",
             "details": must_release_cves,
-            "advisory_types": advisory_types_checked,
-        }
-    if needs_review_cves:
-        return {
-            "impact": "needs_review",
-            "details": needs_review_cves,
             "advisory_types": advisory_types_checked,
         }
     return {
@@ -174,10 +161,13 @@ def compute_recommendation(evaluation):
     ocp_status = evaluation.get("ocp_status", "")
     ocp_available = ocp_status == "available"
 
-    # Must release: CVE with Done-Errata
+    # Must release: CVE with resolution Done (fix landed, not yet shipped)
     if cve_impact == "must_release":
         cve_details = evaluation.get("cve_impact", {}).get("details", [])
-        cve_list = ", ".join(d["cve"] for d in cve_details)
+        cve_list = ", ".join(
+            f"{d['cve']} ({d['jira']})" if d.get("jira") else d["cve"]
+            for d in cve_details
+        )
         if not ocp_available:
             return "NEEDS REVIEW", f"CVE fix: {cve_list} (OCP payload not yet available)"
         return "ASK ART TO CREATE ARTIFACTS", f"CVE fix: {cve_list}"
@@ -210,10 +200,6 @@ def compute_recommendation(evaluation):
         # All bugs are release-not-required
         bug_summary = f"{ocpbugs_count} OCPBUGS (all labeled release-not-required)"
         return "SKIP", bug_summary
-
-    # Needs review: CVE in progress
-    if cve_impact == "needs_review":
-        return "NEEDS REVIEW", "CVE fix in progress"
 
     # Needs review: advisory report skipped
     if cve_impact == "unknown":
@@ -465,10 +451,11 @@ def _build_reason(e):
     impact = cve_impact.get("impact", "unknown")
     if impact == "must_release":
         details = cve_impact.get("details", [])
-        cve_list = ", ".join(d.get("cve", "") for d in details)
+        cve_list = ", ".join(
+            f"{d['cve']} ({d['jira']})" if d.get("jira") else d.get("cve", "")
+            for d in details
+        )
         parts.append(f"CVE fix: {cve_list}")
-    elif impact == "needs_review":
-        parts.append("CVE in progress")
     elif impact == "none":
         parts.append("no CVEs")
     elif impact == "unknown":
