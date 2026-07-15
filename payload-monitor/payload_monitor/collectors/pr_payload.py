@@ -273,6 +273,14 @@ def _extract_test_description(test_name: str) -> str:
     return stripped
 
 
+def _extract_changed_lines(diff_content: str) -> str:
+    """Extract only added/removed lines from a unified diff, ignoring context."""
+    return "\n".join(
+        line[1:] for line in diff_content.splitlines()
+        if line.startswith("+") or line.startswith("-")
+    ).lower()
+
+
 def classify_failure(
     job: PRPayloadJob,
     diff_content: str,
@@ -281,9 +289,9 @@ def classify_failure(
     """Classify whether a job failure is PR-caused or flaky.
 
     Uses diff-aware matching: checks if the failing test's description
-    appears in the PR diff, indicating the PR modified or added that test.
+    appears in added/removed lines of the PR diff (not context lines).
     """
-    diff_lower = diff_content.lower()
+    changed_lines = _extract_changed_lines(diff_content)
 
     for t in job.failing_tests:
         # Skip generic infrastructure failures
@@ -304,7 +312,7 @@ def classify_failure(
                 fragments.append(should_match.group(1))
 
         for frag in fragments:
-            if len(frag) >= 20 and frag.lower() in diff_lower:
+            if len(frag) >= 20 and frag.lower() in changed_lines:
                 matched = [f for f in pr_files if any(
                     part in f.lower() for part in desc.lower().split()[:3]
                 )]
@@ -327,9 +335,16 @@ def classify_failure(
                         matched_files=pr_files,
                     )
 
+    test_names = [
+        _extract_test_description(t.name)[:80]
+        for t in job.failing_tests
+        if "cluster precondition" not in t.name.lower()
+    ][:3]
+    summary = "; ".join(test_names) if test_names else "no test-level details"
+
     return FailureVerdict(
         verdict="flaky",
-        reason="Failing test(s) not found in PR diff — likely unrelated to changes",
+        reason=f"Not in PR diff — likely unrelated. Failures: {summary}",
     )
 
 

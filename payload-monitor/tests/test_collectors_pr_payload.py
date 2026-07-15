@@ -192,6 +192,20 @@ class TestClassifyFailure:
         verdict = classify_failure(job, diff, ["f.go"])
         assert verdict.verdict == "flaky"
 
+    def test_context_lines_not_matched(self):
+        """Test description in diff context (no +/-) should NOT trigger pr-caused."""
+        job = self._make_job(
+            "[sig-etcd] Two Node with Fencing should start normally as standalone voter"
+        )
+        diff = """diff --git a/test/extended/edge_topologies/tnf_etcd_disruption.go b/test/extended/edge_topologies/tnf_etcd_disruption.go
+ 	g.It("should start normally as standalone voter when peer is a non-voting learner", func() {
+-		timeout := 3 * time.Minute
++		timeout := longRecoveryTimeout
+ 	})
+"""
+        verdict = classify_failure(job, diff, ["test/extended/edge_topologies/tnf_etcd_disruption.go"])
+        assert verdict.verdict == "flaky"
+
     def test_no_failing_tests(self):
         job = PRPayloadJob(
             name="test-job",
