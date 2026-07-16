@@ -117,6 +117,7 @@ any existing `/payload-job` comments, and triages results if a payload
 run exists. Store the JSON output for step 2c.
 
 Exit codes:
+
 - `0` = results found — either triage results or discovery suggestions
 - `1` = no payload URL AND no matching payload jobs — skip Payload Track
 - `3` = error — follow **Error Handling** rules
@@ -264,6 +265,7 @@ to follow:
 **Triage mode** (`mode: "triage"`):
 
 The JSON contains:
+
 - `complete` — `true` when all jobs have final results, `false` when
   jobs are still running
 - `jobs[]` — each with `verdict` (`pr-caused` or `flaky`), `reason`,
@@ -306,6 +308,7 @@ flow as discovery mode. Never auto-post.
 **Discovery mode** (`mode: "discovery"`):
 
 No payload run exists yet. The JSON contains:
+
 - `suggestions[]` — payload jobs that match the PR's changed files,
   each with `as_name`, `trigger_command`, and `matched_files`
 - `version` — the OCP version the jobs target
@@ -314,6 +317,7 @@ Present the discovered payload jobs to the user and **ask whether to
 trigger one or more of them**. Use a direct question in the output:
 
 > "These payload jobs match your PR's changes:
+>
 > 1. `<trigger_command_1>` — <as_name_1>
 > 2. `<trigger_command_2>` — <as_name_2>
 >

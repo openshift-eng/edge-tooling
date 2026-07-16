@@ -33,6 +33,7 @@ python3 -m payload_monitor \
 ```
 
 The tool will:
+
 1. Fetch the pr-payload-tests page and extract Prow job URLs
 2. Check each job's pass/fail status via GCS `finished.json`
 3. For failing jobs, fetch deep junit artifacts to get individual Go test names
@@ -71,6 +72,7 @@ If `payload-monitor` exits non-zero, report the error to the user:
 - **Tool error (non-zero exit)**: Re-run with `--verbose` to see diagnostic output, then report the error message to the user.
 
 Between phases, guard checks:
+
 1. After fetching the payload page — verify job URLs were found before proceeding.
 2. After GCS lookups — note any `UNKNOWN` results (auth or connectivity issue) before classifying.
 3. After fetching the PR diff — if `gh` returns no diff, warn the user and skip classification (do not auto-classify as FLAKY).
