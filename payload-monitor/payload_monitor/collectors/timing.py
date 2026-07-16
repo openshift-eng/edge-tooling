@@ -86,25 +86,66 @@ def seed_cache_from_previous_run(cache_path: Path) -> None:
         return
 
     try:
-        json.loads(resp.text)
+        payload = json.loads(resp.text)
     except (json.JSONDecodeError, ValueError):
         logger.warning("Previous cache artifact is not valid JSON, ignoring")
+        return
+
+    if not _is_valid_cache_payload(payload):
+        logger.warning("Previous cache artifact has unexpected structure, ignoring")
         return
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(resp.text)
     logger.info(
         f"Seeded timing cache from build {latest_build} "
-        f"({len(json.loads(resp.text).get('runs', {}))} runs)"
+        f"({len(payload.get('runs', {}))} runs)"
     )
+
+
+# Fields load_cache() indexes directly (run_data["..."]) with no default —
+# a missing or wrong-typed value there raises KeyError/TypeError.
+_REQUIRED_RUN_STRING_FIELDS = (
+    "job_name", "topology", "release", "start_time", "result", "run_type",
+)
+
+
+def _is_valid_cache_payload(data) -> bool:
+    """Validate a downloaded cache payload matches the shape load_cache() expects.
+
+    This is an untrusted, externally-fetched artifact (GCS), so we allow-list
+    the exact structure rather than trusting arbitrary valid JSON.
+    """
+    if not isinstance(data, dict):
+        return False
+    runs = data.get("runs")
+    if not isinstance(runs, dict):
+        return False
+    for run_data in runs.values():
+        if not isinstance(run_data, dict):
+            return False
+        if not all(
+            isinstance(run_data.get(field), str)
+            for field in _REQUIRED_RUN_STRING_FIELDS
+        ):
+            return False
+        duration = run_data.get("duration_seconds")
+        if not isinstance(duration, (int, float)) or isinstance(duration, bool):
+            return False
+        for optional_field in ("variant", "step_durations"):
+            if optional_field in run_data and not isinstance(run_data[optional_field], dict):
+                return False
+    return True
 
 
 def _within_retention_window(timestamp_ms, days: int) -> bool:
     """Return True if *timestamp_ms* falls within the last *days* days.
 
-    Returns True for missing/zero timestamps (can't judge age).
+    Returns True for missing/zero/non-numeric timestamps (can't judge age).
     """
     if not timestamp_ms:
+        return True
+    if not isinstance(timestamp_ms, (int, float)) or isinstance(timestamp_ms, bool):
         return True
     try:
         run_time = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)

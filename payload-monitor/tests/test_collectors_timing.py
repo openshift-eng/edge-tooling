@@ -456,6 +456,10 @@ class TestWithinRetentionWindow:
         result = timing._within_retention_window(ts_ms, days=7)
         assert isinstance(result, bool)
 
+    def test_nonnumeric_timestamp_returns_true(self):
+        for bad_value in ("2026-07-16", ["not", "a", "number"], {"ts": 1}):
+            assert timing._within_retention_window(bad_value, days=7) is True
+
 
 # ---------------------------------------------------------------------------
 # GCS cache seeding
@@ -473,8 +477,8 @@ class TestSeedCacheFromPreviousRun:
             cache_path.unlink(missing_ok=True)
 
     @patch.dict(os.environ, {}, clear=True)
-    def test_skips_when_job_name_unset(self):
-        cache_path = Path("/tmp/nonexistent_test_cache.json")
+    def test_skips_when_job_name_unset(self, tmp_path):
+        cache_path = tmp_path / "nonexistent_test_cache.json"
         timing.seed_cache_from_previous_run(cache_path)
         assert not cache_path.exists()
 
@@ -512,16 +516,16 @@ class TestSeedCacheFromPreviousRun:
 
     @patch.object(timing, "_session")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
-    def test_latest_build_failure_no_crash(self, mock_session):
+    def test_latest_build_failure_no_crash(self, mock_session, tmp_path):
         mock_session.get.side_effect = requests.RequestException("network error")
 
-        cache_path = Path("/tmp/nonexistent_seed_test.json")
+        cache_path = tmp_path / "nonexistent_seed_test.json"
         timing.seed_cache_from_previous_run(cache_path)
         assert not cache_path.exists()
 
     @patch.object(timing, "_session")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
-    def test_cache_artifact_404_no_crash(self, mock_session):
+    def test_cache_artifact_404_no_crash(self, mock_session, tmp_path):
         latest_resp = MagicMock()
         latest_resp.text = "199\n"
         latest_resp.raise_for_status = MagicMock()
@@ -531,20 +535,20 @@ class TestSeedCacheFromPreviousRun:
 
         mock_session.get.side_effect = [latest_resp, cache_resp]
 
-        cache_path = Path("/tmp/nonexistent_seed_test.json")
+        cache_path = tmp_path / "nonexistent_seed_test.json"
         timing.seed_cache_from_previous_run(cache_path)
         assert not cache_path.exists()
 
     @patch.object(timing, "_session")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
-    def test_skips_when_latest_is_current_build(self, mock_session):
+    def test_skips_when_latest_is_current_build(self, mock_session, tmp_path):
         latest_resp = MagicMock()
         latest_resp.text = "200\n"
         latest_resp.raise_for_status = MagicMock()
 
         mock_session.get.return_value = latest_resp
 
-        cache_path = Path("/tmp/nonexistent_seed_test.json")
+        cache_path = tmp_path / "nonexistent_seed_test.json"
         timing.seed_cache_from_previous_run(cache_path)
         assert not cache_path.exists()
         # Should only have called GET once (for latest-build.txt), not for the cache artifact
@@ -552,7 +556,7 @@ class TestSeedCacheFromPreviousRun:
 
     @patch.object(timing, "_session")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
-    def test_invalid_json_from_artifact_no_crash(self, mock_session):
+    def test_invalid_json_from_artifact_no_crash(self, mock_session, tmp_path):
         latest_resp = MagicMock()
         latest_resp.text = "199\n"
         latest_resp.raise_for_status = MagicMock()
@@ -563,6 +567,27 @@ class TestSeedCacheFromPreviousRun:
 
         mock_session.get.side_effect = [latest_resp, cache_resp]
 
-        cache_path = Path("/tmp/nonexistent_seed_test.json")
+        cache_path = tmp_path / "nonexistent_seed_test.json"
+        timing.seed_cache_from_previous_run(cache_path)
+        assert not cache_path.exists()
+
+    @patch.object(timing, "_session")
+    @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
+    def test_structurally_invalid_json_no_crash(self, mock_session, tmp_path):
+        # Valid JSON, but not the shape load_cache() expects (runs entries
+        # missing required string fields).
+        cache_data = json.dumps({"runs": {"111": {"job_name": "j1"}}})
+
+        latest_resp = MagicMock()
+        latest_resp.text = "199\n"
+        latest_resp.raise_for_status = MagicMock()
+
+        cache_resp = MagicMock()
+        cache_resp.text = cache_data
+        cache_resp.raise_for_status = MagicMock()
+
+        mock_session.get.side_effect = [latest_resp, cache_resp]
+
+        cache_path = tmp_path / "nonexistent_seed_test.json"
         timing.seed_cache_from_previous_run(cache_path)
         assert not cache_path.exists()
