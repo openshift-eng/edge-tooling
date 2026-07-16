@@ -13,6 +13,12 @@
       "version": "1.0.0"
     },
     {
+      "name": "edge-cve",
+      "source": "./plugins/edge-cve",
+      "description": "Investigate open Black CVE Jira tickets with govulncheck scans and actionable remediation reports",
+      "version": "1.0.0"
+    },
+    {
       "name": "edge-ic",
       "source": "./plugins/edge-ic",
       "description": "Individual contributor workflow automation for TODO management, status reporting, and Jira updates",

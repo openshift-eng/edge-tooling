@@ -12,3 +12,4 @@ markdownlint-cli2-results.json
 .env
 plugins/edge-ocp-rc/jobs/*.txt
 node_modules/
+.work
