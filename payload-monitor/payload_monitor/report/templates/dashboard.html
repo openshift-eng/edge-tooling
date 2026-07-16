@@ -98,6 +98,23 @@
 </div>
 {% endif %}
 
+{% if timing_unavailable %}
+<div class="warning-banner">
+  <strong>Timing insights unavailable:</strong> <code>--with-timing</code> was enabled but timing
+  data could not be collected. The Timing Insights tab is not available for this report.
+  {% if timing_errors %}
+  <details class="error-details">
+    <summary>Show details</summary>
+    <ul>
+      {% for err in timing_errors %}
+      <li>{{ err }}</li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+</div>
+{% endif %}
+
 <!-- Edge OCP Jobs Health Overview -->
 <h2 style="margin-top:0">Edge OCP Jobs Health Overview</h2>
 <div class="health-overview">

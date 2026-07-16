@@ -137,6 +137,8 @@ def _build_template_context(report: MonitorReport) -> dict:
     timing_html = ""
     if report.timing_report and not report.skip_timing:
         timing_html = render_timing_section(report.timing_report)
+    timing_unavailable = not report.skip_timing and not timing_html
+    timing_errors = [e for e in report.data_errors if e.startswith("Timing:")] if timing_unavailable else []
 
     # Map blocking job name -> first index in all_failing for stable detail links
     blocking_job_first_idx = {}
@@ -177,6 +179,8 @@ def _build_template_context(report: MonitorReport) -> dict:
             r.version for r in all_regressions if r.version
         )),
         "timing_html": timing_html,
+        "timing_unavailable": timing_unavailable,
+        "timing_errors": timing_errors,
         "failure_counts": report.failure_counts,
         "persistent_count": sum(1 for c in report.failure_counts.values() if c >= report.persistent_threshold),
         "recurring_threshold": report.recurring_threshold,

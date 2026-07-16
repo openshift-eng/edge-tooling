@@ -24,6 +24,8 @@ from payload_monitor.models import (
     Regression,
     StreamReport,
     SuggestedBug,
+    TimingReport,
+    TimingRun,
 )
 from payload_monitor.report.generator import (
     _build_template_context,
@@ -942,3 +944,69 @@ class TestPatchAnalysisHtml:
         result = html_path.read_text()
         assert "AI-enriched via Claude" in result
         assert "data-only" not in result
+
+
+class TestTimingUnavailableContext:
+    def test_false_when_timing_not_requested(self):
+        report = MonitorReport(generated_at="now", skip_timing=True)
+        ctx = _build_template_context(report)
+        assert ctx["timing_unavailable"] is False
+
+    def test_false_when_timing_succeeded(self):
+        report = MonitorReport(
+            generated_at="now",
+            skip_timing=False,
+            timing_report=TimingReport(
+                last_updated="2026-07-15T07:00:00Z",
+                runs={"1": TimingRun(
+                    "job1", "TNA", "4.22", "2026-07-15T06:00:00Z",
+                    3600, "S", "install",
+                )},
+            ),
+        )
+        ctx = _build_template_context(report)
+        assert ctx["timing_unavailable"] is False
+
+    def test_true_when_timing_report_is_none(self):
+        report = MonitorReport(
+            generated_at="now",
+            skip_timing=False,
+            timing_report=None,
+        )
+        ctx = _build_template_context(report)
+        assert ctx["timing_unavailable"] is True
+
+    def test_true_when_timing_report_has_no_runs(self):
+        report = MonitorReport(
+            generated_at="now",
+            skip_timing=False,
+            timing_report=TimingReport(runs={}),
+        )
+        ctx = _build_template_context(report)
+        assert ctx["timing_unavailable"] is True
+
+    def test_banner_in_html_when_unavailable(self):
+        report = MonitorReport(
+            generated_at="now",
+            skip_timing=False,
+            timing_report=None,
+            data_errors=["Timing: Connection timed out"],
+        )
+        html = generate_html(report)
+        assert "Timing insights unavailable" in html
+        assert "Connection timed out" in html
+
+    def test_no_banner_in_html_when_timing_succeeded(self):
+        report = MonitorReport(
+            generated_at="now",
+            skip_timing=False,
+            timing_report=TimingReport(
+                last_updated="2026-07-15T07:00:00Z",
+                runs={"1": TimingRun(
+                    "job1", "TNA", "4.22", "2026-07-15T06:00:00Z",
+                    3600, "S", "install",
+                )},
+            ),
+        )
+        html = generate_html(report)
+        assert "Timing insights unavailable" not in html

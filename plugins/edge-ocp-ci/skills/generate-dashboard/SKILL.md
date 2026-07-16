@@ -85,6 +85,8 @@ cd "$TOOL_DIR" && .venv/bin/python -m payload_monitor --output reports/report-$(
 
 Pass through any relevant flags (`--versions`, `--payloads`, `--skip-prow`, `--skip-sippy`, `--with-timing`).
 
+**Timeout guidance:** When using `--with-timing`, set the Bash tool timeout to at least **10 minutes** (600000 ms). On a cold start (first run after deployment, or if the previous run's cache artifact is unavailable), the timing collector may need to backfill up to 7 days of run data. Subsequent warm runs with a seeded cache typically complete in under 2 minutes.
+
 **Important:** If a report with the same filename already exists, the tool automatically appends a timestamp (e.g., `report-2026-03-25-143027.html`). Capture the actual output path from the tool's log line:
 
 - `Report: /path/to/report-{name}.html`

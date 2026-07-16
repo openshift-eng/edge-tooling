@@ -1,5 +1,7 @@
 """Tests for payload_monitor.collectors.timing."""
 
+import json
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -421,3 +423,146 @@ class TestFetchStepDurations:
         steps = timing.fetch_step_durations("test-job", "12345")
         assert "install" not in steps
         assert steps["pre phase"] == 100.0
+
+
+# ---------------------------------------------------------------------------
+# Retention window helper
+# ---------------------------------------------------------------------------
+
+class TestWithinRetentionWindow:
+    def test_recent_timestamp_is_within(self):
+        # 1 hour ago in milliseconds
+        import time
+        ts_ms = int((time.time() - 3600) * 1000)
+        assert timing._within_retention_window(ts_ms, days=7) is True
+
+    def test_old_timestamp_is_outside(self):
+        # 30 days ago in milliseconds
+        import time
+        ts_ms = int((time.time() - 30 * 86400) * 1000)
+        assert timing._within_retention_window(ts_ms, days=7) is False
+
+    def test_zero_timestamp_returns_true(self):
+        assert timing._within_retention_window(0, days=7) is True
+
+    def test_none_timestamp_returns_true(self):
+        assert timing._within_retention_window(None, days=7) is True
+
+    def test_boundary_exactly_at_cutoff(self):
+        import time
+        ts_ms = int((time.time() - 7 * 86400) * 1000)
+        # At the boundary (within a second of the cutoff) — may be just inside or
+        # just outside depending on execution speed, so just verify it doesn't crash.
+        result = timing._within_retention_window(ts_ms, days=7)
+        assert isinstance(result, bool)
+
+
+# ---------------------------------------------------------------------------
+# GCS cache seeding
+# ---------------------------------------------------------------------------
+
+class TestSeedCacheFromPreviousRun:
+    def test_skips_when_cache_exists(self):
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            f.write(b"{}")
+            cache_path = Path(f.name)
+        try:
+            timing.seed_cache_from_previous_run(cache_path)
+            # Should not have made any HTTP calls
+        finally:
+            cache_path.unlink(missing_ok=True)
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_skips_when_job_name_unset(self):
+        cache_path = Path("/tmp/nonexistent_test_cache.json")
+        timing.seed_cache_from_previous_run(cache_path)
+        assert not cache_path.exists()
+
+    @patch.object(timing, "_session")
+    @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
+    def test_success_writes_cache(self, mock_session):
+        cache_data = json.dumps({
+            "last_updated": "2026-07-15T07:00:00Z",
+            "runs": {"111": {
+                "job_name": "j1", "topology": "TNA", "release": "4.22",
+                "start_time": "2026-07-15T06:00:00Z", "duration_seconds": 3600,
+                "result": "S", "run_type": "install", "variant": {},
+                "step_durations": {},
+            }},
+            "phase_durations": {},
+        })
+
+        latest_resp = MagicMock()
+        latest_resp.text = "199\n"
+        latest_resp.raise_for_status = MagicMock()
+
+        cache_resp = MagicMock()
+        cache_resp.text = cache_data
+        cache_resp.raise_for_status = MagicMock()
+
+        mock_session.get.side_effect = [latest_resp, cache_resp]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = Path(tmpdir) / "timing_cache.json"
+            timing.seed_cache_from_previous_run(cache_path)
+
+            assert cache_path.exists()
+            loaded = json.loads(cache_path.read_text())
+            assert "111" in loaded["runs"]
+
+    @patch.object(timing, "_session")
+    @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
+    def test_latest_build_failure_no_crash(self, mock_session):
+        mock_session.get.side_effect = requests.RequestException("network error")
+
+        cache_path = Path("/tmp/nonexistent_seed_test.json")
+        timing.seed_cache_from_previous_run(cache_path)
+        assert not cache_path.exists()
+
+    @patch.object(timing, "_session")
+    @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
+    def test_cache_artifact_404_no_crash(self, mock_session):
+        latest_resp = MagicMock()
+        latest_resp.text = "199\n"
+        latest_resp.raise_for_status = MagicMock()
+
+        cache_resp = MagicMock()
+        cache_resp.raise_for_status.side_effect = requests.RequestException("404")
+
+        mock_session.get.side_effect = [latest_resp, cache_resp]
+
+        cache_path = Path("/tmp/nonexistent_seed_test.json")
+        timing.seed_cache_from_previous_run(cache_path)
+        assert not cache_path.exists()
+
+    @patch.object(timing, "_session")
+    @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
+    def test_skips_when_latest_is_current_build(self, mock_session):
+        latest_resp = MagicMock()
+        latest_resp.text = "200\n"
+        latest_resp.raise_for_status = MagicMock()
+
+        mock_session.get.return_value = latest_resp
+
+        cache_path = Path("/tmp/nonexistent_seed_test.json")
+        timing.seed_cache_from_previous_run(cache_path)
+        assert not cache_path.exists()
+        # Should only have called GET once (for latest-build.txt), not for the cache artifact
+        assert mock_session.get.call_count == 1
+
+    @patch.object(timing, "_session")
+    @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
+    def test_invalid_json_from_artifact_no_crash(self, mock_session):
+        latest_resp = MagicMock()
+        latest_resp.text = "199\n"
+        latest_resp.raise_for_status = MagicMock()
+
+        cache_resp = MagicMock()
+        cache_resp.text = "not valid json {"
+        cache_resp.raise_for_status = MagicMock()
+
+        mock_session.get.side_effect = [latest_resp, cache_resp]
+
+        cache_path = Path("/tmp/nonexistent_seed_test.json")
+        timing.seed_cache_from_previous_run(cache_path)
+        assert not cache_path.exists()
