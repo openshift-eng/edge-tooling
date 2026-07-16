@@ -23,7 +23,7 @@ def find_scenario_dirs(artifacts_root):
         build_dir = os.path.join(artifacts_root, build_id)
         if not os.path.isdir(build_dir):
             continue
-        for root, dirs, _files in os.walk(build_dir):
+        for root, dirs, _files in os.walk(build_dir, followlinks=True):
             if os.path.basename(root) != "scenario-info":
                 continue
             for scenario in sorted(os.listdir(root)):

@@ -315,25 +315,27 @@ def escape_json_for_script(json_str):
     return json_str.replace("</", "<\\/").replace("<!--", "<\\!--")
 
 
-def build_html(chartjs_src, pcp_charts_src, data_json, scenarios_json, timezone):
+def build_html(chartjs_src, pcp_charts_src, data_json, scenarios_json, timezone,
+               title="PCP Performance Dashboard"):
     """Assemble the complete HTML document."""
     safe_data = escape_json_for_script(data_json)
     safe_scenarios = escape_json_for_script(scenarios_json)
     safe_tz = html.escape(timezone)
+    safe_title = html.escape(title)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PCP Performance Dashboard</title>
+<title>{safe_title}</title>
 <style>
 {CSS}
 </style>
 </head>
 <body>
 <div class="sidebar">
-    <h1>PCP Dashboard</h1>
+    <h1>{safe_title}</h1>
     <div style="padding:4px 16px;font-size:0.75em;color:#8888aa;">Timezone: {safe_tz}</div>
     <div id="sidebar-items"></div>
 </div>
@@ -368,6 +370,8 @@ def main():
                         help="Timezone label for display (default: UTC)")
     parser.add_argument("--output",
                         help="Output HTML file (default: <workdir>/pcp-dashboard.html)")
+    parser.add_argument("--title", default="PCP Performance Dashboard",
+                        help="HTML <title> for the dashboard")
     args = parser.parse_args()
 
     dashboard_dir = os.path.join(args.workdir, "pcp-dashboard")
@@ -385,7 +389,8 @@ def main():
     data_json = json.dumps(data, separators=(",", ":"))
     scenarios_json = json.dumps(scenarios, separators=(",", ":"))
 
-    html = build_html(chartjs_src, pcp_charts_src, data_json, scenarios_json, args.timezone)
+    html = build_html(chartjs_src, pcp_charts_src, data_json, scenarios_json, args.timezone,
+                       title=args.title)
 
     with open(output, "w") as f:
         f.write(html)
