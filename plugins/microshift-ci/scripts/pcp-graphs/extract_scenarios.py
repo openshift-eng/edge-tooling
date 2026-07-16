@@ -19,11 +19,18 @@ def find_scenario_dirs(artifacts_root):
     """Yield (build_id, scenario_name, scenario_dir) tuples."""
     if not os.path.isdir(artifacts_root):
         return
+    seen = set()
     for build_id in os.listdir(artifacts_root):
         build_dir = os.path.join(artifacts_root, build_id)
         if not os.path.isdir(build_dir):
             continue
         for root, dirs, _files in os.walk(build_dir, followlinks=True):
+            st = os.stat(root)
+            ident = (st.st_dev, st.st_ino)
+            if ident in seen:
+                dirs.clear()
+                continue
+            seen.add(ident)
             if os.path.basename(root) != "scenario-info":
                 continue
             for scenario in sorted(os.listdir(root)):

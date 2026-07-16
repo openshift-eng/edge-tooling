@@ -3,7 +3,7 @@
 #
 # Two modes:
 #   --url  <prow-url>   Download artifacts from GCS (default)
-#   --local <path>      Use a local directory containing scenario-info/
+#   --local <path>      Use a local scenario-info/ directory
 #
 # Usage:
 #   generate-dashboard.sh --url <prow-url> [--parallel N] [--timezone TZ]
@@ -35,7 +35,7 @@ usage() {
     echo "  ${0} --local <path> [--build-id ID] [--output FILE] [--title TITLE] [--timezone TZ]" >&2
     echo "" >&2
     echo "  --url URL       : Prow job URL" >&2
-    echo "  --local PATH    : local directory with scenario-info/" >&2
+    echo "  --local PATH    : path to scenario-info/ directory" >&2
     echo "  --build-id ID   : build label (default: local)" >&2
     echo "  --output FILE   : output HTML file path" >&2
     echo "  --title TITLE   : HTML <title> for the dashboard" >&2
@@ -54,6 +54,7 @@ while [[ $# -gt 0 ]]; do
             LOCAL_PATH="$2"; shift 2 ;;
         --build-id)
             [[ $# -lt 2 ]] && { echo "Error: --build-id requires a value" >&2; usage; }
+            [[ "$2" =~ ^[a-zA-Z0-9._-]+$ ]] || { echo "Error: --build-id contains invalid characters" >&2; usage; }
             BUILD_ID="$2"; shift 2 ;;
         --output)
             [[ $# -lt 2 ]] && { echo "Error: --output requires a file path" >&2; usage; }
