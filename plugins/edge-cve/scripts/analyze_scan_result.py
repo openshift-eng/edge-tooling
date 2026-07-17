@@ -34,9 +34,10 @@ def determine_verdict(result: dict) -> tuple[str, bool]:
         return "inconclusive", False
     if result.get("affected"):
         return "affected", True
-    if result.get("scan_exit_code", 0) not in (0, 3) and result.get("finding_count", 0) > 0:
-        # govulncheck exited abnormally but still produced findings data -
-        # treat as inconclusive rather than silently clearing the repo.
+    # govulncheck: 0 = clean, 3 = vulnerabilities found. Any other exit is
+    # abnormal (tool/build error, etc.) - treat as inconclusive even when
+    # finding_count is 0, so a failed scan is never mistaken for "not affected".
+    if result.get("scan_exit_code", 0) not in (0, 3):
         return "inconclusive", False
     return "not_affected", False
 

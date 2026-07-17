@@ -18,7 +18,7 @@ export JIRA_API_TOKEN=<token>
 /edge-cve:investigate
 
 # Or run scripts directly (OpenShift)
-WORKDIR=/tmp/edge-cve-workdir.$(date +%y%m%d)
+WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/edge-cve-workdir.XXXXXX")"
 bash plugins/edge-cve/scripts/cve-investigator.sh prepare --workdir "$WORKDIR"
 bash plugins/edge-cve/scripts/cve-investigator.sh scan --workdir "$WORKDIR" --repo openshift/lvm-operator --dry-run
 bash plugins/edge-cve/scripts/cve-investigator.sh scan --workdir "$WORKDIR" --repo openshift/lvm-operator
@@ -116,7 +116,7 @@ pip install requests
 - Applies `k8s/namespace.yaml`, `k8s/rbac.yaml` (ServiceAccount/Role/RoleBinding), and one Job per target
 - Jobs use `registry.redhat.io/ubi9/go-toolset:1.23` (OpenShift arbitrary-UID compatible), clone the repo at the target ref, and run `govulncheck -json ./...`
 - `GOTOOLCHAIN=auto` lets Go auto-download a newer toolchain if `govulncheck@latest` requires one (needs egress to `proxy.golang.org` / `go.dev`)
-- No `hostUsers`/`fsGroup`/explicit `securityContext` is set — the namespace's default SCC (typically `restricted-v2`) assigns UID/GID automatically
+- Container runs non-root with `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`, and all capabilities dropped; writable `emptyDir` volumes cover `/tmp` and `/tmp/workspace`. No fixed `runAsUser`/`fsGroup` — the namespace's default SCC (typically `restricted-v2`) assigns UID/GID automatically
 - Cluster must be able to pull from `registry.redhat.io`
 
 ## Result storage
@@ -205,12 +205,13 @@ bash plugins/edge-cve/scripts/run_govulncheck_podman.sh --workdir "$WORKDIR" --r
   clone or toolchain download hangs past the timeout, the container is
   force-removed rather than left running indefinitely — this is what
   previously orphaned a multi-GB container and filled up the podman VM's
-  disk. By default the script also runs a light `podman system prune -f`
-  before starting to reclaim space from any containers/images left behind by
-  a prior interrupted run; pass `--no-prune` to skip it.
+  disk. Host-wide `podman system prune -f` is **opt-in** via `--prune`
+  (default is no prune / `--no-prune`) — never run it against a shared
+  podman machine without explicit approval, since it can delete unrelated
+  stopped containers and dangling images.
 - If the podman machine's disk still fills up (e.g. from unrelated images on
-  the same machine), reclaim space with `podman system prune -f` (safe,
-  leaves named volumes alone) or, more aggressively,
+  the same machine), reclaim space only after confirming with the user:
+  `podman system prune -f` (leaves named volumes alone) or, more aggressively,
   `podman image prune -a -f --filter until=720h` to drop any image unused for
   30+ days.
 

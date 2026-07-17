@@ -55,6 +55,11 @@ def load_config() -> dict[str, str]:
     return {"base_url": base_url, "email": email, "token": token}
 
 
+# Hard cap on /search/jql pages so a stuck/repeating nextPageToken cannot loop
+# forever. 1000 pages * 100 results = 100k issues, well above Black CVE volume.
+MAX_SEARCH_PAGES = 1000
+
+
 def search_jql(
     jql: str,
     *,
@@ -72,8 +77,9 @@ def search_jql(
     url = f"{cfg['base_url']}/rest/api/3/search/jql"
     issues: list[dict[str, Any]] = []
     next_page_token: str | None = None
+    seen_tokens: set[str] = set()
 
-    while True:
+    for page in range(1, MAX_SEARCH_PAGES + 1):
         payload: dict[str, Any] = {
             "jql": jql,
             "maxResults": max_results,
@@ -92,13 +98,40 @@ def search_jql(
         batch = data.get("issues", [])
         issues.extend(batch)
 
-        if data.get("isLast", True):
-            break
-        next_page_token = data.get("nextPageToken")
-        if not next_page_token:
-            break
+        # Only trust an explicit final-page signal. Do not default missing
+        # isLast to True - that silently truncates when Jira omits the field.
+        is_last = data.get("isLast")
+        token = data.get("nextPageToken")
 
-    return issues
+        if is_last is True:
+            return issues
+
+        if token:
+            if token == next_page_token or token in seen_tokens:
+                raise RuntimeError(
+                    f"Jira search pagination failed to advance "
+                    f"(repeated nextPageToken on page {page})"
+                )
+            seen_tokens.add(token)
+            next_page_token = token
+            continue
+
+        if is_last is False:
+            raise RuntimeError(
+                f"Jira search page {page} has isLast=false but no nextPageToken"
+            )
+        if is_last is None and len(batch) >= max_results:
+            raise RuntimeError(
+                f"Jira search page {page} missing isLast/nextPageToken on a "
+                f"full page of {len(batch)} issues; refusing to truncate"
+            )
+        # Short/empty page with no token and no explicit isLast - treat as done.
+        return issues
+
+    raise RuntimeError(
+        f"Jira search exceeded {MAX_SEARCH_PAGES} pages without isLast=true; "
+        f"refusing to continue"
+    )
 
 
 def normalize_issue(raw: dict[str, Any], *, base_url: str | None = None) -> dict[str, Any]:

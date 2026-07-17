@@ -241,22 +241,26 @@ func configMapName(targetID string) string {
 }
 
 func sanitizeLabel(raw string) string {
+	// Preserve A-Z (no lowercasing) so ConfigMap edge-cve/repo labels match
+	// the case-preserving --repo filters from collect_govulncheck_results.py
+	// and the REPO_LABEL values set by run_govulncheck_jobs.sh.
 	var b strings.Builder
 	for _, r := range raw {
 		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
 			b.WriteRune(r)
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r + ('a' - 'A'))
 		default:
 			b.WriteRune('-')
 		}
 	}
-	out := strings.Trim(b.String(), "-_.")
+	out := b.String()
+	// Truncate first, then trim trailing separators so a mid-label cut cannot
+	// leave a final '-', '_', or '.' (Kubernetes label values must end in
+	// alphanumeric).
 	if len(out) > 63 {
 		out = out[:63]
 	}
-	return out
+	return strings.Trim(out, "-_.")
 }
 
 func parseCSV(raw string) []string {
@@ -308,43 +312,90 @@ func readNDJSON(path string) []map[string]any {
 	return entries
 }
 
+// buildOSVIndex maps OSV IDs (and aliases) to top-level {"osv": {...}} catalog
+// entries from the govulncheck NDJSON stream. Finding records reference these
+// by string ID in finding.osv.
+func buildOSVIndex(entries []map[string]any) map[string]map[string]any {
+	index := make(map[string]map[string]any)
+	for _, entry := range entries {
+		osv, ok := entry["osv"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if id, ok := osv["id"].(string); ok && id != "" {
+			index[strings.ToUpper(id)] = osv
+		}
+		aliases, _ := osv["aliases"].([]any)
+		for _, alias := range aliases {
+			if s, ok := alias.(string); ok && s != "" {
+				index[strings.ToUpper(s)] = osv
+			}
+		}
+	}
+	return index
+}
+
 // matchFindings selects the findings relevant to this scan. If CVE_IDS was
 // provided (the Jira-driven bulk workflow, where we're checking a repo
 // against specific known CVEs), only findings matching one of those IDs
 // count. If no CVE_IDS was given (ad-hoc "is this repo/ref affected by
 // anything" checks - see run_single_repo_scan.sh), every vulnerability
 // govulncheck reports counts, since there's no specific CVE to filter to.
+//
+// Only NDJSON entries with a "finding" key are considered - top-level "osv"
+// catalog records are used for ID resolution only and are never appended to
+// matched (the original finding entry is preserved).
 func matchFindings(findings []map[string]any, cveSet map[string]bool) []map[string]any {
+	osvByID := buildOSVIndex(findings)
 	matchAny := len(cveSet) == 0
 	var matched []map[string]any
 	for _, entry := range findings {
+		if _, hasFinding := entry["finding"]; !hasFinding {
+			continue
+		}
 		if matchAny {
-			if findingOSV(entry) != nil {
+			if findingOSV(entry, osvByID) != nil {
 				matched = append(matched, entry)
 			}
 			continue
 		}
-		if entryMatchesCVE(entry, cveSet) {
+		if entryMatchesCVE(entry, cveSet, osvByID) {
 			matched = append(matched, entry)
 		}
 	}
 	return matched
 }
 
-func findingOSV(entry map[string]any) map[string]any {
+// findingOSV resolves the OSV record for a finding entry. govulncheck emits
+// finding.osv as either an embedded object (legacy) or a string ID that
+// references a prior top-level {"osv": {...}} catalog entry.
+func findingOSV(entry map[string]any, osvByID map[string]map[string]any) map[string]any {
 	finding, ok := entry["finding"].(map[string]any)
 	if !ok {
 		finding = entry
 	}
-	osv, _ := finding["osv"].(map[string]any)
-	if osv == nil {
-		osv, _ = finding["vulnerability"].(map[string]any)
+	switch v := finding["osv"].(type) {
+	case map[string]any:
+		return v
+	case string:
+		if v == "" {
+			break
+		}
+		if osv, ok := osvByID[strings.ToUpper(v)]; ok {
+			return osv
+		}
+		// Catalog entry missing (truncated stream) - still expose the ID so
+		// matchAny / exact-ID checks can see the finding.
+		return map[string]any{"id": v}
 	}
-	return osv
+	if osv, _ := finding["vulnerability"].(map[string]any); osv != nil {
+		return osv
+	}
+	return nil
 }
 
-func entryMatchesCVE(entry map[string]any, cveSet map[string]bool) bool {
-	osv := findingOSV(entry)
+func entryMatchesCVE(entry map[string]any, cveSet map[string]bool, osvByID map[string]map[string]any) bool {
+	osv := findingOSV(entry, osvByID)
 	if osv == nil {
 		return false
 	}

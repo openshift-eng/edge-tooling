@@ -33,10 +33,15 @@ def oc_base(namespace: str) -> list[str]:
 
 
 def sanitize_label(raw: str) -> str:
-    """Mirror the sanitization applied to labels in run_govulncheck_jobs.sh."""
+    """Mirror Go sanitizeLabel used for edge-cve/repo ConfigMap labels.
+
+    Preserves uppercase (same as run_govulncheck_jobs.sh REPO_LABEL). Truncate
+    to 63 first, then trim trailing "-_." so the value always ends alphanumeric.
+    """
     label = raw.replace("/", "--")
-    label = re.sub(r"[^A-Za-z0-9._-]", "", label)
-    return label[:63]
+    label = re.sub(r"[^A-Za-z0-9._-]", "-", label)
+    label = label[:63]
+    return label.rstrip("-_.")
 
 
 def wait_for_jobs(namespace: str, timeout: int) -> dict:

@@ -35,11 +35,14 @@ CONTAINER_CPUS="3"
 # forever holding a container's writable layer open (this is what previously
 # left an orphaned multi-GB container behind and filled the podman VM disk).
 CONTAINER_TIMEOUT="1800"
-RUN_PRUNE=1
+# Opt-in only: never prune the host's podman store unless the caller explicitly
+# asked for it (--prune). Unrelated images/containers on a shared machine must
+# not be deleted as a side effect of a CVE scan.
+RUN_PRUNE=0
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") --workdir DIR [--repo SLUG ...] [--image IMAGE] [--memory MEM] [--cpus N] [--timeout SECONDS] [--no-prune]
+Usage: $(basename "$0") --workdir DIR [--repo SLUG ...] [--image IMAGE] [--memory MEM] [--cpus N] [--timeout SECONDS] [--prune|--no-prune]
 
 Runs govulncheck for each Go scan target sequentially in its own podman
 container (no cluster required). A named podman volume (${CACHE_VOLUME})
@@ -52,15 +55,14 @@ Options:
   --memory MEM     Container memory limit, podman --memory syntax (default: ${CONTAINER_MEMORY})
   --cpus N         Container CPU limit (default: ${CONTAINER_CPUS})
   --timeout SEC    Kill a single target's container after this many seconds (default: ${CONTAINER_TIMEOUT})
-  --no-prune       Skip the automatic "podman system prune" run before starting
+  --prune          Opt-in: run "podman system prune -f" before starting
+  --no-prune       Explicitly skip prune (default; kept for callers that pass it)
 
 Disk usage: each target runs in its own --rm container and the shared
 ${CACHE_VOLUME} volume only holds the Go module/toolchain cache (build cache
 and the repo clone are cleaned up inside the container after each target -
-see scan_target.sh). By default this script also runs a light
-"podman system prune -f" before starting to reclaim space from any
-containers/images left over from prior interrupted runs; pass --no-prune to
-skip that.
+see scan_target.sh). Host-wide "podman system prune -f" is opt-in via
+--prune - it is never run unless you ask for it.
 
 If a target's govulncheck run exits with 137 (SIGKILL), it was almost
 certainly OOM-killed - re-run with a higher --memory.
@@ -75,6 +77,7 @@ while [[ $# -gt 0 ]]; do
     --memory) CONTAINER_MEMORY="$2"; shift 2 ;;
     --cpus) CONTAINER_CPUS="$2"; shift 2 ;;
     --timeout) CONTAINER_TIMEOUT="$2"; shift 2 ;;
+    --prune) RUN_PRUNE=1; shift ;;
     --no-prune) RUN_PRUNE=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
@@ -119,7 +122,7 @@ cleanup_current_container() {
 trap cleanup_current_container EXIT INT TERM
 
 if [[ ${RUN_PRUNE} -eq 1 ]]; then
-  echo "Pruning stopped containers / dangling images before starting (pass --no-prune to skip)..." >&2
+  echo "Pruning stopped containers / dangling images (--prune explicitly requested)..." >&2
   podman system prune -f >&2 || true
 fi
 podman system df >&2 || true
@@ -248,9 +251,16 @@ repo_filters = sys.argv[3:]
 results = []
 for result_file in sorted(Path(results_dir).glob("*/result.json")):
     try:
-        results.append(json.loads(result_file.read_text(encoding="utf-8")))
+        result = json.loads(result_file.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         print(f"Warning: invalid JSON in {result_file}", file=sys.stderr)
+        continue
+    # When --repo filters were used, only aggregate matching result files so a
+    # prior unfiltered run's leftovers under results/ don't leak into the
+    # output. No filters => keep every valid result (existing behavior).
+    if repo_filters and result.get("repo_slug") not in repo_filters:
+        continue
+    results.append(result)
 
 payload = {
     "collected_at": datetime.now(timezone.utc).isoformat(),

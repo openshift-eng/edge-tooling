@@ -44,11 +44,20 @@ Parse `$ARGUMENTS` for optional flags:
 
 | Flag | Effect |
 |------|--------|
-| `--workdir DIR` | Override work directory (default: `/tmp/edge-cve-workdir.<YYMMDD>`) |
+| `--workdir DIR` | Override work directory. Default is a unique per-run dir from `mktemp -d "${TMPDIR:-/tmp}/edge-cve-workdir.XXXXXX"`. Overrides must be an absolute path, must not contain `..`, must not be a system/home root, and must be empty or nonexistent when starting a new investigation (`prepare` enforces this). |
 | `--dry-run` | Run `prepare` and render OpenShift job manifests without applying them |
 | `--skip-scan` | Skip scan launch/collection entirely; generate report from existing scan data |
 | `--local` | Run the scan sequentially via podman (`scan-local`) instead of OpenShift Jobs; no cluster required |
 | `--check-repo URL --ref REF` | Ad-hoc single-repo mode (see below): bypasses the whole Jira pipeline; `--cve ID` (repeatable, optional), `--ticket KEY` (repeatable, optional), `--jira-url`, `--summary`, `--component` add context |
+
+**Flag incompatibility**: `--local` and `--dry-run` must not be combined. `--dry-run`
+applies only to OpenShift job manifest rendering; `--local` uses podman
+(`scan-local`) and has no dry-run path. If both appear in `$ARGUMENTS`, stop
+immediately with an error before any prepare/scan work:
+
+```text
+Error: --local and --dry-run are incompatible; use one or the other
+```
 
 ## Prerequisites
 
@@ -73,12 +82,23 @@ Do NOT broaden this query. Only Black CVEs in this intersection are in scope.
 
 ## Work Directory
 
-Compute once at the start by running `date +%y%m%d` unless `--workdir` is
-provided:
+Compute once at the start of a new investigation. Prefer a unique per-run
+directory (never reuse a shared daily path):
 
-```text
-/tmp/edge-cve-workdir.<YYMMDD>
+```bash
+WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/edge-cve-workdir.XXXXXX")"
 ```
+
+If `--workdir DIR` is provided instead, validate it **before** `prepare`:
+
+- absolute path (starts with `/`)
+- does not contain `..`
+- is not a system/home root (`/`, `/tmp`, `$HOME`, etc.)
+- is nonexistent or empty (refuse to write into a non-empty directory)
+
+`cve-investigator.sh prepare` enforces the same checks. For `--skip-scan` on an
+existing prior run, reuse that run's workdir as-is (it will already contain
+outputs; do not re-run `prepare` against it).
 
 Prescribed outputs:
 
@@ -88,6 +108,8 @@ Prescribed outputs:
 | `jira/cves-parsed.json` | `parse_cves.py` |
 | `jira/cves-grouped.json` | `group_cves.py` |
 | `jira/cves-llm-review.json` | `group_cves.py` (ambiguous groups) |
+| `jira/cves-grouped-reviewed.json` | Step 1b Agent (after validation) |
+| `jira/cves-parsed-for-analysis.json` | `redact_parsed_for_analysis.py` (Step 3) |
 | `scans/scan-targets.json` | `build_scan_targets.py` |
 | `scans/govulncheck-results.json` | `collect_govulncheck_results.py` |
 | `report-cve-investigation.md` | `generate_report.py` |
@@ -102,7 +124,9 @@ Prescribed outputs:
 
 **Actions**:
 
-1. Compute `<WORKDIR>` from `date +%y%m%d` or use `--workdir` from arguments.
+1. Compute `<WORKDIR>` with `mktemp -d "${TMPDIR:-/tmp}/edge-cve-workdir.XXXXXX"`,
+   or validate a `--workdir` override (absolute, no `..`, not a system/home
+   root, empty or nonexistent) before continuing.
 2. Run:
 
    ```text
@@ -144,7 +168,22 @@ Prescribed outputs:
    Reply DONE when cves-grouped-reviewed.json is written."
    ```
 
-2. Rebuild scan targets from the reviewed grouping:
+2. **Validate the reviewed grouping before rebuilding targets.** Require
+   `<WORKDIR>/jira/cves-grouped-reviewed.json` to exist and match the
+   `cves-grouped.json` schema. If it is missing or invalid, **stop** — do
+   **not** run `build_scan_targets.py` (that would leave or refresh targets from
+   stale pre-review data).
+
+   ```text
+   python3 plugins/edge-cve/scripts/validate_grouped_cves.py --workdir <WORKDIR>
+   ```
+
+   This checks `jira/cves-grouped-reviewed.json` against
+   `jira/cves-grouped.json` (existence, JSON parse, required top-level/group/
+   ticket keys, and key parity with the schema ref). Non-zero exit means stop.
+
+3. Rebuild scan targets from the reviewed grouping (only after validation
+   succeeds):
 
    ```text
    python3 plugins/edge-cve/scripts/build_scan_targets.py \
@@ -156,12 +195,22 @@ Prescribed outputs:
 
 Skip this step when `--skip-scan` is set.
 
+**Before branching**: If both `--local` and `--dry-run` are set, stop with
+`Error: --local and --dry-run are incompatible; use one or the other`. Do not
+fall through to the `--local` branch (that would silently ignore `--dry-run`).
+
 **Actions**:
 
 1. If `--local` (podman, no cluster required — run one target at a time):
 
+   **Warn the user before starting** that local scans use podman on their
+   machine (named containers + a shared `edge-cve-govulncheck-gocache`
+   volume). Do **not** run host-wide cleanup unless they explicitly approve
+   it — always pass `--no-prune` by default. Only add `--prune` (which runs
+   `podman system prune -f`) after the user confirms cleanup is OK.
+
    ```text
-   bash plugins/edge-cve/scripts/cve-investigator.sh scan-local --workdir <WORKDIR>
+   bash plugins/edge-cve/scripts/cve-investigator.sh scan-local --workdir <WORKDIR> --no-prune
    ```
 
    This writes `scans/govulncheck-results.json` directly; skip to Step 3
@@ -179,19 +228,62 @@ Skip this step when `--skip-scan` is set.
 
    ```text
    bash plugins/edge-cve/scripts/cve-investigator.sh scan --workdir <WORKDIR>
+   ```
+
+   **Stop / continue after `scan`:**
+
+   | Condition | Handling |
+   |-----------|----------|
+   | Non-zero exit (oc/login/RBAC/apply failure, missing `scan-targets.json`, etc.) | **Stop.** Do not run `collect`, Step 3, or claim a successful scan. Report the error. |
+   | Zero discovered Go targets (`No Go scan targets found…`, exit 0) | **Stop the scan path.** Do not run `collect` or Step 3. Skip to Step 4 only to report tickets with **no scan coverage**; do not invent empty "all clear" results. |
+   | Jobs applied successfully | Continue to `collect`. |
+
+   ```text
    bash plugins/edge-cve/scripts/cve-investigator.sh collect --workdir <WORKDIR>
    ```
 
-4. If collection times out, note partial results and continue.
+   **Stop / continue after `collect`:**
+
+   | Condition | Handling |
+   |-----------|----------|
+   | Non-zero exit (not logged in, `oc` failure, etc.) | **Stop.** Do not run Step 3. Do not finalize as if this run produced fresh complete results. |
+   | Missing `<WORKDIR>/scans/govulncheck-results.json` after collect | **Stop.** Do not analyze or finalize using an older file from a prior run in the same workdir. |
+   | File present but malformed JSON / not an object with a `results` array | **Stop.** Report parse error; do not analyze or finalize from corrupted output. |
+   | `wait.complete` is false (collection **timed out**) | **Note partial results and continue** (same as prior timeout guidance): proceed to Steps 3–4 only with explicit partial/incomplete status. Do **not** treat the run as fully collected. |
+   | `wait.complete` is true but `results` is empty while jobs were expected | Treat as **incomplete**, not not-affected. Continue to Step 4 with that caveat; skip Step 3 LLM analysis (nothing trustworthy to analyze). |
+   | Complete payload with `results` | Continue to Step 3. |
+
+4. Timeout reminder: when collect warns it timed out waiting for jobs, keep going
+   with whatever ConfigMaps were gathered, but label the investigation
+   **partial** in chat and in any user-facing summary. Never describe partial
+   or timed-out collection as a complete scan.
 
 ### Step 3: Analyze govulncheck Results (LLM)
 
 **Goal**: Determine which scan results are truly actionable.
 
+**Gate**: Only enter this step when Step 2 produced a **current**, parseable
+`govulncheck-results.json` for this run. If scan/collect stopped on failure,
+missing file, or malformed JSON, skip analysis entirely. If results are
+partial (timeout / incomplete wait), analyze only entries present in that file
+and mark missing targets as unscanned — do not infer not-affected from absence.
+
 **Actions**:
 
-1. Read `<WORKDIR>/scans/govulncheck-results.json`.
-2. For each result where `affected` is true, `scan_incomplete` is true (the
+1. Read `<WORKDIR>/scans/govulncheck-results.json` (from this run only).
+2. **Redact private tickets before any analysis subagent runs.** Never pass
+   `jira/cves-parsed.json` to the subagent when it may contain `is_private`
+   tickets (summaries/CVE IDs must not reach the LLM). Build a safe input:
+
+   ```text
+   python3 plugins/edge-cve/scripts/redact_parsed_for_analysis.py --workdir <WORKDIR>
+   ```
+
+   This writes `jira/cves-parsed-for-analysis.json`: non-private tickets
+   unchanged; private tickets reduced to `key` / `url` / `is_private` /
+   `redacted` only. Use **only** that file for ticket context below.
+
+3. For each result where `affected` is true, `scan_incomplete` is true (the
    scan was signal-killed, typically OOM - see below), or `scan_exit_code` is
    non-zero with `finding_count` > 0, launch **foreground** Agents in a single
    message (one per affected/incomplete target):
@@ -200,7 +292,10 @@ Skip this step when `--skip-scan` is set.
    Agent: subagent_type=generalPurpose, prompt="Analyze govulncheck output for CVE actionability.
    Target: <TARGET_ID>
    Read the result entry in <WORKDIR>/scans/govulncheck-results.json.
-   Read related tickets in <WORKDIR>/jira/cves-parsed.json.
+   Read related tickets ONLY from <WORKDIR>/jira/cves-parsed-for-analysis.json
+   (already redacted). Do NOT read jira/cves-parsed.json or any other raw Jira
+   export. Skip tickets with is_private/redacted true for summary/CVE context;
+   use only non-private ticket fields plus the govulncheck result.
 
    If scan_incomplete is true, the scan container was killed (typically OOM,
    scan_exit_code 137) before govulncheck finished - do NOT interpret the
@@ -209,7 +304,7 @@ Skip this step when `--skip-scan` is set.
    run_govulncheck_podman.sh/run_govulncheck_jobs.sh with a higher --memory.
 
    Otherwise decide: affected_and_actionable | affected_but_transitive | false_positive | inconclusive
-   Explain using matched findings and ticket context.
+   Explain using matched findings and non-private ticket context.
 
    Save a short analysis to <WORKDIR>/scans/analysis-<TARGET_ID>.txt including:
    - verdict
@@ -219,11 +314,16 @@ Skip this step when `--skip-scan` is set.
    Reply DONE <analysis-file-path> only."
    ```
 
-3. Do NOT use LLM for tickets already marked `not_affected` with exit code 0.
+4. Do NOT use LLM for tickets already marked `not_affected` with exit code 0.
 
 ### Step 4: Finalize — Generate Reports
 
-**IMPORTANT**: Mandatory even when scans are skipped or partial.
+**IMPORTANT**: Run finalize when this run has usable ticket/grouping inputs,
+including `--skip-scan` and **explicitly partial** collections. Do **not** run
+finalize after a hard stop in Step 2 (scan/collect command failure, missing
+results file, or malformed JSON) — that would present stale or incomplete scan
+data as a finished investigation. When finalize does run on partial results,
+state clearly in Step 5 that coverage is incomplete.
 
 ```text
 bash plugins/edge-cve/scripts/cve-investigator.sh finalize --workdir <WORKDIR>
@@ -261,11 +361,14 @@ this instead:
 
 ```text
 bash plugins/edge-cve/scripts/cve-investigator.sh check-repo \
-  --repo-url <URL> --ref <REF> \
+  --repo-url <URL> --ref <REF> --no-prune \
   [--cve <CVE-ID> ...] [--ticket <KEY> ...] \
   [--jira-url <URL>] [--summary <TEXT>] [--component <NAME>] \
   [--workdir <DIR>] [--memory <MEM>] [--cpus <N>] [--timeout <SECONDS>]
 ```
+
+Pass `--no-prune` unless the user explicitly approved host podman cleanup
+(same rule as `scan-local` above). Only use `--prune` after that confirmation.
 
 This deterministically (no LLM call needed for the base result):
 

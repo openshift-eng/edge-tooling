@@ -46,7 +46,10 @@ cd "${workdir}"
 if ! git rev-parse --verify "${GIT_REF}" >/dev/null 2>&1; then
   git fetch --depth 1 origin "${GIT_REF}" || true
 fi
-git checkout "${GIT_REF}" 2>/dev/null || git checkout "origin/${GIT_REF}" 2>/dev/null || true
+if ! git checkout "${GIT_REF}" 2>/dev/null && ! git checkout "origin/${GIT_REF}" 2>/dev/null; then
+  echo "Error: failed to checkout GIT_REF=${GIT_REF} (also tried origin/${GIT_REF})" >&2
+  exit 1
+fi
 
 commit="$(git rev-parse HEAD)"
 export GOTOOLCHAIN=auto

@@ -36,7 +36,9 @@ CACHE_VOLUME="edge-cve-govulncheck-gocache"
 CONTAINER_MEMORY="6g"
 CONTAINER_CPUS="3"
 CONTAINER_TIMEOUT="1800"
-RUN_PRUNE=1
+# Opt-in only: never prune the host's podman store unless the caller explicitly
+# asked for it (--prune).
+RUN_PRUNE=0
 
 usage() {
   cat <<EOF
@@ -51,7 +53,8 @@ Options:
   --memory MEM       Container memory limit (default: ${CONTAINER_MEMORY})
   --cpus N           Container CPU limit (default: ${CONTAINER_CPUS})
   --timeout SEC      Kill the container after this many seconds (default: ${CONTAINER_TIMEOUT})
-  --no-prune         Skip the automatic "podman system prune" run before starting
+  --prune            Opt-in: run "podman system prune -f" before starting
+  --no-prune         Explicitly skip prune (default; kept for callers that pass it)
 EOF
 }
 
@@ -67,6 +70,7 @@ while [[ $# -gt 0 ]]; do
     --memory) CONTAINER_MEMORY="$2"; shift 2 ;;
     --cpus) CONTAINER_CPUS="$2"; shift 2 ;;
     --timeout) CONTAINER_TIMEOUT="$2"; shift 2 ;;
+    --prune) RUN_PRUNE=1; shift ;;
     --no-prune) RUN_PRUNE=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
@@ -96,7 +100,7 @@ elif command -v gtimeout >/dev/null 2>&1; then
 fi
 
 if [[ ${RUN_PRUNE} -eq 1 ]]; then
-  echo "Pruning stopped containers / dangling images before starting (pass --no-prune to skip)..." >&2
+  echo "Pruning stopped containers / dangling images (--prune explicitly requested)..." >&2
   podman system prune -f >&2 || true
 fi
 
