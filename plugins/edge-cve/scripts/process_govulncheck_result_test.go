@@ -1,8 +1,70 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestReadNDJSONValidSkipsBlankLines(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "out.json")
+	content := "{\"osv\":{\"id\":\"GO-1\"}}\n\n{\"finding\":{\"osv\":\"GO-1\"}}\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := readNDJSON(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+}
+
+func TestReadNDJSONOpenFailure(t *testing.T) {
+	_, err := readNDJSON(filepath.Join(t.TempDir(), "missing.json"))
+	if err == nil || !strings.Contains(err.Error(), "open ") {
+		t.Fatalf("expected open error, got %v", err)
+	}
+}
+
+func TestReadNDJSONDecodeFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.json")
+	if err := os.WriteFile(path, []byte("{\"ok\":true}\nnot-json\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := readNDJSON(path)
+	if err == nil || !strings.Contains(err.Error(), "decode NDJSON") {
+		t.Fatalf("expected decode error, got %v", err)
+	}
+}
+
+func TestParseScanExitValid(t *testing.T) {
+	got, err := parseScanExit("137")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 137 {
+		t.Fatalf("expected 137, got %d", got)
+	}
+}
+
+func TestParseScanExitMissing(t *testing.T) {
+	_, err := parseScanExit("")
+	if err == nil || !strings.Contains(err.Error(), "required") {
+		t.Fatalf("expected required error, got %v", err)
+	}
+}
+
+func TestParseScanExitMalformed(t *testing.T) {
+	_, err := parseScanExit("not-a-number")
+	if err == nil || !strings.Contains(err.Error(), "invalid SCAN_EXIT") {
+		t.Fatalf("expected invalid SCAN_EXIT error, got %v", err)
+	}
+}
 
 func TestMatchFindingsStringOSVID(t *testing.T) {
 	entries := []map[string]any{

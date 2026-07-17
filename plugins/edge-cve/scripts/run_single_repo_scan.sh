@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Clone+scan a single repo@ref with govulncheck via podman - no scan-targets.json
 # or Jira data required. Used for ad-hoc "is this repo/ref affected" checks
 # (see cve-investigator.sh check-repo / edge-cve:investigate --check-repo).
@@ -97,6 +97,9 @@ if command -v timeout >/dev/null 2>&1; then
   TIMEOUT_BIN="timeout"
 elif command -v gtimeout >/dev/null 2>&1; then
   TIMEOUT_BIN="gtimeout"
+else
+  echo "Error: timeout (GNU coreutils) or gtimeout (macOS coreutils) is required for wall-clock container limits" >&2
+  exit 1
 fi
 
 if [[ ${RUN_PRUNE} -eq 1 ]]; then
@@ -111,8 +114,23 @@ repo_label="$(printf '%s' "${repo_label}" | tr -cd 'A-Za-z0-9._-')"
 repo_label="${repo_label:0:63}"
 
 ref_label="$(printf '%s' "${GIT_REF}" | tr -cd 'A-Za-z0-9._-')"
-target_id="${repo_label}--${ref_label}"
-target_id="${target_id:0:120}"
+# Collision-resistant id: readable labels + digest of full URL/ref (normalized).
+# Built before RESULT_DIR/<target-id>/ so truncated labels cannot collide.
+digest="$(
+  printf '%s\n%s\n' \
+    "$(printf '%s' "${REPO_URL}" | tr '[:upper:]' '[:lower:]')" \
+    "$(printf '%s' "${GIT_REF}" | tr '[:upper:]' '[:lower:]')" \
+    | openssl dgst -sha256 \
+    | awk '{print $NF}' \
+    | cut -c1-8
+)"
+base="${repo_label}--${ref_label}"
+max_base=$((120 - 2 - ${#digest}))
+if (( max_base < 1 )); then
+  max_base=1
+fi
+base="${base:0:${max_base}}"
+target_id="${base}--${digest}"
 
 cve_ids_csv=""
 if [[ ${#CVE_IDS[@]} -gt 0 ]]; then
@@ -133,7 +151,11 @@ cleanup_current_container() {
     podman rm -f "${CURRENT_CONTAINER}" >/dev/null 2>&1 || true
   fi
 }
-trap cleanup_current_container EXIT INT TERM
+# EXIT for normal termination; INT/TERM must exit after cleanup so execution
+# cannot resume after signal handling.
+trap cleanup_current_container EXIT
+trap 'cleanup_current_container; exit 130' INT
+trap 'cleanup_current_container; exit 143' TERM
 
 echo "Scanning ${REPO_SLUG}@${GIT_REF} (target: ${target_id})" >&2
 

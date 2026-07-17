@@ -44,12 +44,51 @@ def sanitize_label(raw: str) -> str:
     return label.rstrip("-_.")
 
 
+def job_is_terminal(job: dict) -> bool:
+    """True when the Job has a terminal Complete or Failed condition.
+
+    Newly created Jobs often have active==0 before pods are scheduled; those
+    must keep polling until a terminal condition appears.
+    """
+    status = job.get("status") or {}
+    for cond in status.get("conditions") or []:
+        if not isinstance(cond, dict):
+            continue
+        if cond.get("status") != "True":
+            continue
+        if cond.get("type") in ("Complete", "Failed"):
+            return True
+    return False
+
+
+def summarize_jobs(items: list) -> dict:
+    """Aggregate Job counters and whether every Job is terminal."""
+    active = failed = succeeded = 0
+    all_terminal = True
+    for job in items:
+        status = job.get("status") or {}
+        if status.get("active"):
+            active += 1
+        if status.get("failed"):
+            failed += int(status["failed"])
+        if status.get("succeeded"):
+            succeeded += int(status["succeeded"])
+        if not job_is_terminal(job):
+            all_terminal = False
+    return {
+        "complete": all_terminal,
+        "active": active,
+        "failed": failed,
+        "succeeded": succeeded,
+    }
+
+
 def wait_for_jobs(namespace: str, timeout: int) -> dict:
     start = time.time()
     while time.time() - start < timeout:
         proc = run(
-            oc_base(namespace)
-            + [
+            [
+                *oc_base(namespace),
                 "get",
                 "jobs",
                 "-l",
@@ -67,23 +106,9 @@ def wait_for_jobs(namespace: str, timeout: int) -> dict:
         if not items:
             return {"complete": True, "active": 0, "failed": 0, "succeeded": 0}
 
-        active = failed = succeeded = 0
-        for job in items:
-            status = job.get("status", {})
-            if status.get("active"):
-                active += 1
-            if status.get("failed"):
-                failed += int(status["failed"])
-            if status.get("succeeded"):
-                succeeded += int(status["succeeded"])
-
-        if active == 0:
-            return {
-                "complete": True,
-                "active": active,
-                "failed": failed,
-                "succeeded": succeeded,
-            }
+        summary = summarize_jobs(items)
+        if summary["complete"]:
+            return summary
         time.sleep(15)
 
     return {"complete": False, "timeout": timeout}
@@ -99,7 +124,7 @@ def collect_result_configmaps(namespace: str, repo_filters: list[str]) -> list[d
             selector = f"{selector},edge-cve/repo in ({','.join(sanitized)})"
 
     proc = run(
-        oc_base(namespace) + ["get", "configmaps", "-l", selector, "-o", "json"],
+        [*oc_base(namespace), "get", "configmaps", "-l", selector, "-o", "json"],
         check=False,
     )
     if proc.returncode != 0:

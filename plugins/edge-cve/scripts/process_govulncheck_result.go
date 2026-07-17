@@ -28,17 +28,41 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const serviceAccountDir = "/var/run/secrets/kubernetes.io/serviceaccount"
+
+// Bound in-cluster ConfigMap create/patch calls so a stuck API server cannot
+// hang the scan container indefinitely.
+const k8sAPIClientTimeout = 30 * time.Second
+
+func parseScanExit(raw string) (int, error) {
+	if strings.TrimSpace(raw) == "" {
+		return 0, fmt.Errorf("SCAN_EXIT is required")
+	}
+	scanExit, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid SCAN_EXIT %q: %w", raw, err)
+	}
+	return scanExit, nil
+}
 
 func main() {
 	targetID := os.Getenv("TARGET_ID")
 	cveSet := parseCSVUpper(os.Getenv("CVE_IDS"))
 	ticketKeys := parseCSV(os.Getenv("TICKET_KEYS"))
-	scanExit, _ := strconv.Atoi(os.Getenv("SCAN_EXIT"))
+	scanExit, err := parseScanExit(os.Getenv("SCAN_EXIT"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
 
-	findings := readNDJSON("/tmp/govulncheck.json")
+	findings, err := readNDJSON("/tmp/govulncheck.json")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to read govulncheck output: %v\n", err)
+		os.Exit(1)
+	}
 	matched := matchFindings(findings, cveSet)
 
 	// A shell exit code > 128 means the process was terminated by a signal
@@ -189,12 +213,19 @@ func doRequest(client *http.Client, method, url, token, contentType string, payl
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
 
+	if client.Timeout == 0 {
+		client.Timeout = k8sAPIClientTimeout
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return httpResult{}, err
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return httpResult{}, fmt.Errorf("reading response body: %w", err)
+	}
 	return httpResult{status: resp.StatusCode, body: string(respBody)}, nil
 }
 
@@ -224,6 +255,7 @@ func inClusterClient() (*http.Client, string, string, string, error) {
 	}
 
 	client := &http.Client{
+		Timeout: k8sAPIClientTimeout,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{RootCAs: pool},
 		},
@@ -290,26 +322,32 @@ func mapKeys(set map[string]bool) []string {
 	return out
 }
 
-func readNDJSON(path string) []map[string]any {
+func readNDJSON(path string) ([]map[string]any, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer file.Close()
 
 	var entries []map[string]any
 	scanner := bufio.NewScanner(file)
+	lineNo := 0
 	for scanner.Scan() {
+		lineNo++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
 		var entry map[string]any
-		if json.Unmarshal([]byte(line), &entry) == nil {
-			entries = append(entries, entry)
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			return nil, fmt.Errorf("decode NDJSON %s line %d: %w", path, lineNo, err)
 		}
+		entries = append(entries, entry)
 	}
-	return entries
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan %s: %w", path, err)
+	}
+	return entries, nil
 }
 
 // buildOSVIndex maps OSV IDs (and aliases) to top-level {"osv": {...}} catalog

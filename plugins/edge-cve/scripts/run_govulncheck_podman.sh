@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Run govulncheck locally via podman, one target at a time (sequential), for
 # CVE scan targets. Mirrors run_govulncheck_jobs.sh but requires no
 # OpenShift cluster - useful for local testing and dev loops.
@@ -106,6 +106,9 @@ if command -v timeout >/dev/null 2>&1; then
   TIMEOUT_BIN="timeout"
 elif command -v gtimeout >/dev/null 2>&1; then
   TIMEOUT_BIN="gtimeout"
+else
+  echo "Error: timeout (GNU coreutils) or gtimeout (macOS coreutils) is required for wall-clock container limits" >&2
+  exit 1
 fi
 
 # Force-remove whatever container is currently in flight if this script itself
@@ -119,7 +122,11 @@ cleanup_current_container() {
     podman rm -f "${CURRENT_CONTAINER}" >/dev/null 2>&1 || true
   fi
 }
-trap cleanup_current_container EXIT INT TERM
+# EXIT for normal termination; INT/TERM must exit after cleanup so the scan
+# loop cannot resume with an orphaned/half-removed container.
+trap cleanup_current_container EXIT
+trap 'cleanup_current_container; exit 130' INT
+trap 'cleanup_current_container; exit 143' TERM
 
 if [[ ${RUN_PRUNE} -eq 1 ]]; then
   echo "Pruning stopped containers / dangling images (--prune explicitly requested)..." >&2

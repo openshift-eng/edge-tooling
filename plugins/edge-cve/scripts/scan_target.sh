@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Clone a repo at a target ref, run govulncheck, and process the result.
 #
 # Shared by both execution modes:

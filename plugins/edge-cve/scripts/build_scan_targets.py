@@ -8,6 +8,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -22,8 +23,20 @@ def slugify(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:50]
 
 
+def _normalize_for_digest(value: str) -> str:
+    return value.strip().lower()
+
+
 def target_id(repo_slug: str, git_ref: str) -> str:
-    return f"{slugify(repo_slug)}--{slugify(git_ref)}"
+    """Readable slug pair plus a short digest of the full normalized inputs.
+
+    Truncated slugify alone can collide (long slugs/refs); the digest keeps
+    ids distinct while preserving the human-readable prefix.
+    """
+    digest = hashlib.sha256(
+        f"{_normalize_for_digest(repo_slug)}\n{_normalize_for_digest(git_ref)}".encode()
+    ).hexdigest()[:8]
+    return f"{slugify(repo_slug)}--{slugify(git_ref)}--{digest}"
 
 
 def main() -> None:

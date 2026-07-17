@@ -24,9 +24,9 @@ as the bulk Jira-driven results, as long as it used the same --workdir.
 
 Tickets flagged private (see lib.cve_extract.is_private_ticket - Jira
 Security Level or a "private" label) are rendered with NOTHING but a link
-back to the Jira ticket: no CVE ID, summary, component detail beyond the
-grouping itself, or scan findings are shown, since any of those could leak
-information about an embargoed/restricted vulnerability.
+back to the Jira ticket: no CVE ID, summary, or scan findings. They are
+grouped under the neutral version "Withheld" so real OCP versions cannot
+leak via section headings.
 
 Usage:
     generate_html_report.py --workdir DIR
@@ -57,8 +57,8 @@ VERDICT_LABELS = {
 
 
 def version_sort_key(version: str) -> tuple:
-    if version == "Unspecified":
-        return (1, ())
+    if version in ("Unspecified", "Withheld"):
+        return (1, version)
     parts = []
     for part in version.split("."):
         try:
@@ -112,9 +112,14 @@ def group_tickets(
         if known_components and component not in known_components:
             dropped += 1
             continue
-        versions = ticket.get("versions") or ["Unspecified"]
         scans = scan_index.get(ticket["key"], [])
         is_private = ticket.get("is_private", False)
+        # Private tickets must not be bucketed under real OCP versions.
+        versions = (
+            ["Withheld"]
+            if is_private
+            else (ticket.get("versions") or ["Unspecified"])
+        )
         verdict = "private" if is_private else verdict_for_ticket(ticket, scans)
 
         row = {
@@ -188,6 +193,22 @@ def render_row(row: dict) -> str:
     )
 
 
+def unique_rows_by_key(versions: dict[str, list[dict]]) -> list[dict]:
+    """Deduplicate rows that appear under multiple version buckets.
+
+    Tickets with several OCP versions are listed once per version section, but
+    component/global totals must count each ticket key only once.
+    """
+    seen: dict[str, dict] = {}
+    for rows in versions.values():
+        for row in rows:
+            key = row.get("key")
+            if key is None or key in seen:
+                continue
+            seen[key] = row
+    return list(seen.values())
+
+
 def render_component(component: str, versions: dict[str, list[dict]], *, open_by_default: bool) -> str:
     version_blocks = []
     for version in sorted(versions.keys(), key=version_sort_key):
@@ -200,8 +221,9 @@ def render_component(component: str, versions: dict[str, list[dict]], *, open_by
             f"<tbody>{rows_html}</tbody></table>"
         )
 
-    total = sum(len(rows) for rows in versions.values())
-    affected = sum(1 for rows in versions.values() for row in rows if row["verdict"] == "affected")
+    unique_rows = unique_rows_by_key(versions)
+    total = len(unique_rows)
+    affected = sum(1 for row in unique_rows if row["verdict"] == "affected")
     badge = f'<span class="badge badge-affected">{affected} affected</span>' if affected else ""
     open_attr = " open" if open_by_default else ""
 
@@ -216,17 +238,21 @@ def render_component(component: str, versions: dict[str, list[dict]], *, open_by
 
 def render_summary(grouped: dict[str, dict[str, list[dict]]]) -> tuple[str, dict[str, int]]:
     counts = {"total": 0, "private": 0, "affected": 0, "not_affected": 0, "inconclusive": 0, "other": 0}
+    seen_keys: set[str] = set()
     for versions in grouped.values():
-        for rows in versions.values():
-            for row in rows:
-                counts["total"] += 1
-                verdict = row["verdict"]
-                if verdict == "private":
-                    counts["private"] += 1
-                elif verdict in ("affected", "not_affected", "inconclusive"):
-                    counts[verdict] += 1
-                else:
-                    counts["other"] += 1
+        for row in unique_rows_by_key(versions):
+            key = row["key"]
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            counts["total"] += 1
+            verdict = row["verdict"]
+            if verdict == "private":
+                counts["private"] += 1
+            elif verdict in ("affected", "not_affected", "inconclusive"):
+                counts[verdict] += 1
+            else:
+                counts["other"] += 1
 
     cards = [
         ("Total tickets", counts["total"], "total"),
@@ -422,7 +448,12 @@ def main() -> None:
     scan_index = build_scan_index(scans)
     known_components = load_known_components(config_path)
     if not known_components:
-        print(f"Warning: no components found in {config_path}; showing all components", file=sys.stderr)
+        print(
+            f"Error: no components found in {config_path}; "
+            "refusing to render all Jira components (edge-only scope requires a mapping)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     grouped, dropped = group_tickets(parsed, scan_index, known_components)
     stats_html, counts = render_summary(grouped)
@@ -442,7 +473,7 @@ def main() -> None:
     check_repo_html = render_check_repo_section(check_repo_results)
 
     jql = 'filter = "All Open CVEs" AND filter = "All Open Black CVEs"'
-    components_list = ", ".join(sorted(known_components)) if known_components else "(all - no config found)"
+    components_list = ", ".join(sorted(known_components))
     dropped_note = (
         f"{dropped} ticket(s) for other components dropped" if dropped else "no other-component tickets found"
     )

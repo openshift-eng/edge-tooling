@@ -44,12 +44,22 @@ def determine_verdict(result: dict) -> tuple[str, bool]:
 
 def finding_label(finding: dict) -> str:
     inner = finding.get("finding", finding)
-    osv = inner.get("osv") or inner.get("vulnerability") or {}
-    vuln_id = osv.get("id", "?")
+    if not isinstance(inner, dict):
+        inner = finding if isinstance(finding, dict) else {}
+    # govulncheck may emit finding.osv as a string ID or an embedded OSV object.
+    osv = inner.get("osv")
+    if not osv:
+        osv = inner.get("vulnerability")
+    vuln_id = "?"
+    if isinstance(osv, str):
+        vuln_id = osv or "?"
+    elif isinstance(osv, dict):
+        raw_id = osv.get("id", "?")
+        vuln_id = raw_id if isinstance(raw_id, str) and raw_id else "?"
     module = ""
     trace = inner.get("trace") or []
-    if trace and isinstance(trace, list):
-        module = trace[0].get("module", "") or trace[0].get("package", "")
+    if trace and isinstance(trace, list) and isinstance(trace[0], dict):
+        module = trace[0].get("module", "") or trace[0].get("package", "") or ""
     return f"{vuln_id}" + (f" in {module}" if module else "")
 
 

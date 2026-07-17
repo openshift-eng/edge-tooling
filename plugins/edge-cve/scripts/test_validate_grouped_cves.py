@@ -14,7 +14,7 @@ SCRIPT = Path(__file__).resolve().parent / "validate_grouped_cves.py"
 
 MINIMAL_GROUPED = {
     "grouped_at": "2026-01-01T00:00:00+00:00",
-    "source": "/tmp/cves-parsed.json",
+    "source": "cves-parsed.json",
     "group_count": 1,
     "ticket_count": 1,
     "llm_review_count": 0,
@@ -38,7 +38,8 @@ MINIMAL_GROUPED = {
 
 class ValidateGroupedCvesTest(unittest.TestCase):
     def _run(self, *args: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
+        # S603: argv is sys.executable + fixed SCRIPT path + test-controlled args only.
+        return subprocess.run(  # noqa: S603
             [sys.executable, str(SCRIPT), *args],
             capture_output=True,
             text=True,

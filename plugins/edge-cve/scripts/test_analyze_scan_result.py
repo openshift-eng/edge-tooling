@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for analyze_scan_result.determine_verdict."""
+"""Unit tests for analyze_scan_result.determine_verdict / finding_label."""
 
 import unittest
 from pathlib import Path
@@ -8,7 +8,48 @@ import sys
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from analyze_scan_result import determine_verdict  # noqa: E402
+from analyze_scan_result import determine_verdict, finding_label  # noqa: E402
+
+
+class FindingLabelTests(unittest.TestCase):
+    def test_string_osv_id_with_module(self):
+        # Positive: govulncheck NDJSON often stores finding.osv as a string ID.
+        label = finding_label(
+            {
+                "finding": {
+                    "osv": "GO-2024-1234",
+                    "trace": [{"module": "golang.org/x/net"}],
+                }
+            }
+        )
+        self.assertEqual(label, "GO-2024-1234 in golang.org/x/net")
+
+    def test_embedded_osv_object_with_module(self):
+        # Positive: legacy/embedded OSV object with id field.
+        label = finding_label(
+            {
+                "finding": {
+                    "osv": {"id": "CVE-2024-99999", "summary": "example"},
+                    "trace": [{"package": "example.com/mod/pkg"}],
+                }
+            }
+        )
+        self.assertEqual(label, "CVE-2024-99999 in example.com/mod/pkg")
+
+    def test_missing_osv_falls_back_to_question_mark(self):
+        # Negative: no osv/vulnerability → preserve "?" fallback, no module.
+        self.assertEqual(finding_label({"finding": {"trace": []}}), "?")
+
+    def test_empty_string_osv_id_falls_back(self):
+        # Negative: empty string ID must not produce a blank label.
+        self.assertEqual(finding_label({"finding": {"osv": ""}}), "?")
+
+    def test_osv_object_without_id_falls_back(self):
+        # Negative: mapping without usable id → "?".
+        self.assertEqual(
+            finding_label({"finding": {"osv": {"summary": "no id"}}}),
+            "?",
+        )
 
 
 class DetermineVerdictTests(unittest.TestCase):
