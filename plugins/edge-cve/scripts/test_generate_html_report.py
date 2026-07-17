@@ -89,7 +89,8 @@ class LoadKnownComponentsTests(unittest.TestCase):
             )
             empty_cfg = workdir / "empty-components.json"
             empty_cfg.write_text(json.dumps({"components": {}}), encoding="utf-8")
-            result = subprocess.run(
+            # S603: argv is sys.executable + fixed script path + test-controlled args only.
+            result = subprocess.run(  # noqa: S603
                 [
                     sys.executable,
                     str(SCRIPT_DIR / "generate_html_report.py"),

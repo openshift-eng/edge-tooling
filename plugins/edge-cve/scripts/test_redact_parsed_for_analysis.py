@@ -18,7 +18,8 @@ class RedactParsedForAnalysisTest(unittest.TestCase):
         jira = workdir / "jira"
         jira.mkdir(parents=True, exist_ok=True)
         (jira / "cves-parsed.json").write_text(json.dumps(parsed), encoding="utf-8")
-        return subprocess.run(
+        # S603: argv is sys.executable + fixed SCRIPT path + test-controlled args only.
+        return subprocess.run(  # noqa: S603
             [sys.executable, str(SCRIPT), "--workdir", str(workdir)],
             capture_output=True,
             text=True,

@@ -30,6 +30,7 @@ mkdir -p "${workdir}" /tmp/go/bin /tmp/go/cache /tmp/go/pkg/mod
 # checkout and GOCACHE build objects have little/no reuse value across
 # different repos/refs and are the main source of unbounded growth in the
 # shared cache volume / container writable layer over many sequential runs.
+# shellcheck disable=SC2329 # Invoked via trap.
 cleanup() {
   local ec=$?
   cd / 2>/dev/null || true
