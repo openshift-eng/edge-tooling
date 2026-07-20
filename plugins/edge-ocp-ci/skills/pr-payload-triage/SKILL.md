@@ -1,6 +1,6 @@
 ---
 name: edge-ocp-ci:pr-payload-triage
-description: "Triage a PR payload test run — classify failures as PR-caused vs. flaky by matching failing tests against the PR diff"
+description: "Triage a PR payload test run — classify failures as PR-caused vs. unrelated by matching failing tests against the PR diff"
 argument-hint: "<pr-payload-url> <pr-ref>"
 user-invocable: true
 allowed-tools:
@@ -9,7 +9,7 @@ allowed-tools:
 
 # PR Payload Triage Skill
 
-You are helping a developer triage the results of a PR payload test run triggered by `/payload-job` on a GitHub PR. The goal is to classify each failing job as either **PR-caused** (the failing test was modified by the PR) or **flaky/unrelated** (the failure is in a test the PR did not touch).
+You are helping a developer triage the results of a PR payload test run triggered by `/payload-job` on a GitHub PR. The goal is to classify each failing job as either **PR-caused** (the failing test was modified by the PR) or **unrelated** (the failure is in a test the PR did not touch).
 
 ## Arguments
 
@@ -49,13 +49,13 @@ The tool prints a markdown triage report to stdout. Present it to the user as-is
 | Verdict | Icon | Meaning |
 |---------|------|---------|
 | PR CAUSED | 🔴 | The failing test was modified by the PR — investigate |
-| FLAKY | 🟡 | The failure is in a test the PR did not touch — safe to `/retest` |
+| UNRELATED | 🟡 | The failure is in a test the PR did not touch — safe to `/retest` |
 
 ### Follow-up Actions
 
 Based on the results, suggest:
 
-- **All FLAKY**: "All failures are unrelated to your PR. Safe to re-trigger." Then find the original `/payload-job` trigger comment on the PR and ask the user to confirm before posting it as a PR comment; never auto-post.
+- **All UNRELATED**: "All failures are unrelated to your PR. Safe to re-trigger." Then find the original `/payload-job` trigger comment on the PR and ask the user to confirm before posting it as a PR comment; never auto-post.
 - **Some PR CAUSED**: "Job X failed in a test your PR modified. Check the error and Prow link before re-triggering."
 - **All PR CAUSED**: "All failures are in tests your PR touches. Investigate before re-triggering."
 

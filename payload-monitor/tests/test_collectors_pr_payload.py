@@ -154,7 +154,7 @@ class TestClassifyFailure:
         verdict = classify_failure(job, diff, ["test/two_node_test.go"])
         assert verdict.verdict == "pr-caused"
 
-    def test_test_not_in_diff_flaky(self):
+    def test_test_not_in_diff_unrelated(self):
         job = self._make_job(
             "[sig-etcd] Two Node with Fencing should recover after etcd kill"
         )
@@ -164,7 +164,7 @@ class TestClassifyFailure:
 +}
 """
         verdict = classify_failure(job, diff, ["pkg/helper.go"])
-        assert verdict.verdict == "flaky"
+        assert verdict.verdict == "unrelated"
 
     def test_func_identifier_match(self):
         job = self._make_job(
@@ -184,13 +184,13 @@ class TestClassifyFailure:
         )
         diff = "+something unrelated in the diff that is long enough to match"
         verdict = classify_failure(job, diff, ["file.go"])
-        assert verdict.verdict == "flaky"
+        assert verdict.verdict == "unrelated"
 
     def test_short_description_not_matched(self):
         job = self._make_job("[sig-x] ab")
         diff = "+ab is in the diff"
         verdict = classify_failure(job, diff, ["f.go"])
-        assert verdict.verdict == "flaky"
+        assert verdict.verdict == "unrelated"
 
     def test_context_lines_not_matched(self):
         """Test description in diff context (no +/-) should NOT trigger pr-caused."""
@@ -204,7 +204,7 @@ class TestClassifyFailure:
  	})
 """
         verdict = classify_failure(job, diff, ["test/extended/edge_topologies/tnf_etcd_disruption.go"])
-        assert verdict.verdict == "flaky"
+        assert verdict.verdict == "unrelated"
 
     def test_no_failing_tests(self):
         job = PRPayloadJob(
@@ -213,7 +213,7 @@ class TestClassifyFailure:
             result=JobResult.FAILURE,
         )
         verdict = classify_failure(job, "+diff content", ["file.go"])
-        assert verdict.verdict == "flaky"
+        assert verdict.verdict == "unrelated"
 
 
 class TestClassifyFailures:
@@ -269,7 +269,7 @@ class TestFormatTriageJson:
         assert output["complete"] is True
         assert "No triage needed" in output["recommendation"]
 
-    def test_has_failures_flaky(self):
+    def test_has_failures_unrelated(self):
         result = PRTriageResult(
             payload_url="url", pr_ref="ref", total_jobs=2, passed=1, failed=1,
             jobs=[
@@ -277,7 +277,7 @@ class TestFormatTriageJson:
                 PRPayloadJob("j2", "url2", JobResult.FAILURE,
                              failing_tests=[FailingTest(name="test1", error_message="err")]),
             ],
-            verdicts={"j2": FailureVerdict(verdict="flaky", reason="not in diff")},
+            verdicts={"j2": FailureVerdict(verdict="unrelated", reason="not in diff")},
         )
         output = json.loads(format_triage_json(result))
         assert output["failed"] == 1

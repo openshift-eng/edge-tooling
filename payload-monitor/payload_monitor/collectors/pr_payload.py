@@ -286,7 +286,7 @@ def classify_failure(
     diff_content: str,
     pr_files: list[str],
 ) -> FailureVerdict:
-    """Classify whether a job failure is PR-caused or flaky.
+    """Classify whether a job failure is PR-caused or unrelated.
 
     Uses diff-aware matching: checks if the failing test's description
     appears in added/removed lines of the PR diff (not context lines).
@@ -343,7 +343,7 @@ def classify_failure(
     summary = "; ".join(test_names) if test_names else "no test-level details"
 
     return FailureVerdict(
-        verdict="flaky",
+        verdict="unrelated",
         reason=f"Not in PR diff — likely unrelated. Failures: {summary}",
     )
 
