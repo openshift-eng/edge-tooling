@@ -49,7 +49,8 @@ The tool prints a markdown triage report to stdout. Present it to the user as-is
 | Verdict | Icon | Meaning |
 |---------|------|---------|
 | PR CAUSED | 🔴 | The failing test was modified by the PR — investigate |
-| UNRELATED | 🟡 | The failure is in a test the PR did not touch — safe to `/retest` |
+| INFRA | 🟠 | Infrastructure failure (image build, provisioning, etc.) — safe to re-trigger |
+| UNRELATED | 🟡 | The failure is in a test the PR did not touch — safe to re-trigger |
 
 ### Follow-up Actions
 

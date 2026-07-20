@@ -178,13 +178,13 @@ class TestClassifyFailure:
         assert verdict.verdict == "pr-caused"
         assert "helperFunction" in verdict.reason
 
-    def test_infra_failure_skipped(self):
+    def test_infra_failure_detected(self):
         job = self._make_job(
             "[sig-cluster] cluster precondition check failed"
         )
         diff = "+something unrelated in the diff that is long enough to match"
         verdict = classify_failure(job, diff, ["file.go"])
-        assert verdict.verdict == "unrelated"
+        assert verdict.verdict == "infra"
 
     def test_short_description_not_matched(self):
         job = self._make_job("[sig-x] ab")
@@ -213,7 +213,14 @@ class TestClassifyFailure:
             result=JobResult.FAILURE,
         )
         verdict = classify_failure(job, "+diff content", ["file.go"])
-        assert verdict.verdict == "unrelated"
+        assert verdict.verdict == "infra"
+
+    def test_infra_image_build_failure(self):
+        job = self._make_job(
+            "[sig-build] build step", error="ManageDockerfileFailed: Failed to prepare"
+        )
+        verdict = classify_failure(job, "+unrelated diff", ["file.go"])
+        assert verdict.verdict == "infra"
 
 
 class TestClassifyFailures:

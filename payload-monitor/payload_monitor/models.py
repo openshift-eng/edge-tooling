@@ -284,7 +284,7 @@ class PRPayloadJob:
 
 @dataclass
 class FailureVerdict:
-    verdict: str          # "pr-caused" | "unrelated" | "unknown"
+    verdict: str          # "pr-caused" | "unrelated" | "infra" | "unknown"
     reason: str
     matched_files: list[str] = field(default_factory=list)
 

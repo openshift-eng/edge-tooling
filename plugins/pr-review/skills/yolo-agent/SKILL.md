@@ -139,7 +139,7 @@ Check in order:
 2. **All CI green AND no new comments AND no resurfaced comments AND
    payload is clean** — where "payload is clean" means: mode is `"none"`,
    OR mode is `"triage"` with `complete: true` and zero `"pr-caused"`
-   verdicts (all failures are `"unrelated"`, not caused by the PR's changes) →
+   verdicts (all failures are `"unrelated"` or `"infra"`, not caused by the PR's changes) →
    post a PR comment to add the label (see format below), set status
    `complete`, clean state file, report "PR is ready", stop.
    Use `gh pr comment <number> --repo <org>/<repo>` with this body:
@@ -268,7 +268,7 @@ The JSON contains:
 
 - `complete` — `true` when all jobs have final results, `false` when
   jobs are still running
-- `jobs[]` — each with `verdict` (`pr-caused` or `unrelated`), `reason`,
+- `jobs[]` — each with `verdict` (`pr-caused`, `infra`, or `unrelated`), `reason`,
   `prow_url`, `failing_tests`
 - `recommendation` — the action to suggest to the user
 - `trigger_command` — the exact command for re-triggering

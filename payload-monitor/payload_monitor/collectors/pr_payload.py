@@ -281,20 +281,56 @@ def _extract_changed_lines(diff_content: str) -> str:
     ).lower()
 
 
+_INFRA_PATTERNS = [
+    "cluster precondition",
+    "failed to prepare",
+    "managedockerfilefailed",
+    "image build",
+    "infrastructure",
+    "provision",
+    "timeout waiting for cluster",
+    "could not install",
+    "failed to create cluster",
+    "failed to install",
+]
+
+
+def _is_infra_failure(job: PRPayloadJob) -> tuple[bool, str]:
+    """Detect infrastructure failures that prevented tests from running."""
+    if not job.failing_tests:
+        return True, "No test results — step-level failure"
+
+    if all("cluster precondition" in t.name.lower() for t in job.failing_tests):
+        return True, "All failures are cluster precondition checks"
+
+    all_errors = " ".join(t.error_message.lower() for t in job.failing_tests)
+    all_names = " ".join(t.name.lower() for t in job.failing_tests)
+    combined = all_errors + " " + all_names
+
+    for pattern in _INFRA_PATTERNS:
+        if pattern in combined:
+            return True, f"Infrastructure issue detected: {pattern}"
+
+    return False, ""
+
+
 def classify_failure(
     job: PRPayloadJob,
     diff_content: str,
     pr_files: list[str],
 ) -> FailureVerdict:
-    """Classify whether a job failure is PR-caused or unrelated.
+    """Classify whether a job failure is PR-caused, infra, or unrelated.
 
     Uses diff-aware matching: checks if the failing test's description
     appears in added/removed lines of the PR diff (not context lines).
     """
+    is_infra, infra_reason = _is_infra_failure(job)
+    if is_infra:
+        return FailureVerdict(verdict="infra", reason=infra_reason)
+
     changed_lines = _extract_changed_lines(diff_content)
 
     for t in job.failing_tests:
-        # Skip generic infrastructure failures
         if "cluster precondition" in t.name.lower():
             continue
 
@@ -387,13 +423,17 @@ def format_triage_json(result: PRTriageResult) -> str:
     complete = unknown_count == 0
 
     pr_caused = [j for j in jobs_out if j["verdict"] == "pr-caused"]
+    infra = [j for j in jobs_out if j["verdict"] == "infra"]
+    failed_jobs = [j for j in jobs_out if j["result"] == "FAILURE"]
     if not complete:
         recommendation = "Payload jobs still running. Re-check later."
     elif not result.failed:
         recommendation = "All jobs passed. No triage needed."
+    elif len(infra) == len(failed_jobs):
+        recommendation = "All failures are infrastructure issues (not test failures). Safe to re-trigger with /payload-job."
     elif not pr_caused:
         recommendation = "All failures are unrelated to this PR. Safe to re-trigger with /payload-job."
-    elif len(pr_caused) == len([j for j in jobs_out if j["result"] == "FAILURE"]):
+    elif len(pr_caused) == len(failed_jobs):
         recommendation = "All failures are in tests this PR modifies. Investigate before re-triggering /payload-job."
     else:
         recommendation = "Some failures are PR-caused. Investigate those before re-triggering /payload-job."
@@ -437,7 +477,8 @@ def format_triage_markdown(result: PRTriageResult) -> str:
         if not verdict:
             continue
 
-        icon = "🔴" if verdict.verdict == "pr-caused" else "🟡"
+        icons = {"pr-caused": "🔴", "infra": "🟠", "unrelated": "🟡"}
+        icon = icons.get(verdict.verdict, "🟡")
         label = verdict.verdict.upper().replace("-", " ")
         lines.append(f"#### {icon} {job.name}")
         lines.append(f"**Verdict:** {label}")
