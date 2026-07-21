@@ -460,6 +460,52 @@ class TestWithinRetentionWindow:
         for bad_value in ("2026-07-16", ["not", "a", "number"], {"ts": 1}):
             assert timing._within_retention_window(bad_value, days=7) is True
 
+    def test_bool_timestamp_returns_true(self):
+        assert timing._within_retention_window(True, days=7) is True
+
+
+VALID_RUN = {
+    "job_name": "j1", "topology": "TNA", "release": "4.22",
+    "start_time": "2026-07-15T06:00:00Z", "result": "S", "run_type": "install",
+    "duration_seconds": 3600, "variant": {"network": "ipv4"},
+    "step_durations": {"install": 120.0},
+}
+
+
+class TestIsValidCachePayload:
+    def test_valid_payload_passes(self):
+        assert timing._is_valid_cache_payload({"runs": {"111": VALID_RUN}}) is True
+
+    def test_non_dict_payload_rejected(self):
+        assert timing._is_valid_cache_payload(["not", "a", "dict"]) is False
+
+    def test_non_dict_runs_rejected(self):
+        assert timing._is_valid_cache_payload({"runs": "not_a_dict"}) is False
+
+    def test_missing_required_field_rejected(self):
+        bad_run = {k: v for k, v in VALID_RUN.items() if k != "job_name"}
+        assert timing._is_valid_cache_payload({"runs": {"111": bad_run}}) is False
+
+    def test_non_numeric_duration_rejected(self):
+        bad_run = {**VALID_RUN, "duration_seconds": "not_a_number"}
+        assert timing._is_valid_cache_payload({"runs": {"111": bad_run}}) is False
+
+    def test_bool_duration_rejected(self):
+        bad_run = {**VALID_RUN, "duration_seconds": True}
+        assert timing._is_valid_cache_payload({"runs": {"111": bad_run}}) is False
+
+    def test_non_numeric_step_duration_value_rejected(self):
+        bad_run = {**VALID_RUN, "step_durations": {"install": "not_a_number"}}
+        assert timing._is_valid_cache_payload({"runs": {"111": bad_run}}) is False
+
+    def test_bool_step_duration_value_rejected(self):
+        bad_run = {**VALID_RUN, "step_durations": {"install": True}}
+        assert timing._is_valid_cache_payload({"runs": {"111": bad_run}}) is False
+
+    def test_non_string_variant_value_rejected(self):
+        bad_run = {**VALID_RUN, "variant": {"network": 123}}
+        assert timing._is_valid_cache_payload({"runs": {"111": bad_run}}) is False
+
 
 # ---------------------------------------------------------------------------
 # GCS cache seeding
@@ -590,4 +636,24 @@ class TestSeedCacheFromPreviousRun:
 
         cache_path = tmp_path / "nonexistent_seed_test.json"
         timing.seed_cache_from_previous_run(cache_path)
+        assert not cache_path.exists()
+
+    @patch.object(timing, "_session")
+    @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
+    def test_write_failure_no_crash(self, mock_session, tmp_path):
+        cache_data = json.dumps({"runs": {"111": VALID_RUN}})
+
+        latest_resp = MagicMock()
+        latest_resp.text = "199\n"
+        latest_resp.raise_for_status = MagicMock()
+
+        cache_resp = MagicMock()
+        cache_resp.text = cache_data
+        cache_resp.raise_for_status = MagicMock()
+
+        mock_session.get.side_effect = [latest_resp, cache_resp]
+
+        cache_path = tmp_path / "nonexistent_seed_test.json"
+        with patch.object(Path, "write_text", side_effect=OSError("disk full")):
+            timing.seed_cache_from_previous_run(cache_path)
         assert not cache_path.exists()

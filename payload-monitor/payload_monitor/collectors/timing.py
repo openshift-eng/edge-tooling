@@ -46,7 +46,7 @@ def seed_cache_from_previous_run(cache_path: Path) -> None:
 
     Uses the ``latest-build.txt`` convention to find the most recent completed
     build, then fetches its ``timing_cache.json`` artifact over public HTTPS.
-    Skips silently (with a log warning) on any failure — this must never be
+    Skips gracefully on any failure (logging a warning) — this must never be
     fatal, because a cold start is the natural fallback.
     """
     if cache_path.exists():
@@ -87,16 +87,22 @@ def seed_cache_from_previous_run(cache_path: Path) -> None:
 
     try:
         payload = json.loads(resp.text)
-    except (json.JSONDecodeError, ValueError):
-        logger.warning("Previous cache artifact is not valid JSON, ignoring")
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.warning(
+            f"Previous cache artifact is not valid JSON (build {latest_build}): {e}"
+        )
         return
 
     if not _is_valid_cache_payload(payload):
         logger.warning("Previous cache artifact has unexpected structure, ignoring")
         return
 
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(resp.text)
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(resp.text)
+    except OSError as e:
+        logger.warning(f"Could not write seeded cache to {cache_path}: {e}")
+        return
     logger.info(
         f"Seeded timing cache from build {latest_build} "
         f"({len(payload.get('runs', {}))} runs)"
@@ -134,6 +140,12 @@ def _is_valid_cache_payload(data) -> bool:
             return False
         for optional_field in ("variant", "step_durations"):
             if optional_field in run_data and not isinstance(run_data[optional_field], dict):
+                return False
+        for v in run_data.get("step_durations", {}).values():
+            if not isinstance(v, (int, float)) or isinstance(v, bool):
+                return False
+        for v in run_data.get("variant", {}).values():
+            if not isinstance(v, str):
                 return False
     return True
 
@@ -472,7 +484,8 @@ def collect(
     """Collect timing data for SNO/TNA/TNF jobs across versions.
 
     Pipeline (parallelized at each stage):
-    1. Load existing cache
+    1. Seed the local cache from the previous Prow run's GCS artifacts, then
+       load the (possibly just-seeded) existing cache
     2. Fetch SNO/TNA/TNF jobs for all versions in parallel
     3. Fetch job runs for all jobs in parallel
     4. Fetch summaries + step durations for all new runs in parallel
