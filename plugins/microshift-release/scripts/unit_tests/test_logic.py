@@ -128,7 +128,7 @@ class TestInterpretCves(unittest.TestCase):
         result = interpret_cves(report)
         self.assertEqual(result["impact"], "none")
 
-    def test_cve_needs_review(self):
+    def test_cve_in_progress_skipped(self):
         report = {
             "RHSA-2026:12345": {
                 "type": "image",
@@ -144,7 +144,8 @@ class TestInterpretCves(unittest.TestCase):
             }
         }
         result = interpret_cves(report)
-        self.assertEqual(result["impact"], "needs_review")
+        self.assertEqual(result["impact"], "none")
+        self.assertEqual(result["skipped_not_actionable"], 1)
 
     def test_cve_must_release_resolution_done(self):
         report = {
@@ -164,7 +165,7 @@ class TestInterpretCves(unittest.TestCase):
         result = interpret_cves(report)
         self.assertEqual(result["impact"], "must_release")
 
-    def test_cve_needs_review_status_verified(self):
+    def test_cve_verified_but_unresolved_skipped(self):
         report = {
             "RHSA-2026:12345": {
                 "type": "extras",
@@ -180,7 +181,8 @@ class TestInterpretCves(unittest.TestCase):
             }
         }
         result = interpret_cves(report)
-        self.assertEqual(result["impact"], "needs_review")
+        self.assertEqual(result["impact"], "none")
+        self.assertEqual(result["skipped_not_actionable"], 1)
 
     def test_metadata_skipped(self):
         report = {
@@ -200,6 +202,108 @@ class TestInterpretCves(unittest.TestCase):
         result = interpret_cves(report)
         self.assertEqual(result["impact"], "none")
 
+    def test_cve_deduped_across_advisories(self):
+        report = {
+            "RHSA-2026:11111": {
+                "type": "extras",
+                "cves": {
+                    "CVE-2026-9999": {
+                        "jira_ticket": {
+                            "id": "OCPBUGS-100",
+                            "resolution": "Done",
+                            "status": "Closed",
+                        }
+                    }
+                },
+            },
+            "RHSA-2026:22222": {
+                "type": "image",
+                "cves": {
+                    "CVE-2026-9999": {
+                        "jira_ticket": {
+                            "id": "OCPBUGS-100",
+                            "resolution": "Done",
+                            "status": "Closed",
+                        }
+                    }
+                },
+            },
+        }
+        result = interpret_cves(report)
+        self.assertEqual(result["impact"], "must_release")
+        self.assertEqual(len(result["details"]), 1)
+
+    def test_cve_pending_enrichment(self):
+        report = {
+            "RHSA-2026:12345": {
+                "type": "image",
+                "cves": {"CVE-2026-9999": {"pending": True}},
+            }
+        }
+        result = interpret_cves(report)
+        self.assertEqual(result["impact"], "pending_enrichment")
+        self.assertIn("CVE-2026-9999", result["pending_cve_enrichment"])
+
+    def test_cve_mixed_pending_and_must_release(self):
+        report = {
+            "RHSA-2026:12345": {
+                "type": "image",
+                "cves": {
+                    "CVE-2026-1111": {
+                        "jira_ticket": {
+                            "id": "OCPBUGS-1",
+                            "resolution": "Done",
+                            "status": "Closed",
+                        }
+                    },
+                    "CVE-2026-2222": {"pending": True},
+                },
+            }
+        }
+        result = interpret_cves(report)
+        self.assertEqual(result["impact"], "must_release")
+        self.assertEqual(len(result["details"]), 1)
+        self.assertIn("CVE-2026-2222", result["pending_cve_enrichment"])
+
+    def test_cve_pending_not_affected_after_enrichment(self):
+        """After enrichment, empty dict means not affected."""
+        report = {
+            "RHSA-2026:12345": {
+                "type": "image",
+                "cves": {"CVE-2026-9999": {}},
+            }
+        }
+        result = interpret_cves(report)
+        self.assertEqual(result["impact"], "none")
+        self.assertEqual(result["pending_cve_enrichment"], [])
+
+    def test_mixed_must_release_and_skipped(self):
+        report = {
+            "RHSA-2026:12345": {
+                "type": "image",
+                "cves": {
+                    "CVE-2026-1111": {
+                        "jira_ticket": {
+                            "id": "OCPBUGS-200",
+                            "resolution": "Done",
+                            "status": "Closed",
+                        }
+                    },
+                    "CVE-2026-2222": {
+                        "jira_ticket": {
+                            "id": "OCPBUGS-201",
+                            "resolution": "",
+                            "status": "In Progress",
+                        }
+                    },
+                },
+            }
+        }
+        result = interpret_cves(report)
+        self.assertEqual(result["impact"], "must_release")
+        self.assertEqual(len(result["details"]), 1)
+        self.assertEqual(result["skipped_not_actionable"], 1)
+
 
 class TestComputeRecommendation(unittest.TestCase):
     def test_must_release_cve(self):
@@ -212,6 +316,20 @@ class TestComputeRecommendation(unittest.TestCase):
         rec, reason = compute_recommendation(evaluation)
         self.assertEqual(rec, "ASK ART TO CREATE ARTIFACTS")
         self.assertIn("CVE fix", reason)
+
+    def test_must_release_cve_with_jira(self):
+        evaluation = {
+            "cve_impact": {
+                "impact": "must_release",
+                "details": [{"cve": "CVE-2026-1", "jira": "OCPBUGS-999"}],
+            },
+            "commits": 5,
+            "days_since": 10,
+            "ocp_status": "available",
+        }
+        rec, reason = compute_recommendation(evaluation)
+        self.assertEqual(rec, "ASK ART TO CREATE ARTIFACTS")
+        self.assertIn("CVE-2026-1 (OCPBUGS-999)", reason)
 
     def test_90_day_rule(self):
         evaluation = {
@@ -242,14 +360,40 @@ class TestComputeRecommendation(unittest.TestCase):
         rec, _ = compute_recommendation(evaluation)
         self.assertEqual(rec, "SKIP")
 
-    def test_needs_review_cve_in_progress(self):
+    def test_in_progress_cves_skip(self):
         evaluation = {
-            "cve_impact": {"impact": "needs_review"},
+            "cve_impact": {"impact": "none", "skipped_not_actionable": 2},
             "commits": 5,
             "days_since": 10,
         }
-        rec, _ = compute_recommendation(evaluation)
+        rec, reason = compute_recommendation(evaluation)
+        self.assertEqual(rec, "SKIP")
+        self.assertIn("not actionable", reason)
+
+    def test_pending_enrichment_needs_review(self):
+        evaluation = {
+            "cve_impact": {
+                "impact": "pending_enrichment",
+                "pending_cve_enrichment": ["CVE-2026-1"],
+            },
+            "commits": 5,
+            "days_since": 10,
+        }
+        rec, reason = compute_recommendation(evaluation)
         self.assertEqual(rec, "NEEDS REVIEW")
+        self.assertIn("advisory CVEs", reason)
+
+    def test_pending_enrichment_skip_no_commits(self):
+        evaluation = {
+            "cve_impact": {
+                "impact": "pending_enrichment",
+                "pending_cve_enrichment": ["CVE-2026-1"],
+            },
+            "commits": 0,
+            "days_since": 10,
+        }
+        rec, _ = compute_recommendation(evaluation)
+        self.assertEqual(rec, "SKIP")
 
     def test_needs_review_unknown_advisory(self):
         evaluation = {
@@ -551,6 +695,33 @@ class TestBuildReason(unittest.TestCase):
         })
         self.assertIn("no CVEs", result)
         self.assertIn("last: 4.21.6 (30d ago)", result)
+
+    def test_skipped_not_actionable_cves(self):
+        result = _build_reason({
+            "cve_impact": {"impact": "none", "skipped_not_actionable": 3},
+            "last_released": "4.21.6",
+            "days_since": 30,
+        })
+        self.assertIn("no actionable CVEs (3 not actionable)", result)
+        self.assertNotIn("no CVEs", result)
+
+    def test_must_release_with_jira(self):
+        result = _build_reason({
+            "cve_impact": {
+                "impact": "must_release",
+                "details": [{"cve": "CVE-2026-1", "jira": "OCPBUGS-500"}],
+            },
+        })
+        self.assertIn("CVE-2026-1 (OCPBUGS-500)", result)
+
+    def test_pending_enrichment(self):
+        result = _build_reason({
+            "cve_impact": {
+                "impact": "pending_enrichment",
+                "pending_cve_enrichment": ["CVE-2026-1", "CVE-2026-2"],
+            },
+        })
+        self.assertIn("2 advisory CVEs", result)
 
     def test_advisory_skipped(self):
         result = _build_reason({
