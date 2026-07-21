@@ -11,13 +11,11 @@ Usage: precheck_xyz.py <version...> [--verbose] [--json]
 import argparse
 import json
 import logging
-import os
-import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from lib import art_jira, brew, git_ops, lifecycle, ocpbugs, pyxis, release_controller
+from lib import advisory, art_jira, brew, git_ops, lifecycle, ocpbugs, pyxis, release_controller
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,55 +25,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def run_advisory_report(version, repo_root):
-    """Call advisory_publication_report.sh as subprocess.
+def run_advisory_report(version, repo_root=None):
+    """Get advisory report with CVE IDs (Jira enrichment deferred to skill layer).
+
+    Extracts advisory and CVE data from OCP shipment MRs. CVEs are marked
+    as ``pending`` — Jira lookup is handled by the skill layer via MCP.
 
     Args:
         version: Full version, e.g., "4.21.8".
-        repo_root: Path to the git repository root.
+        repo_root: Unused (kept for backward compatibility).
 
     Returns:
-        dict: Parsed JSON report, or {"error": "...", "skipped": True} on failure.
+        dict: Advisory report keyed by advisory name, or
+              {"error": "...", "skipped": True} on failure.
     """
-    # Check prerequisites
-    parts = version.split(".")
-    if len(parts) >= 2 and parts[1].isdigit():
-        minor_int = int(parts[1])
-        if minor_int >= 20 and not os.environ.get("GITLAB_API_TOKEN", "").strip():
-            return {"error": "Missing env var: GITLAB_API_TOKEN", "skipped": True}
-
-    # Check VPN
-    if not brew.check_vpn():
-        return {"error": "VPN not connected", "skipped": True}
-
-    script = os.path.join(
-        repo_root, "scripts", "advisory_publication", "advisory_publication_report.sh"
-    )
-    if not os.path.exists(script):
-        return {"error": f"Script not found: {script}", "skipped": True}
-
     logger.info("Running advisory publication report for %s...", version)
-    try:
-        result = subprocess.run(
-            ["bash", script, version],
-            capture_output=True, text=True, timeout=120,
-        )
-        if result.returncode == 0:
-            stdout = result.stdout.strip()
-            # The advisory script may print warnings before the JSON.
-            # Find the outermost JSON object by matching the last '}'
-            # back to its opening '{'.
-            json_end = stdout.rfind("}")
-            if json_end >= 0:
-                json_start = stdout.find("{")
-                if json_start >= 0 and json_start < json_end:
-                    return json.loads(stdout[json_start:json_end + 1])
-            return {"error": "No JSON found in advisory report output", "skipped": True}
-        return {"error": result.stderr.strip(), "skipped": True}
-    except subprocess.TimeoutExpired:
-        return {"error": "Advisory report timed out (120s)", "skipped": True}
-    except json.JSONDecodeError as e:
-        return {"error": f"Invalid JSON from advisory report: {e}", "skipped": True}
+    return advisory.get_advisory_report(version)
 
 
 def interpret_cves(advisory_report):
@@ -83,24 +48,38 @@ def interpret_cves(advisory_report):
 
     Rules from the MicroShift release process:
     - Empty cves dict -> no CVEs -> no action
+    - CVE with ``pending: True`` -> not yet looked up in Jira -> pending enrichment
     - CVE with empty dict (no Jira ticket) -> does NOT affect MicroShift -> no action
     - CVE with resolution "Done" -> MUST release (fix landed but not yet shipped)
     - CVE with resolution "Done-Errata" -> no action (fix already shipped in a prior errata)
     - CVE with resolution "Not a Bug" -> no action (CVE does not affect MicroShift)
-    - CVE with any other status -> flag as NEEDS REVIEW
+    - CVE with any other status (in progress) -> no action (fix not yet landed)
 
     Args:
-        advisory_report: Parsed JSON from advisory_publication_report.sh.
+        advisory_report: Parsed advisory report dict.
 
     Returns:
-        dict: {"impact": "none"|"must_release"|"needs_review", "details": [...]}
+        dict with keys:
+            impact: "none"|"must_release"|"unknown"|"pending_enrichment"
+            details: list of CVE dicts (for must_release), explanatory strings (for unknown), or empty list
+            advisory_types: list of advisory types checked
+            skipped_not_actionable: count of CVEs skipped (in-progress or unresolved fix)
+            pending_cve_enrichment: list of CVE IDs needing Jira lookup
     """
     if not advisory_report or advisory_report.get("skipped"):
-        return {"impact": "unknown", "details": ["Advisory report was skipped"]}
+        return {
+            "impact": "unknown",
+            "details": ["Advisory report was skipped"],
+            "advisory_types": [],
+            "skipped_not_actionable": 0,
+            "pending_cve_enrichment": [],
+        }
 
     must_release_cves = []
-    needs_review_cves = []
+    pending_cves = []
+    skipped_not_actionable = 0
     advisory_types_checked = []
+    seen_cves = set()
 
     for advisory_name, advisory_data in advisory_report.items():
         advisory_type = advisory_data.get("type", "unknown")
@@ -111,9 +90,16 @@ def interpret_cves(advisory_report):
 
         cves = advisory_data.get("cves", {})
         for cve_id, cve_data in cves.items():
+            if cve_id in seen_cves:
+                continue
+            seen_cves.add(cve_id)
+
+            if cve_data.get("pending"):
+                pending_cves.append(cve_id)
+                continue
+
             jira_ticket = cve_data.get("jira_ticket")
             if not jira_ticket:
-                # No MicroShift Jira ticket -> CVE does not affect MicroShift
                 continue
 
             resolution = jira_ticket.get("resolution", "")
@@ -128,29 +114,23 @@ def interpret_cves(advisory_report):
             elif resolution in ("Done-Errata", "Not a Bug"):
                 continue
             else:
-                needs_review_cves.append({
-                    "cve": cve_id,
-                    "jira": jira_ticket.get("id", ""),
-                    "reason": f"Fix {status.lower()}" if status else "Unknown status",
-                })
+                skipped_not_actionable += 1
+                logger.debug(
+                    "Skipping CVE %s (%s): resolution=%r status=%r",
+                    cve_id, jira_ticket.get("id", ""), resolution, status,
+                )
+
+    base = {
+        "advisory_types": advisory_types_checked,
+        "skipped_not_actionable": skipped_not_actionable,
+        "pending_cve_enrichment": pending_cves,
+    }
 
     if must_release_cves:
-        return {
-            "impact": "must_release",
-            "details": must_release_cves,
-            "advisory_types": advisory_types_checked,
-        }
-    if needs_review_cves:
-        return {
-            "impact": "needs_review",
-            "details": needs_review_cves,
-            "advisory_types": advisory_types_checked,
-        }
-    return {
-        "impact": "none",
-        "details": [],
-        "advisory_types": advisory_types_checked,
-    }
+        return {**base, "impact": "must_release", "details": must_release_cves}
+    if pending_cves:
+        return {**base, "impact": "pending_enrichment", "details": []}
+    return {**base, "impact": "none", "details": []}
 
 
 def compute_recommendation(evaluation):
@@ -174,10 +154,13 @@ def compute_recommendation(evaluation):
     ocp_status = evaluation.get("ocp_status", "")
     ocp_available = ocp_status == "available"
 
-    # Must release: CVE with Done-Errata
+    # Must release: CVE with resolution Done (fix landed, not yet shipped)
     if cve_impact == "must_release":
         cve_details = evaluation.get("cve_impact", {}).get("details", [])
-        cve_list = ", ".join(d["cve"] for d in cve_details)
+        cve_list = ", ".join(
+            f"{d['cve']} ({d['jira']})" if d.get("jira") else d["cve"]
+            for d in cve_details
+        )
         if not ocp_available:
             return "NEEDS REVIEW", f"CVE fix: {cve_list} (OCP payload not yet available)"
         return "ASK ART TO CREATE ARTIFACTS", f"CVE fix: {cve_list}"
@@ -211,15 +194,16 @@ def compute_recommendation(evaluation):
         bug_summary = f"{ocpbugs_count} OCPBUGS (all labeled release-not-required)"
         return "SKIP", bug_summary
 
-    # Needs review: CVE in progress
-    if cve_impact == "needs_review":
-        return "NEEDS REVIEW", "CVE fix in progress"
-
-    # Needs review: advisory report skipped
-    if cve_impact == "unknown":
+    # Needs review: advisory report skipped or CVEs found without Jira lookup
+    if cve_impact in ("unknown", "pending_enrichment"):
+        pending = evaluation.get("cve_impact", {}).get("pending_cve_enrichment", [])
+        if cve_impact == "pending_enrichment" and pending:
+            label = f"{len(pending)} advisory CVEs"
+        else:
+            label = "advisory report unavailable"
         if commits > 0:
-            return "NEEDS REVIEW", f"{commits} commits, advisory report unavailable"
-        return "SKIP", "No commits, advisory report unavailable"
+            return "NEEDS REVIEW", f"{commits} commits, {label}"
+        return "SKIP", f"No commits, {label}"
 
     # Skip: no changes
     if commits == 0:
@@ -229,10 +213,13 @@ def compute_recommendation(evaluation):
         return "SKIP", f"No commits ({days_str})"
 
     # Has commits but no CVEs and within 90 days
+    skipped_cves = evaluation.get("cve_impact", {}).get("skipped_not_actionable", 0)
+    cve_label = (f"no actionable CVEs ({skipped_cves} not actionable)"
+                 if skipped_cves > 0 else "no CVEs")
     if days_since is not None:
-        return "SKIP", f"{days_since}d since last release, {commits} commits, no CVEs"
+        return "SKIP", f"{days_since}d since last release, {commits} commits, {cve_label}"
 
-    return "SKIP", f"{commits} commits, no CVEs"
+    return "SKIP", f"{commits} commits, {cve_label}"
 
 
 def _resolve_range_base(version, minor, z):
@@ -465,12 +452,20 @@ def _build_reason(e):
     impact = cve_impact.get("impact", "unknown")
     if impact == "must_release":
         details = cve_impact.get("details", [])
-        cve_list = ", ".join(d.get("cve", "") for d in details)
+        cve_list = ", ".join(
+            f"{d['cve']} ({d['jira']})" if d.get("jira") else d.get("cve", "")
+            for d in details
+        )
         parts.append(f"CVE fix: {cve_list}")
-    elif impact == "needs_review":
-        parts.append("CVE in progress")
     elif impact == "none":
-        parts.append("no CVEs")
+        skipped = cve_impact.get("skipped_not_actionable", 0)
+        if skipped > 0:
+            parts.append(f"no actionable CVEs ({skipped} not actionable)")
+        else:
+            parts.append("no CVEs")
+    elif impact == "pending_enrichment":
+        pending = cve_impact.get("pending_cve_enrichment", [])
+        parts.append(f"{len(pending)} advisory CVEs")
     elif impact == "unknown":
         advisory = e.get("advisory_report", {})
         if advisory and advisory.get("skipped"):
@@ -597,7 +592,9 @@ def format_text_full(output):
         last = e.get("last_released", "--")
         days = str(e.get("days_since", "--")) if e.get("days_since") is not None else "--"
         commits = str(e.get("commits", 0))
-        impact = e.get("cve_impact", {}).get("impact", "--")
+        impact_raw = e.get("cve_impact", {}).get("impact", "--")
+        impact = {"pending_enrichment": "pending", "must_release": "must release"}.get(
+            impact_raw, impact_raw)
         ocpbugs_data = e.get("ocpbugs", {})
         ocpbugs_count = ("skipped" if ocpbugs_data.get("skipped")
                          else str(ocpbugs_data.get("count", 0)))
@@ -627,10 +624,11 @@ def format_text_full(output):
                     sections.append(f"| {v} | {adv_name} | {adv_type} | none | -- |")
                 else:
                     for cve_id, cve_data in cves.items():
-                        jira_ticket = cve_data.get("jira_ticket")
-                        if jira_ticket:
-                            jid = jira_ticket.get('id', '?')
-                            jres = jira_ticket.get('resolution', '?')
+                        if cve_data.get("pending"):
+                            impact = "found"
+                        elif cve_data.get("jira_ticket"):
+                            jid = cve_data["jira_ticket"].get('id', '?')
+                            jres = cve_data["jira_ticket"].get('resolution', '?')
                             impact = f"{jid} ({jres})"
                         else:
                             impact = "not affected"

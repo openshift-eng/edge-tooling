@@ -55,7 +55,7 @@ def ensure_microshift_repo():
             capture_output=True, text=True, check=True,
         )
         subprocess.run(
-            ["git", "sparse-checkout", "set", "scripts/advisory_publication"],
+            ["git", "sparse-checkout", "set", "--no-cone"],
             cwd=output_dir, capture_output=True, text=True, check=True,
         )
 
