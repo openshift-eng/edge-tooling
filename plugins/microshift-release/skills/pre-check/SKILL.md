@@ -3,7 +3,7 @@ name: microshift-release:pre-check
 argument-hint: [Z|X|Y|RC|EC|nightly] [version|time-range...] [--verbose]
 description: Check OCP release schedule, verify availability, evaluate z-stream need, or check nightly build gaps
 user-invocable: true
-allowed-tools: Bash, mcp__atlassian__getJiraIssue, mcp__atlassian__searchJiraIssuesUsingJql
+allowed-tools: Bash, mcp__jira__jira_get_issue, mcp__jira__jira_search
 ---
 
 # microshift-release:pre-check
@@ -27,7 +27,7 @@ When a time range is provided (e.g., "this week"), it queries ART Jira for OCP r
 | Requirement | Needed for | Mandatory? |
 |---|---|---|
 | VPN | Brew RPM checks (nightly, EC/RC), advisory report | Yes for nightly/ecrc — xyz degrades gracefully (skips advisory, 90-day rule) |
-| Atlassian MCP | OCPBUGS enrichment, ART ticket queries, time range lookups | Yes — required to analyze OCPBUGS resolution and release action |
+| Jira MCP | OCPBUGS enrichment, ART ticket queries, time range lookups | Yes — required to analyze OCPBUGS resolution and release action |
 | `GITLAB_API_TOKEN` | Advisory report for 4.20+ (shipment MR data) | No — advisory skipped for 4.20+ without it |
 
 ## Arguments
@@ -63,22 +63,22 @@ SCRIPTS_DIR=plugins/microshift-release/scripts
 
 If a time range is present instead of explicit versions, query ART Jira for release tickets due in that window:
 
-1. **Convert the time range** to concrete dates (`date_from`, `date_to`) based on today's date:
+1. **Convert the time range** to concrete dates (`date_from`, `date_to`) based on today's date. **Weeks always start on Monday** (ISO 8601):
    - `today` → today only
    - `tomorrow` → tomorrow only
-   - `this week` → Monday through Sunday of the current week
-   - `next week` → next Monday through next Sunday
+   - `this week` → Monday of the current ISO week through the following Sunday (if today is Sunday, it belongs to the week that started on the previous Monday)
+   - `next week` → Monday after the current ISO week through the following Sunday
    - `next N days` → today through N days from now
    - `this month` → today through end of current month
    - For any other natural language range, compute the appropriate date window
 
-2. **Query ART Jira** using `mcp__atlassian__searchJiraIssuesUsingJql`:
+2. **Query ART Jira** using `mcp__jira__jira_search`:
 
    ```text
-   JQL: project = ART AND issuetype = Story AND summary ~ "Release 4." AND duedate >= "{date_from}" AND duedate <= "{date_to}" ORDER BY duedate ASC
+   jql: project = ART AND issuetype = Story AND summary ~ "Release 4." AND duedate >= "{date_from}" AND duedate <= "{date_to}" ORDER BY duedate ASC
    ```
 
-   Use `cloudId: "redhat.atlassian.net"` for the Atlassian MCP tool.
+   Use `limit: 50` to ensure all tickets in the window are returned.
 
 3. **Extract versions** from ticket summaries. ART release tickets use the format `"Release X.Y.Z [YYYY-Mon-DD]"` (e.g., `"Release 4.21.18 [2026-Jun-02]"`). Extract the `X.Y.Z` version from each matching ticket.
 
@@ -92,11 +92,10 @@ If no ART tickets are found in the date range, report "No OCP releases scheduled
 
 Before running the script, query ART Jira for in-progress release tickets so the script can show ART ticket status in the Release Schedule table.
 
-1. Call `mcp__atlassian__searchJiraIssuesUsingJql` with:
-   - `cloudId`: `"redhat.atlassian.net"`
+1. Call `mcp__jira__jira_search` with:
    - `jql`: `project = ART AND summary ~ "Release" AND status = "In Progress" ORDER BY duedate ASC`
-   - `fields`: `["summary", "status", "duedate"]`
-   - `maxResults`: `50`
+   - `fields`: `summary,status,duedate`
+   - `limit`: `50`
 2. From the results, build a JSON array:
 
    ```json
@@ -109,7 +108,7 @@ Before running the script, query ART Jira for in-progress release tickets so the
    echo '<json>' > /tmp/art_tickets.json
    ```
 
-If `mcp__atlassian__searchJiraIssuesUsingJql` is not available, skip this step — the script degrades gracefully (shows `None` for ART tickets).
+If `mcp__jira__jira_search` is not available, skip this step — the script degrades gracefully (shows `None` for ART tickets).
 
 ### Step 4: Run the Script
 
@@ -139,12 +138,10 @@ Display the script output **verbatim** — do not reformat, add tables, or chang
 After displaying the output (including any `--verbose` re-run), if any OCPBUGS appeared in the results:
 
 1. **Collect OCPBUGS keys**: Extract all unique `OCPBUGS-XXXXX` keys from the output (they appear in the Resolved OCPBUGS table or the one-line summaries).
-2. **Fetch each bug via MCP**: For each unique key, call `mcp__atlassian__getJiraIssue` with:
-   - `cloudId`: `"redhat.atlassian.net"`
-   - `issueIdOrKey`: the OCPBUGS key (e.g., `"OCPBUGS-12345"`)
-   - `fields`: `["summary", "status", "labels", "issuetype", "priority"]`
-   - `responseContentFormat`: `"markdown"`
-   Make all `getJiraIssue` calls **in parallel** (multiple tool calls in one message).
+2. **Fetch each bug via MCP**: For each unique key, call `mcp__jira__jira_get_issue` with:
+   - `issue_key`: the OCPBUGS key (e.g., `"OCPBUGS-12345"`)
+   - `fields`: `summary,status,resolution,labels,issuetype,priority`
+   Make all `jira_get_issue` calls **in parallel** (multiple tool calls in one message).
 3. **Build enriched JSON**: For each successfully fetched bug, build a JSON object:
 
    ```json
@@ -168,9 +165,40 @@ After displaying the output (including any `--verbose` re-run), if any OCPBUGS a
 
 5. **Display the enrichment output** after the main precheck output. This shows real summaries, statuses, release actions (release-required/release-not-required/needs-review), and updated recommendations.
 
-If `mcp__atlassian__getJiraIssue` is not available, skip enrichment and note that the Atlassian MCP is required for OCPBUGS analysis.
+If `mcp__jira__jira_get_issue` is not available, skip enrichment and note that the Jira MCP is required for OCPBUGS analysis.
 
-### Step 7: Handle Errors
+### Step 7: Enrich Advisory CVEs via MCP
+
+After displaying the output, if any version shows "advisory CVEs" or "pending" in the CVE impact column:
+
+1. **Collect CVE IDs**: Extract all CVE IDs from the Advisory / CVE Details table (they appear as `CVE-YYYY-NNNNN` with impact "found").
+2. **Search Jira for each CVE**: For each unique CVE ID, call `mcp__jira__jira_search` with:
+   - `jql`: `summary ~ "CVE-YYYY-NNNNN" AND project = OCPBUGS`
+   - `fields`: `summary,status,resolution`
+   - `limit`: `5`
+   Make all `jira_search` calls **in parallel** (multiple tool calls in one message).
+3. **Interpret each CVE**: For each CVE, based on the Jira ticket found:
+   - **No ticket found** → CVE does not affect MicroShift → no action
+   - **Resolution = "Done"** → fix landed but not yet shipped → **must release**
+   - **Resolution = "Done-Errata"** → fix already shipped → no action
+   - **Resolution = "Not a Bug"** → does not affect MicroShift → no action
+   - **Any other status** (In Progress, Verified, etc.) → fix not yet landed → no action
+4. **Present enriched results**: Display a summary table of each CVE with its Jira ticket, resolution, and whether it triggers a release. If any CVE has resolution "Done", update the version recommendation to "ASK ART TO CREATE ARTIFACTS" with the CVE list.
+
+If `mcp__jira__jira_search` is not available, skip CVE enrichment and note that the Jira MCP is required for advisory CVE analysis.
+
+### Step 8: Final Recommendations Table
+
+After all enrichment steps (OCPBUGS + CVE), **always** end with a `## Final Recommendations` table — one row per evaluated version. Use this format:
+
+| Version | ART Ticket | Due | OCPBUGS | CVEs (MicroShift) | Recommendation |
+|---------|-----------|-----|---------|-------------------|----------------|
+| 4.22.6 | ART-21670 (Closed) | Jul-21 | 4 needs-review | none | **NEEDS REVIEW** — reason |
+| 4.21.25 | ART-21668 (Closed) | Jul-21 | 1 unresolved | none | **SKIP** — reason |
+
+Every version gets a row, even if the action is SKIP. Never summarize as prose paragraphs instead of a table.
+
+### Step 9: Handle Errors
 
 If the script exits non-zero, display stderr and suggest:
 
@@ -198,5 +226,5 @@ If the script exits non-zero, display stderr and suggest:
 - Read-only — does NOT create tickets or modify external state
 - Scripts support `--json` for raw JSON output when called directly (e.g., `bash ${SCRIPTS_DIR}/precheck.sh xyz 4.21.10 --json`)
 - `--verbose` works for all types: detailed tables for xyz, NVR/nightly names for nightly, next versions for EC/RC
-- OCPBUGS enrichment uses Atlassian MCP (OAuth) — no PAT env vars needed; the script discovers bug keys from git commits, and the skill enriches them via `getJiraIssue`
+- OCPBUGS enrichment uses Jira MCP (OAuth) — no PAT env vars needed; the script discovers bug keys from git commits, and the skill enriches them via `jira_get_issue`
 - VPN required for Brew and errata access
