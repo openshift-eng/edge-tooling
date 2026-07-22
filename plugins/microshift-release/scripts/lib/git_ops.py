@@ -51,12 +51,8 @@ def ensure_microshift_repo():
         logger.info("Cloning MicroShift repo to %s...", output_dir)
         os.makedirs(os.path.dirname(output_dir), exist_ok=True)
         subprocess.run(
-            ["git", "clone", "--filter=blob:none", "--sparse", MICROSHIFT_REMOTE, output_dir],
+            ["git", "clone", "--filter=blob:none", MICROSHIFT_REMOTE, output_dir],
             capture_output=True, text=True, check=True,
-        )
-        subprocess.run(
-            ["git", "sparse-checkout", "set", "--no-cone"],
-            cwd=output_dir, capture_output=True, text=True, check=True,
         )
 
     _microshift_dir = output_dir
