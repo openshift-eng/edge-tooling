@@ -6,6 +6,8 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from unittest.mock import patch
+
 from advisory_promotion import (  # noqa: E402
     check_in_advisory,
     check_in_catalog,
@@ -16,6 +18,8 @@ from advisory_promotion import (  # noqa: E402
     check_no_xy0_tag,
     check_chi_freshness,
     check_image_sha_distinct,
+    check_shipment_errata_stage_url,
+    check_shipment_errata_prod_url,
     check_shipment_mr_approved,
     format_text_short,
     format_text_full,
@@ -310,6 +314,97 @@ class TestShipmentMRApproved(unittest.TestCase):
 
     def test_not_found(self):
         r = check_shipment_mr_approved({"found": False, "reason": "Not found"})
+        self.assertEqual(r["status"], "FAIL")
+
+
+# ── Global: shipment_errata_stage_url ───────────────────────────
+
+_SHA_A = "a" * 64
+_SHA_B = "b" * 64
+_SHA_C = "c" * 64
+
+
+class TestShipmentErrataStageUrl(unittest.TestCase):
+    def test_shipment_unavailable(self):
+        r = check_shipment_errata_stage_url({"skipped": True}, None)
+        self.assertEqual(r["status"], "WARN")
+
+    def test_missing_url(self):
+        r = check_shipment_errata_stage_url({"found": True}, None)
+        self.assertEqual(r["status"], "FAIL")
+
+    def test_invalid_url_format(self):
+        shipment = {"found": True, "stage_errata_url": "https://example.com/bad"}
+        r = check_shipment_errata_stage_url(shipment, None)
+        self.assertEqual(r["status"], "FAIL")
+
+    def test_no_advisory_images(self):
+        shipment = {"found": True, "stage_errata_url": "https://access.stage.redhat.com/errata/RHBA-2026:73871"}
+        r = check_shipment_errata_stage_url(shipment, None)
+        self.assertEqual(r["status"], "WARN")
+        self.assertIn("RHBA-2026:73871", r["reason"])
+
+    @patch("advisory_promotion.artifacts.fetch_errata_images", return_value=None)
+    def test_errata_page_unreachable(self, _mock):
+        shipment = {"found": True, "stage_errata_url": "https://access.stage.redhat.com/errata/RHBA-2026:73871"}
+        adv = _advisory([_image("amd64", 9, _SHA_A), _image("arm64", 9, _SHA_B)])
+        r = check_shipment_errata_stage_url(shipment, adv)
+        self.assertEqual(r["status"], "WARN")
+
+    @patch("advisory_promotion.artifacts.fetch_errata_images")
+    def test_images_match(self, mock_fetch):
+        adv = _advisory([_image("amd64", 9, _SHA_A), _image("arm64", 9, _SHA_B)])
+        mock_fetch.return_value = [{"rhel": 9, "sha": _SHA_A}, {"rhel": 9, "sha": _SHA_B}]
+        shipment = {"found": True, "stage_errata_url": "https://access.stage.redhat.com/errata/RHBA-2026:73871"}
+        r = check_shipment_errata_stage_url(shipment, adv)
+        self.assertEqual(r["status"], "PASS")
+        self.assertIn("2 images verified", r["reason"])
+
+    @patch("advisory_promotion.artifacts.fetch_errata_images")
+    def test_images_mismatch(self, mock_fetch):
+        adv = _advisory([_image("amd64", 9, _SHA_A), _image("arm64", 9, _SHA_B)])
+        mock_fetch.return_value = [{"rhel": 9, "sha": _SHA_A}]
+        shipment = {"found": True, "stage_errata_url": "https://access.stage.redhat.com/errata/RHBA-2026:73871"}
+        r = check_shipment_errata_stage_url(shipment, adv)
+        self.assertEqual(r["status"], "FAIL")
+        self.assertIn("1 image(s) not in errata", r["reason"])
+
+
+# ── Global: shipment_errata_prod_url ────────────────────────────
+
+
+class TestShipmentErrataProdUrl(unittest.TestCase):
+    def test_ec_skipped(self):
+        r = check_shipment_errata_prod_url({"found": True}, None, _version("5.0.0-ec.3"))
+        self.assertEqual(r["status"], "SKIP")
+
+    def test_rc_skipped(self):
+        r = check_shipment_errata_prod_url({"found": True}, None, _version("4.22.0-rc.2"))
+        self.assertEqual(r["status"], "SKIP")
+
+    def test_missing_url_warns(self):
+        shipment = {"found": True}
+        r = check_shipment_errata_prod_url(shipment, None, _version("4.20.26"))
+        self.assertEqual(r["status"], "WARN")
+
+    def test_shipment_unavailable(self):
+        r = check_shipment_errata_prod_url({"skipped": True}, None, _version("4.20.26"))
+        self.assertEqual(r["status"], "WARN")
+
+    @patch("advisory_promotion.artifacts.fetch_errata_images")
+    def test_images_match(self, mock_fetch):
+        adv = _advisory([_image("amd64", 9, _SHA_A), _image("arm64", 9, _SHA_B)])
+        mock_fetch.return_value = [{"rhel": 9, "sha": _SHA_A}, {"rhel": 9, "sha": _SHA_B}]
+        shipment = {"found": True, "prod_errata_url": "https://access.redhat.com/errata/RHBA-2026:47055"}
+        r = check_shipment_errata_prod_url(shipment, adv, _version("4.20.26"))
+        self.assertEqual(r["status"], "PASS")
+
+    @patch("advisory_promotion.artifacts.fetch_errata_images")
+    def test_images_mismatch(self, mock_fetch):
+        adv = _advisory([_image("amd64", 9, _SHA_A), _image("arm64", 9, _SHA_B)])
+        mock_fetch.return_value = [{"rhel": 9, "sha": _SHA_C}]
+        shipment = {"found": True, "prod_errata_url": "https://access.redhat.com/errata/RHBA-2026:47055"}
+        r = check_shipment_errata_prod_url(shipment, adv, _version("4.20.26"))
         self.assertEqual(r["status"], "FAIL")
 
 
