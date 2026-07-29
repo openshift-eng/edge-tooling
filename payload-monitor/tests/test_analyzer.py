@@ -289,7 +289,8 @@ class TestFindEscalationRisks:
         assert _find_escalation_risks([], Config()) == []
 
     def test_latest_failure_empty_url_not_replaced_by_older(self):
-        """Newest failure has an empty prow_url -> it must not be replaced by an older job's URL."""
+        """Newest failure has an empty prow_url -> it must not be replaced by
+        an older job's URL."""
         def informing_job(url):
             return JobRun(name="j1", prow_url=url, result=JobResult.FAILURE,
                           job_type=JobType.INFORMING, topology="SNO")
