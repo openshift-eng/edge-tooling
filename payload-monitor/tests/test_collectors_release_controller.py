@@ -174,10 +174,10 @@ class TestParseJobs:
         assert result[0].previous_attempts[0].prow_url == "https://prow/1"
 
 
-class TestDiscoverStreams:
-    def test_discover_streams(self, config):
+class TestConfiguredStreamNames:
+    def test_configured_stream_names(self, config):
         config.versions = ["4.18", "4.19"]
-        streams = rc.discover_streams(config)
+        streams = rc.configured_stream_names(config)
         assert streams == ["4.18.0-0.nightly", "4.19.0-0.nightly"]
 
 

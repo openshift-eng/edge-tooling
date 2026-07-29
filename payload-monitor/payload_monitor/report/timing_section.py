@@ -62,6 +62,17 @@ def _color_for(topology: str, run_type: str) -> str:
     return _COLORS.get((topology, run_type), "#8b949e")
 
 
+def _stat_cells(stats: dict, keys: list[str]) -> str:
+    """Render ``<td>`` cells for the given stat keys."""
+    parts = []
+    for k in keys:
+        if k == "cv":
+            parts.append(f'<td>{stats["cv"]}%</td>')
+        else:
+            parts.append(f'<td>{_fmt_duration(stats[k])}</td>')
+    return "".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # Sub-section renderers
 # ---------------------------------------------------------------------------
@@ -98,13 +109,8 @@ def render_summary_table(report: TimingReport) -> str:
                 f'<td>{html.escape(rtype.capitalize())}</td>'
                 f'<td style="color:var(--text-muted);font-style:italic">all</td>'
                 f'<td>{stats["count"]}</td>'
-                f'<td>{_fmt_duration(stats["avg"])}</td>'
-                f'<td>{_fmt_duration(stats["median"])}</td>'
-                f'<td>{_fmt_duration(stats["p90"])}</td>'
-                f'<td>{_fmt_duration(stats["p95"])}</td>'
-                f'<td>{_fmt_duration(stats["p99"])}</td>'
-                f'<td>{stats["cv"]}%</td>'
-                f'</tr>'
+                + _stat_cells(stats, ["avg", "median", "p90", "p95", "p99", "cv"])
+                + '</tr>'
             )
         else:
             rows.append(
@@ -136,13 +142,8 @@ def render_summary_table(report: TimingReport) -> str:
                     f'<td>{html.escape(rtype.capitalize())}</td>'
                     f'<td>{html.escape(ver)}</td>'
                     f'<td>{ver_stats["count"]}</td>'
-                    f'<td>{_fmt_duration(ver_stats["avg"])}</td>'
-                    f'<td>{_fmt_duration(ver_stats["median"])}</td>'
-                    f'<td>{_fmt_duration(ver_stats["p90"])}</td>'
-                    f'<td>{_fmt_duration(ver_stats["p95"])}</td>'
-                    f'<td>{_fmt_duration(ver_stats["p99"])}</td>'
-                    f'<td>{ver_stats["cv"]}%</td>'
-                    f'</tr>'
+                    + _stat_cells(ver_stats, ["avg", "median", "p90", "p95", "p99", "cv"])
+                    + '</tr>'
                 )
             else:
                 rows.append(
@@ -216,11 +217,8 @@ def render_variant_table(report: TimingReport) -> str:
             f'<td style="font-size:13px;color:var(--text-muted)">{html.escape(vk)}</td>'
             f'<td style="color:var(--text-muted);font-style:italic">all</td>'
             f'<td>{stats["count"]}</td>'
-            f'<td>{_fmt_duration(stats["avg"])}</td>'
-            f'<td>{_fmt_duration(stats["median"])}</td>'
-            f'<td>{_fmt_duration(stats["p95"])}</td>'
-            f'<td>{stats["cv"]}%</td>'
-            f'</tr>'
+            + _stat_cells(stats, ["avg", "median", "p95", "cv"])
+            + '</tr>'
         )
         # Per-version rows — hidden by default, shown when version filter active
         for ver in sorted(set(r.release for r in group)):
@@ -235,11 +233,8 @@ def render_variant_table(report: TimingReport) -> str:
                     f'<td style="font-size:13px;color:var(--text-muted)">{html.escape(vk)}</td>'
                     f'<td>{html.escape(ver)}</td>'
                     f'<td>{ver_stats["count"]}</td>'
-                    f'<td>{_fmt_duration(ver_stats["avg"])}</td>'
-                    f'<td>{_fmt_duration(ver_stats["median"])}</td>'
-                    f'<td>{_fmt_duration(ver_stats["p95"])}</td>'
-                    f'<td>{ver_stats["cv"]}%</td>'
-                    f'</tr>'
+                    + _stat_cells(ver_stats, ["avg", "median", "p95", "cv"])
+                    + '</tr>'
                 )
 
     all_versions = sorted(set(r.release for r in runs))
@@ -441,15 +436,17 @@ def render_trend_svg(report: TimingReport) -> str:
     # Legend
     legend_x = pad_l + 8
     legend_y = pad_t + 8
+    n_series = len(series)
+    item_w = min(130, (w - pad_r - legend_x) / n_series) if n_series else 130
     for i, (key, _) in enumerate(sorted(series.items())):
         topo, rtype = key
         color = _color_for(topo, rtype)
-        lx = legend_x + i * 130
+        lx = legend_x + i * item_w
         parts.append(
-            f'<rect x="{lx}" y="{legend_y}" width="12" height="12" rx="2" fill="{color}"/>'
+            f'<rect x="{lx:.1f}" y="{legend_y}" width="12" height="12" rx="2" fill="{color}"/>'
         )
         parts.append(
-            f'<text x="{lx + 16}" y="{legend_y + 10}" fill="var(--text)" '
+            f'<text x="{lx + 16:.1f}" y="{legend_y + 10}" fill="var(--text)" '
             f'font-size="11">{topo} {rtype}</text>'
         )
 

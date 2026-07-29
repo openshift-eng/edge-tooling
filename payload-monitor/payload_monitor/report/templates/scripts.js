@@ -14,7 +14,6 @@ document.addEventListener('DOMContentLoaded', function() {
 // Filter functionality
 document.addEventListener('DOMContentLoaded', function() {
   const filterBtns = document.querySelectorAll('.filter-btn');
-  const jobRows = document.querySelectorAll('.job-row');
   const detailRows = document.querySelectorAll('.detail-row');
   const crRows = document.querySelectorAll('.cr-row');
   const regressionRows = document.querySelectorAll('.regression-row');
@@ -63,9 +62,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
   const INITIAL_VISIBLE = 5;
   const sectionVisibleLimit = { anomalies: 10 };
-  const sectionsCollapsed = { jobs: true, details: true, regressions: true, cr: true, anomalies: true };
-  const sectionSelectors = { jobs: '.job-row', details: '.detail-row', regressions: '.regression-row', cr: '.cr-row', anomalies: '.anomaly-row' };
-  const sectionLabels = { jobs: ' failing jobs', details: ' failure details', regressions: ' regressions', cr: ' component regressions', anomalies: ' anomalies' };
+  const sectionsCollapsed = { details: true, regressions: true, cr: true, anomalies: true };
+  const sectionSelectors = { details: '.detail-row', regressions: '.regression-row', cr: '.cr-row', anomalies: '.anomaly-row' };
+  const sectionLabels = { details: ' failure details', regressions: ' regressions', cr: ' component regressions', anomalies: ' anomalies' };
 
   // Count rows that pass the current filter (inline style.display is set by filters,
   // collapsed-row class is separate — so style.display !== 'none' means "passes filter")
@@ -127,10 +126,6 @@ document.addEventListener('DOMContentLoaded', function() {
       return true;
     }
 
-    jobRows.forEach(row => {
-      row.style.display = isVisible(row) ? '' : 'none';
-    });
-
     detailRows.forEach(row => {
       row.style.display = isVisible(row) ? '' : 'none';
     });
@@ -162,7 +157,7 @@ document.addEventListener('DOMContentLoaded', function() {
     updateExpandButtons();
 
     // Update header count
-    const visibleCount = countFiltered('.job-row');
+    const visibleCount = countFiltered('.detail-row');
     const countEl = document.getElementById('visible-count');
     if (countEl) countEl.textContent = visibleCount;
   }
@@ -177,25 +172,6 @@ document.addEventListener('DOMContentLoaded', function() {
     applyCollapse();
     updateExpandButtons();
   };
-
-  // "View Details" links: expand both sections, open the target detail, scroll to it
-  document.querySelectorAll('.detail-link').forEach(link => {
-    link.addEventListener('click', function(e) {
-      e.preventDefault();
-      // Expand both sections so the target is visible
-      sectionsCollapsed.jobs = false;
-      sectionsCollapsed.details = false;
-      applyCollapse();
-      updateExpandButtons();
-
-      const targetId = this.getAttribute('href').substring(1);
-      const detail = document.getElementById(targetId);
-      if (detail) {
-        detail.open = true;
-        detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    });
-  });
 
   // Column sorting for any table with sortable headers
   const sortableHeaders = document.querySelectorAll('th.sortable');
@@ -246,6 +222,23 @@ document.addEventListener('DOMContentLoaded', function() {
       }, 2000);
     });
   };
+
+  // Click-to-copy on action cell code elements
+  document.querySelectorAll('.action-cell code').forEach(function(code) {
+    code.style.cursor = 'pointer';
+    code.addEventListener('click', function(e) {
+      var text = code.textContent.trim();
+      navigator.clipboard.writeText(text).then(function() {
+        var tooltip = document.createElement('span');
+        tooltip.className = 'copy-tooltip';
+        tooltip.textContent = 'Copied!';
+        tooltip.style.left = e.clientX + 'px';
+        tooltip.style.top = e.clientY + 'px';
+        document.body.appendChild(tooltip);
+        setTimeout(function() { tooltip.remove(); }, 1500);
+      });
+    });
+  });
 
   // Draggable column resizers
   document.querySelectorAll('table').forEach(table => {
@@ -323,7 +316,7 @@ document.addEventListener('DOMContentLoaded', function() {
     applyFilters();
 
     // Scroll to the failures heading
-    const heading = document.querySelector('#tab-payload-health h2:nth-of-type(2)');
+    const heading = document.getElementById('section-edge-failures');
     if (heading) heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
@@ -354,10 +347,11 @@ document.addEventListener('DOMContentLoaded', function() {
         }
       });
 
+      var jobNameEl = card.querySelector('.da-job-name');
+      var jobName = jobNameEl ? jobNameEl.textContent.trim() : '';
       var summaryText = summary.textContent.trim();
-      var match = summaryText.match(/(?:AI Analyzed)?\s*(.+?)\s*\((\d+\.\d+)\)\s*$/);
-      var jobName = match ? match[1].trim() : '';
-      var version = match ? match[2] : '';
+      var match = summaryText.match(/\((\d+\.\d+)\)/);
+      var version = match ? match[1] : '';
 
       var fields = card.querySelectorAll('.da-field');
       var rootCause = '', failureType = '', recommendation = '';
@@ -409,6 +403,12 @@ document.addEventListener('DOMContentLoaded', function() {
       var header = document.createElement('div');
       header.className = 'ai-highlight-header';
 
+      if (item.jobName) {
+        var name = document.createElement('span');
+        name.className = 'job-name';
+        name.textContent = item.jobName;
+        header.appendChild(name);
+      }
       if (item.topology) {
         var b1 = document.createElement('span');
         b1.className = 'badge ' + item.topology.toLowerCase();
@@ -432,12 +432,6 @@ document.addEventListener('DOMContentLoaded', function() {
         ver.style.cssText = 'color:#f0f6fc;font-size:13px;font-weight:600';
         ver.textContent = item.version;
         header.appendChild(ver);
-      }
-      if (item.jobName) {
-        var name = document.createElement('span');
-        name.className = 'job-name';
-        name.textContent = item.jobName;
-        header.appendChild(name);
       }
       card.appendChild(header);
 

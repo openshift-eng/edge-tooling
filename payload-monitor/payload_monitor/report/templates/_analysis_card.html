@@ -7,6 +7,9 @@
   {% endif %}
   {% endif %}
   <h3>AI Root Cause Analysis</h3>
+  {% if job_name %}
+  <div class="da-job-name">{{ job_name }}</div>
+  {% endif %}
   <div class="da-field">
     <span class="da-label">Root Cause:</span>
     <span>{{ root_cause }}</span>

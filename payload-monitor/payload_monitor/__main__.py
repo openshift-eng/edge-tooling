@@ -15,7 +15,7 @@ from .analyzer import analyze
 from .collectors import component_readiness, prow, sippy, timing
 from .collectors.release_controller import (
     collect as collect_payloads,
-    discover_streams,
+    configured_stream_names,
     version_from_stream,
 )
 from .config import Config
@@ -154,9 +154,9 @@ def main(
 
     logger.info("Starting Edge OCP Payload Monitor")
 
-    # Step 1: Discover versions and resolve stream names
-    logger.info("Step 1: Discovering active versions...")
-    stream_names = discover_streams(config)
+    # Step 1: Resolve configured release streams
+    logger.info("Step 1: Resolving configured release streams...")
+    stream_names = configured_stream_names(config)
     active_versions = [version_from_stream(s) for s in stream_names]
     logger.info(f"  Versions: {active_versions}")
 

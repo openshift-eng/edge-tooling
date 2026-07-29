@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 
+import html as html_mod
 import json
 import logging
 import re
@@ -46,6 +47,17 @@ _JINJA_ENV = Environment(
 _TAG_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})-(\d{2})(\d{2})(\d{2})$")
 
 
+def _load_json(path: Path, description: str) -> dict:
+    """Load JSON from *path*, raising a clear, path-aware error on failure."""
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"{description} not found: {path}") from None
+    except json.JSONDecodeError as e:
+        raise ValueError(f"{description} is not valid JSON ({path}): {e}") from e
+
+
 def _extract_date(tag: str) -> str:
     """Extract date and time from a payload tag like '4.19.0-0.nightly-2026-03-25-085944'."""
     m = _TAG_DATE_RE.search(tag)
@@ -85,13 +97,21 @@ def _build_template_context(report: MonitorReport) -> dict:
 
     all_failing.sort(key=_fail_sort_key)
 
-    # Build blocking job summaries: versions, test names, topology per unique job
+    # Build blocking job summaries and findings-summary counts in one pass
     blocking_job_versions: dict[str, list[str]] = {}
     blocking_job_tests: dict[str, list[str]] = {}
+    blocking_failures = 0
+    informing_failures = 0
+    blocking_jobs_seen: set[str] = set()
+    blocking_jobs_list: list[dict] = []
     for item in all_failing:
         if item["job"].job_type == JobType.BLOCKING:
+            blocking_failures += 1
             name = item["job"].name
             ver = item["version"]
+            if name not in blocking_jobs_seen:
+                blocking_jobs_seen.add(name)
+                blocking_jobs_list.append(item)
             if name not in blocking_job_versions:
                 blocking_job_versions[name] = []
                 blocking_job_tests[name] = []
@@ -100,6 +120,14 @@ def _build_template_context(report: MonitorReport) -> dict:
             for ft in item["job"].failing_tests:
                 if ft.name not in blocking_job_tests[name]:
                     blocking_job_tests[name].append(ft.name)
+        elif item["job"].job_type == JobType.INFORMING:
+            informing_failures += 1
+
+    total_payloads = sum(len(stream.payloads) for stream in report.streams)
+    rejected_payloads = sum(
+        1 for stream in report.streams for p in stream.payloads
+        if p.status == PayloadStatus.REJECTED
+    )
 
     # Collect blocking jobs that succeeded only after retry (flaky passes)
     retried_successes = []
@@ -126,6 +154,28 @@ def _build_template_context(report: MonitorReport) -> dict:
             if not r.version:
                 r.version = stream.version
             all_regressions.append(r)
+
+    # Per-stream views: affected topologies + trend
+    stream_views = []
+    for stream in report.streams:
+        affected = sorted({
+            j.topology for p in stream.payloads for j in p.failing_edge_jobs if j.topology
+        })
+        mid = len(stream.payloads) // 2
+        recent_fails = sum(
+            len(p.blocking_edge_failures) + len(p.informing_edge_failures)
+            for p in stream.payloads[:mid]
+        )
+        older_fails = sum(
+            len(p.blocking_edge_failures) + len(p.informing_edge_failures)
+            for p in stream.payloads[mid:]
+        )
+        stream_views.append({
+            "stream": stream,
+            "affected_topologies": affected,
+            "recent_fails": recent_fails,
+            "older_fails": older_fails,
+        })
 
     # Unique topology names and versions for filters
     topologies = sorted(set(
@@ -194,6 +244,12 @@ def _build_template_context(report: MonitorReport) -> dict:
         "blocking_job_tests": blocking_job_tests,
         "blocking_job_first_idx": blocking_job_first_idx,
         "retried_successes": retried_successes,
+        "stream_views": stream_views,
+        "blocking_failures": blocking_failures,
+        "informing_failures": informing_failures,
+        "blocking_jobs_list": blocking_jobs_list,
+        "total_payloads": total_payloads,
+        "rejected_payloads": rejected_payloads,
     }
 
 
@@ -204,8 +260,14 @@ def generate_html(report: MonitorReport, output_path: Optional[Path] = None) -> 
     also writes to that file.
     """
     # Load CSS and JS to inline
-    css = (TEMPLATES_DIR / "styles.css").read_text()
-    js = (TEMPLATES_DIR / "scripts.js").read_text()
+    try:
+        css = (TEMPLATES_DIR / "styles.css").read_text()
+        js = (TEMPLATES_DIR / "scripts.js").read_text()
+    except FileNotFoundError as e:
+        raise FileNotFoundError(
+            f"Report template asset missing ({e.filename}) — "
+            "reinstall payload_monitor or check TEMPLATES_DIR"
+        ) from e
 
     template = _JINJA_ENV.get_template("dashboard.html")
     context = _build_template_context(report)
@@ -303,7 +365,7 @@ def _safe_urls(urls: list[str]) -> list[str]:
     return safe
 
 
-def _render_analysis_card(da: dict, attempt_count: int = 1) -> str:
+def _render_analysis_card(da: dict, attempt_count: int = 1, job_name: str = "") -> str:
     """Render an AI analysis card as an HTML string."""
     template = _JINJA_ENV.get_template("_analysis_card.html")
     return template.render(
@@ -315,6 +377,7 @@ def _render_analysis_card(da: dict, attempt_count: int = 1) -> str:
         same_root_cause=da.get("same_root_cause", True),
         attempt_analyses=da.get("attempt_analyses", []),
         attempt_count=attempt_count,
+        job_name=job_name,
     )
 
 
@@ -327,8 +390,7 @@ def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
     - ``data-prow-url`` on ``<details>`` elements identifies where to add badges
     - ``data-enrichment-status="data-only"`` marks the header status div
     """
-    with open(analysis_path) as f:
-        data = json.load(f)
+    data = _load_json(analysis_path, "Analysis JSON")
 
     by_url = data.get("by_prow_url", {})
     if not by_url:
@@ -339,38 +401,43 @@ def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
     patched = 0
     badge_html = '<span class="badge ai-analyzed">AI Analyzed</span>'
 
-    def _insert_badge(m):
-        summary_content = m.group(2)
+    _suggestion_re = re.compile(
+        r'<div class="claude-suggestion" data-prow-url="([^"]*)"'
+        r' data-attempt-count="(\d+)">'
+        r'.*?<!-- /claude-suggestion -->',
+        re.DOTALL,
+    )
+    _details_re = re.compile(
+        r'(<details [^>]*data-prow-url="([^"]*)"[^>]*>)\s*<summary>'
+        r'(.*?)'
+        r'(</summary>)',
+        re.DOTALL,
+    )
+
+    patched_urls: set[str] = set()
+
+    def _replace_suggestion(m: re.Match) -> str:
+        nonlocal patched
+        prow_url = html_mod.unescape(m.group(1))
+        da = by_url.get(prow_url)
+        if da is None:
+            return m.group(0)
+        attempt_count = int(m.group(2))
+        patched += 1
+        patched_urls.add(prow_url)
+        return _render_analysis_card(da, attempt_count=attempt_count, job_name=da.get("job_name", ""))
+
+    content = _suggestion_re.sub(_replace_suggestion, content)
+
+    def _insert_badge(m: re.Match) -> str:
+        if html_mod.unescape(m.group(2)) not in patched_urls:
+            return m.group(0)
+        summary_content = m.group(3)
         if "ai-analyzed" in summary_content:
             return m.group(0)
-        return f'{m.group(1)}\n  <summary>{summary_content} {badge_html}{m.group(3)}'
+        return f'{m.group(1)}\n  <summary>{summary_content} {badge_html}{m.group(4)}'
 
-    for prow_url, da in by_url.items():
-        escaped_url = re.escape(prow_url)
-
-        # Find the claude-suggestion div with matching data-prow-url
-        suggestion_pattern = (
-            rf'<div class="claude-suggestion" data-prow-url="{escaped_url}"'
-            r' data-attempt-count="(\d+)">'
-            r'.*?</div>\s*</div>'
-        )
-        m = re.search(suggestion_pattern, content, flags=re.DOTALL)
-        if not m:
-            continue
-
-        attempt_count = int(m.group(1))
-        card_html = _render_analysis_card(da, attempt_count=attempt_count)
-
-        content = content[:m.start()] + card_html + content[m.end():]
-        patched += 1
-
-        # Add "AI Analyzed" badge to the <details> element for this job
-        details_pattern = (
-            rf'(<details [^>]*data-prow-url="{escaped_url}"[^>]*>)\s*<summary>'
-            r'(.*?)'
-            r'(</summary>)'
-        )
-        content = re.sub(details_pattern, _insert_badge, content, count=1, flags=re.DOTALL)
+    content = _details_re.sub(_insert_badge, content)
 
     # Update header: replace "Data only" status using data attribute
     if patched > 0:
@@ -407,8 +474,7 @@ def merge_analysis(report: MonitorReport, analysis_path: Path) -> None:
       }
     }
     """
-    with open(analysis_path) as f:
-        data = json.load(f)
+    data = _load_json(analysis_path, "Analysis JSON")
 
     by_url = data.get("by_prow_url", {})
     merged = 0
@@ -452,8 +518,7 @@ def _safe_dataclass_init(cls, data: dict):
 
 def load_json(json_path: Path) -> MonitorReport:
     """Load a MonitorReport from a JSON file (potentially enriched with deep analysis)."""
-    with open(json_path) as f:
-        data = json.load(f)
+    data = _load_json(json_path, "Report JSON")
 
     streams = []
     for s in data.get("streams", []):

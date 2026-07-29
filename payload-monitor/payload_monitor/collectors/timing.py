@@ -324,29 +324,14 @@ def compute_stats(runs: list[TimingRun]) -> dict:
 # ---------------------------------------------------------------------------
 
 def fetch_edge_jobs(release: str, config: Config) -> list[dict]:
-    """Fetch all jobs from Sippy for a release, filter for edge topologies."""
-    logger.info(f"Fetching edge topology jobs for release {release}")
-    try:
-        resp = _session.get(JOBS_URL, params={"release": release}, timeout=30)
-        resp.raise_for_status()
-        all_jobs = resp.json()
-    except requests_lib.RequestException as e:
-        logger.error(f"Failed to fetch Sippy jobs for {release}: {e}")
-        return []
+    """Fetch all jobs from Sippy for a release, filter for edge topologies.
 
-    if not isinstance(all_jobs, list):
-        return []
+    Delegates to collectors.sippy.fetch_edge_jobs so topology filtering stays
+    config-driven and isn't duplicated across collectors.
+    """
+    from . import sippy as _sippy
 
-    edge_jobs = []
-    for job in all_jobs:
-        name = job.get("name", "")
-        topology = config.classify_topology(name)
-        if topology in ("SNO", "TNA", "TNF"):
-            job["_topology"] = topology
-            edge_jobs.append(job)
-
-    logger.info(f"  Found {len(edge_jobs)} SNO/TNA/TNF jobs for {release}")
-    return edge_jobs
+    return _sippy.fetch_edge_jobs(release, config, session=_session)
 
 
 def fetch_job_runs(job_name: str, release: str) -> list[dict]:

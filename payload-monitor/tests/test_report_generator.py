@@ -30,12 +30,14 @@ from payload_monitor.models import (
 from payload_monitor.report.generator import (
     _build_template_context,
     _extract_date,
+    _load_json,
     _render_analysis_card,
     _safe_dataclass_init,
     _safe_urls,
     generate_html,
     generate_json,
     load_json,
+    merge_analysis,
     patch_analysis_html,
 )
 
@@ -209,6 +211,19 @@ class TestRenderAnalysisCard:
               "suspect_prs": [], "recommendation": "r"}
         html = _render_analysis_card(da)
         assert "Per-Attempt Breakdown" not in html
+
+    def test_job_name_rendered_when_provided(self):
+        da = {"root_cause": "x", "failure_type": "y", "impact": "z",
+              "suspect_prs": [], "recommendation": "r"}
+        html = _render_analysis_card(da, job_name="periodic-ci-openshift-tnf-e2e")
+        assert "da-job-name" in html
+        assert "periodic-ci-openshift-tnf-e2e" in html
+
+    def test_no_job_name_div_when_not_provided(self):
+        da = {"root_cause": "x", "failure_type": "y", "impact": "z",
+              "suspect_prs": [], "recommendation": "r"}
+        html = _render_analysis_card(da)
+        assert "da-job-name" not in html
 
 
 class TestGenerateHtml:
@@ -788,17 +803,18 @@ class TestPatchAnalysisHtml:
         },
     }
 
-    def _suggestion_div(self, attempt_count=1):
+    def _suggestion_div(self, attempt_count=1, prow_url=None):
         """Build a claude-suggestion div with data attributes matching the template."""
+        url = prow_url or self.PROW_URL
         return (
-            f'<div class="claude-suggestion" data-prow-url="{self.PROW_URL}"'
+            f'<div class="claude-suggestion" data-prow-url="{url}"'
             f' data-attempt-count="{attempt_count}">\n'
             '  For deeper analysis, use Claude directly:<br>\n'
             '  <div class="cmd-copy-row">\n'
-            f'    <code>/ci:prow-job-analyze-test-failure {self.PROW_URL}</code>\n'
+            f'    <code>/ci:prow-job-analysis {url}</code>\n'
             '    <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>\n'
             '  </div>\n'
-            '</div>'
+            '</div><!-- /claude-suggestion -->'
         )
 
     def _write_files(self, tmp_path, html_content, analysis=None):
@@ -932,6 +948,34 @@ class TestPatchAnalysisHtml:
         result = html_path.read_text()
         assert "ai-analyzed" in result
 
+    def test_job_name_from_analysis_json(self, tmp_path):
+        analysis = {"by_prow_url": {self.PROW_URL: {
+            "job_name": "periodic-ci-openshift-tnf-e2e",
+            "root_cause": "test root cause", "failure_type": "Infrastructure flake",
+            "impact": "low impact", "suspect_prs": [], "recommendation": "retry",
+        }}}
+        html = (
+            '<p><strong>Prow Job:</strong> '
+            f'<a href="{self.PROW_URL}" target="_blank">View in Prow</a></p>\n'
+            + self._suggestion_div(attempt_count=1)
+        )
+        html_path, analysis_path = self._write_files(tmp_path, html, analysis)
+        patch_analysis_html(html_path, analysis_path)
+        result = html_path.read_text()
+        assert 'class="da-job-name"' in result
+        assert "periodic-ci-openshift-tnf-e2e" in result
+
+    def test_no_job_name_div_when_not_in_analysis_json(self, tmp_path):
+        html = (
+            f'<p><strong>Prow Job:</strong> '
+            f'<a href="{self.PROW_URL}" target="_blank">View in Prow</a></p>\n'
+            + self._suggestion_div(attempt_count=1)
+        )
+        html_path, analysis_path = self._write_files(tmp_path, html)
+        patch_analysis_html(html_path, analysis_path)
+        result = html_path.read_text()
+        assert 'class="da-job-name"' not in result
+
     def test_header_status_updated_via_data_attribute(self, tmp_path):
         html = (
             '<div class="meta" style="margin-top:4px" data-enrichment-status="data-only">\n'
@@ -944,6 +988,43 @@ class TestPatchAnalysisHtml:
         result = html_path.read_text()
         assert "AI-enriched via Claude" in result
         assert "data-only" not in result
+
+    def test_url_with_ampersand(self, tmp_path):
+        """URLs containing & are HTML-escaped in data-prow-url but raw in analysis JSON."""
+        raw_url = "https://prow.ci.openshift.org/view/gs/logs?a=1&b=2"
+        escaped_url = "https://prow.ci.openshift.org/view/gs/logs?a=1&amp;b=2"
+        analysis = {"by_prow_url": {raw_url: {
+            "root_cause": "ampersand test", "failure_type": "test",
+            "impact": "none", "suspect_prs": [], "recommendation": "ok",
+        }}}
+        html = self._suggestion_div(attempt_count=1, prow_url=escaped_url)
+        html_path, analysis_path = self._write_files(tmp_path, html, analysis)
+        patch_analysis_html(html_path, analysis_path)
+        result = html_path.read_text()
+        assert "deep-analysis-card" in result
+        assert "ampersand test" in result
+        assert "claude-suggestion" not in result
+
+    def test_extra_nested_div_inside_suggestion(self, tmp_path):
+        """Extra wrapper div inside .claude-suggestion doesn't break matching."""
+        html = (
+            f'<div class="claude-suggestion" data-prow-url="{self.PROW_URL}"'
+            f' data-attempt-count="1">\n'
+            '  <div class="extra-wrapper">\n'
+            '    For deeper analysis, use Claude directly:<br>\n'
+            '    <div class="cmd-copy-row">\n'
+            f'      <code>/ci:prow-job-analysis {self.PROW_URL}</code>\n'
+            '      <button class="copy-btn">Copy</button>\n'
+            '    </div>\n'
+            '  </div>\n'
+            '</div><!-- /claude-suggestion -->'
+        )
+        html_path, analysis_path = self._write_files(tmp_path, html)
+        patch_analysis_html(html_path, analysis_path)
+        result = html_path.read_text()
+        assert "deep-analysis-card" in result
+        assert "test root cause" in result
+        assert "claude-suggestion" not in result
 
 
 class TestTimingUnavailableContext:
@@ -1010,3 +1091,80 @@ class TestTimingUnavailableContext:
         )
         html = generate_html(report)
         assert "Timing insights unavailable" not in html
+
+
+class TestLoadJsonErrors:
+    def test_malformed_json_raises_value_error_with_path(self, tmp_path):
+        bad = tmp_path / "bad.json"
+        bad.write_text("{invalid json")
+        with pytest.raises(ValueError, match=str(bad)):
+            _load_json(bad, "Test JSON")
+
+    def test_missing_file_raises_file_not_found_with_path(self, tmp_path):
+        missing = tmp_path / "nope.json"
+        with pytest.raises(FileNotFoundError, match=str(missing)):
+            _load_json(missing, "Test JSON")
+
+    def test_patch_analysis_malformed_json(self, tmp_path):
+        html_path = tmp_path / "report.html"
+        html_path.write_text("<html></html>")
+        bad_json = tmp_path / "analysis.json"
+        bad_json.write_text("{broken")
+        with pytest.raises(ValueError, match="Analysis JSON"):
+            patch_analysis_html(html_path, bad_json)
+
+    def test_merge_analysis_missing_file(self, tmp_path):
+        report = MonitorReport(generated_at="now")
+        missing = tmp_path / "nope.json"
+        with pytest.raises(FileNotFoundError, match="Analysis JSON"):
+            merge_analysis(report, missing)
+
+    def test_load_json_malformed(self, tmp_path):
+        bad = tmp_path / "report.json"
+        bad.write_text("not json")
+        with pytest.raises(ValueError, match="Report JSON"):
+            load_json(bad)
+
+
+class TestStreamViewsContext:
+    def test_stream_views_populated(self):
+        b_job = JobRun("b1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")
+        i_job = JobRun("i1", "url", JobResult.FAILURE, JobType.INFORMING, "TNA")
+        p1 = Payload("t1", "s", "4.19", PayloadStatus.REJECTED, jobs=[b_job])
+        p2 = Payload("t2", "s", "4.19", PayloadStatus.ACCEPTED, jobs=[i_job])
+        stream = StreamReport("s", "4.19", payloads=[p1, p2])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        assert len(ctx["stream_views"]) == 1
+        sv = ctx["stream_views"][0]
+        assert sv["stream"] is stream
+        assert sv["affected_topologies"] == ["SNO", "TNA"]
+        assert isinstance(sv["recent_fails"], int)
+        assert isinstance(sv["older_fails"], int)
+
+    def test_blocking_and_informing_counts(self):
+        b_job = JobRun("b1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")
+        b_job2 = JobRun("b1", "url2", JobResult.FAILURE, JobType.BLOCKING, "SNO")
+        i_job = JobRun("i1", "url", JobResult.FAILURE, JobType.INFORMING, "TNA")
+        p = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[b_job, b_job2, i_job])
+        stream = StreamReport("s", "4.19", payloads=[p])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        assert ctx["blocking_failures"] == 2
+        assert ctx["informing_failures"] == 1
+        assert len(ctx["blocking_jobs_list"]) == 1
+        assert ctx["blocking_jobs_list"][0]["job"].name == "b1"
+
+    def test_total_and_rejected_payloads(self):
+        p1 = Payload("t1", "s", "4.19", PayloadStatus.REJECTED)
+        p2 = Payload("t2", "s", "4.19", PayloadStatus.ACCEPTED)
+        p3 = Payload("t3", "s2", "4.20", PayloadStatus.REJECTED)
+        s1 = StreamReport("s", "4.19", payloads=[p1, p2])
+        s2 = StreamReport("s2", "4.20", payloads=[p3])
+        report = MonitorReport(generated_at="now", streams=[s1, s2])
+
+        ctx = _build_template_context(report)
+        assert ctx["total_payloads"] == 3
+        assert ctx["rejected_payloads"] == 2

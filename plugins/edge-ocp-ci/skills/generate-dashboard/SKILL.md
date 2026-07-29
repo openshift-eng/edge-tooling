@@ -31,12 +31,8 @@ This skill composes with the following installed marketplace CI skills from the 
 
 | Skill | When to Use |
 |-------|-------------|
-| `ci:analyze-payload` | Full payload analysis with historical lookback and HTML report — use for rejected/failing payloads with edge blockers |
-| `ci:prow-job-analyze-test-failure` | Analyze failed tests by inspecting test code, downloading artifacts, and optionally integrating must-gather — use for any failing edge test |
-| `ci:prow-job-analyze-install-failure` | Analyze OpenShift install failures from installer logs, log bundles, and sosreports — use when edge jobs fail at install stage |
-| `ci:prow-job-analyze-metal-install-failure` | Analyze bare metal install failures using dev-scripts artifacts — use for metal/baremetal SNO or TNF jobs with "metal" in name |
-| `ci:prow-job-analyze-resource` | Analyze K8s resource lifecycle in Prow job artifacts (audit logs, pod logs) — use when failure involves resource state issues |
-| `ci:prow-job-artifact-search` | Search, list, and fetch artifacts from Prow job runs in GCS — use when you need to find specific artifacts |
+| `ci:prow-job-analysis` | General-purpose Prow job failure analysis — classifies job type and failure mode, then routes internally to the right investigation procedure (install, test, upgrade, resource exhaustion, networking, etc.) — use for any failing edge job |
+| `ci:prow-job-analyze-resource` | Analyze K8s resource lifecycle in Prow job artifacts (audit logs, pod logs) — use for a deep resource-specific audit trail beyond what `ci:prow-job-analysis` covers |
 | `ci:analyze-regression` | Analyze Component Readiness regression details and suggest next steps — use for Sippy-detected regressions |
 | `ci:check-if-jira-regression-is-ongoing` | Check if a JIRA regression bug is still ongoing or resolved — use to validate whether known bugs still apply |
 
@@ -110,7 +106,7 @@ The 7th field contains semicolon-separated Prow URLs for previous failed attempt
 
 If no `BLOCKING_JOBS_START` marker appears in the output, there are no blocking failures — skip to Step 6.
 
-**For informing job failures:** Do NOT run deep analysis. The HTML report already includes a suggestion to use Claude directly with `/ci:prow-job-analyze-test-failure <prow-url>`.
+**For informing job failures:** Do NOT run deep analysis. The HTML report already includes a suggestion to use Claude directly with `/ci:prow-job-analysis <prow-url>`.
 
 #### Analysis Prompt
 
@@ -134,19 +130,15 @@ Steps:
    - Are different tests failing or different error messages?
    - Does the failure mode change between attempts?
 
-Then based on failure type of the latest attempt:
-- If install failure (error contains "install should succeed", "bootstrap", or failed in pre/setup phase):
-  Use `ci:prow-job-analyze-install-failure` (or `ci:prow-job-analyze-metal-install-failure` if job name contains "metal")
-- If test failure (job passed install but failed during test phase):
-  Use `ci:prow-job-analyze-test-failure`
-- If resource/state failure (etcd issues, operator degraded, node not ready):
-  Use `ci:prow-job-analyze-resource`
+4. Use `ci:prow-job-analysis` on the latest attempt's Prow URL for root cause classification and analysis — it auto-detects job type and failure mode and routes internally to the right investigation procedure
+5. If the failure is specifically about a Kubernetes resource's lifecycle (created/modified/deleted at an unexpected time) and needs an audit-log timeline beyond what `ci:prow-job-analysis` surfaced, use `ci:prow-job-analyze-resource` as a follow-up
 
 For JIRA context: use `ci:fetch-jira-issue` for any linked bugs.
 
 Return ONLY a JSON object with these fields:
 {
   "prow_url": "{prow_url}",
+  "job_name": "{job_name}",
   "root_cause": "Overall root cause (synthesize across all attempts if same cause, or describe the dominant pattern)",
   "failure_type": "Infrastructure flake | Test regression | Install failure | Platform issue",
   "impact": "How this affects payload acceptance and which topologies",
@@ -179,11 +171,12 @@ When using subagents, launch all in parallel using multiple Agent tool calls in 
    ```json
    {
      "prow_url": "{prow_url}",
+     "job_name": "{job_name}",
      "root_cause": "Analysis timed out or failed: {error_message}",
      "failure_type": "Analysis error",
      "impact": "Unable to determine — manual investigation needed",
      "suspect_prs": [],
-     "recommendation": "Run /ci:prow-job-analyze-test-failure {prow_url} manually for detailed analysis",
+     "recommendation": "Run /ci:prow-job-analysis {prow_url} manually for detailed analysis",
      "same_root_cause": true,
      "attempt_analyses": []
    }
@@ -200,6 +193,7 @@ Collect the deep analysis results (from subagents or inline analysis) and write 
 {
   "by_prow_url": {
     "https://prow.ci.openshift.org/view/gs/.../123": {
+      "job_name": "periodic-ci-...",
       "root_cause": "Overall root cause synthesized across all attempts",
       "failure_type": "Infrastructure flake | Test regression | Install failure | Platform issue",
       "impact": "How this affects payload acceptance and which topologies",
@@ -261,7 +255,7 @@ Offer follow-up actions the user can take from this session:
 - **Set release blocker** on a JIRA issue (`ci:set-release-blocker`)
 - **Triage a regression** in Component Readiness (`ci:triage-regression`)
 - **Trigger payload job** to test a fix (`ci:trigger-payload-job`)
-- **Investigate an informing job** further (`ci:prow-job-analyze-test-failure`)
+- **Investigate an informing job** further (`ci:prow-job-analysis`)
 
 ---
 

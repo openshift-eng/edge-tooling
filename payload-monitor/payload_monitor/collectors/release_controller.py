@@ -90,8 +90,12 @@ def _parse_jobs(
 
 
 
-def discover_streams(config: Config) -> list[str]:
-    """Return list of nightly stream names to monitor."""
+def configured_stream_names(config: Config) -> list[str]:
+    """Map ``config.versions`` to release-controller stream names.
+
+    This is a static mapping, not a live discovery against the
+    release-controller index.
+    """
     return [_stream_name(v) for v in config.versions]
 
 
@@ -204,7 +208,7 @@ def _collect_stream(stream: str, config: Config) -> StreamReport:
 def collect(config: Config, streams: Optional[list[str]] = None) -> list[StreamReport]:
     """Collect payload data for all configured streams in parallel."""
     if streams is None:
-        streams = discover_streams(config)
+        streams = configured_stream_names(config)
 
     with ThreadPoolExecutor(max_workers=min(len(streams) or 1, 10)) as pool:
         futures = {
