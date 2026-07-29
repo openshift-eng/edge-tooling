@@ -241,7 +241,7 @@ class TestFindEscalationRisks:
         assert risks[0].consecutive_failures == 3
         assert risks[0].topology == "SNO"
         assert risks[0].version == "4.19"
-        assert "j1" in risks[0].sippy_url
+        assert risks[0].prow_url == "https://prow/j1"
 
     def test_non_consecutive(self):
         """Informing job fails in payloads 1, 3, 5 (gaps) -> no EscalationRisk."""

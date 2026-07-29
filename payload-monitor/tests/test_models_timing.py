@@ -22,14 +22,6 @@ class TestTimingRun:
         )
         assert run.is_success is False
 
-    def test_duration_minutes(self):
-        run = TimingRun(
-            job_name="test-job", topology="TNA", release="4.22",
-            start_time="2026-04-01T12:00:00Z", duration_seconds=5400,
-            result="S", run_type="install",
-        )
-        assert run.duration_minutes == 90.0
-
     def test_default_variant(self):
         run = TimingRun(
             job_name="test-job", topology="TNA", release="4.22",
@@ -37,32 +29,6 @@ class TestTimingRun:
             result="S", run_type="install",
         )
         assert run.variant == {}
-
-    def test_install_duration_from_setup(self):
-        run = TimingRun(
-            job_name="test-job", topology="TNA", release="4.22",
-            start_time="", duration_seconds=12000,
-            result="S", run_type="install",
-            step_durations={"install": 4752.0, "test": 7680.0},
-        )
-        assert run.install_duration_seconds == 4752.0
-
-    def test_install_duration_from_setup_key(self):
-        run = TimingRun(
-            job_name="test-job", topology="TNA", release="4.22",
-            start_time="", duration_seconds=12000,
-            result="S", run_type="install",
-            step_durations={"setup": 3000.0},
-        )
-        assert run.install_duration_seconds == 3000.0
-
-    def test_install_duration_missing(self):
-        run = TimingRun(
-            job_name="test-job", topology="TNA", release="4.22",
-            start_time="", duration_seconds=12000,
-            result="S", run_type="install",
-        )
-        assert run.install_duration_seconds == 0.0
 
 
 class TestTimingReport:

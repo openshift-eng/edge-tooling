@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import html
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 from ..collectors.timing import compute_stats
 from ..models import TimingReport, TimingRun

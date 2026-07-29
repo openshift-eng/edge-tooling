@@ -12,6 +12,7 @@
   <div>
     <h1>Edge OCP Payload Monitor</h1>
     <div class="meta">SNO / TNA / TNF topology health across OpenShift nightly payloads</div>
+    <div class="meta"><a href="https://github.com/openshift-eng/edge-context/blob/main/roles/ocp-payload-manager.md" target="_blank">Review the Edge CI Payload Manager Responsibilities</a></div>
   </div>
   <div style="text-align:right">
     <div class="meta"><a href="https://github.com/openshift-eng/edge-tooling" target="_blank" style="color:var(--text-muted)">View source on GitHub ↗</a></div>
@@ -376,7 +377,7 @@
     {% if escalation_risks %}
     <div class="fs-escalation-list">
       {% for er in escalation_risks %}
-      <a class="fs-escalation-item" {% if er.sippy_url %}href="{{ er.sippy_url }}" target="_blank"{% endif %}>
+      <a class="fs-escalation-item" {% if er.prow_url %}href="{{ er.prow_url }}" target="_blank"{% endif %}>
         <span class="fs-escalation-left">
           <span class="fs-escalation-name">{{ er.job_name }}</span>
           <span class="badge escalation-risk">Unstable</span>

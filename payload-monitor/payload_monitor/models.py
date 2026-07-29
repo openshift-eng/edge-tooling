@@ -205,7 +205,7 @@ class EscalationRisk:
     topology: str
     version: str
     consecutive_failures: int
-    sippy_url: str = ""
+    prow_url: str = ""
 
 
 @dataclass
@@ -247,17 +247,6 @@ class TimingRun:
     def is_success(self) -> bool:
         return self.result == "S"
 
-    @property
-    def duration_minutes(self) -> float:
-        return self.duration_seconds / 60.0
-
-    @property
-    def install_duration_seconds(self) -> float:
-        """Return install step duration if available, else 0."""
-        for key in ("install", "setup"):
-            if key in self.step_durations:
-                return self.step_durations[key]
-        return 0.0
 
 
 @dataclass

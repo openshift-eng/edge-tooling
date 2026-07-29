@@ -490,7 +490,7 @@ class TestEscalationRisksContext:
     def test_context_includes_escalation_risks(self):
         er = EscalationRisk(
             job_name="j1", topology="SNO", version="4.19",
-            consecutive_failures=3, sippy_url="https://sippy/j1",
+            consecutive_failures=3, prow_url="https://prow/j1",
         )
         job = JobRun("j1", "url", JobResult.FAILURE, JobType.INFORMING, "SNO")
         payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
@@ -579,7 +579,7 @@ class TestJsonRoundTripNewFields:
     def test_escalation_risks_round_trip(self, tmp_path):
         er = EscalationRisk(
             job_name="j1", topology="SNO", version="4.19",
-            consecutive_failures=3, sippy_url="https://sippy/j1",
+            consecutive_failures=3, prow_url="https://prow/j1",
         )
         report = MonitorReport(generated_at="now", escalation_risks=[er])
         out = tmp_path / "report.json"
