@@ -81,6 +81,7 @@ def _find_escalation_risks(
         for job_name, topology in informing_jobs.items():
             consecutive = 0
             latest_prow_url = ""
+            latest_failure_seen = False
             for payload in reversed_payloads:
                 job_in_payload = None
                 for job in payload.jobs:
@@ -92,8 +93,9 @@ def _find_escalation_risks(
                     break
                 if job_in_payload.result == JobResult.FAILURE:
                     consecutive += 1
-                    if not latest_prow_url:
+                    if not latest_failure_seen:
                         latest_prow_url = job_in_payload.prow_url
+                        latest_failure_seen = True
                 else:
                     break
 

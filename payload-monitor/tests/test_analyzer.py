@@ -288,6 +288,23 @@ class TestFindEscalationRisks:
         """No streams -> empty list."""
         assert _find_escalation_risks([], Config()) == []
 
+    def test_latest_failure_empty_url_not_replaced_by_older(self):
+        """Newest failure has an empty prow_url -> it must not be replaced by an older job's URL."""
+        def informing_job(url):
+            return JobRun(name="j1", prow_url=url, result=JobResult.FAILURE,
+                          job_type=JobType.INFORMING, topology="SNO")
+
+        payloads = [
+            _make_payload("t1", [informing_job("https://prow/old")]),
+            _make_payload("t2", [informing_job("https://prow/mid")]),
+            _make_payload("t3", [informing_job("")]),
+        ]
+        stream = StreamReport("s", "4.19", payloads=payloads)
+
+        risks = _find_escalation_risks([stream], Config())
+        assert len(risks) == 1
+        assert risks[0].prow_url == ""
+
     def test_all_passing(self):
         """All jobs pass -> empty list."""
         payloads = [
