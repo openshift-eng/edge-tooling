@@ -11,15 +11,15 @@
   <div class="da-job-name">{{ job_name }}</div>
   {% endif %}
   <div class="da-field">
-    <span class="da-label">Root Cause:</span>
+    <span class="da-label da-label-highlight">Root Cause:</span>
     <span>{{ root_cause }}</span>
   </div>
   <div class="da-field">
-    <span class="da-label">Failure Type:</span>
+    <span class="da-label da-label-highlight">Failure Type:</span>
     <span class="badge da-type">{{ failure_type }}</span>
   </div>
   <div class="da-field">
-    <span class="da-label">Impact:</span>
+    <span class="da-label da-label-highlight">Impact:</span>
     <span>{{ impact }}</span>
   </div>
   {% if suspect_prs %}

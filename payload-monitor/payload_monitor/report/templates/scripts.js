@@ -439,7 +439,7 @@ document.addEventListener('DOMContentLoaded', function() {
         var cause = document.createElement('div');
         cause.className = 'ai-highlight-cause';
         var lbl1 = document.createElement('span');
-        lbl1.className = 'da-label';
+        lbl1.className = 'da-label da-label-highlight';
         lbl1.textContent = 'Root Cause:';
         cause.appendChild(lbl1);
         cause.appendChild(document.createTextNode(' ' + item.rootCause));
@@ -449,7 +449,7 @@ document.addEventListener('DOMContentLoaded', function() {
         var rec = document.createElement('div');
         rec.className = 'ai-highlight-rec';
         var lbl2 = document.createElement('span');
-        lbl2.className = 'da-label';
+        lbl2.className = 'da-label da-label-highlight';
         lbl2.textContent = 'Action:';
         rec.appendChild(lbl2);
         rec.appendChild(document.createTextNode(' ' + item.recommendation));

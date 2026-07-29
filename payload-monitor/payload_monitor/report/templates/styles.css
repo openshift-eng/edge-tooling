@@ -928,6 +928,10 @@ details pre {
   margin-right: 6px;
   font-size: 14px;
 }
+.da-label-highlight {
+  color: var(--accent);
+  font-weight: 700;
+}
 .da-field span:not(.da-label, .badge) {
   color: rgba(230,237,243,0.7);
   font-size: 14px;
@@ -1066,11 +1070,11 @@ details pre {
   margin: 4px 0;
   line-height: 1.4;
 }
-.ai-highlight-cause .da-label,
-.ai-highlight-rec .da-label {
+.ai-highlight-cause .da-label-highlight,
+.ai-highlight-rec .da-label-highlight {
   font-weight: 700;
   font-size: 13px;
-  color: var(--text);
+  color: var(--accent);
 }
 
 /* Regressions */
