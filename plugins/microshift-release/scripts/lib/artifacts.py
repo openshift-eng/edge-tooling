@@ -54,10 +54,10 @@ _GITLAB_BASE = "https://gitlab.cee.redhat.com"
 _SHIPMENT_PROJECT_PATH = "hybrid-platforms/art/ocp-shipment-data"
 
 
-def _http_get(url, timeout=15, verify=True, headers=None):
+def _http_get(url, timeout=15, verify=True, headers=None, proxies=None):
     """Perform an HTTP GET, returning the response or raising RequestException."""
     return requests.get(url, timeout=timeout, verify=verify, headers=headers,
-                        allow_redirects=True)
+                        allow_redirects=True, proxies=proxies)
 
 
 def validate_nvr_format(nvr, release_type):
@@ -540,6 +540,8 @@ def _parse_shipment_yaml(content):
         "release_notes_type": release_notes.get("type"),
         "stage_advisory_url": stage_advisory.get("internal_url"),
         "prod_advisory_url": prod_advisory.get("internal_url"),
+        "stage_errata_url": stage_advisory.get("url"),
+        "prod_errata_url": prod_advisory.get("url"),
         "image_sha": image_sha,
         "assembly": metadata.get("assembly"),
     }
@@ -734,6 +736,48 @@ def fetch_advisory_details(advisory_url):
         "spec_type": spec.get("type"),
         "images": images if images else None,
     }
+
+
+_ERRATA_IMAGE_RE = re.compile(
+    r"registry\.(?:stage\.)?redhat\.io/openshift\d+/microshift-bootc-rhel(\d+)"
+    r"@sha256:([0-9a-f]{64})"
+)
+
+
+_STAGE_PROXY = "http://squid.corp.redhat.com:3128"
+
+
+def fetch_errata_images(errata_url):
+    """Fetch an errata page and extract microshift-bootc image references.
+
+    Stage URLs (access.stage.redhat.com) are routed through the
+    corporate proxy because the staging CDN is IP-restricted.
+
+    Returns:
+        list of dicts [{"rhel": int, "sha": str}] or None on failure.
+    """
+    proxies = None
+    if "access.stage.redhat.com" in errata_url:
+        proxies = {"https": _STAGE_PROXY, "http": _STAGE_PROXY}
+    try:
+        resp = _http_get(errata_url, verify=False, timeout=15, proxies=proxies)
+        if resp.status_code != 200:
+            logger.warning("Errata page returned HTTP %d: %s",
+                           resp.status_code, errata_url)
+            return None
+    except requests.RequestException as exc:
+        logger.warning("Errata page fetch failed for %s: %s", errata_url, exc)
+        return None
+
+    images = []
+    seen = set()
+    for m in _ERRATA_IMAGE_RE.finditer(resp.text):
+        rhel, sha = int(m.group(1)), m.group(2)
+        if sha not in seen:
+            seen.add(sha)
+            images.append({"rhel": rhel, "sha": sha})
+
+    return images if images else None
 
 
 def fetch_shipment_mr_approvals(project_id, mr_iid):
