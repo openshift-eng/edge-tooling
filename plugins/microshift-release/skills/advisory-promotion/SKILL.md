@@ -120,6 +120,8 @@ All per-image checks run independently per variant (`{arch}_el{rhel}`). For vers
 | Check | Description |
 |---|---|
 | `shipment_type` | `releaseNotes.type` matches expected advisory type |
+| `shipment_errata_stage_url` | Stage errata URL present and its images match the advisory |
+| `shipment_errata_prod_url` | Prod errata URL present and its images match the advisory (skipped for EC/RC) |
 | `shipment_filename` | YAML path matches `shipment/ocp/openshift-{minor}/.../{version}.microshift-bootc.{timestamp}.yaml` |
 | `shipment_nvr_commit` | Commit hash in shipment `snapshot.nvrs` matches the Brew RPM build commit |
 | `shipment_mr_approved` | Shipment MR has required approvals |
@@ -151,12 +153,14 @@ Advisory Promotion: 4.20.26
 ...
 
 ── Global ──────────────────────────────────────────────────
-✅  advisory_type                          spec.type = RHBA
-✅  shipment_type                          releaseNotes.type = RHBA
-✅  shipment_filename                      shipment/ocp/openshift-4.20/openshift-4-20/prod/4.20.26.microshift-bootc...yaml
-✅  shipment_nvr_commit                    Commit b79e4b0 matches Brew
-✅  advisory_sha_distinct_el9              SHAs are distinct
-✅  shipment_mr_approved                   MR !594 approved by tlove, knarra, adobes
+✅  advisory_type                           spec.type = RHBA
+✅  shipment_type                           releaseNotes.type = RHBA
+✅  shipment_errata_stage_url               RHBA-2026:73871 — 4 images verified
+✅  shipment_errata_prod_url                RHBA-2026:47055 — 4 images verified
+✅  shipment_filename                       shipment/ocp/openshift-4.20/openshift-4-20/prod/4.20.26.microshift-bootc...yaml
+✅  shipment_nvr_commit                     Commit b79e4b0 matches Brew
+✅  advisory_sha_distinct_el9               SHAs are distinct
+✅  shipment_mr_approved                    MR !594 approved by tlove, knarra, adobes
 ```
 
 With `--prod`, both stage and prod catalog checks run:
