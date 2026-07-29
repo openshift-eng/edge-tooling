@@ -53,6 +53,8 @@ _PER_VARIANT_CHECKS = [
 _GLOBAL_CHECKS = [
     "advisory_type",
     "shipment_type",
+    "shipment_errata_stage_url",
+    "shipment_errata_prod_url",
     "shipment_filename",
     "shipment_nvr_commit",
     "advisory_sha_distinct_el9",
@@ -419,6 +421,77 @@ def check_shipment_type(shipment, version_info):
                  [f"Got: {rn_type}", f"Expected: {' or '.join(expected)}"])
 
 
+_ERRATA_URL_PATTERN = re.compile(
+    r"^https://access\.(?:stage\.)?redhat\.com/errata/(RH[A-Z]A-\d{4}:\d+)$"
+)
+
+
+def _check_errata_images(check_id, errata_url, advisory_details):
+    """Validate errata URL format and compare its images against the advisory."""
+    m = _ERRATA_URL_PATTERN.match(errata_url)
+    if not m:
+        return _fail(check_id, f"Invalid errata URL format: {errata_url}",
+                     ["Expected: https://access[.stage].redhat.com/errata/RH<T>A-YYYY:NNNNN"])
+
+    errata_id = m.group(1)
+
+    if advisory_details is None or not advisory_details.get("images"):
+        return _warn(check_id, f"{errata_id} — advisory images unavailable for comparison",
+                     [f"URL: {errata_url}"])
+
+    errata_images = artifacts.fetch_errata_images(errata_url)
+    if errata_images is None:
+        return _warn(check_id, f"{errata_id} — could not fetch errata page or no images found",
+                     [f"URL: {errata_url}"])
+
+    errata_shas = {img["sha"] for img in errata_images}
+    advisory_shas = {img["sha"] for img in advisory_details["images"] if img.get("sha")}
+
+    missing = advisory_shas - errata_shas
+    if missing:
+        details = [f"URL: {errata_url}",
+                   f"Advisory images: {len(advisory_shas)}, Errata images: {len(errata_shas)}"]
+        for sha in sorted(missing):
+            for img in advisory_details["images"]:
+                if img.get("sha") == sha:
+                    details.append(f"Missing: {img.get('arch_key', '?')} sha256:{sha[:12]}")
+                    break
+        return _fail(check_id, f"{errata_id} — {len(missing)} image(s) not in errata", details)
+
+    return _pass(check_id, f"{errata_id} — {len(advisory_shas)} images verified",
+                 [f"URL: {errata_url}"])
+
+
+def check_shipment_errata_stage_url(shipment, advisory_details):
+    """Stage errata URL is present and its images match the advisory."""
+    check_id = "shipment_errata_stage_url"
+    if shipment.get("skipped") or not shipment.get("found"):
+        return _warn(check_id, "Shipment MR unavailable")
+
+    errata_url = shipment.get("stage_errata_url")
+    if not errata_url:
+        return _fail(check_id, "No stage errata URL in shipment YAML",
+                     ["Expected: shipment.environments.stage.advisory.url"])
+
+    return _check_errata_images(check_id, errata_url, advisory_details)
+
+
+def check_shipment_errata_prod_url(shipment, advisory_details, version_info):
+    """Prod errata URL is present and its images match the advisory."""
+    check_id = "shipment_errata_prod_url"
+    if version_info["type"] in ("EC", "RC"):
+        return _skip(check_id, f"N/A ({version_info['type']} not shipped to prod)")
+    if shipment.get("skipped") or not shipment.get("found"):
+        return _warn(check_id, "Shipment MR unavailable")
+
+    errata_url = shipment.get("prod_errata_url")
+    if not errata_url:
+        return _warn(check_id, "No prod errata URL in shipment YAML",
+                     ["Expected: shipment.environments.prod.advisory.url"])
+
+    return _check_errata_images(check_id, errata_url, advisory_details)
+
+
 def check_image_sha_distinct(rhel, advisory_details):
     """amd64 and arm64 advisory SHAs are different for this RHEL version."""
     check_id = f"advisory_sha_distinct_el{rhel}"
@@ -546,6 +619,10 @@ def run_advisory_promotion_checks(version_info, phase="stage"):
             "advisory_type"
         futures[ex.submit(check_shipment_type, shipment, version_info)] = \
             "shipment_type"
+        futures[ex.submit(check_shipment_errata_stage_url, shipment, advisory_details)] = \
+            "shipment_errata_stage_url"
+        futures[ex.submit(check_shipment_errata_prod_url, shipment, advisory_details, version_info)] = \
+            "shipment_errata_prod_url"
         futures[ex.submit(check_shipment_filename, shipment, version_info)] = \
             "shipment_filename"
         futures[ex.submit(check_shipment_nvr_commit, shipment, version_info)] = \
@@ -603,7 +680,9 @@ def format_text_short(version, results, version_info):
     def _fmt_line(r):
         icon = _STATUS_EMOJI.get(r["status"], r["status"])
         cid = r["check"].ljust(max_id_len)
-        lines = [f"{icon}  {cid}  {r['reason']}"]
+        # Variation selector (U+FE0F) adds 1 terminal column; compensate.
+        gap = " " if "️" in icon else "  "
+        lines = [f"{icon}{gap}{cid}  {r['reason']}"]
         if r["status"] == "FAIL" and r.get("details"):
             pad = " " * (_ICON_DISPLAY_WIDTH + 2 + max_id_len + 2)
             for d in r["details"]:
