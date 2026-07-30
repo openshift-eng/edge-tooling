@@ -58,12 +58,16 @@ class TestIdentifyRegressions:
             "jira_component": "",
             "id": 1,
         }]
-        regressions = sippy.identify_regressions(jobs)
+        regressions = sippy.identify_regressions(jobs, version="4.19")
         assert len(regressions) == 1
         assert regressions[0].test_name == "periodic-sno-test"
         assert regressions[0].sample_pass_rate == 50.0
         assert regressions[0].basis_pass_rate == 90.0
         assert regressions[0].topology == "SNO"
+        assert regressions[0].triage_url.startswith(
+            "https://sippy.dptools.openshift.org/sippy-ng/jobs/4.19/analysis?filters="
+        )
+        assert "periodic-sno-test" in regressions[0].triage_url
 
     def test_skips_improvement(self):
         jobs = [{

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import quote
 
 import requests
 
@@ -48,8 +50,17 @@ def fetch_edge_jobs(
     return edge_jobs
 
 
+def _job_analysis_url(version: str, name: str) -> str:
+    """Build the Sippy UI URL for a job's analysis page, filtered by job name."""
+    filters = json.dumps({
+        "items": [{"columnField": "name", "operatorValue": "equals", "value": name}]
+    })
+    return f"{BASE_URL}/sippy-ng/jobs/{version}/analysis?filters={quote(filters)}"
+
+
 def identify_regressions(
     edge_jobs: list[dict],
+    version: str = "",
     min_runs: int = 3,
 ) -> list[Regression]:
     """Identify jobs that are getting worse over time.
@@ -69,7 +80,7 @@ def identify_regressions(
         name = job.get("name", "")
         topology = job.get("_topology", "")
         jira_component = job.get("jira_component", "")
-        triage_url = f"{BASE_URL}/sippy-ng/jobs/{name}"
+        triage_url = _job_analysis_url(version, name)
 
         # Skip jobs with too few runs — insufficient data to confirm regression
         if current_runs < min_runs:
@@ -99,7 +110,7 @@ def _collect_version(version: str, config: Config) -> tuple[str, list[Regression
     session = create_session()
     try:
         edge_jobs = fetch_edge_jobs(version, config, session=session)
-        regressions = identify_regressions(edge_jobs)
+        regressions = identify_regressions(edge_jobs, version=version)
         if regressions:
             logger.info(
                 f"  {version}: {len(regressions)} edge job regressions detected"
