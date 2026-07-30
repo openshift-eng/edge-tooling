@@ -580,6 +580,12 @@ class TestJsonRoundTripNewFields:
         er = EscalationRisk(
             job_name="j1", topology="SNO", version="4.19",
             consecutive_failures=3, prow_url="https://prow/j1",
+            triage_url="https://sippy.dptools.openshift.org/sippy-ng/jobs/4.19/analysis?filters=x",
+            failing_runs=[
+                {"payload_tag": "t5", "prow_url": "https://prow/j1"},
+                {"payload_tag": "t4", "prow_url": "https://prow/j1"},
+                {"payload_tag": "t3", "prow_url": "https://prow/j1"},
+            ],
         )
         report = MonitorReport(generated_at="now", escalation_risks=[er])
         out = tmp_path / "report.json"
@@ -588,6 +594,8 @@ class TestJsonRoundTripNewFields:
         assert len(loaded.escalation_risks) == 1
         assert loaded.escalation_risks[0].job_name == "j1"
         assert loaded.escalation_risks[0].consecutive_failures == 3
+        assert loaded.escalation_risks[0].triage_url == er.triage_url
+        assert loaded.escalation_risks[0].failing_runs == er.failing_runs
 
     def test_cross_topology_round_trip(self, tmp_path):
         report = MonitorReport(
@@ -947,6 +955,29 @@ class TestPatchAnalysisHtml:
         patch_analysis_html(html_path, analysis_path)
         result = html_path.read_text()
         assert "ai-analyzed" in result
+
+    def test_badge_inserted_in_grid_layout(self, tmp_path):
+        html = (
+            f'<details class="detail-row" data-prow-url="{self.PROW_URL}">\n'
+            '  <summary>\n'
+            '    <span class="detail-cell-job" title="job-name">job-name</span>\n'
+            '    <span class="detail-cell-version">4.19</span>\n'
+            '    <span class="detail-cell-payload"><a href="#">tag</a></span>\n'
+            '    <span class="detail-cell-topology"><span class="badge sno">SNO</span></span>\n'
+            '    <span class="detail-cell-type"><span class="badge blocking">blocking</span></span>\n'
+            '    <span class="detail-cell-recurrence">&mdash;</span>\n'
+            '    <span class="detail-cell-date">2026-03-25</span>\n'
+            '  </summary>\n'
+            '  <div class="content">\n'
+            + self._suggestion_div(attempt_count=1) + '\n'
+            '  </div>\n'
+            '</details>'
+        )
+        html_path, analysis_path = self._write_files(tmp_path, html)
+        patch_analysis_html(html_path, analysis_path)
+        result = html_path.read_text()
+        assert "ai-analyzed" in result
+        assert 'job-name<span class="badge ai-analyzed">' in result
 
     def test_job_name_from_analysis_json(self, tmp_path):
         analysis = {"by_prow_url": {self.PROW_URL: {

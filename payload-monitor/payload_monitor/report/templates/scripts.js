@@ -67,7 +67,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const sectionLabels = { details: ' failure details', regressions: ' regressions', cr: ' component regressions', anomalies: ' anomalies' };
 
   // Count rows that pass the current filter (inline style.display is set by filters,
-  // collapsed-row class is separate — so style.display !== 'none' means "passes filter")
+  // collapsed-row class is separate - so style.display !== 'none' means "passes filter")
   function countFiltered(selector) {
     let count = 0;
     document.querySelectorAll(selector).forEach(row => {
@@ -80,7 +80,7 @@ document.addEventListener('DOMContentLoaded', function() {
     Object.entries(sectionSelectors).forEach(([section, selector]) => {
       let visibleIdx = 0;
       document.querySelectorAll(selector).forEach(row => {
-        // Skip rows hidden by filters — don't count them toward the visible limit
+        // Skip rows hidden by filters - don't count them toward the visible limit
         if (row.style.display === 'none') {
           row.classList.remove('collapsed-row');
           return;
@@ -116,9 +116,9 @@ document.addEventListener('DOMContentLoaded', function() {
   function applyFilters() {
     function isVisible(row) {
       for (const [group, values] of Object.entries(activeFilters)) {
+        if (!(group in row.dataset)) continue;
         const rowValue = row.dataset[group];
-        if (!rowValue) continue;
-        const rowValues = rowValue.split(' ');
+        const rowValues = rowValue ? rowValue.split(' ') : [];
         if (!rowValues.some(v => values.has(v))) {
           return false;
         }
@@ -184,7 +184,7 @@ document.addEventListener('DOMContentLoaded', function() {
       const col = parseInt(this.dataset.col);
       const rows = Array.from(tbody.querySelectorAll('tr'));
 
-      // Toggle sort direction — only clear siblings in the same table
+      // Toggle sort direction - only clear siblings in the same table
       const isAsc = this.classList.contains('asc');
       table.querySelectorAll('th.sortable').forEach(h => { h.classList.remove('asc', 'desc'); });
       this.classList.add(isAsc ? 'desc' : 'asc');
@@ -223,8 +223,8 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   };
 
-  // Click-to-copy on action cell code elements
-  document.querySelectorAll('.action-cell code').forEach(function(code) {
+  // Click-to-copy on action cell and claude-suggestion code elements
+  document.querySelectorAll('.action-cell code, .claude-suggestion code, .claude-cmd-popup code').forEach(function(code) {
     code.style.cursor = 'pointer';
     code.addEventListener('click', function(e) {
       var text = code.textContent.trim();
@@ -239,6 +239,26 @@ document.addEventListener('DOMContentLoaded', function() {
       });
     });
   });
+
+  // Scroll to a job row and open it. Matches by job name.
+  window.scrollToJob = function(jobName) {
+    var rows = document.querySelectorAll('details.detail-row');
+    var row = null;
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].dataset.jobName === jobName) { row = rows[i]; break; }
+    }
+    if (row) {
+      if (row.classList.contains('collapsed-row')) {
+        sectionsCollapsed.details = false;
+        applyCollapse();
+        updateExpandButtons();
+      }
+      row.open = true;
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      row.querySelector('summary').style.background = 'rgba(210,153,34,0.15)';
+      setTimeout(function() { row.querySelector('summary').style.background = ''; }, 2000);
+    }
+  };
 
   // Draggable column resizers
   document.querySelectorAll('table').forEach(table => {
@@ -282,6 +302,90 @@ document.addEventListener('DOMContentLoaded', function() {
       });
     });
   });
+
+  // Detail grid sorting (failure analysis section)
+  const gridHeader = document.querySelector('.detail-grid-header');
+  if (gridHeader) {
+    const cellClasses = ['detail-cell-job', 'detail-cell-version', 'detail-cell-payload', 'detail-cell-topology', 'detail-cell-type', 'detail-cell-recurrence', 'detail-cell-date'];
+    const sortableCols = gridHeader.querySelectorAll('[data-sort-col]');
+
+    sortableCols.forEach(col => {
+      col.addEventListener('click', function() {
+        const colIdx = parseInt(this.dataset.sortCol);
+        const isAsc = this.classList.contains('asc');
+        sortableCols.forEach(c => c.classList.remove('asc', 'desc'));
+        this.classList.add(isAsc ? 'desc' : 'asc');
+        const dir = isAsc ? -1 : 1;
+
+        const rows = Array.from(document.querySelectorAll('details.detail-row'));
+        const cellClass = cellClasses[colIdx];
+        const numPat = /^[-+]?\d+(\.\d+)?%?$/;
+
+        rows.sort((a, b) => {
+          const aCell = a.querySelector('summary .' + cellClass);
+          const bCell = b.querySelector('summary .' + cellClass);
+          let aText = (aCell?.textContent || '').trim().replace(/\s+/g, ' ').toLowerCase();
+          let bText = (bCell?.textContent || '').trim().replace(/\s+/g, ' ').toLowerCase();
+          if (numPat.test(aText) && numPat.test(bText)) {
+            return (parseFloat(aText) - parseFloat(bText)) * dir;
+          }
+          return aText.localeCompare(bText) * dir;
+        });
+
+        let ref = gridHeader;
+        rows.forEach(row => { ref.after(row); ref = row; });
+        applyCollapse();
+        updateExpandButtons();
+      });
+    });
+
+    // Detail grid column resizing
+    const headerDivs = Array.from(gridHeader.querySelectorAll(':scope > div'));
+    let gridColWidths = null;
+
+    function applyGridWidths() {
+      const tpl = gridColWidths.map(w => w + 'px').join(' ');
+      gridHeader.style.gridTemplateColumns = tpl;
+      document.querySelectorAll('details.detail-row > summary').forEach(s => {
+        s.style.gridTemplateColumns = tpl;
+      });
+    }
+
+    function freezeGridLayout() {
+      if (gridColWidths) return;
+      gridColWidths = headerDivs.map(d => d.offsetWidth);
+      applyGridWidths();
+    }
+
+    headerDivs.forEach((div, idx) => {
+      const resizer = document.createElement('div');
+      resizer.className = 'col-resizer';
+      div.appendChild(resizer);
+      resizer.addEventListener('click', e => e.stopPropagation());
+
+      let startX;
+      resizer.addEventListener('mousedown', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        freezeGridLayout();
+        startX = e.pageX;
+        const startWidth = gridColWidths[idx];
+        resizer.classList.add('resizing');
+
+        function onMouseMove(e) {
+          gridColWidths[idx] = Math.max(40, startWidth + e.pageX - startX);
+          applyGridWidths();
+        }
+        function onMouseUp() {
+          resizer.classList.remove('resizing');
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', onMouseUp);
+        }
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+      });
+    });
+  }
 
   // Jump to failures table with filters pre-applied
   window.jumpToFailures = function(version, jobtype) {

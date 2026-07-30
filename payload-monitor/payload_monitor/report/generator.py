@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from jinja2 import Environment, FileSystemLoader
+from markupsafe import Markup, escape
 
 from ..models import (
     AttemptAnalysis,
@@ -39,10 +40,19 @@ from .timing_section import render_timing_section
 logger = logging.getLogger(__name__)
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+def _js_attr(value):
+    """Escape a value for use inside an HTML-attribute JavaScript context.
+
+    Produces a JSON-quoted string (JS-safe) with double quotes HTML-escaped
+    to &quot; so it nests safely inside onclick="..." attributes.
+    """
+    return escape(json.dumps(str(value)))
+
 _JINJA_ENV = Environment(
     loader=FileSystemLoader(str(TEMPLATES_DIR)),
     autoescape=True,
 )
+_JINJA_ENV.filters["js_attr"] = _js_attr
 
 _TAG_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})-(\d{2})(\d{2})(\d{2})$")
 
@@ -190,13 +200,6 @@ def _build_template_context(report: MonitorReport) -> dict:
     timing_unavailable = not report.skip_timing and not timing_html
     timing_errors = [e for e in report.data_errors if e.startswith("Timing:")] if timing_unavailable else []
 
-    # Map blocking job name -> first index in all_failing for stable detail links
-    blocking_job_first_idx = {}
-    for idx, item in enumerate(all_failing, 1):
-        if item["job"].job_type == JobType.BLOCKING:
-            if item["job"].name not in blocking_job_first_idx:
-                blocking_job_first_idx[item["job"].name] = idx
-
     return {
         "report": report,
         "all_failing": all_failing,
@@ -237,12 +240,12 @@ def _build_template_context(report: MonitorReport) -> dict:
         "persistent_threshold": report.persistent_threshold,
         "escalation_risks": report.escalation_risks,
         "escalation_risk_jobs": set(er.job_name for er in report.escalation_risks),
+        "escalation_risk_by_job": {er.job_name: er for er in report.escalation_risks},
         "cross_topology": report.cross_topology,
         "jira_matches_by_job": report.jira_matches,
         "suggested_bugs_by_job": {b.job_name: b for b in report.suggested_bugs},
         "blocking_job_versions": blocking_job_versions,
         "blocking_job_tests": blocking_job_tests,
-        "blocking_job_first_idx": blocking_job_first_idx,
         "retried_successes": retried_successes,
         "stream_views": stream_views,
         "blocking_failures": blocking_failures,
@@ -265,7 +268,7 @@ def generate_html(report: MonitorReport, output_path: Optional[Path] = None) -> 
         js = (TEMPLATES_DIR / "scripts.js").read_text()
     except FileNotFoundError as e:
         raise FileNotFoundError(
-            f"Report template asset missing ({e.filename}) — "
+            f"Report template asset missing ({e.filename}) - "
             "reinstall payload_monitor or check TEMPLATES_DIR"
         ) from e
 
@@ -435,7 +438,44 @@ def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
         summary_content = m.group(3)
         if "ai-analyzed" in summary_content:
             return m.group(0)
-        return f'{m.group(1)}\n  <summary>{summary_content} {badge_html}{m.group(4)}'
+        # Grid layout: insert badge inside the job cell before its closing </span>
+        job_anchor = 'class="detail-cell-job"'
+        job_pos = summary_content.find(job_anchor)
+        if job_pos >= 0:
+            open_gt = summary_content.find('>', job_pos)
+            if open_gt >= 0:
+                close_pos = summary_content.find('</span>', open_gt)
+                if close_pos >= 0:
+                    summary_content = (
+                        summary_content[:close_pos]
+                        + badge_html
+                        + summary_content[close_pos:]
+                    )
+                    return f'{m.group(1)}\n  <summary>{summary_content}{m.group(4)}'
+        # Legacy flat layout fallback
+        for anchor in ('class="detail-date"', 'class="detail-version"'):
+            anchor_pos = summary_content.find(anchor)
+            if anchor_pos < 0:
+                continue
+            span_start = summary_content.rfind('<span', 0, anchor_pos)
+            if span_start < 0:
+                continue
+            last_close = summary_content.rfind('>', 0, span_start)
+            if last_close >= 0:
+                ins = last_close + 1
+                while ins < span_start and summary_content[ins] in ' \t\n':
+                    ins += 1
+                summary_content = (
+                    summary_content[:ins]
+                    + badge_html + '\n    '
+                    + summary_content[ins:]
+                )
+            else:
+                summary_content = badge_html + ' ' + summary_content
+            break
+        else:
+            summary_content = summary_content + ' ' + badge_html
+        return f'{m.group(1)}\n  <summary>{summary_content}{m.group(4)}'
 
     content = _details_re.sub(_insert_badge, content)
 

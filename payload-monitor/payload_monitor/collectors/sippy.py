@@ -50,7 +50,7 @@ def fetch_edge_jobs(
     return edge_jobs
 
 
-def _job_analysis_url(version: str, name: str) -> str:
+def job_analysis_url(version: str, name: str) -> str:
     """Build the Sippy UI URL for a job's analysis page, filtered by job name."""
     filters = json.dumps({
         "items": [{"columnField": "name", "operatorValue": "equals", "value": name}]
@@ -80,9 +80,9 @@ def identify_regressions(
         name = job.get("name", "")
         topology = job.get("_topology", "")
         jira_component = job.get("jira_component", "")
-        triage_url = _job_analysis_url(version, name)
+        triage_url = job_analysis_url(version, name)
 
-        # Skip jobs with too few runs — insufficient data to confirm regression
+        # Skip jobs with too few runs - insufficient data to confirm regression
         if current_runs < min_runs:
             continue
 

@@ -297,11 +297,10 @@
       {% set fc = failure_counts.get(item.job.name, 0) %}
       {% set versions = blocking_job_versions.get(item.job.name, []) %}
       {% set tests = blocking_job_tests.get(item.job.name, []) %}
-      <div class="fs-blocking-row">
+      <div class="fs-blocking-row" onclick="scrollToJob({{ item.job.name | js_attr }})">
         <div class="fs-blocking-main">
           <span class="badge {{ item.job.topology | lower }}">{{ item.job.topology }}</span>
-          {% set _detail_idx = blocking_job_first_idx.get(item.job.name) %}
-          {% if _detail_idx is not none %}<a class="fs-blocking-name" href="#detail-{{ _detail_idx }}" title="Jump to failure analysis">{{ item.job.name }}</a>{% else %}<span class="fs-blocking-name">{{ item.job.name }}</span>{% endif %}
+          <span class="fs-blocking-name">{{ item.job.name }}</span>
           {% if fc >= recurring_threshold %}
           <span class="badge {% if fc >= persistent_threshold %}persistent{% else %}recurring{% endif %}">{{ fc }}x</span>
           {% endif %}
@@ -337,10 +336,10 @@
     </div>
     <div class="fs-inline-jobs">
       {% for item in retried_successes %}
-      <div class="fs-blocking-row">
+      <div class="fs-blocking-row" onclick="scrollToJob({{ item.job.name | js_attr }})">
         <div class="fs-blocking-main">
           <span class="badge {{ item.job.topology | lower }}">{{ item.job.topology }}</span>
-          <a class="fs-blocking-name" href="{{ item.job.prow_url }}" target="_blank">{{ item.job.name }}</a>
+          <a class="fs-blocking-name" href="{{ item.job.prow_url }}" target="_blank" onclick="event.stopPropagation()">{{ item.job.name }}</a>
           <span class="badge green">Succeeded</span>
           <span class="fs-blocking-versions">{{ item.version }}</span>
         </div>
@@ -377,7 +376,7 @@
     {% if escalation_risks %}
     <div class="fs-escalation-list">
       {% for er in escalation_risks %}
-      <a class="fs-escalation-item" {% if er.prow_url %}href="{{ er.prow_url }}" target="_blank"{% endif %}>
+      <a class="fs-escalation-item" onclick="scrollToJob({{ er.job_name | js_attr }})">
         <span class="fs-escalation-left">
           <span class="fs-escalation-name">{{ er.job_name }}</span>
           <span class="badge escalation-risk">Unstable</span>
@@ -442,6 +441,13 @@
   {% for v in versions %}
   <button class="filter-btn" data-group="version" data-value="{{ v }}">{{ v }}</button>
   {% endfor %}
+
+  <span class="filter-label">Status:</span>
+  <button class="filter-btn active" data-group="status" data-value="all">All</button>
+  <button class="filter-btn" data-group="status" data-value="persistent">Persistent</button>
+  <button class="filter-btn" data-group="status" data-value="recurring">Recurring</button>
+  <button class="filter-btn" data-group="status" data-value="unstable">Unstable</button>
+  <button class="filter-btn" data-group="status" data-value="ai-analyzed">AI Analyzed</button>
 </div>
 
 <div class="badge-legend">
@@ -450,27 +456,35 @@
   <span class="badge-legend-item"><span class="badge persistent" style="cursor:default">Persistent</span> job failed in {{ persistent_threshold }}+ payloads - likely not a flake</span>
   <span class="badge-legend-item"><span class="badge escalation-risk" style="cursor:default">Unstable</span> informing job failing 3+ consecutive payloads</span>
 </div>
+<div class="table-wrapper">
+<div class="detail-grid-header">
+  <div></div>
+  <div class="sortable" data-sort-col="0">Job</div>
+  <div class="sortable" data-sort-col="1" style="text-align:center">Version</div>
+  <div class="sortable" data-sort-col="2">Payload</div>
+  <div class="sortable" data-sort-col="3" style="text-align:center">Topology</div>
+  <div class="sortable" data-sort-col="4">Type</div>
+  <div class="sortable" data-sort-col="5">Recurrence</div>
+  <div class="sortable" data-sort-col="6">Date</div>
+</div>
 {% for detail in all_failing %}
-<details id="detail-{{ loop.index }}" class="detail-row" data-topology="{{ detail.job.topology }}" data-jobtype="{{ detail.job.job_type.value }}" data-version="{{ detail.version }}" data-row-index="{{ loop.index }}" data-prow-url="{{ detail.job.prow_url }}">
+{% set _fc = failure_counts.get(detail.job.name, 0) %}
+{% set _statuses = [] %}
+{% if _fc >= persistent_threshold %}{% if _statuses.append('persistent') %}{% endif %}{% endif %}
+{% if _fc >= recurring_threshold and _fc < persistent_threshold %}{% if _statuses.append('recurring') %}{% endif %}{% endif %}
+{% if detail.job.name in escalation_risk_jobs %}{% if _statuses.append('unstable') %}{% endif %}{% endif %}
+{% if detail.job.deep_analysis %}{% if _statuses.append('ai-analyzed') %}{% endif %}{% endif %}
+<details id="detail-{{ loop.index }}" class="detail-row" data-topology="{{ detail.job.topology }}" data-jobtype="{{ detail.job.job_type.value }}" data-version="{{ detail.version }}" data-status="{{ _statuses | join(' ') }}" data-row-index="{{ loop.index }}" data-prow-url="{{ detail.job.prow_url }}" data-job-name="{{ detail.job.name }}">
   <summary>
-    <span class="badge {{ detail.job.topology | lower }}">{{ detail.job.topology }}</span>
-    <span class="badge {{ detail.job.job_type.value }}">{{ detail.job.job_type.value }}</span>
-    {% set fc = failure_counts.get(detail.job.name, 0) %}
-    {% if fc >= persistent_threshold %}
-    <span class="badge persistent" title="This job has failed in {{ fc }} payloads. Persistent failures are likely real regressions, not flakes.">Persistent ({{ fc }}x)</span>
-    {% elif fc >= recurring_threshold %}
-    <span class="badge recurring" title="This job has failed in {{ fc }} payloads. Recurring failures may indicate an intermittent regression - investigate before dismissing as a flake.">Recurring ({{ fc }}x)</span>
-    {% endif %}
-    {% if detail.job.name in escalation_risk_jobs %}<span class="badge escalation-risk" title="This informing job has failed in 3+ consecutive recent payloads.">Unstable</span>{% endif %}
-    {% if detail.job.deep_analysis %}<span class="badge ai-analyzed">AI Analyzed</span>{% endif %}
-    {% set also_in = cross_topology.get(detail.job.name, []) %}
-    {% if also_in %}
-    <span class="cross-topo-hint" title="The same base job is also failing in other topologies, suggesting a shared platform issue.">Also in: {% for t in also_in %}<span class="badge {{ t|lower }}">{{ t }}</span>{% endfor %}</span>
-    {% endif %}
-    {{ detail.job.name }} <span class="detail-version">({{ detail.version }})</span>
+    <span class="detail-cell-job" title="{{ detail.job.name }}">{{ detail.job.name }}{% if detail.job.deep_analysis %}<span class="badge ai-analyzed">AI</span>{% endif %}{% set also_in = cross_topology.get(detail.job.name, []) %}{% if also_in %}<span class="cross-topo-hint" title="Also failing in other topologies">{% for t in also_in %}<span class="badge {{ t|lower }}">{{ t }}</span>{% endfor %}</span>{% endif %}</span>
+    <span class="detail-cell-version">{{ detail.version }}</span>
+    <span class="detail-cell-payload"><a href="{{ detail.payload_url }}" target="_blank" title="{{ detail.payload_tag }}" onclick="event.stopPropagation()">{{ detail.payload_tag }}</a></span>
+    <span class="detail-cell-topology"><span class="badge {{ detail.job.topology | lower }}">{{ detail.job.topology }}</span></span>
+    <span class="detail-cell-type"><span class="badge {{ detail.job.job_type.value }}">{{ detail.job.job_type.value }}</span></span>
+    <span class="detail-cell-recurrence">{% set fc = failure_counts.get(detail.job.name, 0) %}{% if fc >= persistent_threshold %}<span class="badge persistent" title="Failed in {{ fc }} payloads">Persistent</span>{% elif fc >= recurring_threshold %}<span class="badge recurring" title="Failed in {{ fc }} payloads">Recurring</span>{% endif %}{% if detail.job.name in escalation_risk_jobs %}<span class="badge escalation-risk">Unstable</span>{% endif %}{% if fc < recurring_threshold and detail.job.name not in escalation_risk_jobs %}<span style="color:var(--text-muted)">&mdash;</span>{% endif %}</span>
+    <span class="detail-cell-date">{% if detail.date %}{{ detail.date }}{% endif %}</span>
   </summary>
   <div class="content">
-    <p><strong>Payload:</strong> <a href="{{ detail.payload_url }}" target="_blank">{{ detail.payload_tag }}</a></p>
 
     {# AI analysis: rendered inline if deep_analysis exists, or placeholder for post-generation patching #}
     {% if detail.job.deep_analysis %}
@@ -518,6 +532,22 @@
     {% endif %}
     {% endif %}
 
+    {# Escalation risk: consecutive failure history #}
+    {% set er_info = escalation_risk_by_job.get(detail.job.name) %}
+    {% if er_info and er_info.failing_runs %}
+    <div class="escalation-history">
+      <strong>Consecutive Failures ({{ er_info.consecutive_failures }}x, newest first)</strong>
+      <div class="escalation-history-runs">
+        {% for run in er_info.failing_runs %}
+        <a href="{{ run.prow_url }}" target="_blank" class="escalation-history-run">{{ run.payload_tag }}</a>
+        {% endfor %}
+        {% if er_info.triage_url %}
+        <a href="{{ er_info.triage_url }}" target="_blank" class="escalation-history-run escalation-history-sippy">View full history in Sippy &#8594;</a>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
     {# Attempts and failing tests #}
     {% if detail.job.previous_attempts %}
     <div class="previous-attempts">
@@ -563,7 +593,6 @@
       </div>
     </div>
     {% else %}
-    <p><strong>Prow Job:</strong> <a href="{{ detail.job.prow_url }}" target="_blank">View in Prow</a></p>
     {# Failing tests for jobs without previous attempts #}
     {% if detail.job.failing_tests %}
     <div class="previous-attempts">
@@ -582,6 +611,7 @@
   </div>
 </details>
 {% endfor %}
+</div>
 {% if all_failing | length > 5 %}
 <button class="expand-btn" id="expand-details-btn" onclick="expandSection('details')">Show all {{ all_failing | length }} failure details</button>
 {% endif %}

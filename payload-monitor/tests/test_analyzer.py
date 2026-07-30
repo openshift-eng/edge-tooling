@@ -242,6 +242,13 @@ class TestFindEscalationRisks:
         assert risks[0].topology == "SNO"
         assert risks[0].version == "4.19"
         assert risks[0].prow_url == "https://prow/j1"
+        assert "sippy.dptools.openshift.org" in risks[0].triage_url
+        assert "4.19" in risks[0].triage_url
+        assert len(risks[0].failing_runs) == 3
+        assert risks[0].failing_runs[0]["payload_tag"] == "t5"
+        assert risks[0].failing_runs[1]["payload_tag"] == "t4"
+        assert risks[0].failing_runs[2]["payload_tag"] == "t3"
+        assert risks[0].failing_runs[0]["prow_url"] == "https://prow/j1"
 
     def test_non_consecutive(self):
         """Informing job fails in payloads 1, 3, 5 (gaps) -> no EscalationRisk."""

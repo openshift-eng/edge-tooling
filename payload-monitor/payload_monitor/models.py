@@ -206,6 +206,8 @@ class EscalationRisk:
     version: str
     consecutive_failures: int
     prow_url: str = ""
+    triage_url: str = ""
+    failing_runs: list[dict] = field(default_factory=list)
 
 
 @dataclass
