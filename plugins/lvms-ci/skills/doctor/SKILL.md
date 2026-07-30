@@ -3,7 +3,7 @@ name: lvms-ci:doctor
 argument-hint: [release1,release2,...]
 description: Analyze CI for LVMS periodic jobs and produce an HTML summary
 user-invocable: true
-allowed-tools: Skill, Bash, Read, Write, Glob, Grep, Agent
+allowed-tools: Bash, Read, Write, Glob, Grep, Workflow
 ---
 
 # lvms-ci:doctor
@@ -67,18 +67,16 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 - If a release has no failed jobs, its jobs JSON will be an empty array — skip analysis for that release
 - If a release has an `"error"` field in the JSON summary, data collection failed for that release — report the error to the user but continue with other releases
 
-### Step 2: Analyze Each Job Using prow-job-analyzer Agent
+### Step 2: Analyze Each Job Using Workflow
 
-**Goal**: Get detailed root cause analysis for each failed job using pre-downloaded artifacts.
+**Goal**: Get detailed root cause analysis for each failed job using pre-downloaded artifacts. Uses the Workflow tool to guarantee parallel execution.
 
 **Actions**:
 
-1. Use the JSON summary output from Step 1 to build agent prompts. Do NOT read the job JSON files into the main conversation — the prepare script already printed all job details (artifacts_dir, build_id, job name, url) and agents receive these directly in their prompt.
-2. For **every** failed job across all releases and PRs, launch a separate **Agent** (using the `Agent` tool, NOT the `Skill` tool) with `subagent_type=lvms-ci:prow-job-analyzer`. For PR jobs, only launch agents for jobs with FAILURE status.
+1. Use the JSON summary output from Step 1 to build a `jobs` array. Do NOT read the job JSON files into the main conversation — the prepare script already printed all job details (artifacts_dir, build_id, job name).
+2. For **every** failed job across all releases and PRs (for PR jobs, only those with FAILURE status), create a job object with `prompt` and `label` fields.
 
-   The agent returns a JSON array directly — no extraction needed. Build the prompt with the job's `artifacts_dir`, `url` (as `job_url`), and `job` (as `job_name`) from the prepare output.
-
-   **Example prompt:**
+   **Prompt template for release jobs:**
 
    ```text
    Analyze this prow job:
@@ -87,13 +85,30 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
    job_name: <JOB_NAME>
    ```
 
-   After each agent completes, save its JSON response to the corresponding file using the Write tool:
+   **Prompt template for PR jobs:**
+
+   ```text
+   Analyze this prow job:
+   artifacts_dir: <ARTIFACTS_DIR>
+   job_url: <JOB_URL>
+   job_name: <JOB_NAME>
+   ```
+
+   Substitute `<ARTIFACTS_DIR>`, `<JOB_URL>`, and `<JOB_NAME>` in the prompt templates from the prepare script's JSON output (`artifacts_dir`, `url`, `job` fields). The remaining variables `<JOB_ID>`, `<RELEASE>`, and `<PR_NUMBER>` (from `build_id`, `release`, `pr_number` fields) are used in labels and filenames below.
+
+   **Label**: Use a short identifier like `<RELEASE>/<JOB_NAME_SUFFIX>` for release jobs or `pr<PR_NUMBER>/<JOB_NAME_SUFFIX>` for PR jobs.
+
+3. Call the **Workflow** tool with ALL jobs passed directly as args:
+
+   ```text
+   Workflow: scriptPath="plugins/lvms-ci/scripts/agent-workflow.js", args={agentType: "lvms-ci:prow-job-analyzer", jobs: [<jobs array>]}
+   ```
+
+4. The Workflow runs in the background. Immediately call `TaskOutput(task_id=<ID>, block=true, timeout=600000)` to wait for it. If it returns with status `running`, call `TaskOutput` again — repeat until the workflow completes. Do NOT end your turn while the workflow is still running.
+5. When the workflow completes, it returns `{ analyzed, failed, total, results }` where `results[i]` is the agent's JSON response for `jobs[i]` (null for failed agents). Save each non-null result to the corresponding file using the Write tool:
    - Release jobs: `<WORKDIR>/jobs/release-<RELEASE>-job-<N>-<JOB_ID>.json`
    - PR jobs: `<WORKDIR>/jobs/prs-job-<N>-pr<PR_NUMBER>-<JOB_NAME_SUFFIX>.json`
-
-3. Launch **ALL** agents (all releases + PRs) in a **single message** as **foreground** agents (do NOT use `run_in_background`). Foreground agents in the same message run concurrently — this is just as fast as background agents but keeps your turn active until all complete.
-4. Say "Analyzing N jobs in parallel..." in your message text alongside the Agent tool calls.
-5. When all agents return, immediately proceed to Step 3 in the same turn. Do NOT stop or end your turn between Step 2 and Step 3.
+6. Report the analysis counts and immediately proceed to Step 3. Do NOT stop or end your turn between Step 2 and Step 3.
 
 ### Step 3: Finalize — Aggregate and Generate HTML Report
 
@@ -160,14 +175,13 @@ Z-stream test results are collected automatically when `--pull-requests` is pass
 
 ## Related Skills
 
-- **lvms-ci:prow-job**: Single job analysis (thin wrapper around the `lvms-ci:prow-job-analyzer` agent)
-- **lvms-ci:prow-job-analyzer**: Dedicated agent for root cause analysis of a single prow job (used directly by Step 2)
+- **lvms-ci:prow-job**: Single job analysis (used by Step 2 workflow agents, also standalone)
 
 ## Notes
 
 - **Deterministic scripts** handle: data collection, artifact download, aggregation, HTML generation
 - **LLM agents** handle: per-job root cause analysis (Step 2)
-- All agents are launched in a single parallel wave
+- Step 2 uses the Workflow tool to guarantee parallel agent execution — all agents run concurrently
 - The `prepare` script downloads all artifacts upfront so prow-job agents use local paths (no redundant downloads)
 - The `finalize` script runs aggregation and HTML generation in one call
 - All intermediate files use prescribed filenames in `<WORKDIR>` — no improvised names
