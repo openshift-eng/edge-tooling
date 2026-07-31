@@ -269,3 +269,32 @@ class TimingReport:
     @property
     def successful_runs(self) -> list[TimingRun]:
         return [r for r in self.runs.values() if r.is_success]
+
+
+# PR payload triage models
+
+@dataclass
+class PRPayloadJob:
+    name: str
+    prow_url: str
+    result: JobResult
+    failing_tests: list[FailingTest] = field(default_factory=list)
+    error_summary: str = ""
+
+
+@dataclass
+class FailureVerdict:
+    verdict: str          # "pr-caused" | "unrelated" | "infra" | "unknown"
+    reason: str
+    matched_files: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PRTriageResult:
+    payload_url: str
+    pr_ref: str           # e.g. "openshift/origin#31276"
+    total_jobs: int
+    passed: int
+    failed: int
+    jobs: list[PRPayloadJob] = field(default_factory=list)
+    verdicts: dict[str, FailureVerdict] = field(default_factory=dict)  # job_name -> verdict
