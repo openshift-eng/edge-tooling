@@ -1205,6 +1205,116 @@ details pre {
   padding: 2px 6px;
 }
 
+/* Doctor Report Tabs */
+.doctor-title { font-size: 20px; margin: 16px 0 8px; }
+.doctor-overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 12px 0; }
+.doctor-overview-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; text-align: center; }
+.doctor-overview-number { font-size: 1.6em; font-weight: 700; }
+.doctor-overview-number.doctor-badge-ok { color: var(--green); }
+.doctor-overview-number.doctor-badge-issues { color: var(--yellow); }
+.doctor-overview-number.doctor-badge-critical { color: var(--red); }
+.doctor-overview-label { color: var(--text-muted); font-size: 13px; }
+.doctor-timestamp { color: var(--text-muted); font-size: 12px; margin-top: 8px; }
+
+.doctor-toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 15px; margin: 15px 0; }
+.doctor-toc h3 { font-size: 14px; margin: 0 0 8px 0; color: var(--text); }
+.doctor-toc ul { list-style: none; padding-left: 0; margin: 0; }
+.doctor-toc li { padding: 4px 0; font-size: 13px; }
+.doctor-toc a { color: var(--accent); }
+
+.doctor-release { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 15px; margin: 15px 0; }
+.doctor-release-header { display: flex; justify-content: space-between; align-items: center; }
+.doctor-release-header h2 { font-size: 1.15em; margin: 0; border: none; padding: 0; }
+.doctor-badge { padding: 4px 12px; border-radius: 12px; font-size: 0.85em; font-weight: 600; }
+.doctor-badge-ok { background: rgba(63,185,80,0.15); color: var(--green); }
+.doctor-badge-issues { background: rgba(210,153,34,0.15); color: var(--yellow); }
+.doctor-badge-critical { background: rgba(248,81,73,0.15); color: var(--red); }
+.doctor-section-anchor { color: var(--text-muted); text-decoration: none; cursor: pointer; font-size: 0.75em; margin-left: 8px; vertical-align: middle; }
+.doctor-section-anchor:hover { color: var(--accent); }
+
+.doctor-breakdown { display: flex; gap: 15px; margin: 10px 0; flex-wrap: wrap; }
+.doctor-breakdown-item { font-size: 13px; color: var(--text-muted); }
+.doctor-breakdown-item strong { color: var(--text); }
+
+.doctor-issues-table { width: 100%; border-collapse: collapse; margin: 15px 0; table-layout: fixed; }
+.doctor-issues-table td { padding: 5px 6px; vertical-align: middle; font-size: 13px; }
+.doctor-col-link { width: 24px; text-align: center; }
+.doctor-col-sev { width: 78px; }
+.doctor-col-ftype { width: 58px; }
+.doctor-col-title { cursor: pointer; user-select: none; }
+.doctor-col-title::before { content: '\25B6  '; font-size: 0.7em; color: var(--text-muted); }
+.doctor-col-title.active::before { content: '\25BC  '; }
+.doctor-col-jobs { width: 70px; text-align: center; color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+.doctor-issue-row { border-top: 1px solid var(--border); }
+.doctor-issue-row:first-child { border-top: none; }
+.doctor-detail-row { display: none; }
+.doctor-detail-row.show { display: table-row; }
+.doctor-detail-row td { padding: 0 6px 12px 40px; overflow-wrap: anywhere; word-break: break-word; }
+.doctor-detail-row ul { margin: 4px 0 4px 20px; padding: 0; }
+.doctor-detail-row li { margin: 2px 0; font-size: 13px; }
+.doctor-anchor-link { color: var(--text-muted); text-decoration: none; cursor: pointer; font-size: 0.85em; }
+.doctor-anchor-link:hover { color: var(--accent); }
+
+.doctor-severity { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.doctor-severity-critical { background: rgba(248,81,73,0.2); color: var(--red); }
+.doctor-severity-high { background: rgba(219,109,40,0.2); color: var(--orange); }
+.doctor-severity-medium { background: rgba(210,153,34,0.2); color: var(--yellow); }
+.doctor-severity-low { background: rgba(63,185,80,0.2); color: var(--green); }
+.doctor-ftype { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.doctor-ftype-test { background: rgba(88,166,255,0.15); color: var(--accent); }
+.doctor-ftype-build { background: rgba(188,140,255,0.15); color: var(--purple); }
+.doctor-ftype-infra { background: rgba(219,109,40,0.15); color: var(--orange); }
+
+.doctor-root-cause { background: rgba(210,153,34,0.1); border-left: 3px solid var(--yellow); padding: 8px 12px; margin: 8px 0; font-size: 13px; border-radius: 0 4px 4px 0; }
+.doctor-confidence { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; margin-left: 6px; vertical-align: middle; }
+.doctor-confidence-high { background: rgba(63,185,80,0.15); color: var(--green); }
+.doctor-confidence-medium { background: rgba(210,153,34,0.15); color: var(--yellow); }
+.doctor-confidence-low { background: rgba(248,81,73,0.15); color: var(--red); }
+
+.doctor-scenarios { margin: 6px 0; font-size: 13px; }
+.doctor-scenario-chip { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; background: var(--surface-hover); color: var(--text-muted); margin: 0 3px 2px 0; font-family: monospace; }
+.doctor-causal-chain { margin: 6px 0; font-size: 13px; }
+.doctor-causal-chain ol { margin: 4px 0 4px 20px; padding: 0; }
+.doctor-causal-chain li { margin: 2px 0; }
+.doctor-evidence { color: var(--text-muted); font-family: monospace; font-size: 12px; }
+.doctor-causal-chain code { background: var(--surface-hover); padding: 1px 4px; border-radius: 3px; font-size: 12px; word-break: break-all; overflow-wrap: anywhere; }
+.doctor-analysis-gaps { color: var(--text-muted); font-style: italic; font-size: 12px; margin: 4px 0; }
+.doctor-next-steps { font-size: 13px; color: var(--text-muted); margin: 6px 0; }
+.doctor-no-failures { color: var(--green); padding: 12px 0; font-size: 13px; }
+.doctor-no-analysis { color: var(--text-muted); font-size: 13px; font-style: italic; padding: 4px 0; }
+
+.doctor-bug-links { margin: 8px 0; padding: 8px 12px; background: rgba(88,166,255,0.05); border-left: 3px solid var(--accent); font-size: 13px; border-radius: 0 4px 4px 0; }
+.doctor-bug-tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; margin: 2px 4px 2px 0; text-decoration: none; }
+.doctor-bug-tag-open { background: rgba(210,153,34,0.15); color: var(--yellow); border: 1px solid rgba(210,153,34,0.3); }
+.doctor-job-date { font-weight: 400; color: var(--text-muted); font-size: 12px; }
+
+/* Doctor sub-tabs (Periodics / Pull Requests / Bugs / Image Health) */
+.doctor-sub-tabs { display: flex; gap: 0; border-bottom: 2px solid var(--border); margin: 12px 0 0 0; }
+.doctor-sub-btn { padding: 8px 20px; border: none; background: transparent; font-size: 13px; font-weight: 600; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: color 0.2s, border-color 0.2s; }
+.doctor-sub-btn:hover { color: var(--text); }
+.doctor-sub-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.doctor-sub-panel { display: none; padding-top: 12px; }
+.doctor-sub-panel.active { display: block; }
+
+/* Doctor bugs and data tables */
+.doctor-bugs-table, .doctor-data-table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; }
+.doctor-bugs-table th, .doctor-data-table th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 12px; font-weight: 600; }
+.doctor-bugs-table td, .doctor-data-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; white-space: normal; }
+.doctor-bugs-table tr:hover td, .doctor-data-table tr:hover td { background: var(--surface-hover); }
+
+/* Doctor grade badges */
+.doctor-grade-badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.doctor-grade-badge.grade-a { background: rgba(63,185,80,0.2); color: var(--green); }
+.doctor-grade-badge.grade-b { background: rgba(88,166,255,0.2); color: var(--accent); }
+.doctor-grade-badge.grade-c { background: rgba(210,153,34,0.2); color: var(--yellow); }
+.doctor-grade-badge.grade-d { background: rgba(219,109,40,0.2); color: var(--orange); }
+.doctor-grade-badge.grade-f { background: rgba(248,81,73,0.2); color: var(--red); }
+.doctor-grade-badge.grade-na { background: rgba(139,148,158,0.2); color: var(--text-muted); }
+
+/* Doctor index image info (LVMS-specific) */
+.doctor-index-image-info { background: rgba(88,166,255,0.05); border-left: 3px solid var(--accent); padding: 8px 12px; margin: 8px 0; font-size: 13px; }
+.doctor-index-image-info code { background: var(--surface-hover); padding: 2px 4px; border-radius: 3px; font-size: 12px; }
+
 /* Responsive */
 @media (max-width: 768px) {
   body { padding: 12px; }

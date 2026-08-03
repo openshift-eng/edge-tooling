@@ -208,22 +208,23 @@ def main():
         files = find_release_job_files(workdir, release)
         if not files:
             print(f"No job files found for release {release}", file=sys.stderr)
-            sys.exit(1)
+            result = build_release_json(release, [], timestamp)
+            result["no_job_files"] = True
+        else:
+            print(f"Found {len(files)} job files for release {release}", file=sys.stderr)
+            jobs = []
+            for filepath in files:
+                summaries = parse_structured_summary(filepath)
+                if not summaries:
+                    print(f"  WARNING: no STRUCTURED SUMMARY in {os.path.basename(filepath)}", file=sys.stderr)
+                    continue
+                jobs.extend(summaries)
 
-        print(f"Found {len(files)} job files for release {release}", file=sys.stderr)
-        jobs = []
-        for filepath in files:
-            summaries = parse_structured_summary(filepath)
-            if not summaries:
-                print(f"  WARNING: no valid JSON in {os.path.basename(filepath)}", file=sys.stderr)
-                continue
-            jobs.extend(summaries)
-
-        if not jobs:
-            print("No valid job reports found", file=sys.stderr)
-            sys.exit(1)
-
-        result = build_release_json(release, jobs, timestamp)
+            result = build_release_json(release, jobs, timestamp)
+            if not jobs:
+                print(f"No structured summaries found in {len(files)} job file(s)", file=sys.stderr)
+                result["no_structured_summaries"] = True
+                result["job_file_count"] = len(files)
         jobs_dir = os.path.join(workdir, "jobs")
         os.makedirs(jobs_dir, exist_ok=True)
         output_path = os.path.join(jobs_dir, f"release-{release}-summary.json")

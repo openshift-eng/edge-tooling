@@ -197,7 +197,10 @@ def _build_template_context(report: MonitorReport) -> dict:
     }
 
 
-def generate_html(report: MonitorReport, output_path: Optional[Path] = None) -> str:
+def generate_html(
+    report: MonitorReport,
+    output_path: Optional[Path] = None,
+) -> str:
     """Generate a self-contained HTML report.
 
     Returns the HTML content as a string. If output_path is provided,
@@ -211,6 +214,7 @@ def generate_html(report: MonitorReport, output_path: Optional[Path] = None) -> 
     context = _build_template_context(report)
     context["css"] = css
     context["js"] = js
+    context["doctor_fragments"] = report.doctor_fragments
 
     rendered_html = template.render(**context)
 
@@ -240,6 +244,7 @@ def generate_json(report: MonitorReport, output_path: Path) -> None:
         "jira_errors": report.jira_errors,
         "recurring_threshold": report.recurring_threshold,
         "persistent_threshold": report.persistent_threshold,
+        "doctor_fragments": report.doctor_fragments,
     }
 
     for stream in report.streams:
@@ -558,4 +563,5 @@ def load_json(json_path: Path) -> MonitorReport:
         jira_errors=data.get("jira_errors", []),
         recurring_threshold=data.get("recurring_threshold", 2),
         persistent_threshold=data.get("persistent_threshold", 3),
+        doctor_fragments=data.get("doctor_fragments", {}),
     )

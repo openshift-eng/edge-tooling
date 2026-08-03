@@ -6,7 +6,12 @@ Shared across components (MicroShift, LVMS, etc.) via symlinks in each
 plugin's scripts/ directory.
 
 Usage:
-    create-report.py --component <component> [--workdir DIR] <release1,release2,...>
+    create-report.py --component <component> [--workdir DIR] [--format html|fragment] <release1,release2,...>
+
+Formats:
+    html      - Standalone HTML report (default)
+    fragment  - HTML fragment file for embedding in payload-monitor dashboard
+    both      - Generate both html and fragment in a single run
 """
 
 import json
@@ -64,6 +69,7 @@ COMPONENT_JIRA_CREATE = {
 
 _GRADE_ORDER = {"A": 0, "B": 1, "C": 2, "D": 3, "F": 4}
 _GRADE_CSS = {"A": "grade-a", "B": "grade-b", "C": "grade-c", "D": "grade-d", "F": "grade-f"}
+
 
 CSS = """\
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; color: #333; }
@@ -1089,7 +1095,7 @@ def _render_investigation(issue):
         for link in chain:
             item = _e(link.get("cause"))
             if link.get("evidence"):
-                item += f' — <span class="evidence">{_e(link["evidence"])}</span>'
+                item += f' -<span class="evidence">{_e(link["evidence"])}</span>'
             if link.get("quote"):
                 item += f' <code>{_e(link["quote"])}</code>'
             lines.append(f'                    <li>{item}</li>')
@@ -1386,27 +1392,38 @@ def _render_bug_links(bug_match, issue, source_label, jira_cfg=None):
 # HTML rendering
 # ---------------------------------------------------------------------------
 
+def _render_simple_release(version, badge_class, badge_label, body_html):
+    """Render a release section with no issue details (error / empty states)."""
+    return (
+        f'        <div class="release-section" id="release-{_e(version)}">\n'
+        '            <div class="release-header">\n'
+        f'                <h2>Release {_e(version)}</h2>\n'
+        f'                <span class="badge {badge_class}">{badge_label}</span>\n'
+        '            </div>\n'
+        f'            {body_html}\n'
+        "        </div>"
+    )
+
+
 def render_release_section(version, rdata, bug_candidates, index_info=None, jira_cfg=None, release_status=None, job_issue_map=None):
     if rdata is None:
-        return (
-            f'        <div class="release-section" id="release-{_e(version)}">\n'
-            '            <div class="release-header">\n'
-            f'                <h2>Release {_e(version)}</h2>\n'
-            '                <span class="badge badge-nodata">no data</span>\n'
-            '            </div>\n'
-            "            <p>Analysis failed to produce results.</p>\n"
-            "        </div>"
-        )
+        return _render_simple_release(version, "badge-nodata", "no data",
+                                      "<p>Analysis failed to produce results.</p>")
 
     if rdata.get("collection_error"):
-        return (
-            f'        <div class="release-section" id="release-{_e(version)}">\n'
-            '            <div class="release-header">\n'
-            f'                <h2>Release {_e(version)}</h2>\n'
-            '                <span class="badge badge-nodata">collection error</span>\n'
-            '            </div>\n'
-            f'            <pre>Data collection failed: {_e(rdata["collection_error"])}</pre>\n'
-            "        </div>"
+        return _render_simple_release(version, "badge-nodata", "collection error",
+                                      f'<pre>Data collection failed: {_e(rdata["collection_error"])}</pre>')
+
+    if rdata.get("no_job_files"):
+        return _render_simple_release(version, "status-pass", "all clear",
+                                      "<p>No failed periodic jobs found for this release.</p>")
+
+    if rdata.get("no_structured_summaries"):
+        count = rdata.get("job_file_count", 0)
+        return _render_simple_release(
+            version, "badge-nodata", "pending analysis",
+            f"<p>{count} job file(s) found but no structured summaries were produced"
+            " - analysis may still be running or the jobs had no parseable output.</p>"
         )
 
     total = rdata["total_failed"]
@@ -1611,10 +1628,10 @@ def render_pr_section(pr_data, bug_candidates, pr_status, pr_error=None, jira_cf
         else:
             b = {"build": 0, "test": 0, "infrastructure": 0}
         pending = pr.get("pending", 0)
-        suffix = f' &mdash; {pending} running' if pending else ''
+        suffix = f' -{pending} running' if pending else ''
         toc_lines.append(
             f'                <li><a href="#pr-{pr["number"]}">PR# {pr["number"]}</a>'
-            f' &mdash; {pr["failed"]} failures ({b.get("build", 0)} build, {b.get("test", 0)} test, {b.get("infrastructure", 0)} infra){suffix}</li>'
+            f' -{pr["failed"]} failures ({b.get("build", 0)} build, {b.get("test", 0)} test, {b.get("infrastructure", 0)} infra){suffix}</li>'
         )
     toc_lines.append('            </ul>')
     toc_lines.append('        </div>')
@@ -1789,7 +1806,7 @@ def generate_html(component_title, releases_data, all_bug_candidates, pr_data, p
         status = (status_data or {}).get(version)
         if rdata and rdata.get("collection_error"):
             toc.append(
-                f'                <li><a href="#release-{_e(version)}">Release {_e(version)}</a> &mdash; collection error</li>'
+                f'                <li><a href="#release-{_e(version)}">Release {_e(version)}</a> -collection error</li>'
             )
         elif rdata:
             b = rdata["breakdown"]
@@ -1800,13 +1817,13 @@ def generate_html(component_title, releases_data, all_bug_candidates, pr_data, p
                 rate = round(passed / total * 100) if total > 0 else 0
                 pass_info = f" &mdash; {passed}/{total} passed ({rate}%)"
             toc.append(
-                f'                <li><a href="#release-{_e(version)}">Release {_e(version)}</a> &mdash; '
+                f'                <li><a href="#release-{_e(version)}">Release {_e(version)}</a> -'
                 f'<span class="toc-counts" data-release="{_e(version)}">'
                 f'{rdata["total_failed"]} failures ({b["build"]} build, {b["test"]} test, {b["infrastructure"]} infra)'
                 f'{pass_info}</span></li>'
             )
         else:
-            toc.append(f'                <li><a href="#release-{_e(version)}">Release {_e(version)}</a> &mdash; no data</li>')
+            toc.append(f'                <li><a href="#release-{_e(version)}">Release {_e(version)}</a> -no data</li>')
 
     job_issue_map = _build_job_issue_map(releases_data)
 
@@ -1831,7 +1848,7 @@ def generate_html(component_title, releases_data, all_bug_candidates, pr_data, p
     </style>
 </head>
 <body>
-<div id="loading" style="display:flex;align-items:center;justify-content:center;height:80vh;font-family:sans-serif;color:#6c757d;font-size:1.2em;">Loading report&hellip;</div>
+<div id="loading" style="display:flex;align-items:center;justify-content:center;height:80vh;font-family:sans-serif;color:#6c757d;font-size:1.2em;">Loading report...</div>
 <div class="container" style="display:none">
     <h1>{component_title} CI Doctor Report</h1>
     <p class="timestamp">Generated: {time_str} UTC</p>
@@ -1886,6 +1903,230 @@ def generate_html(component_title, releases_data, all_bug_candidates, pr_data, p
 
 
 # ---------------------------------------------------------------------------
+# Fragment mode - embeddable HTML for payload-monitor dashboard
+# ---------------------------------------------------------------------------
+
+# Map of standalone CSS classes to doctor-prefixed equivalents.
+# Order matters: longer/more specific entries first to avoid partial matches.
+_DOCTOR_CLASS_MAP = [
+    ("release-header", "doctor-release-header"),
+    ("release-section", "doctor-release"),
+    ("release-badge", "doctor-badge"),
+    ("overview-card", "doctor-overview-card"),
+    ("overview-grid", "doctor-overview-grid"),
+    ("issues-table", "doctor-issues-table"),
+    ("issue-row", "doctor-issue-row"),
+    ("detail-row", "doctor-detail-row"),
+    ("col-title", "doctor-col-title"),
+    ("col-sev", "doctor-col-sev"),
+    ("col-ftype", "doctor-col-ftype"),
+    ("col-jobs", "doctor-col-jobs"),
+    ("col-link", "doctor-col-link"),
+    ("root-cause", "doctor-root-cause"),
+    ("severity-badge", "doctor-severity"),
+    ("severity-critical", "doctor-severity-critical"),
+    ("severity-high", "doctor-severity-high"),
+    ("severity-medium", "doctor-severity-medium"),
+    ("severity-low", "doctor-severity-low"),
+    ("ftype-badge", "doctor-ftype"),
+    ("ftype-test", "doctor-ftype-test"),
+    ("ftype-build", "doctor-ftype-build"),
+    ("ftype-infra", "doctor-ftype-infra"),
+    ("confidence-badge", "doctor-confidence"),
+    ("confidence-high", "doctor-confidence-high"),
+    ("confidence-medium", "doctor-confidence-medium"),
+    ("confidence-low", "doctor-confidence-low"),
+    ("badge-ok", "doctor-badge-ok"),
+    ("badge-issues", "doctor-badge-issues"),
+    ("badge-critical", "doctor-badge-critical"),
+    ("badge-nodata", "doctor-badge-nodata"),
+    ("breakdown-item", "doctor-breakdown-item"),
+    ("breakdown", "doctor-breakdown"),
+    ("causal-chain", "doctor-causal-chain"),
+    ("scenario-chip", "doctor-scenario-chip"),
+    ("scenarios", "doctor-scenarios"),
+    ("analysis-gaps", "doctor-analysis-gaps"),
+    ("bug-links", "doctor-bug-links"),
+    ("bug-tag-open", "doctor-bug-tag-open"),
+    ("bug-tag-regression", "doctor-bug-tag-regression"),
+    ("bug-tag", "doctor-bug-tag"),
+    ("job-date", "doctor-job-date"),
+    ("no-bugs", "doctor-no-bugs"),
+    ("anchor-link", "doctor-anchor-link"),
+    ("section-anchor", "doctor-section-anchor"),
+    ("filter-toggle", "doctor-filter-toggle"),
+    ("index-image-info", "doctor-index-image-info"),
+    ("grade-badge", "doctor-grade-badge"),
+    ("data-table", "doctor-data-table"),
+    ("toc-counts", "doctor-toc-counts"),
+    ("toc-header", "doctor-toc-header"),
+    ("graph-toggle", "doctor-graph-toggle"),
+    ("graph-tabs", "doctor-graph-tabs"),
+    ("graph-tab-btn", "doctor-graph-tab-btn"),
+    ("graph-pane", "doctor-graph-pane"),
+    ("graph-source", "doctor-graph-source"),
+    ("perf-graphs", "doctor-perf-graphs"),
+    ("bd-build", "doctor-bd-build"),
+    ("bd-test", "doctor-bd-test"),
+    ("bd-infra", "doctor-bd-infra"),
+    ("evidence", "doctor-evidence"),
+    ("next-steps", "doctor-next-steps"),
+    ("no-failures", "doctor-no-failures"),
+    ("no-analysis", "doctor-no-analysis"),
+    ("number", "doctor-overview-number"),
+    ("label", "doctor-overview-label"),
+    ("timestamp", "doctor-timestamp"),
+    ("toc", "doctor-toc"),
+    ("badge", "doctor-badge"),
+]
+
+# Dict for O(1) lookup per class token (avoids fragile substring replacement)
+_DOCTOR_CLASS_LOOKUP = dict(_DOCTOR_CLASS_MAP)
+
+_CLASS_ATTR_RE = re.compile(r'class="([^"]*)"')
+
+
+def _doctor_prefix_classes(html):
+    """Replace standalone CSS classes with doctor-prefixed versions."""
+    def _replace_class_attr(m):
+        tokens = m.group(1).split()
+        mapped = " ".join(_DOCTOR_CLASS_LOOKUP.get(t, t) for t in tokens)
+        return f'class="{mapped}"'
+    return _CLASS_ATTR_RE.sub(_replace_class_attr, html)
+
+
+def _doctor_prefix_ids(html, slug):
+    """Prefix id attributes to avoid collisions with payload-monitor."""
+    html = re.sub(r'id="release-', f'id="doctor-{slug}-release-', html)
+    html = re.sub(r'href="#release-', f'href="#doctor-{slug}-release-', html)
+    html = re.sub(r'id="images-', f'id="doctor-{slug}-images-', html)
+    html = re.sub(r'href="#images-', f'href="#doctor-{slug}-images-', html)
+    return html
+
+
+def _postprocess_fragment(html, slug):
+    """Prefix CSS classes and HTML ids for embedding in the payload-monitor dashboard."""
+    html = _doctor_prefix_classes(html)
+    return _doctor_prefix_ids(html, slug)
+
+
+COMPONENT_SLUGS = {
+    "microshift": "microshift-ci",
+    "lvm-operator": "lvms-ci",
+}
+
+
+def generate_fragment(component, component_title, releases_data, all_bug_candidates,
+                      pr_data, pr_status, timestamp, pr_error=None,
+                      bugs_tab_data=None, images_tab_data=None, index_data=None):
+    """Generate an embeddable HTML fragment for the payload-monitor dashboard.
+
+    Returns a dict with an 'html' key containing the fragment.
+    """
+    slug = COMPONENT_SLUGS.get(component, component)
+
+    # Build overview cards
+    cards = []
+    total_failures = 0
+    for version, rdata in releases_data.items():
+        if rdata and rdata.get("collection_error"):
+            count_str = "!"
+            css = "doctor-badge-critical"
+        elif rdata:
+            count_str = str(rdata["total_failed"])
+            total_failures += rdata["total_failed"]
+            css = "doctor-badge-critical" if rdata["total_failed"] > 0 else "doctor-badge-ok"
+        else:
+            count_str = "?"
+            css = ""
+        cards.append(
+            f'<div class="doctor-overview-card">'
+            f'<div class="doctor-overview-number {css}">{count_str}</div>'
+            f'<div class="doctor-overview-label">Release {_e(version)}</div>'
+            f'</div>'
+        )
+
+    # PR card
+    if pr_error:
+        pr_count_str = "!"
+        pr_css = "doctor-badge-critical"
+    elif pr_status:
+        pr_count = sum(p.get("failed", 0) for p in pr_status)
+        pr_count_str = str(pr_count)
+        pr_css = "doctor-badge-issues" if pr_count > 0 else "doctor-badge-ok"
+    elif pr_data:
+        pr_count = pr_data.get("total_failed", 0)
+        pr_count_str = str(pr_count)
+        pr_css = "doctor-badge-issues" if pr_count > 0 else "doctor-badge-ok"
+    else:
+        pr_count_str = "0"
+        pr_css = "doctor-badge-ok"
+    cards.append(
+        f'<div class="doctor-overview-card">'
+        f'<div class="doctor-overview-number {pr_css}">{pr_count_str}</div>'
+        f'<div class="doctor-overview-label">Rebase PRs</div>'
+        f'</div>'
+    )
+
+    # Render sections using existing functions, then prefix classes/ids
+    _idx = index_data or {}
+    periodics_parts = []
+    for version, rdata in releases_data.items():
+        periodics_parts.append(render_release_section(version, rdata, all_bug_candidates, _idx.get(version)))
+    periodics_html = _postprocess_fragment("\n".join(periodics_parts), slug)
+
+    pr_html = _postprocess_fragment(
+        render_pr_section(pr_data, all_bug_candidates, pr_status, pr_error), slug)
+
+    bugs_html = _postprocess_fragment(
+        render_bugs_section(bugs_tab_data) if bugs_tab_data else "", slug)
+
+    images_html = _postprocess_fragment(
+        render_images_section(images_tab_data), slug)
+
+    time_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Determine sub-tabs to show
+    sub_tabs = [
+        ("Periodics", f"doctor-{slug}-periodics"),
+        ("Pull Requests", f"doctor-{slug}-prs"),
+        ("Bugs", f"doctor-{slug}-bugs"),
+        ("Image Health", f"doctor-{slug}-images"),
+    ]
+
+    tab_buttons = []
+    for i, (label, tab_id) in enumerate(sub_tabs):
+        active = " active" if i == 0 else ""
+        tab_buttons.append(
+            f'<button class="doctor-sub-btn{active}" data-doctor-tab="{tab_id}">{label}</button>'
+        )
+
+    fragment = f"""\
+<h2 class="doctor-title">{_e(component_title)} CI Health</h2>
+<div class="doctor-overview-grid">
+{"".join(cards)}
+</div>
+<p class="doctor-timestamp">Generated: {time_str} UTC</p>
+<div class="doctor-sub-tabs">
+{"".join(tab_buttons)}
+</div>
+<div class="doctor-sub-panel active" id="doctor-{slug}-periodics">
+{periodics_html}
+</div>
+<div class="doctor-sub-panel" id="doctor-{slug}-prs">
+{pr_html}
+</div>
+<div class="doctor-sub-panel" id="doctor-{slug}-bugs">
+{bugs_html}
+</div>
+<div class="doctor-sub-panel" id="doctor-{slug}-images">
+{images_html}
+</div>"""
+
+    return fragment
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1894,6 +2135,7 @@ def main():
     releases_arg = None
     component = None
     ignore_keys = set()
+    output_format = "html"
 
     args = sys.argv[1:]
     i = 0
@@ -1915,6 +2157,15 @@ def main():
                 print("Error: --ignore requires an argument", file=sys.stderr)
                 sys.exit(1)
             ignore_keys = {k.strip() for k in args[i + 1].split(",") if k.strip()}
+            i += 2
+        elif args[i] == "--format":
+            if i + 1 >= len(args):
+                print("Error: --format requires an argument", file=sys.stderr)
+                sys.exit(1)
+            output_format = args[i + 1]
+            if output_format not in ("html", "fragment", "both"):
+                print(f"Error: --format must be 'html', 'fragment', or 'both', got '{output_format}'", file=sys.stderr)
+                sys.exit(1)
             i += 2
         elif args[i].startswith("-"):
             print(f"Unknown option: {args[i]}", file=sys.stderr)
@@ -1960,6 +2211,9 @@ def main():
         if entry["summary"]:
             parts.append("summary found")
             found_any = True
+        elif entry["jobs"]:
+            parts.append("no summary, jobs file present")
+            found_any = True
         else:
             parts.append("summary MISSING")
         parts.append("bug mapping found" if entry["bugs"] else "no bug mapping")
@@ -1982,30 +2236,24 @@ def main():
         print(f"\nError: no analysis files found in {workdir}", file=sys.stderr)
         sys.exit(1)
 
-    # Load everything via json.load
+    # Load everything via json.load.
+    # aggregate.py now sets sentinel flags (no_job_files, no_structured_summaries)
+    # in the summary JSON, so the summary file should always exist when aggregate
+    # ran successfully. The rdata-is-None fallback handles cases where aggregate
+    # was skipped entirely (e.g. prepare failed for this release).
     releases_data = {}
     bug_data = {}
     _EMPTY_BREAKDOWN = {"build": 0, "test": 0, "infrastructure": 0}
     for version in releases:
         entry = files["releases"][version]
         rdata = load_json(entry["summary"])
-        if rdata is None:
-            if entry.get("error"):
-                rdata = {
-                    "total_failed": 0,
-                    "issues": [],
-                    "breakdown": _EMPTY_BREAKDOWN,
-                    "collection_error": entry["error"],
-                }
-            else:
-                # Distinguish "no failures" from "analysis failed" by checking the jobs file
-                jobs = load_json(entry["jobs"])
-                if jobs is not None and len(jobs) == 0:
-                    rdata = {
-                        "total_failed": 0,
-                        "issues": [],
-                        "breakdown": _EMPTY_BREAKDOWN,
-                    }
+        if rdata is None and entry.get("error"):
+            rdata = {
+                "total_failed": 0,
+                "issues": [],
+                "breakdown": _EMPTY_BREAKDOWN,
+                "collection_error": entry["error"],
+            }
         releases_data[version] = rdata
         bug_data[version] = load_bug_candidates(entry["bugs"])
 
@@ -2085,13 +2333,27 @@ def main():
             print("WARNING: Chart.js or pcp-charts.js not found, "
                   "interactive PCP charts will not render", file=sys.stderr)
 
-    # Generate HTML
+    # Generate output
     timestamp = datetime.now(timezone.utc)
-    html_content = generate_html(component_title, releases_data, all_bug_candidates, pr_data, pr_status, timestamp, pr_error, bugs_tab_data, images_tab_data, index_data, COMPONENT_JIRA_CREATE.get(component), status_data=status_data)
 
-    output_path = os.path.join(workdir, f"report-{component}-ci-doctor.html")
-    with open(output_path, "w") as f:
-        f.write(html_content)
+    write_html = output_format in ("html", "both")
+    write_fragment = output_format in ("fragment", "both")
+
+    if write_html:
+        html_content = generate_html(component_title, releases_data, all_bug_candidates, pr_data, pr_status, timestamp, pr_error, bugs_tab_data, images_tab_data, index_data, COMPONENT_JIRA_CREATE.get(component), status_data=status_data)
+        output_path = os.path.join(workdir, f"report-{component}-ci-doctor.html")
+        with open(output_path, "w") as f:
+            f.write(html_content)
+
+    if write_fragment:
+        fragment_html = generate_fragment(
+            component, component_title, releases_data, all_bug_candidates,
+            pr_data, pr_status, timestamp, pr_error,
+            bugs_tab_data, images_tab_data, index_data,
+        )
+        fragment_path = os.path.join(workdir, f"report-{component}-ci-doctor-fragment.html")
+        with open(fragment_path, "w") as f:
+            f.write(fragment_html)
 
     # Summary
     print("\nSummary:")
@@ -2142,7 +2404,10 @@ def main():
             print(f"    Release {release}: {repo_names}{grade_str}")
     else:
         print("    No container image data")
-    print(f"\nHTML report generated: {output_path}")
+    if write_html:
+        print(f"\nHTML report generated: {output_path}")
+    if write_fragment:
+        print(f"Fragment generated: {fragment_path}")
 
 
 if __name__ == "__main__":

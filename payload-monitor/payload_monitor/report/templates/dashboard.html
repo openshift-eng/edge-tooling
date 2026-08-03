@@ -40,6 +40,9 @@
   {% if timing_html %}
   <button class="tab-btn" data-tab="timing-insights">Timing Insights</button>
   {% endif %}
+  {% for label, html in doctor_fragments.items() %}
+  <button class="tab-btn" data-tab="{{ label | lower | replace(' ', '-') }}">{{ label }}</button>
+  {% endfor %}
 </div>
 
 <!-- Tab: Payload Health -->
@@ -914,6 +917,12 @@
 {{ timing_html | safe }}
 </div>
 {% endif %}
+
+{% for label, html in doctor_fragments.items() %}
+<div class="tab-panel" id="tab-{{ label | lower | replace(' ', '-') }}">
+{{ html | safe }}
+</div>
+{% endfor %}
 
 <script>{{ js | safe }}</script>
 </body>
