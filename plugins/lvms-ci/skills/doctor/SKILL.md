@@ -21,6 +21,7 @@ Accepts a comma-separated list of release versions (or `main`), runs analysis fo
 
 ## Arguments
 
+- `--prepared` (optional): Artifacts have already been collected by an external script. When set, skip Step 1. Read the prepare summary from `<WORKDIR>/prepare-summary.json` instead.
 - `<ARGUMENTS>` (required): Comma-separated list of release versions (e.g., `main` or `4.20,4.21,4.22,main`)
 
 ## Work Directory
@@ -37,20 +38,23 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 
 **Goal**: Deterministically collect all failed jobs and download their artifacts before any LLM analysis.
 
-**Actions**:
-
 1. Determine today's `<WORKDIR>` by running `date +%y%m%d` and substituting into `/tmp/lvm-operator-ci-claude-workdir.<YYMMDD>`. Use this value in all subsequent commands.
-2. Run the prepare script:
+
+**If `--prepared` was passed**: the prepare script was already run externally. Read the prepare summary using `Read <WORKDIR>/prepare-summary.json`. Parse the JSON to get the workdir, release info (job counts, file paths), and PR info. Then skip to Step 2.
+
+**Otherwise** run the prepare script:
+
+1. Run:
 
    ```text
    bash plugins/lvms-ci/scripts/doctor.sh prepare --component lvm-operator --workdir <WORKDIR> <ARGUMENTS> --pull-requests
    ```
 
-3. The script deterministically:
+2. The script deterministically:
    - For each release: fetches failed periodic jobs, downloads artifacts, writes `<WORKDIR>/jobs/release-<version>-jobs.json`
    - For PRs: fetches PRs with failures, downloads artifacts, writes `<WORKDIR>/jobs/prs-jobs.json` and `<WORKDIR>/jobs/prs-status.json`
    - Outputs a JSON summary listing all releases, job counts, and file paths
-4. Read the JSON output to know which releases have jobs to analyze and how many
+3. Read the JSON output to know which releases have jobs to analyze and how many
 
 **Job JSON field names** (use these exactly — do NOT guess alternatives like `job_name`):
 
