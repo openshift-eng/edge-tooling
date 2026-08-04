@@ -292,7 +292,7 @@ def run_errata_promotion_checks(version_info, advisory_id):
     nvrs = errata.extract_microshift_nvrs(builds_data)
 
     embedded_issues = advisory.get("_jira_issues")
-    bugs = errata.extract_bug_keys(embedded_issues)
+    bugs = errata.extract_bug_keys(embedded_issues) if embedded_issues is not None else None
 
     logger.info("Running checks...")
     results = [

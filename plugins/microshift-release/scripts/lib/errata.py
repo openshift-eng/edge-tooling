@@ -262,7 +262,7 @@ def extract_bug_keys(jira_data):
             bug["status"] = "unknown"
         bug["summary"] = fields.get("summary", "")
         bug["is_private"] = fields.get("is_private", False)
-        if bug["key"]:
+        if bug["key"] and bug["key"].startswith("OCPBUGS-"):
             bugs.append(bug)
 
     return bugs
