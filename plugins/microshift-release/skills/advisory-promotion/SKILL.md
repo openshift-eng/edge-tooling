@@ -110,11 +110,13 @@ Paste the **complete stdout** of each script into the response as a code block. 
 If the script exits non-zero:
 
 **Bootc mode:**
+
 - **VPN errors**: Connect to VPN (GitLab API and Brew require it)
 - **Missing GITLAB_API_TOKEN**: `export GITLAB_API_TOKEN=<token>` for shipment MR and approval checks
 - **Version too low**: Advisory promotion requires 4.18+ (Konflux builds)
 
 **Errata mode:**
+
 - **Kerberos auth failed**: Run `kinit <username>@REDHAT.COM` to obtain a Kerberos ticket
 - **VPN errors**: Connect to VPN (Errata Tool requires it)
 - **Advisory not found**: Verify the advisory ID/name is correct in the Errata Tool UI
@@ -184,7 +186,7 @@ All per-image checks run independently per variant (`{arch}_el{rhel}`). For vers
 
 ## Output Format
 
-### Bootc Mode
+### Bootc Mode Output
 
 **Short (default):** All checks shown, grouped by variant. Skipped checks use ⏭️.
 
@@ -202,7 +204,7 @@ Advisory Promotion: 4.20.26
 ✅  shipment_mr_approved                   MR !594 approved by tlove, knarra, adobes
 ```
 
-### Errata Mode
+### Errata Mode Output
 
 **Short (default):**
 
