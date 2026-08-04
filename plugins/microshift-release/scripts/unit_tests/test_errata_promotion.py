@@ -143,6 +143,7 @@ class TestBugsVerified(unittest.TestCase):
         r = check_bugs_verified(bugs)
         self.assertEqual(r["status"], "PASS")
         self.assertIn("2/2", r["reason"])
+        self.assertIn("accepted", r["reason"])
 
     def test_all_closed(self):
         bugs = [

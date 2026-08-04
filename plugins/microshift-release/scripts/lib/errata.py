@@ -7,12 +7,7 @@ All requests go through the internal Red Hat VPN.
 import logging
 import re
 
-import requests
-import urllib3
-from requests_gssapi import HTTPSPNEGOAuth
-
 logger = logging.getLogger(__name__)
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 ET_BASE_URL = "https://errata.devel.redhat.com"
 ET_API_URL = f"{ET_BASE_URL}/api/v1"
@@ -24,6 +19,10 @@ def _get_session():
     """Return a requests session with GSSAPI auth, creating it on first call."""
     global _session
     if _session is None:
+        import requests  # noqa: PLC0415
+        import urllib3  # noqa: PLC0415
+        from requests_gssapi import HTTPSPNEGOAuth  # noqa: PLC0415
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         _session = requests.Session()
         _session.auth = HTTPSPNEGOAuth()
         _session.verify = False
@@ -37,6 +36,7 @@ def _et_get(path, **kwargs):
     Returns:
         dict/list or None on failure.
     """
+    import requests  # noqa: PLC0415
     session = _get_session()
     url = f"{ET_API_URL}/{path.lstrip('/')}"
     try:
@@ -52,6 +52,9 @@ def _et_get(path, **kwargs):
     except requests.exceptions.ConnectionError as exc:
         logger.error("Cannot reach Errata Tool — check VPN: %s", exc)
         return None
+    except ValueError as exc:
+        logger.error("ET API returned non-JSON response for %s: %s", path, exc)
+        return None
     except requests.RequestException as exc:
         logger.error("ET API error for %s: %s", path, exc)
         return None
@@ -63,12 +66,19 @@ def check_auth():
     Returns:
         bool
     """
+    import requests  # noqa: PLC0415
     session = _get_session()
     try:
         resp = session.get(ET_BASE_URL, timeout=10,
                            headers={"Accept": "text/html"})
+        if resp.status_code >= 400:
+            logger.error("Errata Tool auth check failed (HTTP %d)", resp.status_code)
         return resp.status_code < 400
-    except requests.RequestException:
+    except requests.exceptions.ConnectionError as exc:
+        logger.error("Cannot reach Errata Tool — check VPN: %s", exc)
+        return False
+    except requests.RequestException as exc:
+        logger.error("Errata Tool auth check failed: %s", exc)
         return False
 
 
@@ -116,7 +126,8 @@ def fetch_advisory(advisory_id):
         advisory_id: Numeric ID or name (e.g. ``RHBA-2026:12345``).
 
     Returns:
-        dict with advisory fields (including ``errata_type``), or None.
+        dict with advisory fields (including ``errata_type`` and
+        ``_jira_issues``), or None.
     """
     data = _et_get(f"erratum/{advisory_id}")
     advisory = _unwrap_advisory(data)

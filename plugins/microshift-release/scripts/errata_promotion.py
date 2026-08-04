@@ -42,8 +42,6 @@ _CHECKS = [
 
 _QA_DEFAULT_OWNERS = {"default", "default qa", ""}
 
-_EXPECTED_STATUS = "REL_PREP"
-
 
 def _expected_types(version_info):
     if version_info["type"] == "XY":
@@ -106,7 +104,7 @@ def check_qa_owner(advisory):
 
 
 def check_bugs_verified(bugs):
-    """All OCPBUGS linked to the advisory are in Verified state."""
+    """All OCPBUGS linked to the advisory are in an accepted state."""
     check_id = "et_bugs_verified"
     if bugs is None:
         return _warn(check_id, "Could not fetch Jira issues from advisory")
@@ -121,7 +119,7 @@ def check_bugs_verified(bugs):
     verified = total - len(not_verified)
 
     if not not_verified:
-        return _pass(check_id, f"{verified}/{total} bugs in Verified state",
+        return _pass(check_id, f"{verified}/{total} bugs in accepted state",
                      [b["key"] for b in bugs])
 
     details = [f"{b['key']}: {b.get('status', '?')}" for b in not_verified]
