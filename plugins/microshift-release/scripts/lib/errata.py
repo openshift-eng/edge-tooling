@@ -197,10 +197,10 @@ def extract_microshift_nvrs(builds_data):
                     continue
                 variant_arch = build_info.get("variant_arch", {})
                 found_rpms = False
-                for variant, arches in variant_arch.items():
+                for arches in variant_arch.values():
                     if not isinstance(arches, dict):
                         continue
-                    for arch, rpm_list in arches.items():
+                    for rpm_list in arches.values():
                         if not isinstance(rpm_list, list):
                             continue
                         for rpm_file in rpm_list:

@@ -438,9 +438,7 @@ def main():
             "errata_checks": results,
         }
         print(json.dumps(output, indent=2))
-        return
-
-    if args.verbose:
+    elif args.verbose:
         print(format_text_full(args.version, args.advisory, results, version_info))
     else:
         print(format_text_short(args.version, args.advisory, results))

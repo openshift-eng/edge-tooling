@@ -1,6 +1,6 @@
 ---
 name: microshift-release:advisory-promotion
-argument-hint: <version> [--prod] [--verbose] [--errata <advisory_id>]
+argument-hint: <version> [--prod] [--verbose] [--json] [--errata <advisory_id>]
 description: Validate advisory promotion for QE sign-off — Konflux bootc images (default) or Errata Tool RPM advisory (--errata)
 user-invocable: true
 allowed-tools: Bash
@@ -88,10 +88,10 @@ SCRIPTS_DIR=plugins/microshift-release/scripts
 ### Step 2a: Run Bootc Checks (default)
 
 ```bash
-bash $SCRIPTS_DIR/advisory_promotion.sh <version> [--prod] [--verbose]
+bash $SCRIPTS_DIR/advisory_promotion.sh <version> --prod [--verbose]
 ```
 
-Display stderr only if the script exits non-zero.
+Always pass `--prod` so that all checks run (stage and prod catalogs). Display stderr only if the script exits non-zero.
 
 ### Step 2b: Run Errata Tool Checks
 
@@ -103,7 +103,7 @@ Display stderr only if the script exits non-zero.
 
 ### Step 3: Display Output
 
-Display output **verbatim** — do not reformat, summarize, or add commentary. The script produces deterministic pre-formatted text.
+Paste the **complete stdout** of each script into the response as a code block. Every check line must be visible to the user. Do not summarize, abbreviate, or replace the output with commentary.
 
 ### Step 4: Handle Errors
 
@@ -180,7 +180,7 @@ All per-image checks run independently per variant (`{arch}_el{rhel}`). For vers
 | `et_rpms_present` | Builds | All expected MicroShift RPMs attached to advisory |
 | `et_rpms_product_listed` | Builds | MicroShift RPMs mapped to product version listings |
 | `et_cdn_staging` | Distribution | CDN staging push completed |
-| `et_cat_tests` | Distribution | External tests (CAT, rpmdiff) passing |
+| `et_cat_tests` | Distribution | RHN QA testing passed (rhnqa field) |
 
 ## Output Format
 
