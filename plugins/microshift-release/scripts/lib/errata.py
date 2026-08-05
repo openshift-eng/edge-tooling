@@ -174,6 +174,15 @@ def fetch_cdn_repos(advisory_id):
     return _et_get(f"erratum/{advisory_id}/cdn_repos")
 
 
+def fetch_push_status(advisory_id):
+    """Fetch push job status for an advisory.
+
+    Returns:
+        list of push dicts with target/status, or None.
+    """
+    return _et_get(f"erratum/{advisory_id}/push")
+
+
 def extract_microshift_nvrs(builds_data):
     """Extract MicroShift RPM filenames from the builds response.
 
