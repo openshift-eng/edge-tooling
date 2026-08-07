@@ -63,10 +63,10 @@ Downloads CI Doctor analysis artifacts (per-job reports, summaries, bug mappings
 
      where `<RELEASES>` is a comma-separated list of the releases found in the summary.
 
-   - **Create Jira bugs from the analysis**:
+   - **Search for bugs and draft suggestions**:
 
      ```text
-     /microshift-ci:create-bugs <VERSION> --create
+     /microshift-ci:find-regressions <VERSION>
      ```
 
    - **Read individual job reports** for deeper investigation:

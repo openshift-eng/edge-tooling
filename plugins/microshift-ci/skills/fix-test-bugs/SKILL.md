@@ -19,7 +19,7 @@ allowed-tools: Bash, Read, Write, Edit, Glob, Grep, Agent
 
 ## Description
 
-Given a list of releases or explicit JIRA bug keys, loads the merged candidates file produced by `/microshift-ci:create-bugs`, groups related bugs by shared root cause, evaluates eligibility, and attempts automated fixes in `test/`, `scripts/`, or `docs/` of openshift/microshift, opening one PR per group against `main` for human review. Changes to product code (`cmd/`, `pkg/`, `vendor/`, etc.) are never attempted.
+Given a list of releases or explicit JIRA bug keys, loads the merged candidates file produced by `/microshift-ci:find-regressions`, groups related bugs by shared root cause, evaluates eligibility, and attempts automated fixes in `test/`, `scripts/`, or `docs/` of openshift/microshift, opening one PR per group against `main` for human review. Changes to product code (`cmd/`, `pkg/`, `vendor/`, etc.) are never attempted.
 
 Operates in **fix mode by default** — shows which groups are eligible and attempts fixes. Publishing (PRs, branch cleanup) is blocked when `MICROSHIFT_CI_DRY_RUN=1` is set (typically in CI) — this is enforced deterministically, not just by convention (see Notes).
 
@@ -42,8 +42,8 @@ The repo clone lives at `<WORKDIR>/microshift/` (shared with other skills).
 
 ## Prerequisites
 
-- An existing workdir from a prior `/microshift-ci:create-bugs` run (today's date)
-- `bugs/bug-candidates-merged-*.json` must exist in the workdir (produced by `/microshift-ci:create-bugs`)
+- An existing workdir from a prior `/microshift-ci:find-regressions` run (today's date)
+- `bugs/bug-candidates-merged-*.json` must exist in the workdir (produced by `/microshift-ci:find-regressions`)
 - `gh` CLI authenticated with PR creation permissions
 - Git user must have a fork of openshift/microshift (for pushing branches)
 
@@ -71,7 +71,7 @@ Evaluated in order per **group** (a group is one merged candidate and all its JI
 
    ```text
    Error: no merged candidates file found in <WORKDIR>/bugs/
-   Run /microshift-ci:create-bugs first to generate the merged candidates.
+   Run /microshift-ci:find-regressions first to generate the merged candidates.
    ```
 
    If multiple files exist, read ALL of them and combine their candidates arrays.
@@ -204,6 +204,6 @@ Save the report to `<WORKDIR>/report-fix-test-bugs.txt` (overwrites the dry-run 
 
 ## Related Skills
 
-- **microshift-ci:create-bugs**: Creates JIRA bugs from CI analysis — produces the merged candidates file consumed by this skill
+- **microshift-ci:find-regressions**: Searches JIRA for pre-existing bugs — produces the merged candidates file consumed by this skill
 - **microshift-ci:close-stale-bugs**: Closes stale bugs that no longer match current CI failures
 - **run-doctor.py**: Deterministic pipeline script that orchestrates the CI analysis pipeline (runs `prow-job-analyzer` agents, bug correlation, and HTML report generation)

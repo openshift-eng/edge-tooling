@@ -47,7 +47,7 @@ JIRA_BASE = "https://issues.redhat.com"
 
 # Per-component settings for the "Create Bug in JIRA" button shown next to
 # every issue for quick manual bug filing. Fields mirror what the component's
-# create-bugs skill would use, so manually filed bugs stay trackable by the
+# find-regressions skill would use, so manually filed bugs stay trackable by the
 # existing tooling (Bugs tab query, close-stale-bugs). Components without an
 # entry get no button.
 COMPONENT_JIRA_CREATE = {

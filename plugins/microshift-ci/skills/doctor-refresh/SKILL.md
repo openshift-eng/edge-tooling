@@ -1,0 +1,108 @@
+---
+name: microshift-ci:doctor-refresh
+argument-hint: <release1,release2,...>
+description: Regenerate the CI Doctor HTML report from existing data
+user-invocable: true
+allowed-tools: Bash, Read, Glob
+---
+
+# microshift-ci:doctor-refresh
+
+## Synopsis
+
+```bash
+/microshift-ci:doctor-refresh <release1,release2,...>
+```
+
+## Description
+
+Regenerates the CI Doctor HTML report from existing data. Use this after `/microshift-ci:find-regressions` or `/microshift-ci:close-stale-bugs` to refresh the report with updated bug data.
+
+This is a lightweight operation: it does not re-analyze jobs, re-aggregate summaries, or re-query JIRA. It reads the existing bug mapping files and regenerates the HTML.
+
+## Arguments
+
+- `<ARGUMENTS>` (required): Comma-separated list of release versions (e.g., `4.19,4.20,4.21,4.22`)
+
+## Work Directory
+
+Compute once at the start by running `date +%y%m%d` and substituting into the path below. In all commands, replace `<WORKDIR>` with the computed path.
+
+```text
+/tmp/microshift-ci-claude-workdir.<YYMMDD>
+```
+
+## Implementation Steps
+
+### Step 1: Determine Workdir
+
+1. Compute today's `<WORKDIR>` by running `date +%y%m%d` and substituting into `/tmp/microshift-ci-claude-workdir.<YYMMDD>`.
+2. Verify the directory exists. If it does not:
+
+   ```text
+   Error: no workdir found at <WORKDIR>
+   Run the full doctor workflow first: /microshift-ci:doctor <releases>
+   ```
+
+### Step 2: Verify Bug Mapping Files
+
+1. Parse `<ARGUMENTS>` into a list of release versions.
+2. Check for rebase PR sources in the workdir by looking for `bugs/bug-candidates-rebase-release-*.json` files. Extract the source identifiers (e.g., `rebase-release-4.22`).
+3. Verify that `<WORKDIR>/bugs/bug-matches-<source>.json` exists for each release version and each rebase PR source.
+4. If any mapping files are missing, report which ones are missing and show an error:
+
+   ```text
+   Error: bug mapping files missing for: <sources>
+   Run the find-regressions workflow first: /microshift-ci:find-regressions <sources>
+   ```
+
+   Continue to Step 3 anyway — the HTML report will be generated with whatever data is available.
+
+**Do NOT** delete bug mapping files. **Do NOT** launch find-regressions agents. The mapping files are produced by the preceding `/microshift-ci:find-regressions` session.
+
+### Step 3: Check for Closed Bugs
+
+Read `<WORKDIR>/close-stale-bugs/closed-bugs.json`. If the file does not exist, skip this step — do not pass `--ignore` in Step 4. If the file exists but fails to parse as valid JSON, or the parsed object does not contain an array field named `closed`, log a warning and proceed as if the file were absent (do not set `IGNORE_KEYS`, do not pass `--ignore` in Step 4). If the `closed` array is present and non-empty, join the keys with commas to form an `IGNORE_KEYS` string (e.g., `USHIFT-1234,USHIFT-5678`).
+
+### Step 4: Regenerate HTML Report
+
+Run the refresh script:
+
+```text
+bash plugins/microshift-ci/scripts/doctor.sh refresh --component microshift --workdir <WORKDIR> [--ignore <IGNORE_KEYS>] <ARGUMENTS>
+```
+
+Include `--ignore <IGNORE_KEYS>` only if Step 3 produced a non-empty key list.
+
+### Step 5: Report Completion
+
+Display the path to the regenerated HTML report.
+
+## Examples
+
+### Example 1: Refresh After Bug Creation
+
+```bash
+/microshift-ci:doctor-refresh 4.19,4.20,4.21,4.22
+```
+
+### Example 2: Refresh a Single Release
+
+```bash
+/microshift-ci:doctor-refresh 4.22
+```
+
+## Prerequisites
+
+- An existing workdir from a prior `/microshift-ci:doctor` run
+- Bug mapping files from a prior `/microshift-ci:find-regressions` run
+
+## Related Skills
+
+- **microshift-ci:doctor**: Full CI analysis workflow (produces the initial HTML report)
+- **microshift-ci:find-regressions**: Bug search and ticket suggestions (produces the bug mapping files consumed by this skill)
+
+## Notes
+
+- This skill does NOT re-analyze jobs, re-aggregate summaries, or re-query JIRA — it only regenerates the HTML from existing data
+- Bug mapping files must already exist from a prior `/microshift-ci:find-regressions` run
