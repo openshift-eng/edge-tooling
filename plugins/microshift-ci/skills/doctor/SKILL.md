@@ -128,24 +128,21 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 
 ### Step 3: Search Jira and Categorize Failures
 
-**Goal**: Populate bug mapping files so the HTML report can render linked-bug tags and "Create Bug in JIRA" buttons. Failures are categorized as `linked` (matched an open bug), `suggest` (no match — recommend filing), or `skip` (infrastructure / stale regression).
+**Goal**: Populate bug mapping files (`<WORKDIR>/bugs/bug-matches-<source>.json`) so the HTML report renders linked-bug tags and "Create Bug in JIRA" buttons.
 
 **Actions**:
 
-1. Collect all release versions from `<ARGUMENTS>` into a comma-separated list (e.g., `4.19,4.20,4.21,4.22`)
-2. Check for rebase PR source identifiers from the PR jobs JSON (e.g., `rebase-release-4.22`). Append them to the source list.
-3. Launch a **single** `microshift-ci:find-regressions` **foreground** agent with all sources. The agent searches Jira only — it does not create or update tickets:
+1. Read `<WORKDIR>/jobs/prs-status.json`. For each entry whose `title` field contains `rebase-release-<version>`, record the source identifier `rebase-release-<version>`. If the file is empty or missing, skip this action (no rebase sources).
+2. Build the full source list: all release versions from `<ARGUMENTS>` plus any rebase source identifiers from the previous action (e.g., `4.19,4.20,4.21,4.22,rebase-release-4.22`).
+3. Launch a **single** **foreground** agent with the full source list:
 
    ```text
-   Agent: subagent_type=general_purpose, prompt="Run /microshift-ci:find-regressions <all-sources-comma-separated>"
+   Agent: subagent_type=general_purpose, prompt="Run /microshift-ci:find-regressions <full-source-list>"
    ```
 
-4. The agent produces (all under `<WORKDIR>/bugs/`):
-   - `bug-matches-<source>.json` for each source — bug mapping files consumed by `create-report.py` for the Bugs tab and "Create Bug" buttons (**required by Step 4**)
-   - `bug-candidates-merged-<SOURCE_TAG>.json` — deduplicated candidates with Jira data (consumed by `fix-test-bugs` and other downstream skills)
-   - `bug-results-<SOURCE_TAG>.json` — per-candidate categorization (`suggest`/`linked`/`skip`)
-   - `<WORKDIR>/report-find-regressions.txt` — human-readable search report
-5. When the agent returns, immediately proceed to Step 4 in the same turn. Do NOT stop or end your turn between Step 3 and Step 4.
+4. The agent writes `<WORKDIR>/bugs/bug-matches-<source>.json` for each source — **required by Step 4** for HTML generation.
+   Additional outputs (for downstream skills): `bug-candidates-merged-<SOURCE_TAG>.json`, `bug-results-<SOURCE_TAG>.json`, `report-find-regressions.txt`.
+5. Immediately proceed to Step 4 in the same turn. Do NOT stop or end your turn between Step 3 and Step 4.
 
 **Error Handling**:
 
