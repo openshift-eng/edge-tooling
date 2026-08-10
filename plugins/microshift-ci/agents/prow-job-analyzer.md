@@ -26,7 +26,7 @@ Respond with a valid JSON array only — no prose, no markdown fences. One objec
 
 ## Investigation Principles
 
-Read `plugins/microshift-ci/agents/references/microshift-ci-primer.md` first for artifact layout, scenario naming, and common failure patterns. Check the step diagram URL at the end of `build-log.txt` when identifying which step failed — not all fatal errors cause the current step to fail but may cause the next one to fail.
+Read `plugins/microshift-ci/agents/references/microshift-ci-primer.md` first — it covers artifact layout, scenario naming, sosreport handling, PCP metrics, source correlation, and common failure patterns. Check the step diagram URL at the end of `build-log.txt` when identifying which step failed — not all fatal errors cause the current step to fail but may cause the next one to fail.
 
 The first error found is the anchor for deduplication, not the conclusion of the investigation. Drill from symptom → mechanism → actionable cause, or record the evidence gap in `analysis_gaps`. A timeout is not a root cause — explain what was slow or absent. A crash is not a root cause — explain what triggered it.
 
@@ -34,23 +34,13 @@ The purpose of this analysis is to surface product defects. When a product compo
 
 Two `Created container` events for the same pod means the first instance died. Read `previous.log` for the exit reason before concluding a single-startup narrative.
 
-Journal files (`journal_*.log` next to the sosreport tarballs) are readable directly — check them first for service failures, OOM kills, panics, and container exits. Extract a sosreport with `bash plugins/shared/scripts/extract-sosreport.sh <tarball>` when the investigation requires pod/container logs, including crashes, restarts, readiness flaps, or repeated container creation — pod and container logs (especially `previous.log`) exist exclusively inside the tarball. Prefer the on-failure sosreport over end-of-scenario because test-created namespaces are cleaned up by then. Match sosreport to failure by timestamp.
+When the investigation requires pod/container logs (crashes, restarts, readiness flaps, or repeated container creation), extract a sosreport — see the primer for extraction commands and file locations. Prefer the on-failure sosreport over end-of-scenario. Match sosreport to failure by timestamp.
 
-When `graphs_dir` is provided and the failure involves timeouts, slowness, or resource pressure, read the JSON metric files (`cpu.json`, `mem.json`, `io.json`, `disk.json`) for CPU/memory/disk/IO correlation with the failure window. Look for sustained patterns (4+ consecutive samples), not isolated spikes.
+When `graphs_dir` is provided and the failure involves timeouts, slowness, or resource pressure, read the PCP metric JSON files for correlation with the failure window — see the primer for file names and interpretation guidance.
 
-When the source checkout is available at `source_dir`, read the failing test's source (Robot Framework suites under `test/suites/`, scenario definitions under `test/scenarios*/`) to distinguish test bugs from product bugs. If absent, note it in `analysis_gaps`.
+When `source_dir` is available, read the failing test's source to distinguish test bugs from product bugs. Use `repo-log.sh` (see primer) to list potentially related commits. If the source checkout is absent, note it in `analysis_gaps`.
 
 Use timeline ordering — not error-text similarity — to decide whether multiple scenario failures are cascading (one root cause) or independent.
-
-## Source Correlation
-
-When the source checkout is available, list potentially related commits:
-
-```text
-bash plugins/microshift-ci/scripts/repo-log.sh <SOURCE_DIR> --since <1_MONTH_BEFORE_FINISHED> --until <FINISHED_DATE> --paths test/
-```
-
-Derive `FINISHED_DATE` from `finished.json`. Drop `--paths` to see all changes. Name candidate commits in the causal chain when timing and touched paths match.
 
 ## JSON Schema
 
