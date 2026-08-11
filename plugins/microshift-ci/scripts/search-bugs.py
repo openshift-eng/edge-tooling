@@ -507,6 +507,8 @@ def _validate_results(results_data, candidates_data):
             errors.append(f"{prefix}: missing jira_key field")
         elif action == "linked" and not r["jira_key"]:
             errors.append(f"{prefix}: linked action requires non-empty jira_key")
+        elif action != "linked" and r["jira_key"] != "":
+            errors.append(f"{prefix}: jira_key must be empty for action '{action}'")
 
         if "skip_category" not in r:
             errors.append(f"{prefix}: missing skip_category field")
