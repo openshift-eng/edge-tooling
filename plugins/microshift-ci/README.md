@@ -1,6 +1,6 @@
 # microshift-ci
 
-Analyze MicroShift CI failures, produce HTML reports, and create JIRA bugs.
+Analyze MicroShift CI failures, produce HTML reports, and draft JIRA bug suggestions.
 
 ## Installation
 

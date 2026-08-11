@@ -17,7 +17,7 @@ allowed-tools: Bash, Read, Write, Glob, Grep, mcp__jira__jira_get_issue, mcp__ji
 
 ## Description
 
-Identifies and closes stale AI-generated JIRA bugs that are no longer relevant. The CI Doctor workflow creates bugs for CI failures, but some become stale when the underlying failures resolve themselves. This skill cleans up those orphaned bugs.
+Identifies and closes stale AI-generated JIRA bugs that are no longer relevant. The CI Doctor workflow searches for and drafts bug suggestions for CI failures, but some previously filed bugs become stale when the underlying failures resolve themselves. This skill cleans up those orphaned bugs.
 
 A bug is closed when **all** of the following are true:
 
