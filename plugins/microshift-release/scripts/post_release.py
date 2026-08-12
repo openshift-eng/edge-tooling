@@ -78,6 +78,7 @@ _CHECK_SECTIONS = {
     "pr_bootc_catalog_el10": "Bootc Images",
     "pr_rpms_customer_portal": "Errata (RPMs)",
     "pr_rpms_cdn": "Errata (RPMs)",
+    "pr_rpms_downloads": "RPMs",
     "pr_docs_published": "Documentation",
     "pr_lifecycle_listed": "Lifecycle",
     "pr_lifecycle_active": "Lifecycle",
@@ -85,7 +86,7 @@ _CHECK_SECTIONS = {
 
 _SECTION_ORDER = [
     "Errata (RPMs)", "Errata (Bootc Stage)", "Errata (Bootc Prod)",
-    "Bootc Images", "Documentation", "Lifecycle",
+    "RPMs", "Bootc Images", "Documentation", "Lifecycle",
 ]
 
 _DOCS_RELEASE_NOTES_URL = (
@@ -122,6 +123,7 @@ def _all_check_ids(version_info):
             "pr_errata_bootc_prod_found", "pr_errata_bootc_prod_shipped",
             "pr_errata_bootc_prod_images",
         ]
+    ids.append("pr_rpms_downloads")
     rhel_vers = _rhel_versions(version_info)
     for bc in _CHECKS_BOOTC:
         rhel_match = re.search(r"el(\d+)", bc)
@@ -464,6 +466,58 @@ def check_rpms_cdn(advisory, vpn_ok):
                  [f"Advisory: {advisory_name}"])
 
 
+_ERRATA_RPM_RE = re.compile(
+    r"(microshift[a-z0-9-]*)-\d+\.\d+\.\d+-[^\s<\"]+\.rpm"
+)
+
+_DOWNLOADS_URL = "https://access.redhat.com/downloads/content/{package}/{vr}/{arch}/{hash}/package"
+
+
+def check_rpms_downloads(errata_info, version_info):
+    """Verify expected RPMs are listed on the public errata page."""
+    check_id = "pr_rpms_downloads"
+
+    portal_url = (errata_info or {}).get("portal_url")
+    if not portal_url:
+        return _warn(check_id, "No errata URL available")
+
+    try:
+        resp = requests.get(portal_url, timeout=15, allow_redirects=True)
+        if resp.status_code != 200:
+            return _warn(check_id,
+                         f"Errata page returned HTTP {resp.status_code}",
+                         [f"URL: {portal_url}"])
+    except requests.RequestException as e:
+        return _warn(check_id, f"Could not fetch errata page: {e}",
+                     [f"URL: {portal_url}"])
+
+    page_packages = sorted(set(_ERRATA_RPM_RE.findall(resp.text)))
+    if not page_packages:
+        return _fail(check_id, "No MicroShift RPMs found on errata page",
+                     [f"URL: {portal_url}"])
+
+    expected = artifacts.get_expected_packages(version_info["minor"])
+    if expected is None:
+        return _warn(check_id,
+                     f"{len(page_packages)} packages on errata page "
+                     "(could not determine expected list)",
+                     [f"URL: {portal_url}",
+                      f"Found: {', '.join(page_packages)}"])
+
+    expected_set = set(expected)
+    missing = sorted(expected_set - set(page_packages))
+    if missing:
+        return _fail(check_id,
+                     f"{len(missing)} package(s) missing from errata page",
+                     [f"URL: {portal_url}",
+                      f"Missing: {', '.join(missing)}",
+                      f"Found: {', '.join(page_packages)}"])
+
+    return _pass(check_id,
+                 f"All {len(expected_set)} expected packages listed",
+                 [f"URL: {portal_url}"])
+
+
 def check_docs_published(version_info):
     """Release notes published on docs.redhat.com with version mentioned."""
     check_id = "pr_docs_published"
@@ -653,6 +707,11 @@ def run_post_release_checks(version_info):
             "pr_rpms_customer_portal"
         futures[ex.submit(check_rpms_cdn, rpms_advisory, vpn_ok)] = \
             "pr_rpms_cdn"
+
+        # RPM downloads check (public errata page)
+        futures[ex.submit(check_rpms_downloads,
+                          rpms_errata_info, version_info)] = \
+            "pr_rpms_downloads"
 
         # Lifecycle checks
         if version_info["z"] == 0:

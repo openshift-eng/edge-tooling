@@ -17,6 +17,7 @@ from post_release import (  # noqa: E402
     check_bootc_catalog,
     check_rpms_customer_portal,
     check_rpms_cdn,
+    check_rpms_downloads,
     check_docs_published,
     check_lifecycle_listed,
     check_lifecycle_active,
@@ -477,6 +478,50 @@ class TestRpmsCdn(unittest.TestCase):
         self.assertEqual(r["status"], "WARN")
 
 
+# ── RPM downloads ────────────────────────────────────────
+
+
+class TestRpmsDownloads(unittest.TestCase):
+    @patch("post_release.artifacts.get_expected_packages")
+    @patch("post_release.requests.get")
+    def test_all_found(self, mock_get, mock_expected):
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            text=("microshift-4.22.7-1.el9.x86_64.rpm "
+                  "microshift-selinux-4.22.7-1.el9.noarch.rpm"))
+        mock_expected.return_value = ["microshift", "microshift-selinux"]
+        r = check_rpms_downloads(_errata_info(), _version("4.22.7"))
+        self.assertEqual(r["status"], "PASS")
+        self.assertIn("All 2", r["reason"])
+
+    @patch("post_release.artifacts.get_expected_packages")
+    @patch("post_release.requests.get")
+    def test_missing_package(self, mock_get, mock_expected):
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            text="microshift-4.22.7-1.el9.x86_64.rpm")
+        mock_expected.return_value = ["microshift", "microshift-selinux"]
+        r = check_rpms_downloads(_errata_info(), _version("4.22.7"))
+        self.assertEqual(r["status"], "FAIL")
+        self.assertIn("1 package(s) missing", r["reason"])
+
+    @patch("post_release.requests.get")
+    def test_no_rpms_on_page(self, mock_get):
+        mock_get.return_value = MagicMock(status_code=200, text="<html></html>")
+        r = check_rpms_downloads(_errata_info(), _version("4.22.7"))
+        self.assertEqual(r["status"], "FAIL")
+
+    def test_no_errata(self):
+        r = check_rpms_downloads(None, _version("4.22.7"))
+        self.assertEqual(r["status"], "WARN")
+
+    @patch("post_release.requests.get")
+    def test_page_error(self, mock_get):
+        mock_get.return_value = MagicMock(status_code=500)
+        r = check_rpms_downloads(_errata_info(), _version("4.22.7"))
+        self.assertEqual(r["status"], "WARN")
+
+
 # ── Documentation ──────────────────────────────────────────────
 
 
@@ -620,6 +665,7 @@ class TestFormatting(unittest.TestCase):
             _pass("pr_errata_bootc_prod_found", "RHBA-2026:99999 (published )"),
             _pass("pr_errata_bootc_prod_shipped", "Published on "),
             _pass("pr_errata_bootc_prod_images", "RHBA-2026:99999 — 2 images verified"),
+            _pass("pr_rpms_downloads", "All 15 expected packages listed"),
             _pass("pr_bootc_catalog_el9", "Found in prod catalog (rhel9)"),
             _pass("pr_docs_published", "Release notes page accessible (4.21)"),
         ]
@@ -630,6 +676,7 @@ class TestFormatting(unittest.TestCase):
         self.assertIn("Errata (RPMs)", output)
         self.assertIn("Errata (Bootc Stage)", output)
         self.assertIn("Errata (Bootc Prod)", output)
+        self.assertIn("RPMs", output)
         self.assertIn("Bootc Images", output)
         self.assertIn("Documentation", output)
 
