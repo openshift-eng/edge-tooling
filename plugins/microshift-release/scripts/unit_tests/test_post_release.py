@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from post_release import (  # noqa: E402
     find_rpms_errata,
-    _bootc_errata_from_shipment,
+    _bootc_erratas_from_shipment,
     _check_errata_found,
     _check_errata_shipped,
     _check_bootc_errata_shipped,
@@ -107,13 +107,15 @@ class TestAllCheckIds(unittest.TestCase):
 
     def test_bootc_errata_included_418plus(self):
         ids = _all_check_ids(_version("4.21.7"))
-        self.assertIn("pr_errata_bootc_found", ids)
-        self.assertIn("pr_errata_bootc_shipped", ids)
+        self.assertIn("pr_errata_bootc_stage_found", ids)
+        self.assertIn("pr_errata_bootc_stage_shipped", ids)
+        self.assertIn("pr_errata_bootc_prod_found", ids)
+        self.assertIn("pr_errata_bootc_prod_shipped", ids)
 
     def test_bootc_errata_excluded_pre418(self):
         ids = _all_check_ids(_version("4.17.3"))
-        self.assertNotIn("pr_errata_bootc_found", ids)
-        self.assertNotIn("pr_errata_bootc_shipped", ids)
+        self.assertNotIn("pr_errata_bootc_stage_found", ids)
+        self.assertNotIn("pr_errata_bootc_prod_found", ids)
 
     def test_rpms_errata_always_included(self):
         ids = _all_check_ids(_version("4.17.3"))
@@ -236,31 +238,36 @@ def _shipment(stage_url=None, prod_url=None, found=True):
     }
 
 
-class TestBootcErrataFromShipment(unittest.TestCase):
-    def test_prefers_prod(self):
-        result = _bootc_errata_from_shipment(
+class TestBootcErratasFromShipment(unittest.TestCase):
+    def test_both_present(self):
+        stage, prod = _bootc_erratas_from_shipment(
             _shipment(
                 stage_url="https://access.stage.redhat.com/errata/RHBA-2026:91097",
                 prod_url="https://access.redhat.com/errata/RHBA-2026:47055"))
-        self.assertIsNotNone(result)
-        self.assertEqual(result["advisory_name"], "RHBA-2026:47055")
+        self.assertEqual(stage["advisory_name"], "RHBA-2026:91097")
+        self.assertEqual(prod["advisory_name"], "RHBA-2026:47055")
 
-    def test_falls_back_to_stage(self):
-        result = _bootc_errata_from_shipment(
+    def test_stage_only(self):
+        stage, prod = _bootc_erratas_from_shipment(
             _shipment(
                 stage_url="https://access.stage.redhat.com/errata/RHBA-2026:91097"))
-        self.assertIsNotNone(result)
-        self.assertEqual(result["advisory_name"], "RHBA-2026:91097")
+        self.assertEqual(stage["advisory_name"], "RHBA-2026:91097")
+        self.assertIsNone(prod)
 
     def test_no_shipment(self):
-        self.assertIsNone(_bootc_errata_from_shipment(None))
+        stage, prod = _bootc_erratas_from_shipment(None)
+        self.assertIsNone(stage)
+        self.assertIsNone(prod)
 
     def test_not_found(self):
-        self.assertIsNone(_bootc_errata_from_shipment(
-            _shipment(found=False)))
+        stage, prod = _bootc_erratas_from_shipment(_shipment(found=False))
+        self.assertIsNone(stage)
+        self.assertIsNone(prod)
 
     def test_no_urls(self):
-        self.assertIsNone(_bootc_errata_from_shipment(_shipment()))
+        stage, prod = _bootc_erratas_from_shipment(_shipment())
+        self.assertIsNone(stage)
+        self.assertIsNone(prod)
 
 
 # ── Bootc errata images ──────────────────────────────────
@@ -604,9 +611,11 @@ class TestFormatting(unittest.TestCase):
         return [
             _pass("pr_errata_rpms_found", "RHBA-2026:12345 (published 2026-07-29)"),
             _pass("pr_errata_rpms_shipped", "Status: SHIPPED_LIVE"),
-            _pass("pr_errata_bootc_found", "RHBA-2026:99999 (published 2026-07-29)"),
-            _pass("pr_errata_bootc_shipped", "Published on 2026-07-29"),
-            _pass("pr_errata_bootc_stage_images", "RHBA-2026:99999 — 2 images verified"),
+            _pass("pr_errata_bootc_stage_found", "RHBA-2026:91097 (published )"),
+            _pass("pr_errata_bootc_stage_shipped", "Published on "),
+            _pass("pr_errata_bootc_stage_images", "RHBA-2026:91097 — 2 images verified"),
+            _pass("pr_errata_bootc_prod_found", "RHBA-2026:99999 (published )"),
+            _pass("pr_errata_bootc_prod_shipped", "Published on "),
             _pass("pr_errata_bootc_prod_images", "RHBA-2026:99999 — 2 images verified"),
             _pass("pr_bootc_catalog_el9", "Found in prod catalog (rhel9)"),
             _fail("pr_rpms_customer_portal", "HTTP 404",
@@ -619,7 +628,8 @@ class TestFormatting(unittest.TestCase):
         output = format_text_short("4.21.7", self._sample_results())
         self.assertIn("Post-Release Verification: 4.21.7", output)
         self.assertIn("Errata (RPMs)", output)
-        self.assertIn("Errata (Bootc)", output)
+        self.assertIn("Errata (Bootc Stage)", output)
+        self.assertIn("Errata (Bootc Prod)", output)
         self.assertIn("Bootc Images", output)
         self.assertIn("RPMs", output)
         self.assertIn("Documentation", output)
@@ -629,7 +639,8 @@ class TestFormatting(unittest.TestCase):
                                   _version())
         self.assertIn("# Post-Release Verification", output)
         self.assertIn("## Errata (RPMs)", output)
-        self.assertIn("## Errata (Bootc)", output)
+        self.assertIn("## Errata (Bootc Stage)", output)
+        self.assertIn("## Errata (Bootc Prod)", output)
         self.assertIn("**Summary:**", output)
 
 
