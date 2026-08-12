@@ -76,8 +76,8 @@ _CHECK_SECTIONS = {
     "pr_errata_bootc_prod_images": "Errata (Bootc Prod)",
     "pr_bootc_catalog_el9": "Bootc Images",
     "pr_bootc_catalog_el10": "Bootc Images",
-    "pr_rpms_customer_portal": "RPMs",
-    "pr_rpms_cdn": "RPMs",
+    "pr_rpms_customer_portal": "Errata (RPMs)",
+    "pr_rpms_cdn": "Errata (RPMs)",
     "pr_docs_published": "Documentation",
     "pr_lifecycle_listed": "Lifecycle",
     "pr_lifecycle_active": "Lifecycle",
@@ -85,7 +85,7 @@ _CHECK_SECTIONS = {
 
 _SECTION_ORDER = [
     "Errata (RPMs)", "Errata (Bootc Stage)", "Errata (Bootc Prod)",
-    "Bootc Images", "RPMs", "Documentation", "Lifecycle",
+    "Bootc Images", "Documentation", "Lifecycle",
 ]
 
 _DOCS_RELEASE_NOTES_URL = (
@@ -111,7 +111,10 @@ def _has_bootc(version_info):
 
 def _all_check_ids(version_info):
     """Return the ordered list of check IDs applicable to this version."""
-    ids = ["pr_errata_rpms_found", "pr_errata_rpms_shipped"]
+    ids = [
+        "pr_errata_rpms_found", "pr_errata_rpms_shipped",
+        "pr_rpms_customer_portal", "pr_rpms_cdn",
+    ]
     if _has_bootc(version_info):
         ids += [
             "pr_errata_bootc_stage_found", "pr_errata_bootc_stage_shipped",
@@ -125,7 +128,6 @@ def _all_check_ids(version_info):
         if rhel_match and int(rhel_match.group(1)) not in rhel_vers:
             continue
         ids.append(bc)
-    ids.extend(_CHECKS_RPMS)
     ids.extend(_CHECKS_DOCS)
     if version_info["z"] == 0:
         ids.extend(_CHECKS_LIFECYCLE)

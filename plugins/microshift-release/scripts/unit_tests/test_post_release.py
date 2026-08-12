@@ -611,6 +611,9 @@ class TestFormatting(unittest.TestCase):
         return [
             _pass("pr_errata_rpms_found", "RHBA-2026:12345 (published 2026-07-29)"),
             _pass("pr_errata_rpms_shipped", "Status: SHIPPED_LIVE"),
+            _fail("pr_rpms_customer_portal", "HTTP 404",
+                  ["URL: https://access.redhat.com/errata/..."]),
+            _warn("pr_rpms_cdn", "VPN required for CDN repo check"),
             _pass("pr_errata_bootc_stage_found", "RHBA-2026:91097 (published )"),
             _pass("pr_errata_bootc_stage_shipped", "Published on "),
             _pass("pr_errata_bootc_stage_images", "RHBA-2026:91097 — 2 images verified"),
@@ -618,9 +621,6 @@ class TestFormatting(unittest.TestCase):
             _pass("pr_errata_bootc_prod_shipped", "Published on "),
             _pass("pr_errata_bootc_prod_images", "RHBA-2026:99999 — 2 images verified"),
             _pass("pr_bootc_catalog_el9", "Found in prod catalog (rhel9)"),
-            _fail("pr_rpms_customer_portal", "HTTP 404",
-                  ["URL: https://access.redhat.com/errata/..."]),
-            _warn("pr_rpms_cdn", "VPN required for CDN repo check"),
             _pass("pr_docs_published", "Release notes page accessible (4.21)"),
         ]
 
@@ -631,7 +631,6 @@ class TestFormatting(unittest.TestCase):
         self.assertIn("Errata (Bootc Stage)", output)
         self.assertIn("Errata (Bootc Prod)", output)
         self.assertIn("Bootc Images", output)
-        self.assertIn("RPMs", output)
         self.assertIn("Documentation", output)
 
     def test_full_format(self):
