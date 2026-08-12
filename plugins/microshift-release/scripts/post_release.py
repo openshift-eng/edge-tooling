@@ -292,7 +292,7 @@ _ERRATA_URL_PATTERN = re.compile(
 
 def _extract_errata_id(url):
     """Extract advisory ID from an errata URL."""
-    if not url:
+    if not url or not isinstance(url, str):
         return None
     m = _ERRATA_URL_PATTERN.match(url)
     return m.group(1) if m else None
@@ -304,7 +304,10 @@ def check_bootc_errata_images(check_id, errata_url, advisory_details):
         return _warn(check_id, "No errata URL available")
 
     errata_id = _extract_errata_id(errata_url)
-    label = errata_id or errata_url
+    if not errata_id:
+        return _warn(check_id, "Errata URL not recognized",
+                     [f"URL: {errata_url}"])
+    label = errata_id
 
     if advisory_details is None or not advisory_details.get("images"):
         return _warn(check_id,
