@@ -9,11 +9,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from post_release import (  # noqa: E402
     find_rpms_errata,
-    find_bootc_errata,
+    _bootc_errata_from_shipment,
     _check_errata_found,
     _check_errata_shipped,
     _check_bootc_errata_shipped,
-    check_bootc_errata_id_match,
     check_bootc_errata_images,
     check_bootc_catalog,
     check_rpms_customer_portal,
@@ -237,35 +236,31 @@ def _shipment(stage_url=None, prod_url=None, found=True):
     }
 
 
-class TestBootcErrataIdMatch(unittest.TestCase):
-    def test_matches_prod(self):
-        r = check_bootc_errata_id_match(
-            _errata_info(advisory_name="RHBA-2026:47055"),
-            _shipment(prod_url="https://access.redhat.com/errata/RHBA-2026:47055"))
-        self.assertEqual(r["status"], "PASS")
+class TestBootcErrataFromShipment(unittest.TestCase):
+    def test_prefers_prod(self):
+        result = _bootc_errata_from_shipment(
+            _shipment(
+                stage_url="https://access.stage.redhat.com/errata/RHBA-2026:91097",
+                prod_url="https://access.redhat.com/errata/RHBA-2026:47055"))
+        self.assertIsNotNone(result)
+        self.assertEqual(result["advisory_name"], "RHBA-2026:47055")
 
-    def test_mismatch(self):
-        r = check_bootc_errata_id_match(
-            _errata_info(advisory_name="RHBA-2026:47055"),
-            _shipment(prod_url="https://access.redhat.com/errata/RHBA-2026:99999"))
-        self.assertEqual(r["status"], "FAIL")
+    def test_falls_back_to_stage(self):
+        result = _bootc_errata_from_shipment(
+            _shipment(
+                stage_url="https://access.stage.redhat.com/errata/RHBA-2026:91097"))
+        self.assertIsNotNone(result)
+        self.assertEqual(result["advisory_name"], "RHBA-2026:91097")
 
     def test_no_shipment(self):
-        r = check_bootc_errata_id_match(
-            _errata_info(advisory_name="RHBA-2026:47055"), None)
-        self.assertEqual(r["status"], "WARN")
+        self.assertIsNone(_bootc_errata_from_shipment(None))
 
-    def test_no_bootc_errata(self):
-        r = check_bootc_errata_id_match(
-            None,
-            _shipment(prod_url="https://access.redhat.com/errata/RHBA-2026:47055"))
-        self.assertEqual(r["status"], "WARN")
+    def test_not_found(self):
+        self.assertIsNone(_bootc_errata_from_shipment(
+            _shipment(found=False)))
 
-    def test_no_urls_in_shipment(self):
-        r = check_bootc_errata_id_match(
-            _errata_info(advisory_name="RHBA-2026:47055"),
-            _shipment())
-        self.assertEqual(r["status"], "WARN")
+    def test_no_urls(self):
+        self.assertIsNone(_bootc_errata_from_shipment(_shipment()))
 
 
 # ── Bootc errata images ──────────────────────────────────
@@ -598,68 +593,6 @@ class TestFindRpmsErrata(unittest.TestCase):
         self.assertIn("timeout", result["error"])
 
 
-class TestFindBootcErrata(unittest.TestCase):
-    @patch("post_release.requests.get")
-    def test_found_by_minor(self, mock_get):
-        mock_get.return_value = MagicMock(
-            status_code=200,
-            json=lambda: {
-                "response": {
-                    "docs": [{
-                        "portal_synopsis": (
-                            "Red Hat build of MicroShift 4.21, "
-                            "image mode for RHEL"
-                        ),
-                        "uri": "konflux_RHBA-2026:99999",
-                        "portal_publication_date": "2026-07-29T10:00:00Z",
-                    }]
-                }
-            },
-        )
-        result = find_bootc_errata("4.21.7", "4.21")
-        self.assertIsNotNone(result)
-        self.assertEqual(result["advisory_name"], "RHBA-2026:99999")
-
-    @patch("post_release.requests.get")
-    def test_date_match(self, mock_get):
-        mock_get.return_value = MagicMock(
-            status_code=200,
-            json=lambda: {
-                "response": {
-                    "docs": [
-                        {
-                            "portal_synopsis": (
-                                "Red Hat build of MicroShift 4.21, "
-                                "image mode for RHEL"
-                            ),
-                            "uri": "konflux_RHBA-2026:99999",
-                            "portal_publication_date": "2026-07-29T10:00:00Z",
-                        },
-                        {
-                            "portal_synopsis": (
-                                "Red Hat build of MicroShift 4.21, "
-                                "image mode for RHEL"
-                            ),
-                            "uri": "konflux_RHBA-2026:88888",
-                            "portal_publication_date": "2026-07-15T10:00:00Z",
-                        },
-                    ]
-                }
-            },
-        )
-        result = find_bootc_errata("4.21.7", "4.21",
-                                   rpms_errata_date="2026-07-15")
-        self.assertIsNotNone(result)
-        self.assertEqual(result["advisory_name"], "RHBA-2026:88888")
-
-    @patch("post_release.requests.get")
-    def test_not_found(self, mock_get):
-        mock_get.return_value = MagicMock(
-            status_code=200,
-            json=lambda: {"response": {"docs": []}},
-        )
-        result = find_bootc_errata("4.21.99", "4.21")
-        self.assertIsNone(result)
 
 
 # ── Formatting ─────────────────────────────────────────────────
@@ -673,7 +606,6 @@ class TestFormatting(unittest.TestCase):
             _pass("pr_errata_rpms_shipped", "Status: SHIPPED_LIVE"),
             _pass("pr_errata_bootc_found", "RHBA-2026:99999 (published 2026-07-29)"),
             _pass("pr_errata_bootc_shipped", "Published on 2026-07-29"),
-            _pass("pr_errata_bootc_id_match", "Matches shipment (prod: RHBA-2026:99999)"),
             _pass("pr_errata_bootc_stage_images", "RHBA-2026:99999 — 2 images verified"),
             _pass("pr_errata_bootc_prod_images", "RHBA-2026:99999 — 2 images verified"),
             _pass("pr_bootc_catalog_el9", "Found in prod catalog (rhel9)"),
