@@ -40,6 +40,9 @@ _CHECKS_ERRATA = [
     "pr_errata_rpms_shipped",
     "pr_errata_bootc_found",
     "pr_errata_bootc_shipped",
+    "pr_errata_bootc_id_match",
+    "pr_errata_bootc_stage_images",
+    "pr_errata_bootc_prod_images",
 ]
 
 _CHECKS_BOOTC = [
@@ -66,6 +69,9 @@ _CHECK_SECTIONS = {
     "pr_errata_rpms_shipped": "Errata (RPMs)",
     "pr_errata_bootc_found": "Errata (Bootc)",
     "pr_errata_bootc_shipped": "Errata (Bootc)",
+    "pr_errata_bootc_id_match": "Errata (Bootc)",
+    "pr_errata_bootc_stage_images": "Errata (Bootc)",
+    "pr_errata_bootc_prod_images": "Errata (Bootc)",
     "pr_bootc_catalog_el9": "Bootc Images",
     "pr_bootc_catalog_el10": "Bootc Images",
     "pr_rpms_customer_portal": "RPMs",
@@ -105,7 +111,11 @@ def _all_check_ids(version_info):
     """Return the ordered list of check IDs applicable to this version."""
     ids = ["pr_errata_rpms_found", "pr_errata_rpms_shipped"]
     if _has_bootc(version_info):
-        ids += ["pr_errata_bootc_found", "pr_errata_bootc_shipped"]
+        ids += [
+            "pr_errata_bootc_found", "pr_errata_bootc_shipped",
+            "pr_errata_bootc_id_match",
+            "pr_errata_bootc_stage_images", "pr_errata_bootc_prod_images",
+        ]
     rhel_vers = _rhel_versions(version_info)
     for bc in _CHECKS_BOOTC:
         rhel_match = re.search(r"el(\d+)", bc)
@@ -273,6 +283,99 @@ def _check_bootc_errata_shipped(errata_info):
     return _pass(check_id, f"Published on {date}",
                  [f"Advisory: {name}",
                   f"URL: {errata_info.get('portal_url', '?')}"])
+
+
+_ERRATA_URL_PATTERN = re.compile(
+    r"^https://access\.(?:stage\.)?redhat\.com/errata/(RH[A-Z]A-\d{4}:\d+)$"
+)
+
+
+def _extract_errata_id(url):
+    """Extract advisory ID from an errata URL."""
+    if not url:
+        return None
+    m = _ERRATA_URL_PATTERN.match(url)
+    return m.group(1) if m else None
+
+
+def check_bootc_errata_id_match(bootc_errata_info, shipment):
+    """Hydra-discovered bootc errata ID matches the shipment MR errata."""
+    check_id = "pr_errata_bootc_id_match"
+    if bootc_errata_info is None or bootc_errata_info.get("error"):
+        return _warn(check_id, "No bootc errata from Hydra to compare")
+    if shipment is None or shipment.get("skipped") or not shipment.get("found"):
+        return _warn(check_id, "Shipment MR unavailable",
+                     ["Requires GITLAB_API_TOKEN and VPN"])
+
+    hydra_id = bootc_errata_info.get("advisory_name", "")
+    stage_id = _extract_errata_id(shipment.get("stage_errata_url"))
+    prod_id = _extract_errata_id(shipment.get("prod_errata_url"))
+
+    matches = []
+    mismatches = []
+    if stage_id:
+        if stage_id == hydra_id:
+            matches.append(f"stage: {stage_id}")
+        else:
+            mismatches.append(f"stage: {stage_id} (Hydra: {hydra_id})")
+    if prod_id:
+        if prod_id == hydra_id:
+            matches.append(f"prod: {prod_id}")
+        else:
+            mismatches.append(f"prod: {prod_id} (Hydra: {hydra_id})")
+
+    if not stage_id and not prod_id:
+        return _warn(check_id, "No errata URLs in shipment MR")
+
+    if mismatches:
+        return _fail(check_id,
+                     f"Errata ID mismatch: {', '.join(mismatches)}",
+                     [f"Hydra: {hydra_id}"] + mismatches)
+
+    return _pass(check_id,
+                 f"Matches shipment ({', '.join(matches)})",
+                 [f"Hydra: {hydra_id}"])
+
+
+def check_bootc_errata_images(check_id, errata_url, advisory_details):
+    """Errata page images match advisory.yaml images."""
+    if not errata_url:
+        return _warn(check_id, "No errata URL available")
+
+    errata_id = _extract_errata_id(errata_url)
+    label = errata_id or errata_url
+
+    if advisory_details is None or not advisory_details.get("images"):
+        return _warn(check_id,
+                     f"{label} — advisory images unavailable for comparison")
+
+    errata_images = artifacts.fetch_errata_images(errata_url)
+    if errata_images is None:
+        return _warn(check_id,
+                     f"{label} — could not fetch errata page or no images found",
+                     [f"URL: {errata_url}"])
+
+    errata_shas = {img["sha"] for img in errata_images}
+    advisory_shas = {img["sha"] for img in advisory_details["images"]
+                     if img.get("sha")}
+
+    missing = advisory_shas - errata_shas
+    if missing:
+        details = [f"URL: {errata_url}",
+                   f"Advisory: {len(advisory_shas)}, Errata: {len(errata_shas)}"]
+        for sha in sorted(missing):
+            for img in advisory_details["images"]:
+                if img.get("sha") == sha:
+                    details.append(
+                        f"Missing: {img.get('arch_key', '?')} sha256:{sha[:12]}")
+                    break
+        return _fail(check_id,
+                     f"{label} — {len(missing)} image(s) not in errata",
+                     details)
+
+    return _pass(check_id,
+                 f"{label} — {len(advisory_shas)} images verified",
+                 [f"URL: {errata_url}"])
 
 
 def check_bootc_catalog(rhel, version_info):
@@ -489,10 +592,13 @@ def run_post_release_checks(version_info):
         # Errata searches (Hydra — public internet)
         rpms_errata_future = ex.submit(find_rpms_errata, version, minor)
         bootc_errata_future = None
+        shipment_future = None
         if has_bootc:
             bootc_errata_future = ex.submit(
                 find_bootc_errata, version, minor
             )
+            logger.info("Fetching shipment MR for %s...", version)
+            shipment_future = ex.submit(artifacts.fetch_shipment_mr, version)
 
         # Bootc catalog checks
         futures[ex.submit(check_bootc_catalog, 9, version_info)] = \
@@ -530,14 +636,32 @@ def run_post_release_checks(version_info):
                 bootc_errata_info = bootc_errata_future.result()
             except Exception as exc:
                 logger.exception("Bootc errata search raised unexpected error")
-            # Re-search with RPM errata date for better matching
             rpms_date = (rpms_errata_info or {}).get("publication_date")
             if rpms_date and bootc_errata_info and not bootc_errata_info.get("error"):
                 bootc_errata_info = find_bootc_errata(
                     version, minor, rpms_errata_date=rpms_date
                 )
 
-        # Fetch ET advisories (VPN)
+        # Wait for shipment MR and fetch advisory.yaml
+        shipment = None
+        advisory_details = None
+        if shipment_future is not None:
+            try:
+                shipment = shipment_future.result()
+            except Exception as exc:
+                logger.warning("Shipment MR fetch failed: %s", exc)
+            if shipment and shipment.get("found"):
+                advisory_url = shipment.get("stage_advisory_url")
+                if advisory_url:
+                    logger.info("Fetching advisory YAML...")
+                    try:
+                        advisory_details = artifacts.fetch_advisory_details(
+                            advisory_url
+                        )
+                    except Exception as exc:
+                        logger.warning("Advisory YAML fetch failed: %s", exc)
+
+        # Fetch ET advisories (VPN — RPMs only, bootc uses Hydra)
         rpms_advisory = None
         if vpn_ok and rpms_errata_info and rpms_errata_info.get("advisory_name"):
             logger.info("Fetching RPM advisory from Errata Tool...")
@@ -558,8 +682,7 @@ def run_post_release_checks(version_info):
             rpms_advisory, rpms_errata_info, vpn_ok
         )] = "pr_errata_rpms_shipped"
 
-        # Bootc errata checks (Konflux erratas are not in ET —
-        # Hydra presence is the verification signal)
+        # Bootc errata checks
         if has_bootc:
             futures[ex.submit(
                 _check_errata_found, "pr_errata_bootc_found",
@@ -568,6 +691,17 @@ def run_post_release_checks(version_info):
             futures[ex.submit(
                 _check_bootc_errata_shipped, bootc_errata_info
             )] = "pr_errata_bootc_shipped"
+            futures[ex.submit(
+                check_bootc_errata_id_match, bootc_errata_info, shipment
+            )] = "pr_errata_bootc_id_match"
+            futures[ex.submit(
+                check_bootc_errata_images, "pr_errata_bootc_stage_images",
+                (shipment or {}).get("stage_errata_url"), advisory_details
+            )] = "pr_errata_bootc_stage_images"
+            futures[ex.submit(
+                check_bootc_errata_images, "pr_errata_bootc_prod_images",
+                (shipment or {}).get("prod_errata_url"), advisory_details
+            )] = "pr_errata_bootc_prod_images"
 
         # RPM checks (depend on RPM errata info)
         futures[ex.submit(check_rpms_customer_portal,

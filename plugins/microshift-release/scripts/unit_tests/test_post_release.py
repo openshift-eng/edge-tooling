@@ -13,6 +13,8 @@ from post_release import (  # noqa: E402
     _check_errata_found,
     _check_errata_shipped,
     _check_bootc_errata_shipped,
+    check_bootc_errata_id_match,
+    check_bootc_errata_images,
     check_bootc_catalog,
     check_rpms_customer_portal,
     check_rpms_cdn,
@@ -221,6 +223,103 @@ class TestBootcErrataShipped(unittest.TestCase):
 
     def test_search_error(self):
         r = _check_bootc_errata_shipped({"error": "timeout"})
+        self.assertEqual(r["status"], "WARN")
+
+
+# ── Bootc errata ID match ────────────────────────────────
+
+
+def _shipment(stage_url=None, prod_url=None, found=True):
+    return {
+        "found": found,
+        "stage_errata_url": stage_url,
+        "prod_errata_url": prod_url,
+    }
+
+
+class TestBootcErrataIdMatch(unittest.TestCase):
+    def test_matches_prod(self):
+        r = check_bootc_errata_id_match(
+            _errata_info(advisory_name="RHBA-2026:47055"),
+            _shipment(prod_url="https://access.redhat.com/errata/RHBA-2026:47055"))
+        self.assertEqual(r["status"], "PASS")
+
+    def test_mismatch(self):
+        r = check_bootc_errata_id_match(
+            _errata_info(advisory_name="RHBA-2026:47055"),
+            _shipment(prod_url="https://access.redhat.com/errata/RHBA-2026:99999"))
+        self.assertEqual(r["status"], "FAIL")
+
+    def test_no_shipment(self):
+        r = check_bootc_errata_id_match(
+            _errata_info(advisory_name="RHBA-2026:47055"), None)
+        self.assertEqual(r["status"], "WARN")
+
+    def test_no_bootc_errata(self):
+        r = check_bootc_errata_id_match(
+            None,
+            _shipment(prod_url="https://access.redhat.com/errata/RHBA-2026:47055"))
+        self.assertEqual(r["status"], "WARN")
+
+    def test_no_urls_in_shipment(self):
+        r = check_bootc_errata_id_match(
+            _errata_info(advisory_name="RHBA-2026:47055"),
+            _shipment())
+        self.assertEqual(r["status"], "WARN")
+
+
+# ── Bootc errata images ──────────────────────────────────
+
+
+def _advisory_details(shas=None):
+    if shas is None:
+        shas = ["aaa", "bbb"]
+    return {
+        "images": [{"sha": s, "arch_key": f"arch{i}"}
+                   for i, s in enumerate(shas)]
+    }
+
+
+class TestBootcErrataImages(unittest.TestCase):
+    @patch("post_release.artifacts.fetch_errata_images")
+    def test_all_match(self, mock_fetch):
+        mock_fetch.return_value = [{"rhel": 9, "sha": "aaa"},
+                                   {"rhel": 9, "sha": "bbb"}]
+        r = check_bootc_errata_images(
+            "pr_errata_bootc_stage_images",
+            "https://access.stage.redhat.com/errata/RHBA-2026:47055",
+            _advisory_details(["aaa", "bbb"]))
+        self.assertEqual(r["status"], "PASS")
+        self.assertIn("2 images verified", r["reason"])
+
+    @patch("post_release.artifacts.fetch_errata_images")
+    def test_missing_image(self, mock_fetch):
+        mock_fetch.return_value = [{"rhel": 9, "sha": "aaa"}]
+        r = check_bootc_errata_images(
+            "pr_errata_bootc_prod_images",
+            "https://access.redhat.com/errata/RHBA-2026:47055",
+            _advisory_details(["aaa", "bbb"]))
+        self.assertEqual(r["status"], "FAIL")
+        self.assertIn("1 image(s) not in errata", r["reason"])
+
+    def test_no_url(self):
+        r = check_bootc_errata_images(
+            "pr_errata_bootc_stage_images", None, _advisory_details())
+        self.assertEqual(r["status"], "WARN")
+
+    def test_no_advisory(self):
+        r = check_bootc_errata_images(
+            "pr_errata_bootc_stage_images",
+            "https://access.redhat.com/errata/RHBA-2026:47055", None)
+        self.assertEqual(r["status"], "WARN")
+
+    @patch("post_release.artifacts.fetch_errata_images")
+    def test_fetch_failed(self, mock_fetch):
+        mock_fetch.return_value = None
+        r = check_bootc_errata_images(
+            "pr_errata_bootc_stage_images",
+            "https://access.redhat.com/errata/RHBA-2026:47055",
+            _advisory_details())
         self.assertEqual(r["status"], "WARN")
 
 
@@ -573,7 +672,10 @@ class TestFormatting(unittest.TestCase):
             _pass("pr_errata_rpms_found", "RHBA-2026:12345 (published 2026-07-29)"),
             _pass("pr_errata_rpms_shipped", "Status: SHIPPED_LIVE"),
             _pass("pr_errata_bootc_found", "RHBA-2026:99999 (published 2026-07-29)"),
-            _pass("pr_errata_bootc_shipped", "Status: SHIPPED_LIVE"),
+            _pass("pr_errata_bootc_shipped", "Published on 2026-07-29"),
+            _pass("pr_errata_bootc_id_match", "Matches shipment (prod: RHBA-2026:99999)"),
+            _pass("pr_errata_bootc_stage_images", "RHBA-2026:99999 — 2 images verified"),
+            _pass("pr_errata_bootc_prod_images", "RHBA-2026:99999 — 2 images verified"),
             _pass("pr_bootc_catalog_el9", "Found in prod catalog (rhel9)"),
             _fail("pr_rpms_customer_portal", "HTTP 404",
                   ["URL: https://access.redhat.com/errata/..."]),
