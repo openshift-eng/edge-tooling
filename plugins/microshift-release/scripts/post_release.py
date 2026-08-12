@@ -740,7 +740,7 @@ def run_post_release_checks(version_info):
 
 
 def _section_line(title):
-    return f"── {title} " + "─" * max(1, 60 - len(title) - 4)
+    return f"── {title} " + "─" * max(1, 80 - len(title) - 4)
 
 
 def format_text_short(version, results):
