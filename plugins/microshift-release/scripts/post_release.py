@@ -232,7 +232,7 @@ def _check_errata_found(check_id, label, errata_info):
 
 
 def _check_errata_shipped(check_id, advisory, errata_info, vpn_ok):
-    """Advisory has reached SHIPPED_LIVE status."""
+    """RPM advisory has reached SHIPPED_LIVE status (requires ET API)."""
     if not vpn_ok:
         if errata_info and not errata_info.get("error"):
             return _warn(check_id,
@@ -258,6 +258,21 @@ def _check_errata_shipped(check_id, advisory, errata_info, vpn_ok):
     return _fail(check_id, f"Status: {status} — expected SHIPPED_LIVE",
                  [f"Advisory: {advisory_name}",
                   f"Current: {status}"])
+
+
+def _check_bootc_errata_shipped(errata_info):
+    """Bootc errata is published. Konflux erratas are not in the Errata Tool,
+    so Hydra presence is the verification signal."""
+    check_id = "pr_errata_bootc_shipped"
+    if errata_info is None:
+        return _fail(check_id, "No bootc errata found to verify")
+    if "error" in errata_info:
+        return _warn(check_id, f"Could not verify: {errata_info['error']}")
+    name = errata_info.get("advisory_name", "?")
+    date = errata_info.get("publication_date", "?")
+    return _pass(check_id, f"Published on {date}",
+                 [f"Advisory: {name}",
+                  f"URL: {errata_info.get('portal_url', '?')}"])
 
 
 def check_bootc_catalog(rhel, version_info):
@@ -533,18 +548,6 @@ def run_post_release_checks(version_info):
             except Exception as exc:
                 logger.warning("Failed to fetch RPM advisory: %s", exc)
 
-        bootc_advisory = None
-        if (vpn_ok and has_bootc
-                and bootc_errata_info
-                and bootc_errata_info.get("advisory_name")):
-            logger.info("Fetching bootc advisory from Errata Tool...")
-            try:
-                bootc_advisory = errata.fetch_advisory(
-                    bootc_errata_info["advisory_name"]
-                )
-            except Exception as exc:
-                logger.warning("Failed to fetch bootc advisory: %s", exc)
-
         # RPM errata checks
         futures[ex.submit(
             _check_errata_found, "pr_errata_rpms_found",
@@ -555,15 +558,15 @@ def run_post_release_checks(version_info):
             rpms_advisory, rpms_errata_info, vpn_ok
         )] = "pr_errata_rpms_shipped"
 
-        # Bootc errata checks
+        # Bootc errata checks (Konflux erratas are not in ET —
+        # Hydra presence is the verification signal)
         if has_bootc:
             futures[ex.submit(
                 _check_errata_found, "pr_errata_bootc_found",
                 "bootc images", bootc_errata_info
             )] = "pr_errata_bootc_found"
             futures[ex.submit(
-                _check_errata_shipped, "pr_errata_bootc_shipped",
-                bootc_advisory, bootc_errata_info, vpn_ok
+                _check_bootc_errata_shipped, bootc_errata_info
             )] = "pr_errata_bootc_shipped"
 
         # RPM checks (depend on RPM errata info)

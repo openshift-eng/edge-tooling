@@ -12,6 +12,7 @@ from post_release import (  # noqa: E402
     find_bootc_errata,
     _check_errata_found,
     _check_errata_shipped,
+    _check_bootc_errata_shipped,
     check_bootc_catalog,
     check_rpms_customer_portal,
     check_rpms_cdn,
@@ -203,6 +204,23 @@ class TestErrataShipped(unittest.TestCase):
     def test_no_errata_info(self):
         r = _check_errata_shipped("pr_errata_rpms_shipped",
                                   None, None, vpn_ok=True)
+        self.assertEqual(r["status"], "WARN")
+
+
+class TestBootcErrataShipped(unittest.TestCase):
+    def test_published(self):
+        r = _check_bootc_errata_shipped(
+            _errata_info(advisory_name="RHBA-2026:47055",
+                         publication_date="2026-07-28"))
+        self.assertEqual(r["status"], "PASS")
+        self.assertIn("2026-07-28", r["reason"])
+
+    def test_not_found(self):
+        r = _check_bootc_errata_shipped(None)
+        self.assertEqual(r["status"], "FAIL")
+
+    def test_search_error(self):
+        r = _check_bootc_errata_shipped({"error": "timeout"})
         self.assertEqual(r["status"], "WARN")
 
 
