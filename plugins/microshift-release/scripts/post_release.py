@@ -74,11 +74,11 @@ _CHECK_SECTIONS = {
     "pr_errata_bootc_prod_found": "Errata (Bootc Prod)",
     "pr_errata_bootc_prod_shipped": "Errata (Bootc Prod)",
     "pr_errata_bootc_prod_images": "Errata (Bootc Prod)",
-    "pr_bootc_catalog_el9": "Bootc Images",
-    "pr_bootc_catalog_el10": "Bootc Images",
+    "pr_bootc_catalog_el9": "Bootc Images from https://catalog.redhat.com",
+    "pr_bootc_catalog_el10": "Bootc Images from https://catalog.redhat.com",
     "pr_rpms_customer_portal": "Errata (RPMs)",
     "pr_rpms_cdn": "Errata (RPMs)",
-    "pr_rpms_downloads": "RPMs",
+    "pr_rpms_downloads": "RPMs from https://access.redhat.com/downloads",
     "pr_docs_published": "Documentation",
     "pr_lifecycle_listed": "Lifecycle",
     "pr_lifecycle_active": "Lifecycle",
@@ -86,7 +86,9 @@ _CHECK_SECTIONS = {
 
 _SECTION_ORDER = [
     "Errata (RPMs)", "Errata (Bootc Stage)", "Errata (Bootc Prod)",
-    "RPMs", "Bootc Images", "Documentation", "Lifecycle",
+    "RPMs from https://access.redhat.com/downloads",
+    "Bootc Images from https://catalog.redhat.com",
+    "Documentation", "Lifecycle",
 ]
 
 _DOCS_RELEASE_NOTES_URL = (

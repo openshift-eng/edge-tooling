@@ -676,8 +676,8 @@ class TestFormatting(unittest.TestCase):
         self.assertIn("Errata (RPMs)", output)
         self.assertIn("Errata (Bootc Stage)", output)
         self.assertIn("Errata (Bootc Prod)", output)
-        self.assertIn("RPMs", output)
-        self.assertIn("Bootc Images", output)
+        self.assertIn("RPMs from https://access.redhat.com/downloads", output)
+        self.assertIn("Bootc Images from https://catalog.redhat.com", output)
         self.assertIn("Documentation", output)
 
     def test_full_format(self):
