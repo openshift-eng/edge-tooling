@@ -221,7 +221,7 @@ def _parse_image_metadata(image):
     assembly_version = assembly_match.group(1) if assembly_match else None
 
     freshness = image.get("freshness_grades") or []
-    freshness_grade = freshness[-1].get("grade") if freshness else None
+    freshness_grade = freshness[0].get("grade") if freshness else None
     container_grades = image.get("container_grades") or {}
 
     return {
