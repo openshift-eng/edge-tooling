@@ -1,8 +1,9 @@
-"""OCPBUGS commit scanning for MicroShift bugs.
+"""OCPBUGS discovery and enrichment for MicroShift bugs.
 
-Extracts OCPBUGS references from git commit messages on release branches.
-Jira enrichment (status, labels, release action) is handled at the skill
-level via Atlassian MCP OAuth — this module only does local git operations.
+Discovers bugs from git commit messages and MicroShift component CVE
+trackers via the Jira REST API. Enriches commit-discovered bugs with
+real status/labels when JIRA_API_TOKEN is available, degrades to
+unenriched output when not set.
 """
 
 import logging
@@ -10,6 +11,7 @@ import re
 import subprocess
 
 from lib.git_ops import ensure_microshift_repo, build_revision_range
+from lib import jira_client
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +49,12 @@ def extract_bugs_from_commits(branch, since_version, since_commit=None):
 
 
 def query_resolved_bugs(version, branch=None, since_version=None,
-                        since_commit=None):
-    """Scan commits for OCPBUGS references.
+                        since_commit=None, last_release_date=None,
+                        shipped_cve_ids=None):
+    """Scan commits and Jira for OCPBUGS references.
 
-    Returns unenriched bug entries — Jira enrichment (summary, status,
-    labels, release action) is done by the skill via Atlassian MCP.
+    Enriches commit-discovered bugs via Jira REST API when credentials
+    are available. Also discovers MicroShift component CVE trackers.
 
     Args:
         version: Full version, e.g., "4.21.8".
@@ -73,25 +76,71 @@ def query_resolved_bugs(version, branch=None, since_version=None,
                         len(commit_bug_keys), ", ".join(sorted(commit_bug_keys)))
 
     all_bugs = []
+    enrichment = jira_client.enrich_ocpbugs(sorted(commit_bug_keys))
     for key in sorted(commit_bug_keys):
-        all_bugs.append({
-            "key": key,
-            "summary": "Pending Jira lookup",
-            "status": "unknown",
-            "source": "commit",
-            "release_note": "",
-            "release_note_type": "",
-            "release_note_status": "",
-            "labels": [],
-            "release_action": "needs_review",
-        })
+        if enrichment and key in enrichment:
+            data = enrichment[key]
+            all_bugs.append({
+                "key": key,
+                "summary": data["summary"],
+                "status": data["status"],
+                "source": "commit",
+                "release_note": "",
+                "release_note_type": "",
+                "release_note_status": "",
+                "labels": data["labels"],
+                "release_action": data["release_action"],
+            })
+        else:
+            all_bugs.append({
+                "key": key,
+                "summary": "Pending Jira lookup",
+                "status": "unknown",
+                "source": "commit",
+                "release_note": "",
+                "release_note_type": "",
+                "release_note_status": "",
+                "labels": [],
+                "release_action": "needs_review",
+            })
+
+    # Search for MicroShift component CVEs via Jira REST API
+    minor = ".".join(version.split(".")[:2])
+    component_cves = jira_client.find_microshift_component_cves(
+        minor, resolved_after=last_release_date
+    )
+    jira_unavailable = component_cves is None
+    shipped = shipped_cve_ids or {}
+    for bug in (component_cves or []):
+        if bug["key"] in commit_bug_keys:
+            continue
+        if bug.get("cve_id") and bug["cve_id"] in shipped:
+            logger.info("Skipping %s (%s) — CVE already shipped",
+                        bug["key"], bug["cve_id"])
+            continue
+        all_bugs.append(bug)
+        commit_bug_keys.add(bug["key"])
+
+    release_required = sum(
+        1 for b in all_bugs if b.get("release_action") == "release_required"
+    )
+    release_not_required = sum(
+        1 for b in all_bugs if b.get("release_action") == "release_not_required"
+    )
+    needs_review = sum(
+        1 for b in all_bugs if b.get("release_action") == "needs_review"
+    )
+
+    enrichment_failed = enrichment is None and len(commit_bug_keys) > 0
 
     return {
         "count": len(all_bugs),
         "bugs": all_bugs,
-        "release_required": 0,
-        "release_not_required": 0,
-        "needs_review": len(all_bugs),
-        "skipped": False,
-        "error": None,
+        "release_required": release_required,
+        "release_not_required": release_not_required,
+        "needs_review": needs_review,
+        "skipped": jira_unavailable or enrichment_failed,
+        "error": ("Jira enrichment unavailable" if enrichment_failed
+                  else "Jira CVE search unavailable" if jira_unavailable
+                  else None),
     }

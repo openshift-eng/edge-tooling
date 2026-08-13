@@ -36,8 +36,14 @@ logger = logging.getLogger(__name__)
 _ARCHES = ["amd64", "arm64"]
 
 _CHECKS_ERRATA = [
-    "pr_errata_found",
-    "pr_errata_shipped",
+    "pr_errata_rpms_found",
+    "pr_errata_rpms_shipped",
+    "pr_errata_bootc_stage_found",
+    "pr_errata_bootc_stage_shipped",
+    "pr_errata_bootc_stage_images",
+    "pr_errata_bootc_prod_found",
+    "pr_errata_bootc_prod_shipped",
+    "pr_errata_bootc_prod_images",
 ]
 
 _CHECKS_BOOTC = [
@@ -60,18 +66,30 @@ _CHECKS_LIFECYCLE = [
 ]
 
 _CHECK_SECTIONS = {
-    "pr_errata_found": "Errata",
-    "pr_errata_shipped": "Errata",
-    "pr_bootc_catalog_el9": "Bootc Images",
-    "pr_bootc_catalog_el10": "Bootc Images",
-    "pr_rpms_customer_portal": "RPMs",
-    "pr_rpms_cdn": "RPMs",
+    "pr_errata_rpms_found": "Errata (RPMs)",
+    "pr_errata_rpms_shipped": "Errata (RPMs)",
+    "pr_errata_bootc_stage_found": "Errata (Bootc Stage)",
+    "pr_errata_bootc_stage_shipped": "Errata (Bootc Stage)",
+    "pr_errata_bootc_stage_images": "Errata (Bootc Stage)",
+    "pr_errata_bootc_prod_found": "Errata (Bootc Prod)",
+    "pr_errata_bootc_prod_shipped": "Errata (Bootc Prod)",
+    "pr_errata_bootc_prod_images": "Errata (Bootc Prod)",
+    "pr_bootc_catalog_el9": "Bootc Images from https://catalog.redhat.com",
+    "pr_bootc_catalog_el10": "Bootc Images from https://catalog.redhat.com",
+    "pr_rpms_customer_portal": "Errata (RPMs)",
+    "pr_rpms_cdn": "Errata (RPMs)",
+    "pr_rpms_downloads": "RPMs from https://access.redhat.com/downloads",
     "pr_docs_published": "Documentation",
     "pr_lifecycle_listed": "Lifecycle",
     "pr_lifecycle_active": "Lifecycle",
 }
 
-_SECTION_ORDER = ["Errata", "Bootc Images", "RPMs", "Documentation", "Lifecycle"]
+_SECTION_ORDER = [
+    "Errata (RPMs)", "Errata (Bootc Stage)", "Errata (Bootc Prod)",
+    "RPMs from https://access.redhat.com/downloads",
+    "Bootc Images from https://catalog.redhat.com",
+    "Documentation", "Lifecycle",
+]
 
 _DOCS_RELEASE_NOTES_URL = (
     "https://docs.redhat.com/en/documentation/"
@@ -89,16 +107,31 @@ def _rhel_versions(version_info):
     return [9]
 
 
+def _has_bootc(version_info):
+    """Return True if this version has Konflux bootc images (4.18+)."""
+    return _minor_tuple(version_info["minor"]) >= _BOOTC_MIN_MINOR
+
+
 def _all_check_ids(version_info):
     """Return the ordered list of check IDs applicable to this version."""
-    ids = list(_CHECKS_ERRATA)
+    ids = [
+        "pr_errata_rpms_found", "pr_errata_rpms_shipped",
+        "pr_rpms_customer_portal", "pr_rpms_cdn",
+    ]
+    if _has_bootc(version_info):
+        ids += [
+            "pr_errata_bootc_stage_found", "pr_errata_bootc_stage_shipped",
+            "pr_errata_bootc_stage_images",
+            "pr_errata_bootc_prod_found", "pr_errata_bootc_prod_shipped",
+            "pr_errata_bootc_prod_images",
+        ]
+    ids.append("pr_rpms_downloads")
     rhel_vers = _rhel_versions(version_info)
     for bc in _CHECKS_BOOTC:
         rhel_match = re.search(r"el(\d+)", bc)
         if rhel_match and int(rhel_match.group(1)) not in rhel_vers:
             continue
         ids.append(bc)
-    ids.extend(_CHECKS_RPMS)
     ids.extend(_CHECKS_DOCS)
     if version_info["z"] == 0:
         ids.extend(_CHECKS_LIFECYCLE)
@@ -108,63 +141,95 @@ def _all_check_ids(version_info):
 # ── Hydra errata search ────────────────────────────────────────
 
 
-def find_errata_for_version(version, minor):
-    """Search the public Hydra API for an errata matching this exact version.
-
-    Returns:
-        dict or None: {"advisory_name": "RHBA-2026:12345",
-                       "portal_url": "https://access.redhat.com/errata/...",
-                       "publication_date": "2026-07-29"}
-    """
+def _hydra_search(query, rows=20):
+    """Run a Hydra KCS search and return the response docs list."""
     url = "https://access.redhat.com/hydra/rest/search/kcs"
     params = {
-        "q": (f'"Red Hat build of MicroShift {minor}"'
-              f" documentKind:Errata"),
+        "q": query,
         "start": 0,
-        "rows": 20,
+        "rows": rows,
         "sort": "portal_publication_date desc",
     }
+    resp = requests.get(url, params=params, timeout=15)
+    resp.raise_for_status()
+    return resp.json().get("response", {}).get("docs", [])
 
+
+def _parse_hydra_doc(doc):
+    """Extract advisory info from a Hydra search result document."""
+    synopsis = doc.get("portal_synopsis", "")
+    doc_uri = doc.get("uri", doc.get("id", ""))
+    advisory_match = re.search(r"(RH[A-Z]A-\d{4}:\d+)", doc_uri)
+    advisory_name = advisory_match.group(1) if advisory_match else ""
+    if not advisory_name:
+        advisory_match = re.search(r"(RH[A-Z]A-\d{4}:\d+)", synopsis)
+        advisory_name = advisory_match.group(1) if advisory_match else ""
+    portal_url = doc_uri
+    if not portal_url.startswith("http"):
+        portal_url = f"https://access.redhat.com/errata/{advisory_name}"
+    date = doc.get("portal_publication_date", "")[:10]
+    return {
+        "advisory_name": advisory_name,
+        "portal_url": portal_url,
+        "publication_date": date,
+        "synopsis": synopsis,
+    }
+
+
+def find_rpms_errata(version, minor):
+    """Search Hydra for the RPM errata matching this exact version."""
     try:
-        resp = requests.get(url, params=params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
+        docs = _hydra_search(
+            f'"Red Hat build of MicroShift {minor}" documentKind:Errata'
+        )
     except (requests.RequestException, json.JSONDecodeError) as e:
-        logger.warning("Hydra errata search failed for %s: %s", version, e)
+        logger.warning("Hydra RPM errata search failed for %s: %s", version, e)
         return {"error": str(e)}
 
     version_pattern = re.compile(rf"\b{re.escape(version)}\b")
-    for doc in data.get("response", {}).get("docs", []):
+    for doc in docs:
         synopsis = doc.get("portal_synopsis", "")
         if version_pattern.search(synopsis):
-            doc_uri = doc.get("uri", doc.get("id", ""))
-            advisory_match = re.search(r"(RH[A-Z]A-\d{4}:\d+)", doc_uri)
-            advisory_name = advisory_match.group(1) if advisory_match else ""
-            if not advisory_name:
-                advisory_match = re.search(r"(RH[A-Z]A-\d{4}:\d+)", synopsis)
-                advisory_name = advisory_match.group(1) if advisory_match else ""
-            portal_url = doc_uri
-            if not portal_url.startswith("http"):
-                portal_url = f"https://access.redhat.com/errata/{advisory_name}"
-            date = doc.get("portal_publication_date", "")[:10]
-            return {
-                "advisory_name": advisory_name,
-                "portal_url": portal_url,
-                "publication_date": date,
-                "synopsis": synopsis,
-            }
-
+            return _parse_hydra_doc(doc)
     return None
+
+
+def _errata_info_from_url(url):
+    """Build an errata_info dict from an errata URL."""
+    if not url:
+        return None
+    errata_id = _extract_errata_id(url)
+    if not errata_id:
+        return None
+    return {
+        "advisory_name": errata_id,
+        "portal_url": url,
+        "publication_date": "",
+        "synopsis": "",
+    }
+
+
+def _bootc_erratas_from_shipment(shipment):
+    """Extract stage and prod bootc errata info from the shipment MR.
+
+    Returns:
+        (stage_errata_info, prod_errata_info) — either may be None.
+    """
+    if not shipment or not shipment.get("found"):
+        return None, None
+    stage = _errata_info_from_url(shipment.get("stage_errata_url"))
+    prod = _errata_info_from_url(shipment.get("prod_errata_url"))
+    return stage, prod
 
 
 # ── Check functions ────────────────────────────────────────────
 
 
-def check_errata_found(errata_info):
+def _check_errata_found(check_id, label, errata_info):
     """Public errata advisory exists for this version."""
-    check_id = "pr_errata_found"
     if errata_info is None:
-        return _fail(check_id, "No public errata advisory found via Hydra search")
+        return _fail(check_id,
+                     f"No public {label} errata found via Hydra search")
     if "error" in errata_info:
         return _warn(check_id, f"Hydra search failed: {errata_info['error']}",
                      ["The advisory may exist but could not be verified"])
@@ -175,11 +240,10 @@ def check_errata_found(errata_info):
                   f"Synopsis: {errata_info.get('synopsis', '?')}"])
 
 
-def check_errata_shipped(advisory, errata_info, vpn_ok):
-    """Advisory has reached SHIPPED_LIVE status."""
-    check_id = "pr_errata_shipped"
+def _check_errata_shipped(check_id, advisory, errata_info, vpn_ok):
+    """RPM advisory has reached SHIPPED_LIVE status (requires ET API)."""
     if not vpn_ok:
-        if errata_info:
+        if errata_info and not errata_info.get("error"):
             return _warn(check_id,
                          "VPN required — Hydra confirms advisory is public",
                          [f"Advisory: {errata_info.get('advisory_name', '?')}"])
@@ -203,6 +267,79 @@ def check_errata_shipped(advisory, errata_info, vpn_ok):
     return _fail(check_id, f"Status: {status} — expected SHIPPED_LIVE",
                  [f"Advisory: {advisory_name}",
                   f"Current: {status}"])
+
+
+def _check_bootc_errata_shipped(errata_info, check_id=None):
+    """Bootc errata is published. Konflux erratas are not in the Errata Tool,
+    so presence in the shipment MR is the verification signal."""
+    if check_id is None:
+        check_id = "pr_errata_bootc_shipped"
+    if errata_info is None:
+        return _fail(check_id, "No bootc errata found to verify")
+    if "error" in errata_info:
+        return _warn(check_id, f"Could not verify: {errata_info['error']}")
+    name = errata_info.get("advisory_name", "?")
+    date = errata_info.get("publication_date", "?")
+    return _pass(check_id, f"Published on {date}",
+                 [f"Advisory: {name}",
+                  f"URL: {errata_info.get('portal_url', '?')}"])
+
+
+_ERRATA_URL_PATTERN = re.compile(
+    r"^https://access\.(?:stage\.)?redhat\.com/errata/(RH[A-Z]A-\d{4}:\d+)$"
+)
+
+
+def _extract_errata_id(url):
+    """Extract advisory ID from an errata URL."""
+    if not url or not isinstance(url, str):
+        return None
+    m = _ERRATA_URL_PATTERN.match(url)
+    return m.group(1) if m else None
+
+
+def check_bootc_errata_images(check_id, errata_url, advisory_details):
+    """Errata page images match advisory.yaml images."""
+    if not errata_url:
+        return _warn(check_id, "No errata URL available")
+
+    errata_id = _extract_errata_id(errata_url)
+    if not errata_id:
+        return _warn(check_id, "Errata URL not recognized",
+                     [f"URL: {errata_url}"])
+    label = errata_id
+
+    if advisory_details is None or not advisory_details.get("images"):
+        return _warn(check_id,
+                     f"{label} — advisory images unavailable for comparison")
+
+    errata_images = artifacts.fetch_errata_images(errata_url)
+    if errata_images is None:
+        return _warn(check_id,
+                     f"{label} — could not fetch errata page or no images found",
+                     [f"URL: {errata_url}"])
+
+    errata_shas = {img["sha"] for img in errata_images}
+    advisory_shas = {img["sha"] for img in advisory_details["images"]
+                     if img.get("sha")}
+
+    missing = advisory_shas - errata_shas
+    if missing:
+        details = [f"URL: {errata_url}",
+                   f"Advisory: {len(advisory_shas)}, Errata: {len(errata_shas)}"]
+        for sha in sorted(missing):
+            for img in advisory_details["images"]:
+                if img.get("sha") == sha:
+                    details.append(
+                        f"Missing: {img.get('arch_key', '?')} sha256:{sha[:12]}")
+                    break
+        return _fail(check_id,
+                     f"{label} — {len(missing)} image(s) not in errata",
+                     details)
+
+    return _pass(check_id,
+                 f"{label} — {len(advisory_shas)} images verified",
+                 [f"URL: {errata_url}"])
 
 
 def check_bootc_catalog(rhel, version_info):
@@ -334,6 +471,58 @@ def check_rpms_cdn(advisory, vpn_ok):
                  [f"Advisory: {advisory_name}"])
 
 
+_ERRATA_RPM_RE = re.compile(
+    r"(microshift[a-z0-9-]*)-\d+\.\d+\.\d+-[^\s<\"]+\.rpm"
+)
+
+_DOWNLOADS_URL = "https://access.redhat.com/downloads/content/{package}/{vr}/{arch}/{hash}/package"
+
+
+def check_rpms_downloads(errata_info, version_info):
+    """Verify expected RPMs are listed on the public errata page."""
+    check_id = "pr_rpms_downloads"
+
+    portal_url = (errata_info or {}).get("portal_url")
+    if not portal_url:
+        return _warn(check_id, "No errata URL available")
+
+    try:
+        resp = requests.get(portal_url, timeout=15, allow_redirects=True)
+        if resp.status_code != 200:
+            return _warn(check_id,
+                         f"Errata page returned HTTP {resp.status_code}",
+                         [f"URL: {portal_url}"])
+    except requests.RequestException as e:
+        return _warn(check_id, f"Could not fetch errata page: {e}",
+                     [f"URL: {portal_url}"])
+
+    page_packages = sorted(set(_ERRATA_RPM_RE.findall(resp.text)))
+    if not page_packages:
+        return _fail(check_id, "No MicroShift RPMs found on errata page",
+                     [f"URL: {portal_url}"])
+
+    expected = artifacts.get_expected_packages(version_info["minor"])
+    if expected is None:
+        return _warn(check_id,
+                     f"{len(page_packages)} packages on errata page "
+                     "(could not determine expected list)",
+                     [f"URL: {portal_url}",
+                      f"Found: {', '.join(page_packages)}"])
+
+    expected_set = set(expected)
+    missing = sorted(expected_set - set(page_packages))
+    if missing:
+        return _fail(check_id,
+                     f"{len(missing)} package(s) missing from errata page",
+                     [f"URL: {portal_url}",
+                      f"Missing: {', '.join(missing)}",
+                      f"Found: {', '.join(page_packages)}"])
+
+    return _pass(check_id,
+                 f"All {len(expected_set)} expected packages listed",
+                 [f"URL: {portal_url}"])
+
+
 def check_docs_published(version_info):
     """Release notes published on docs.redhat.com with version mentioned."""
     check_id = "pr_docs_published"
@@ -411,11 +600,17 @@ def run_post_release_checks(version_info):
     if not vpn_ok:
         logger.info("VPN not available — some checks will be skipped")
 
+    has_bootc = _has_bootc(version_info)
+
     with ThreadPoolExecutor(max_workers=8) as ex:
         futures = {}
 
-        # Errata search (Hydra — public internet)
-        errata_future = ex.submit(find_errata_for_version, version, minor)
+        # Errata searches (Hydra — public internet)
+        rpms_errata_future = ex.submit(find_rpms_errata, version, minor)
+        shipment_future = None
+        if has_bootc:
+            logger.info("Fetching shipment MR for %s...", version)
+            shipment_future = ex.submit(artifacts.fetch_shipment_mr, version)
 
         # Bootc catalog checks
         futures[ex.submit(check_bootc_catalog, 9, version_info)] = \
@@ -438,34 +633,90 @@ def run_post_release_checks(version_info):
             except Exception as e:
                 logger.warning("Lifecycle fetch failed: %s", e)
 
-        # Wait for errata search to complete before dependent checks
-        logger.info("Searching for errata advisory...")
+        # Wait for RPM errata search
+        logger.info("Searching for errata advisories...")
         try:
-            errata_info = errata_future.result()
+            rpms_errata_info = rpms_errata_future.result()
         except Exception as exc:
-            logger.exception("Errata search raised unexpected error")
-            errata_info = None
+            logger.exception("RPM errata search raised unexpected error")
+            rpms_errata_info = None
 
-        # Fetch ET advisory (once, shared by shipped + CDN checks)
-        advisory = None
-        if vpn_ok and errata_info and errata_info.get("advisory_name"):
-            logger.info("Fetching advisory from Errata Tool...")
+        # Wait for shipment MR and extract bootc erratas + advisory.yaml
+        shipment = None
+        advisory_details = None
+        bootc_stage_errata = None
+        bootc_prod_errata = None
+        if shipment_future is not None:
             try:
-                advisory = errata.fetch_advisory(errata_info["advisory_name"])
+                shipment = shipment_future.result()
             except Exception as exc:
-                logger.warning("Failed to fetch advisory: %s", exc)
+                logger.warning("Shipment MR fetch failed: %s", exc)
+            if shipment and shipment.get("found"):
+                bootc_stage_errata, bootc_prod_errata = \
+                    _bootc_erratas_from_shipment(shipment)
+                advisory_url = shipment.get("stage_advisory_url")
+                if advisory_url:
+                    logger.info("Fetching advisory YAML...")
+                    try:
+                        advisory_details = artifacts.fetch_advisory_details(
+                            advisory_url
+                        )
+                    except Exception as exc:
+                        logger.warning("Advisory YAML fetch failed: %s", exc)
 
-        # Errata checks
-        futures[ex.submit(check_errata_found, errata_info)] = \
-            "pr_errata_found"
-        futures[ex.submit(check_errata_shipped, advisory, errata_info, vpn_ok)] = \
-            "pr_errata_shipped"
+        # Fetch ET advisory (VPN — RPMs only)
+        rpms_advisory = None
+        if vpn_ok and rpms_errata_info and rpms_errata_info.get("advisory_name"):
+            logger.info("Fetching RPM advisory from Errata Tool...")
+            try:
+                rpms_advisory = errata.fetch_advisory(
+                    rpms_errata_info["advisory_name"]
+                )
+            except Exception as exc:
+                logger.warning("Failed to fetch RPM advisory: %s", exc)
 
-        # RPM checks (depend on errata info)
-        futures[ex.submit(check_rpms_customer_portal, advisory, errata_info, version_info, vpn_ok)] = \
+        # RPM errata checks
+        futures[ex.submit(
+            _check_errata_found, "pr_errata_rpms_found",
+            "RPMs", rpms_errata_info
+        )] = "pr_errata_rpms_found"
+        futures[ex.submit(
+            _check_errata_shipped, "pr_errata_rpms_shipped",
+            rpms_advisory, rpms_errata_info, vpn_ok
+        )] = "pr_errata_rpms_shipped"
+
+        # Bootc errata checks (stage + prod from shipment MR)
+        if has_bootc:
+            for env, bootc_info, url_key in (
+                ("stage", bootc_stage_errata, "stage_errata_url"),
+                ("prod", bootc_prod_errata, "prod_errata_url"),
+            ):
+                futures[ex.submit(
+                    _check_errata_found, f"pr_errata_bootc_{env}_found",
+                    f"bootc {env}", bootc_info
+                )] = f"pr_errata_bootc_{env}_found"
+                futures[ex.submit(
+                    _check_bootc_errata_shipped, bootc_info,
+                    f"pr_errata_bootc_{env}_shipped"
+                )] = f"pr_errata_bootc_{env}_shipped"
+                futures[ex.submit(
+                    check_bootc_errata_images,
+                    f"pr_errata_bootc_{env}_images",
+                    (shipment or {}).get(url_key), advisory_details
+                )] = f"pr_errata_bootc_{env}_images"
+
+        # RPM checks (depend on RPM errata info)
+        futures[ex.submit(check_rpms_customer_portal,
+                          rpms_advisory, rpms_errata_info,
+                          version_info, vpn_ok)] = \
             "pr_rpms_customer_portal"
-        futures[ex.submit(check_rpms_cdn, advisory, vpn_ok)] = \
+        futures[ex.submit(check_rpms_cdn, rpms_advisory, vpn_ok)] = \
             "pr_rpms_cdn"
+
+        # RPM downloads check (public errata page)
+        futures[ex.submit(check_rpms_downloads,
+                          rpms_errata_info, version_info)] = \
+            "pr_rpms_downloads"
 
         # Lifecycle checks
         if version_info["z"] == 0:
@@ -492,7 +743,7 @@ def run_post_release_checks(version_info):
 
 
 def _section_line(title):
-    return f"── {title} " + "─" * max(1, 60 - len(title) - 4)
+    return f"── {title} " + "─" * max(1, 80 - len(title) - 4)
 
 
 def format_text_short(version, results):

@@ -8,12 +8,16 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from post_release import (  # noqa: E402
-    find_errata_for_version,
-    check_errata_found,
-    check_errata_shipped,
+    find_rpms_errata,
+    _bootc_erratas_from_shipment,
+    _check_errata_found,
+    _check_errata_shipped,
+    _check_bootc_errata_shipped,
+    check_bootc_errata_images,
     check_bootc_catalog,
     check_rpms_customer_portal,
     check_rpms_cdn,
+    check_rpms_downloads,
     check_docs_published,
     check_lifecycle_listed,
     check_lifecycle_active,
@@ -21,6 +25,7 @@ from post_release import (  # noqa: E402
     format_text_full,
     _all_check_ids,
     _rhel_versions,
+    _has_bootc,
 )
 from validate_artifacts import classify_version  # noqa: E402
 
@@ -101,24 +106,53 @@ class TestAllCheckIds(unittest.TestCase):
         ids = _all_check_ids(_version("4.22.2"))
         self.assertIn("pr_bootc_catalog_el10", ids)
 
+    def test_bootc_errata_included_418plus(self):
+        ids = _all_check_ids(_version("4.21.7"))
+        self.assertIn("pr_errata_bootc_stage_found", ids)
+        self.assertIn("pr_errata_bootc_stage_shipped", ids)
+        self.assertIn("pr_errata_bootc_prod_found", ids)
+        self.assertIn("pr_errata_bootc_prod_shipped", ids)
+
+    def test_bootc_errata_excluded_pre418(self):
+        ids = _all_check_ids(_version("4.17.3"))
+        self.assertNotIn("pr_errata_bootc_stage_found", ids)
+        self.assertNotIn("pr_errata_bootc_prod_found", ids)
+
+    def test_rpms_errata_always_included(self):
+        ids = _all_check_ids(_version("4.17.3"))
+        self.assertIn("pr_errata_rpms_found", ids)
+        self.assertIn("pr_errata_rpms_shipped", ids)
+
 
 # ── Errata found ───────────────────────────────────────────────
 
 
 class TestErrataFound(unittest.TestCase):
-    def test_found(self):
-        r = check_errata_found(_errata_info())
+    def test_rpms_found(self):
+        r = _check_errata_found("pr_errata_rpms_found", "RPMs", _errata_info())
         self.assertEqual(r["status"], "PASS")
         self.assertIn("RHBA-2026:12345", r["reason"])
 
-    def test_not_found(self):
-        r = check_errata_found(None)
+    def test_rpms_not_found(self):
+        r = _check_errata_found("pr_errata_rpms_found", "RPMs", None)
         self.assertEqual(r["status"], "FAIL")
 
-    def test_search_failed(self):
-        r = check_errata_found({"error": "timeout"})
+    def test_rpms_search_failed(self):
+        r = _check_errata_found("pr_errata_rpms_found", "RPMs", {"error": "timeout"})
         self.assertEqual(r["status"], "WARN")
         self.assertIn("Hydra search failed", r["reason"])
+
+    def test_bootc_found(self):
+        r = _check_errata_found("pr_errata_bootc_found", "bootc images",
+                                _errata_info(advisory_name="RHBA-2026:99999",
+                                             synopsis="image mode"))
+        self.assertEqual(r["status"], "PASS")
+        self.assertIn("RHBA-2026:99999", r["reason"])
+
+    def test_bootc_not_found(self):
+        r = _check_errata_found("pr_errata_bootc_found", "bootc images", None)
+        self.assertEqual(r["status"], "FAIL")
+        self.assertIn("bootc images", r["reason"])
 
 
 # ── Errata shipped ─────────────────────────────────────────────
@@ -137,36 +171,158 @@ def _advisory(status="SHIPPED_LIVE", advisory_id=170194,
 
 class TestErrataShipped(unittest.TestCase):
     def test_no_vpn_with_errata(self):
-        r = check_errata_shipped(None, _errata_info(), vpn_ok=False)
+        r = _check_errata_shipped("pr_errata_rpms_shipped",
+                                  None, _errata_info(), vpn_ok=False)
         self.assertEqual(r["status"], "WARN")
         self.assertIn("VPN required", r["reason"])
 
     def test_no_vpn_no_errata(self):
-        r = check_errata_shipped(None, None, vpn_ok=False)
+        r = _check_errata_shipped("pr_errata_rpms_shipped",
+                                  None, None, vpn_ok=False)
         self.assertEqual(r["status"], "WARN")
 
     def test_shipped_live(self):
-        r = check_errata_shipped(_advisory(status="SHIPPED_LIVE"),
-                                 _errata_info(), vpn_ok=True)
+        r = _check_errata_shipped("pr_errata_rpms_shipped",
+                                  _advisory(status="SHIPPED_LIVE"),
+                                  _errata_info(), vpn_ok=True)
         self.assertEqual(r["status"], "PASS")
         self.assertIn("SHIPPED_LIVE", r["reason"])
 
     def test_not_shipped(self):
-        r = check_errata_shipped(_advisory(status="REL_PREP"),
-                                 _errata_info(), vpn_ok=True)
+        r = _check_errata_shipped("pr_errata_rpms_shipped",
+                                  _advisory(status="REL_PREP"),
+                                  _errata_info(), vpn_ok=True)
         self.assertEqual(r["status"], "FAIL")
 
     def test_in_push(self):
-        r = check_errata_shipped(_advisory(status="IN_PUSH"),
-                                 _errata_info(), vpn_ok=True)
+        r = _check_errata_shipped("pr_errata_rpms_shipped",
+                                  _advisory(status="IN_PUSH"),
+                                  _errata_info(), vpn_ok=True)
         self.assertEqual(r["status"], "WARN")
 
     def test_fetch_failed(self):
-        r = check_errata_shipped(None, _errata_info(), vpn_ok=True)
+        r = _check_errata_shipped("pr_errata_rpms_shipped",
+                                  None, _errata_info(), vpn_ok=True)
         self.assertEqual(r["status"], "WARN")
 
     def test_no_errata_info(self):
-        r = check_errata_shipped(None, None, vpn_ok=True)
+        r = _check_errata_shipped("pr_errata_rpms_shipped",
+                                  None, None, vpn_ok=True)
+        self.assertEqual(r["status"], "WARN")
+
+
+class TestBootcErrataShipped(unittest.TestCase):
+    def test_published(self):
+        r = _check_bootc_errata_shipped(
+            _errata_info(advisory_name="RHBA-2026:47055",
+                         publication_date="2026-07-28"))
+        self.assertEqual(r["status"], "PASS")
+        self.assertIn("2026-07-28", r["reason"])
+
+    def test_not_found(self):
+        r = _check_bootc_errata_shipped(None)
+        self.assertEqual(r["status"], "FAIL")
+
+    def test_search_error(self):
+        r = _check_bootc_errata_shipped({"error": "timeout"})
+        self.assertEqual(r["status"], "WARN")
+
+
+# ── Bootc errata ID match ────────────────────────────────
+
+
+def _shipment(stage_url=None, prod_url=None, found=True):
+    return {
+        "found": found,
+        "stage_errata_url": stage_url,
+        "prod_errata_url": prod_url,
+    }
+
+
+class TestBootcErratasFromShipment(unittest.TestCase):
+    def test_both_present(self):
+        stage, prod = _bootc_erratas_from_shipment(
+            _shipment(
+                stage_url="https://access.stage.redhat.com/errata/RHBA-2026:91097",
+                prod_url="https://access.redhat.com/errata/RHBA-2026:47055"))
+        self.assertEqual(stage["advisory_name"], "RHBA-2026:91097")
+        self.assertEqual(prod["advisory_name"], "RHBA-2026:47055")
+
+    def test_stage_only(self):
+        stage, prod = _bootc_erratas_from_shipment(
+            _shipment(
+                stage_url="https://access.stage.redhat.com/errata/RHBA-2026:91097"))
+        self.assertEqual(stage["advisory_name"], "RHBA-2026:91097")
+        self.assertIsNone(prod)
+
+    def test_no_shipment(self):
+        stage, prod = _bootc_erratas_from_shipment(None)
+        self.assertIsNone(stage)
+        self.assertIsNone(prod)
+
+    def test_not_found(self):
+        stage, prod = _bootc_erratas_from_shipment(_shipment(found=False))
+        self.assertIsNone(stage)
+        self.assertIsNone(prod)
+
+    def test_no_urls(self):
+        stage, prod = _bootc_erratas_from_shipment(_shipment())
+        self.assertIsNone(stage)
+        self.assertIsNone(prod)
+
+
+# ── Bootc errata images ──────────────────────────────────
+
+
+def _advisory_details(shas=None):
+    if shas is None:
+        shas = ["aaa", "bbb"]
+    return {
+        "images": [{"sha": s, "arch_key": f"arch{i}"}
+                   for i, s in enumerate(shas)]
+    }
+
+
+class TestBootcErrataImages(unittest.TestCase):
+    @patch("post_release.artifacts.fetch_errata_images")
+    def test_all_match(self, mock_fetch):
+        mock_fetch.return_value = [{"rhel": 9, "sha": "aaa"},
+                                   {"rhel": 9, "sha": "bbb"}]
+        r = check_bootc_errata_images(
+            "pr_errata_bootc_stage_images",
+            "https://access.stage.redhat.com/errata/RHBA-2026:47055",
+            _advisory_details(["aaa", "bbb"]))
+        self.assertEqual(r["status"], "PASS")
+        self.assertIn("2 images verified", r["reason"])
+
+    @patch("post_release.artifacts.fetch_errata_images")
+    def test_missing_image(self, mock_fetch):
+        mock_fetch.return_value = [{"rhel": 9, "sha": "aaa"}]
+        r = check_bootc_errata_images(
+            "pr_errata_bootc_prod_images",
+            "https://access.redhat.com/errata/RHBA-2026:47055",
+            _advisory_details(["aaa", "bbb"]))
+        self.assertEqual(r["status"], "FAIL")
+        self.assertIn("1 image(s) not in errata", r["reason"])
+
+    def test_no_url(self):
+        r = check_bootc_errata_images(
+            "pr_errata_bootc_stage_images", None, _advisory_details())
+        self.assertEqual(r["status"], "WARN")
+
+    def test_no_advisory(self):
+        r = check_bootc_errata_images(
+            "pr_errata_bootc_stage_images",
+            "https://access.redhat.com/errata/RHBA-2026:47055", None)
+        self.assertEqual(r["status"], "WARN")
+
+    @patch("post_release.artifacts.fetch_errata_images")
+    def test_fetch_failed(self, mock_fetch):
+        mock_fetch.return_value = None
+        r = check_bootc_errata_images(
+            "pr_errata_bootc_stage_images",
+            "https://access.redhat.com/errata/RHBA-2026:47055",
+            _advisory_details())
         self.assertEqual(r["status"], "WARN")
 
 
@@ -322,6 +478,50 @@ class TestRpmsCdn(unittest.TestCase):
         self.assertEqual(r["status"], "WARN")
 
 
+# ── RPM downloads ────────────────────────────────────────
+
+
+class TestRpmsDownloads(unittest.TestCase):
+    @patch("post_release.artifacts.get_expected_packages")
+    @patch("post_release.requests.get")
+    def test_all_found(self, mock_get, mock_expected):
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            text=("microshift-4.22.7-1.el9.x86_64.rpm "
+                  "microshift-selinux-4.22.7-1.el9.noarch.rpm"))
+        mock_expected.return_value = ["microshift", "microshift-selinux"]
+        r = check_rpms_downloads(_errata_info(), _version("4.22.7"))
+        self.assertEqual(r["status"], "PASS")
+        self.assertIn("All 2", r["reason"])
+
+    @patch("post_release.artifacts.get_expected_packages")
+    @patch("post_release.requests.get")
+    def test_missing_package(self, mock_get, mock_expected):
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            text="microshift-4.22.7-1.el9.x86_64.rpm")
+        mock_expected.return_value = ["microshift", "microshift-selinux"]
+        r = check_rpms_downloads(_errata_info(), _version("4.22.7"))
+        self.assertEqual(r["status"], "FAIL")
+        self.assertIn("1 package(s) missing", r["reason"])
+
+    @patch("post_release.requests.get")
+    def test_no_rpms_on_page(self, mock_get):
+        mock_get.return_value = MagicMock(status_code=200, text="<html></html>")
+        r = check_rpms_downloads(_errata_info(), _version("4.22.7"))
+        self.assertEqual(r["status"], "FAIL")
+
+    def test_no_errata(self):
+        r = check_rpms_downloads(None, _version("4.22.7"))
+        self.assertEqual(r["status"], "WARN")
+
+    @patch("post_release.requests.get")
+    def test_page_error(self, mock_get):
+        mock_get.return_value = MagicMock(status_code=500)
+        r = check_rpms_downloads(_errata_info(), _version("4.22.7"))
+        self.assertEqual(r["status"], "WARN")
+
+
 # ── Documentation ──────────────────────────────────────────────
 
 
@@ -404,7 +604,7 @@ class TestLifecycleActive(unittest.TestCase):
 # ── Hydra search ───────────────────────────────────────────────
 
 
-class TestFindErrataForVersion(unittest.TestCase):
+class TestFindRpmsErrata(unittest.TestCase):
     @patch("post_release.requests.get")
     def test_found(self, mock_get):
         mock_get.return_value = MagicMock(
@@ -423,7 +623,7 @@ class TestFindErrataForVersion(unittest.TestCase):
                 }
             },
         )
-        result = find_errata_for_version("4.21.7", "4.21")
+        result = find_rpms_errata("4.21.7", "4.21")
         self.assertIsNotNone(result)
         self.assertEqual(result["advisory_name"], "RHBA-2026:12345")
 
@@ -433,16 +633,18 @@ class TestFindErrataForVersion(unittest.TestCase):
             status_code=200,
             json=lambda: {"response": {"docs": []}},
         )
-        result = find_errata_for_version("4.21.99", "4.21")
+        result = find_rpms_errata("4.21.99", "4.21")
         self.assertIsNone(result)
 
     @patch("post_release.requests.get")
     def test_network_error(self, mock_get):
         import requests
         mock_get.side_effect = requests.RequestException("timeout")
-        result = find_errata_for_version("4.21.7", "4.21")
+        result = find_rpms_errata("4.21.7", "4.21")
         self.assertIn("error", result)
         self.assertIn("timeout", result["error"])
+
+
 
 
 # ── Formatting ─────────────────────────────────────────────────
@@ -452,28 +654,39 @@ class TestFormatting(unittest.TestCase):
     def _sample_results(self):
         from validate_artifacts import _pass, _fail, _warn
         return [
-            _pass("pr_errata_found", "RHBA-2026:12345 (published 2026-07-29)"),
-            _pass("pr_errata_shipped", "Status: SHIPPED_LIVE"),
-            _pass("pr_bootc_catalog_el9", "Found in prod catalog (rhel9)"),
+            _pass("pr_errata_rpms_found", "RHBA-2026:12345 (published 2026-07-29)"),
+            _pass("pr_errata_rpms_shipped", "Status: SHIPPED_LIVE"),
             _fail("pr_rpms_customer_portal", "HTTP 404",
                   ["URL: https://access.redhat.com/errata/..."]),
             _warn("pr_rpms_cdn", "VPN required for CDN repo check"),
+            _pass("pr_errata_bootc_stage_found", "RHBA-2026:91097 (published )"),
+            _pass("pr_errata_bootc_stage_shipped", "Published on "),
+            _pass("pr_errata_bootc_stage_images", "RHBA-2026:91097 — 2 images verified"),
+            _pass("pr_errata_bootc_prod_found", "RHBA-2026:99999 (published )"),
+            _pass("pr_errata_bootc_prod_shipped", "Published on "),
+            _pass("pr_errata_bootc_prod_images", "RHBA-2026:99999 — 2 images verified"),
+            _pass("pr_rpms_downloads", "All 15 expected packages listed"),
+            _pass("pr_bootc_catalog_el9", "Found in prod catalog (rhel9)"),
             _pass("pr_docs_published", "Release notes page accessible (4.21)"),
         ]
 
     def test_short_format(self):
         output = format_text_short("4.21.7", self._sample_results())
         self.assertIn("Post-Release Verification: 4.21.7", output)
-        self.assertIn("Errata", output)
-        self.assertIn("Bootc Images", output)
-        self.assertIn("RPMs", output)
+        self.assertIn("Errata (RPMs)", output)
+        self.assertIn("Errata (Bootc Stage)", output)
+        self.assertIn("Errata (Bootc Prod)", output)
+        self.assertIn("RPMs from https://access.redhat.com/downloads", output)
+        self.assertIn("Bootc Images from https://catalog.redhat.com", output)
         self.assertIn("Documentation", output)
 
     def test_full_format(self):
         output = format_text_full("4.21.7", self._sample_results(),
                                   _version())
         self.assertIn("# Post-Release Verification", output)
-        self.assertIn("## Errata", output)
+        self.assertIn("## Errata (RPMs)", output)
+        self.assertIn("## Errata (Bootc Stage)", output)
+        self.assertIn("## Errata (Bootc Prod)", output)
         self.assertIn("**Summary:**", output)
 
 
