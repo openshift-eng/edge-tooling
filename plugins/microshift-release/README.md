@@ -19,7 +19,7 @@ Automate MicroShift Release Testing Activities — from pre-release evaluation t
 | `/microshift-release:automated-testing` | Automated Testing (Phase 2) | As soon as Phase 1 is done | Run the full Prow CI release testing workflow — create PR, trigger jobs, check status, download and upload artifacts |
 | Not Applicable | Manual Testing (Phase 3) | Only for RHEA versions (X.Y.0). As soon as Phase 1 is done | Run some manual tests  |
 | `/microshift-release:advisory-promotion` | Advisory Promotion (Phase 4) | Start in parallel with Phase 1, but wait for Phase 2 to finish before signing off Errata and Shipment | Validate Konflux bootc advisory promotion for QE sign-off — verify advisory YAML, catalog presence, shipment MR, and commit provenance |
-| `/microshift-release:post-release` | Post-Release (Phase 5) | As soon as Phase 3 is done | Verify all artifacts and docs are publicly available after shipping — bootc images, RPMs, errata, documentation, and lifecycle page |
+| `/microshift-release:post-release` | Post-Release (Phase 5) | As soon as Phase 2 (and Phase 3, if applicable) is done | Verify all artifacts and docs are publicly available after shipping — bootc images, RPMs, errata, documentation, and lifecycle page |
 
 ## How To
 
