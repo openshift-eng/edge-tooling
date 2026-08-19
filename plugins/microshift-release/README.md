@@ -26,8 +26,10 @@ Automate MicroShift Release Testing Activities — from pre-release evaluation t
 ### Request ART to create a new Z-Stream
 
 For every Z-Stream marked as `ASK ART` in Pre-Check (Phase 0) output:
+
  1. Clone this [template ART Jira ticket](https://redhat.atlassian.net/browse/ART-11857) and replace the target version in the title
  1. Share it in Slack [#forum-ocp-art](https://redhat.enterprise.slack.com/archives/CB95J6R4N) channel, template message example:
+
 ```text
 Hello, @release-artists I've opened ${ID_TO_ART_TICKET_CREATED} requesting MicroShift X.Y.Z builds (due date DDth MM). Please help create RPMs and bootc images, thanks!
 cc @Pablo Acevedo @Rama kasturi @AlejandroGullon @Tami Love
@@ -36,6 +38,7 @@ cc @Pablo Acevedo @Rama kasturi @AlejandroGullon @Tami Love
 ### Track Release Testing Activities
 
 For every Z-Stream release requested to ART:
+
  1. Clone this [template USHIFT Jira ticket](https://redhat.atlassian.net/browse/USHIFT-6945) and replace the target version and date in the title
  1. Go through the steps described in the template ticket, log results, and mark each completed step.
 
