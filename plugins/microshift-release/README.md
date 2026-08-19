@@ -13,7 +13,7 @@ Automate MicroShift Release Testing Activities — from pre-release evaluation t
 
 | Skill | Phase | When | Description |
 |---|---|---|---|
-| `/microshift-release:pre-check` | Pre-Check (Phase 0) | Every Friday before EOB | Evaluate whether MicroShift should participate in an OCP release (z-stream, nightly, EC/RC) |
+| `/microshift-release:pre-check` | Pre-Check (Phase 0) | Every Friday before end of the day | Evaluate whether MicroShift should participate in an OCP release (z-stream, nightly, EC/RC) |
 | `/microshift-release:release-versions` | Info (Phase 0) | Anytime after ART has created RPMs and bootc images | Report details about all artifacts: RPMs, bootc images, and Brew builds |
 | `/microshift-release:validate-artifacts` | Build Validation (Phase 1) | As soon as ART has created RPMs and bootc images | Validate MicroShift built artifacts (RPMs and bootc images) produced by ART |
 | `/microshift-release:automated-testing` | Automated Testing (Phase 2) | As soon as Phase 1 is done | Run the full Prow CI release testing workflow — create PR, trigger jobs, check status, download and upload artifacts |
