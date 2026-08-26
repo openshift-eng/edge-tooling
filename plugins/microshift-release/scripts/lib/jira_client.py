@@ -204,7 +204,6 @@ def find_microshift_component_cves(minor, resolved_after=None):
         date_filter = (f' AND (resolutiondate >= "{resolved_after}"'
                        f' OR status = Verified)')
 
-
     jql = (
         f'project = OCPBUGS AND issuetype = Vulnerability'
         f' AND labels = SecurityTracking'

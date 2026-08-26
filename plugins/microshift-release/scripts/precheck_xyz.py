@@ -363,6 +363,11 @@ def compute_recommendation(evaluation):
     ocp_status = evaluation.get("ocp_status", "")
     ocp_available = ocp_status == "available"
 
+    # Shipped CVE dedup warning (appended to reason when collection failed)
+    shipped_warn = ""
+    if evaluation.get("shipped_cve_collection_failed"):
+        shipped_warn = " (⚠ shipped CVE dedup unavailable — CVEs may be overcounted)"
+
     # Must release: CVE with resolution Done (fix landed, not yet shipped)
     if cve_impact == "must_release":
         cve_details = evaluation.get("cve_impact", {}).get("details", [])
@@ -371,6 +376,7 @@ def compute_recommendation(evaluation):
         pending = evaluation.get("cve_impact", {}).get("pending_cve_enrichment", [])
         if pending:
             label += f", {len(pending)} advisory CVEs pending enrichment"
+        label += shipped_warn
         if not ocp_available:
             return "BLOCKED", f"{label} — waiting for OCP payload"
         return "ASK ART TO CREATE ARTIFACTS", label
@@ -393,6 +399,7 @@ def compute_recommendation(evaluation):
     cve_suffix = ""
     if cve_impact == "pending_enrichment" and pending_cves:
         cve_suffix = f", {len(pending_cves)} advisory CVEs pending enrichment"
+    cve_suffix += shipped_warn
 
     # Resolved OCPBUGS targeting this version
     ocpbugs_data = evaluation.get("ocpbugs", {})
@@ -631,6 +638,7 @@ def evaluate_version(version, lifecycle_data, repo_root):
                                     len(shipped_cve_map), last_pub["version"])
         except Exception as e:
             logger.warning("Shipped CVE collection failed: %s", e)
+            result["shipped_cve_collection_failed"] = True
 
     # 4d: OCPBUGS references from commit messages + component CVEs
     logger.info("Checking resolved OCPBUGS for %s...", version)
