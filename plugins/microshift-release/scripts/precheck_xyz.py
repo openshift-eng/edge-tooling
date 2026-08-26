@@ -72,6 +72,13 @@ def _generate_version_range(last_released, version):
     z_start = int(parts_last[2]) + 1
     z_end = int(parts_curr[2])
 
+    if z_start > z_end:
+        logger.warning("Inverted version range: last_released=%s > version=%s "
+                        "— evaluating from %s.%d through %s.%d",
+                        last_released, version,
+                        minor_curr, z_end, minor_curr, z_start - 1)
+        z_start, z_end = z_end, z_start - 1
+
     return [f"{minor_curr}.{z}" for z in range(z_start, z_end + 1)]
 
 
@@ -361,6 +368,9 @@ def compute_recommendation(evaluation):
         cve_details = evaluation.get("cve_impact", {}).get("details", [])
         count = len(cve_details)
         label = f"{count} CVE fix{'es' if count != 1 else ''} (resolution Done)"
+        pending = evaluation.get("cve_impact", {}).get("pending_cve_enrichment", [])
+        if pending:
+            label += f", {len(pending)} advisory CVEs pending enrichment"
         if not ocp_available:
             return "BLOCKED", f"{label} — waiting for OCP payload"
         return "ASK ART TO CREATE ARTIFACTS", label
