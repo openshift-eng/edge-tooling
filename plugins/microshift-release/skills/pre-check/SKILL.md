@@ -178,7 +178,7 @@ If the script exits non-zero, display stderr and suggest:
 
 | Emoji | Status | Meaning |
 |-------|--------|---------|
-| 🔴 **ASK ART** | Action needed now | OCP payload ready, must release |
+| 🔴 **ASK ART** | Create ticket to ART | OCP payload ready, must release |
 | ⏳ **BLOCKED** | Action decided, waiting | Need to release but OCP payload not ready yet |
 | 🟡 **NEEDS REVIEW** | Human judgment needed | Unlabeled OCPBUGS, ambiguous cases |
 | 🟢 **SKIP** | No action | No CVEs, no bugs, within 90 days |
