@@ -80,6 +80,8 @@ echo "Connection will drop when the node is destroyed; will reconnect every ${RE
 echo "Stop with Ctrl+C when the test ends."
 echo ""
 
+trap 'exit 0' INT TERM
+
 while true; do
     echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) connected to ${NODE} ===" >> "${LOG_FILE}"
     if "${HYPERVISOR_SSH[@]}" \

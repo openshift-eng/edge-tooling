@@ -39,7 +39,8 @@ cleanup() {
         kill "${p}" 2>/dev/null || true
     done
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 0' INT TERM
 
 start_stream_for_pod() {
     local pod="$1"

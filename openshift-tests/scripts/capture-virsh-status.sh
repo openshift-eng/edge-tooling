@@ -29,6 +29,8 @@ echo "Polling virsh on ${SSH_USER}@${HYPERVISOR_IP} every ${POLL_INTERVAL}s -> $
 echo "Stop with Ctrl+C when the test ends."
 echo ""
 
+trap 'exit 0' INT TERM
+
 while true; do
     echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) ===" >> "${LOG_FILE}"
     ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -i "${SSH_KEY_PATH}" \

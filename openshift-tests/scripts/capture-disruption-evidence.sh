@@ -49,6 +49,8 @@ resolve_master_ip_from_leases() {
 echo "Disruption evidence capture started: poll=${POLL_SEC}s"
 echo "master-0=${MASTER_0_IP} master-1=${MASTER_1_IP}"
 
+trap 'exit 0' INT TERM
+
 while true; do
     echo
     echo "===== $(date -u +%Y-%m-%dT%H:%M:%SZ) disruption-evidence ====="

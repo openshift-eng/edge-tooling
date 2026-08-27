@@ -28,6 +28,8 @@ fi
 
 echo "$(ts) Starting update-setup job monitor (poll every ${POLL_SEC}s)" | tee -a "${LOG_FILE}"
 
+trap 'exit 0' INT TERM
+
 # Track last seen pod to detect new pods
 last_pod=""
 

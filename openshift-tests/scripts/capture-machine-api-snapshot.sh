@@ -16,6 +16,8 @@ fi
 
 echo "machine-api snapshot capture: poll=${POLL_SEC}s"
 
+trap 'exit 0' INT TERM
+
 while true; do
     echo
     echo "===== $(date -u +%Y-%m-%dT%H:%M:%SZ) machine-api-snapshot ====="

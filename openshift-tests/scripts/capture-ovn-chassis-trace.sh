@@ -242,6 +242,8 @@ sample_ovn_pods_and_logs() {
 echo "$(ts) capture-ovn-chassis-trace: start file_ts=${TIMESTAMP} poll=${POLL_SEC}s sb_every=${SB_EVERY} virsh_every=${VIRSH_EVERY} identity_every=${IDENTITY_EVERY} extra_every=${EXTRA_EVERY} l3gw_every=${L3GW_EVERY}"
 echo "$(ts) Correlate: Node k8s.ovn.org/node-chassis-id vs host ovs external_ids:system-id vs SB Chassis.name; virsh shows disk path/uuid for same-VM/same-disk suspicions."
 
+trap 'exit 0' INT TERM
+
 n=0
 while true; do
     echo ""
