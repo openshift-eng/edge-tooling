@@ -1,15 +1,12 @@
 """Tests for payload_monitor.analyzer."""
 
-import os
-from unittest.mock import patch, MagicMock
-
-import pytest
+from unittest.mock import patch
 
 from payload_monitor.analyzer import (
     _correlate_cross_topology,
     _find_escalation_risks,
     _find_recurring_failures,
-    _find_unmatched_jobs,
+    _find_unique_failing_jobs,
     _normalize_job_name,
     analyze,
 )
@@ -23,7 +20,6 @@ from payload_monitor.models import (
     Payload,
     PayloadStatus,
     StreamReport,
-    SuggestedBug,
 )
 
 
@@ -65,17 +61,17 @@ class TestFindRecurringFailures:
         assert _find_recurring_failures([]) == {}
 
 
-class TestFindUnmatchedJobs:
-    def test_finds_unmatched(self):
-        j1 = _make_job("matched")
-        j2 = _make_job("unmatched")
+class TestFindUniqueFailingJobs:
+    def test_finds_jobs(self):
+        j1 = _make_job("job-a")
+        j2 = _make_job("job-b")
         p = _make_payload("t1", [j1, j2])
         stream = StreamReport("s", "4.19", payloads=[p])
 
-        result = _find_unmatched_jobs([stream], {"matched"})
-        assert len(result) == 1
-        assert result[0][0].name == "unmatched"
-        assert "4.19" in result[0][1]
+        result = _find_unique_failing_jobs([stream])
+        assert len(result) == 2
+        names = {r[0].name for r in result}
+        assert names == {"job-a", "job-b"}
 
     def test_deduplicates_across_versions(self):
         j1 = _make_job("same-job")
@@ -85,23 +81,16 @@ class TestFindUnmatchedJobs:
         s1 = StreamReport("s1", "4.18", payloads=[p1])
         s2 = StreamReport("s2", "4.19", payloads=[p2])
 
-        result = _find_unmatched_jobs([s1, s2], set())
+        result = _find_unique_failing_jobs([s1, s2])
         assert len(result) == 1
         assert sorted(result[0][1]) == ["4.18", "4.19"]
 
-    def test_all_matched(self):
-        j1 = _make_job("matched")
-        p = _make_payload("t1", [j1])
-        stream = StreamReport("s", "4.19", payloads=[p])
-
-        assert _find_unmatched_jobs([stream], {"matched"}) == []
+    def test_empty_streams(self):
+        assert _find_unique_failing_jobs([]) == []
 
 
 class TestFailureCountsOnReport:
-    @patch("payload_monitor.analyzer.jira_has_auth", return_value=False)
-    @patch("payload_monitor.analyzer.jira_collector")
-    def test_failure_counts_stored_on_report(self, mock_jira, mock_auth):
-        mock_jira.search_bugs_for_jobs.return_value = ({}, [])
+    def test_failure_counts_stored_on_report(self):
         j1 = _make_job("job-a")
         j2 = _make_job("job-a")
         j3 = _make_job("job-b")
@@ -115,10 +104,7 @@ class TestFailureCountsOnReport:
         assert report.failure_counts["job-a"] == 2
         assert report.failure_counts["job-b"] == 1
 
-    @patch("payload_monitor.analyzer.jira_has_auth", return_value=False)
-    @patch("payload_monitor.analyzer.jira_collector")
-    def test_failure_counts_empty_when_no_failures(self, mock_jira, mock_auth):
-        mock_jira.search_bugs_for_jobs.return_value = ({}, [])
+    def test_failure_counts_empty_when_no_failures(self):
         job = _make_job("j1", result=JobResult.SUCCESS)
         report = MonitorReport(
             generated_at="now",
@@ -131,32 +117,7 @@ class TestFailureCountsOnReport:
 
 
 class TestAnalyze:
-    @patch("payload_monitor.analyzer.jira_has_auth", return_value=False)
-    @patch("payload_monitor.analyzer.jira_collector")
-    def test_no_jira_auth(self, mock_jira, mock_auth):
-        mock_jira.search_bugs_for_jobs.return_value = ({}, [])
-        report = MonitorReport(
-            generated_at="now",
-            streams=[StreamReport("s", "4.19", payloads=[
-                _make_payload("t1", [_make_job("j1")]),
-            ])],
-        )
-        analyze(report, Config())
-        assert report.skip_jira is True
-
-    @patch("payload_monitor.analyzer.jira_has_auth", return_value=True)
-    @patch("payload_monitor.analyzer.jira_collector")
-    def test_analyze_with_jira(self, mock_jira, mock_auth):
-        from payload_monitor.models import JiraBug, SuggestedBug
-
-        mock_jira.search_bugs_for_jobs.return_value = (
-            {"j1": [JiraBug(key="OCPBUGS-1", summary="bug", status="New")]},
-            [],
-        )
-        mock_jira.suggest_bug.return_value = SuggestedBug(
-            title="t", description="d", job_name="j2", topology="SNO",
-        )
-
+    def test_suggests_bugs_for_failing_jobs(self):
         j1 = _make_job("j1")
         j2 = _make_job("j2")
         report = MonitorReport(
@@ -167,41 +128,10 @@ class TestAnalyze:
         )
         analyze(report, Config())
 
-        assert len(report.jira_bugs) == 1
-        assert report.jira_bugs[0].key == "OCPBUGS-1"
-        assert len(report.suggested_bugs) == 1
-        assert report.suggested_bugs[0].job_name == "j2"
+        assert len(report.suggested_bugs) == 2
+        assert {b.job_name for b in report.suggested_bugs} == {"j1", "j2"}
 
-    @patch("payload_monitor.analyzer.jira_has_auth", return_value=True)
-    @patch("payload_monitor.analyzer.jira_collector")
-    def test_jira_matches_stored_on_report(self, mock_jira, mock_auth):
-        from payload_monitor.models import JiraBug
-
-        jira_matches = {
-            "j1": [JiraBug(key="OCPBUGS-10", summary="bug1", status="Open")],
-            "j2": [JiraBug(key="OCPBUGS-11", summary="bug2", status="Closed")],
-        }
-        mock_jira.search_bugs_for_jobs.return_value = (jira_matches, [])
-
-        j1 = _make_job("j1")
-        j2 = _make_job("j2")
-        report = MonitorReport(
-            generated_at="now",
-            streams=[StreamReport("s", "4.19", payloads=[
-                _make_payload("t1", [j1, j2]),
-            ])],
-        )
-        analyze(report, Config())
-
-        assert report.jira_matches == jira_matches
-        assert "j1" in report.jira_matches
-        assert "j2" in report.jira_matches
-        assert report.jira_matches["j1"][0].key == "OCPBUGS-10"
-
-    @patch("payload_monitor.analyzer.jira_has_auth", return_value=True)
-    @patch("payload_monitor.analyzer.jira_collector")
-    def test_no_failures(self, mock_jira, mock_auth):
-        mock_jira.search_bugs_for_jobs.return_value = ({}, [])
+    def test_no_failures(self):
         job = _make_job("j1", result=JobResult.SUCCESS)
         report = MonitorReport(
             generated_at="now",
@@ -210,9 +140,7 @@ class TestAnalyze:
             ])],
         )
         analyze(report, Config())
-        assert report.jira_bugs == []
         assert report.suggested_bugs == []
-        mock_jira.search_bugs_for_jobs.assert_not_called()
 
 
 def _make_informing_job(name, result=JobResult.FAILURE, topology="SNO"):
@@ -422,12 +350,8 @@ class TestAbsentJobBreaksStreak:
 
 
 class TestAnalyzeEndToEnd:
-    @patch("payload_monitor.analyzer.jira_has_auth", return_value=False)
-    @patch("payload_monitor.analyzer.jira_collector")
-    def test_escalation_risks_populated(self, mock_jira, mock_auth):
+    def test_escalation_risks_populated(self):
         """analyze() should populate escalation_risks on the report."""
-        mock_jira.search_bugs_for_jobs.return_value = ({}, [])
-
         # 3 consecutive informing failures (threshold=3)
         payloads = [
             _make_payload("t1", [_make_informing_job("j1", result=JobResult.FAILURE)]),
@@ -442,12 +366,8 @@ class TestAnalyzeEndToEnd:
         assert len(report.escalation_risks) == 1
         assert report.escalation_risks[0].job_name == "j1"
 
-    @patch("payload_monitor.analyzer.jira_has_auth", return_value=False)
-    @patch("payload_monitor.analyzer.jira_collector")
-    def test_cross_topology_populated(self, mock_jira, mock_auth):
+    def test_cross_topology_populated(self):
         """analyze() should populate cross_topology on the report."""
-        mock_jira.search_bugs_for_jobs.return_value = ({}, [])
-
         sno_job = _make_job(
             "periodic-ci-openshift-release-master-nightly-4.19-e2e-metal-single-node-live-iso",
             topology="SNO",
@@ -466,38 +386,10 @@ class TestAnalyzeEndToEnd:
         assert "TNA" in report.cross_topology[sno_job.name]
 
 
-class TestJiraErrorTracking:
-    @patch("payload_monitor.analyzer.jira_has_auth", return_value=True)
-    @patch("payload_monitor.analyzer.jira_collector")
-    def test_jira_errors_stored_on_report(self, mock_jira, mock_auth):
-        """JIRA search errors should be stored on the report."""
-        mock_jira.search_bugs_for_jobs.return_value = (
-            {},
-            ["JIRA search failed for j1: Connection refused"],
-        )
-        mock_jira.suggest_bug.return_value = SuggestedBug(
-            title="t", description="d", job_name="j1", topology="SNO",
-        )
-
-        report = MonitorReport(
-            generated_at="now",
-            streams=[StreamReport("s", "4.19", payloads=[
-                _make_payload("t1", [_make_job("j1")]),
-            ])],
-        )
-        analyze(report, Config())
-
-        assert len(report.jira_errors) == 1
-        assert "j1" in report.jira_errors[0]
-
-
 class TestAnalyzerErrorRecovery:
-    @patch("payload_monitor.analyzer.jira_has_auth", return_value=False)
-    @patch("payload_monitor.analyzer.jira_collector")
     @patch("payload_monitor.analyzer._find_escalation_risks", side_effect=RuntimeError("boom"))
-    def test_escalation_risk_failure_appends_data_error(self, mock_esc, mock_jira, mock_auth):
+    def test_escalation_risk_failure_appends_data_error(self, mock_esc):
         """Escalation risk failure should append to data_errors and set safe default."""
-        mock_jira.search_bugs_for_jobs.return_value = ({}, [])
         report = MonitorReport(
             generated_at="now",
             streams=[StreamReport("s", "4.19", payloads=[
@@ -508,12 +400,9 @@ class TestAnalyzerErrorRecovery:
         assert report.escalation_risks == []
         assert any("Escalation risk" in e for e in report.data_errors)
 
-    @patch("payload_monitor.analyzer.jira_has_auth", return_value=False)
-    @patch("payload_monitor.analyzer.jira_collector")
     @patch("payload_monitor.analyzer._correlate_cross_topology", side_effect=RuntimeError("boom"))
-    def test_cross_topology_failure_appends_data_error(self, mock_cross, mock_jira, mock_auth):
+    def test_cross_topology_failure_appends_data_error(self, mock_cross):
         """Cross-topology failure should append to data_errors and set safe default."""
-        mock_jira.search_bugs_for_jobs.return_value = ({}, [])
         report = MonitorReport(
             generated_at="now",
             streams=[StreamReport("s", "4.19", payloads=[

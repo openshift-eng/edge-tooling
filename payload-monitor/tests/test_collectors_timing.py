@@ -425,13 +425,110 @@ class TestFetchStepDurations:
         assert steps["pre phase"] == 100.0
 
 
+class TestBuildTimingRun:
+    """Covers the previously-untested run-building step inside collect().
+
+    Regression coverage for the real Sippy /api/jobs/runs shape, e.g.:
+    {"prow_id": "123", "timestamp": "2026-08-30T22:36:19Z", "overall_result": "S"}
+    """
+
+    def test_builds_run_from_real_sippy_shapes(self):
+        run_data = {
+            "prow_id": "2094192518542397440",
+            "timestamp": "2026-08-30T22:36:19Z",
+            "overall_result": "S",
+        }
+        summary = {"durationSeconds": 3474, "overallResult": "S"}
+
+        run = timing._build_timing_run(
+            "test-job", run_data, "4.20", "TNA", "install",
+            {"network": "ipv4"}, summary, {"install": 120.0},
+        )
+
+        assert run.start_time == "2026-08-30T22:36:19Z"
+        assert run.duration_seconds == 3474
+        assert run.result == "S"
+        assert run.step_durations == {"install": 120.0}
+
+    def test_missing_timestamp_yields_empty_start_time(self):
+        run_data = {"prow_id": "1", "overall_result": "F"}
+        run = timing._build_timing_run(
+            "test-job", run_data, "4.20", "SNO", "install", {}, None, {},
+        )
+        assert run.start_time == ""
+        assert run.duration_seconds == 0
+
+    def test_missing_summary_defaults_duration_to_zero(self):
+        run_data = {"prow_id": "1", "timestamp": "2026-08-30T22:36:19Z"}
+        run = timing._build_timing_run(
+            "test-job", run_data, "4.20", "SNO", "install", {}, None, {},
+        )
+        assert run.duration_seconds == 0
+
+
 # ---------------------------------------------------------------------------
 # Retention window helper
 # ---------------------------------------------------------------------------
 
+class TestParseSippyTimestamp:
+    """Sippy's /api/jobs/runs returns ISO-8601 strings for `timestamp`
+    (e.g. "2026-08-30T22:36:19Z"), not epoch milliseconds."""
+
+    def test_iso_string_with_z_suffix(self):
+        dt = timing._parse_sippy_timestamp("2026-08-30T22:36:19Z")
+        assert dt.year == 2026 and dt.month == 8 and dt.day == 30
+        assert dt.tzinfo is not None
+
+    def test_epoch_ms_still_supported(self):
+        import time
+        now_ms = int(time.time() * 1000)
+        dt = timing._parse_sippy_timestamp(now_ms)
+        assert abs(dt.timestamp() * 1000 - now_ms) < 1000
+
+    def test_none_returns_none(self):
+        assert timing._parse_sippy_timestamp(None) is None
+
+    def test_empty_string_returns_none(self):
+        assert timing._parse_sippy_timestamp("") is None
+
+    def test_zero_returns_none(self):
+        assert timing._parse_sippy_timestamp(0) is None
+
+    def test_bool_returns_none(self):
+        assert timing._parse_sippy_timestamp(True) is None
+
+    def test_malformed_string_returns_none(self):
+        assert timing._parse_sippy_timestamp("not-a-timestamp") is None
+
+    def test_unsupported_type_returns_none(self):
+        assert timing._parse_sippy_timestamp(["not", "a", "timestamp"]) is None
+        assert timing._parse_sippy_timestamp({"ts": 1}) is None
+
+    def test_does_not_raise_typeerror_on_string_division(self):
+        # Regression test: previously `_within_retention_window` fed the raw
+        # value straight into `value / 1000`, crashing with
+        # "unsupported operand type(s) for /: 'str' and 'int'" on every
+        # real Sippy response.
+        timing._parse_sippy_timestamp("2026-08-30T22:36:19Z")
+
+
 class TestWithinRetentionWindow:
+    def test_recent_iso_timestamp_is_within(self):
+        from datetime import datetime, timedelta, timezone
+        recent = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        assert timing._within_retention_window(recent, days=7) is True
+
+    def test_old_iso_timestamp_is_outside(self):
+        from datetime import datetime, timedelta, timezone
+        old = (datetime.now(timezone.utc) - timedelta(days=30)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        assert timing._within_retention_window(old, days=7) is False
+
     def test_recent_timestamp_is_within(self):
-        # 1 hour ago in milliseconds
+        # 1 hour ago in milliseconds (epoch-ms still supported for robustness)
         import time
         ts_ms = int((time.time() - 3600) * 1000)
         assert timing._within_retention_window(ts_ms, days=7) is True
@@ -456,8 +553,8 @@ class TestWithinRetentionWindow:
         result = timing._within_retention_window(ts_ms, days=7)
         assert isinstance(result, bool)
 
-    def test_nonnumeric_timestamp_returns_true(self):
-        for bad_value in ("2026-07-16", ["not", "a", "number"], {"ts": 1}):
+    def test_unparseable_timestamp_returns_true(self):
+        for bad_value in ("not-a-timestamp", ["not", "a", "number"], {"ts": 1}):
             assert timing._within_retention_window(bad_value, days=7) is True
 
     def test_bool_timestamp_returns_true(self):
@@ -508,6 +605,101 @@ class TestIsValidCachePayload:
 
 
 # ---------------------------------------------------------------------------
+# GCS build listing (finding the previous completed build)
+# ---------------------------------------------------------------------------
+
+class TestFindPreviousBuildId:
+    @patch.object(timing, "_session")
+    def test_returns_highest_build_excluding_current(self, mock_session):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {
+            "prefixes": [
+                "logs/periodic-ci-test-job/198/",
+                "logs/periodic-ci-test-job/199/",
+                "logs/periodic-ci-test-job/200/",
+            ],
+        }
+        mock_session.get.return_value = resp
+
+        result = timing._find_previous_build_id("periodic-ci-test-job", "200")
+
+        assert result == "199"
+
+    @patch.object(timing, "_session")
+    def test_returns_none_when_no_prefixes(self, mock_session):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {"prefixes": []}
+        mock_session.get.return_value = resp
+
+        assert timing._find_previous_build_id("periodic-ci-test-job", "200") is None
+
+    @patch.object(timing, "_session")
+    def test_returns_none_when_only_current_build_listed(self, mock_session):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {
+            "prefixes": ["logs/periodic-ci-test-job/200/"],
+        }
+        mock_session.get.return_value = resp
+
+        assert timing._find_previous_build_id("periodic-ci-test-job", "200") is None
+
+    @patch.object(timing, "_session")
+    def test_ignores_non_numeric_prefixes(self, mock_session):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {
+            "prefixes": [
+                "logs/periodic-ci-test-job/latest-build.txt/",
+                "logs/periodic-ci-test-job/199/",
+            ],
+        }
+        mock_session.get.return_value = resp
+
+        assert timing._find_previous_build_id("periodic-ci-test-job", "200") == "199"
+
+    @patch.object(timing, "_session")
+    def test_returns_none_on_request_exception(self, mock_session):
+        mock_session.get.side_effect = requests.RequestException("network error")
+
+        assert timing._find_previous_build_id("periodic-ci-test-job", "200") is None
+
+    @patch.object(timing, "_session")
+    def test_returns_none_when_prefixes_missing(self, mock_session):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {}
+        mock_session.get.return_value = resp
+
+        assert timing._find_previous_build_id("periodic-ci-test-job", "200") is None
+
+    @patch.object(timing, "_session")
+    def test_follows_pagination_to_find_highest_build(self, mock_session):
+        # GCS returns prefixes in ascending order, so the highest (most
+        # recent) build ID lands on the last page, not the first.
+        page1 = MagicMock()
+        page1.raise_for_status = MagicMock()
+        page1.json.return_value = {
+            "prefixes": ["logs/periodic-ci-test-job/198/"],
+            "nextPageToken": "token-2",
+        }
+        page2 = MagicMock()
+        page2.raise_for_status = MagicMock()
+        page2.json.return_value = {
+            "prefixes": ["logs/periodic-ci-test-job/199/", "logs/periodic-ci-test-job/200/"],
+        }
+        mock_session.get.side_effect = [page1, page2]
+
+        result = timing._find_previous_build_id("periodic-ci-test-job", "200")
+
+        assert result == "199"
+        assert mock_session.get.call_count == 2
+        assert mock_session.get.call_args_list[1].kwargs["params"]["pageToken"] == "token-2"
+
+
+# ---------------------------------------------------------------------------
 # GCS cache seeding
 # ---------------------------------------------------------------------------
 
@@ -528,9 +720,12 @@ class TestSeedCacheFromPreviousRun:
         timing.seed_cache_from_previous_run(cache_path)
         assert not cache_path.exists()
 
+    @patch.object(timing, "_find_previous_build_id")
     @patch.object(timing, "_session")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
-    def test_success_writes_cache(self, mock_session):
+    def test_success_writes_cache(self, mock_session, mock_find_build):
+        mock_find_build.return_value = "199"
+
         cache_data = json.dumps({
             "last_updated": "2026-07-15T07:00:00Z",
             "runs": {"111": {
@@ -542,15 +737,10 @@ class TestSeedCacheFromPreviousRun:
             "phase_durations": {},
         })
 
-        latest_resp = MagicMock()
-        latest_resp.text = "199\n"
-        latest_resp.raise_for_status = MagicMock()
-
         cache_resp = MagicMock()
         cache_resp.text = cache_data
         cache_resp.raise_for_status = MagicMock()
-
-        mock_session.get.side_effect = [latest_resp, cache_resp]
+        mock_session.get.return_value = cache_resp
 
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_path = Path(tmpdir) / "timing_cache.json"
@@ -560,98 +750,77 @@ class TestSeedCacheFromPreviousRun:
             loaded = json.loads(cache_path.read_text())
             assert "111" in loaded["runs"]
 
-    @patch.object(timing, "_session")
+        mock_find_build.assert_called_once_with("periodic-ci-test-job", "200")
+
+    @patch.object(timing, "_find_previous_build_id")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
-    def test_latest_build_failure_no_crash(self, mock_session, tmp_path):
-        mock_session.get.side_effect = requests.RequestException("network error")
+    def test_no_previous_build_found_no_crash(self, mock_find_build, tmp_path):
+        mock_find_build.return_value = None
 
         cache_path = tmp_path / "nonexistent_seed_test.json"
         timing.seed_cache_from_previous_run(cache_path)
         assert not cache_path.exists()
 
+    @patch.object(timing, "_find_previous_build_id")
     @patch.object(timing, "_session")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
-    def test_cache_artifact_404_no_crash(self, mock_session, tmp_path):
-        latest_resp = MagicMock()
-        latest_resp.text = "199\n"
-        latest_resp.raise_for_status = MagicMock()
+    def test_cache_artifact_404_no_crash(self, mock_session, mock_find_build, tmp_path):
+        mock_find_build.return_value = "199"
 
         cache_resp = MagicMock()
         cache_resp.raise_for_status.side_effect = requests.RequestException("404")
-
-        mock_session.get.side_effect = [latest_resp, cache_resp]
-
-        cache_path = tmp_path / "nonexistent_seed_test.json"
-        timing.seed_cache_from_previous_run(cache_path)
-        assert not cache_path.exists()
-
-    @patch.object(timing, "_session")
-    @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
-    def test_skips_when_latest_is_current_build(self, mock_session, tmp_path):
-        latest_resp = MagicMock()
-        latest_resp.text = "200\n"
-        latest_resp.raise_for_status = MagicMock()
-
-        mock_session.get.return_value = latest_resp
+        mock_session.get.return_value = cache_resp
 
         cache_path = tmp_path / "nonexistent_seed_test.json"
         timing.seed_cache_from_previous_run(cache_path)
         assert not cache_path.exists()
-        # Should only have called GET once (for latest-build.txt), not for the cache artifact
-        assert mock_session.get.call_count == 1
 
+    @patch.object(timing, "_find_previous_build_id")
     @patch.object(timing, "_session")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
-    def test_invalid_json_from_artifact_no_crash(self, mock_session, tmp_path):
-        latest_resp = MagicMock()
-        latest_resp.text = "199\n"
-        latest_resp.raise_for_status = MagicMock()
+    def test_invalid_json_from_artifact_no_crash(self, mock_session, mock_find_build, tmp_path):
+        mock_find_build.return_value = "199"
 
         cache_resp = MagicMock()
         cache_resp.text = "not valid json {"
         cache_resp.raise_for_status = MagicMock()
-
-        mock_session.get.side_effect = [latest_resp, cache_resp]
+        mock_session.get.return_value = cache_resp
 
         cache_path = tmp_path / "nonexistent_seed_test.json"
         timing.seed_cache_from_previous_run(cache_path)
         assert not cache_path.exists()
 
+    @patch.object(timing, "_find_previous_build_id")
     @patch.object(timing, "_session")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
-    def test_structurally_invalid_json_no_crash(self, mock_session, tmp_path):
+    def test_structurally_invalid_json_no_crash(self, mock_session, mock_find_build, tmp_path):
+        mock_find_build.return_value = "199"
+
         # Valid JSON, but not the shape load_cache() expects (runs entries
         # missing required string fields).
         cache_data = json.dumps({"runs": {"111": {"job_name": "j1"}}})
 
-        latest_resp = MagicMock()
-        latest_resp.text = "199\n"
-        latest_resp.raise_for_status = MagicMock()
-
         cache_resp = MagicMock()
         cache_resp.text = cache_data
         cache_resp.raise_for_status = MagicMock()
-
-        mock_session.get.side_effect = [latest_resp, cache_resp]
+        mock_session.get.return_value = cache_resp
 
         cache_path = tmp_path / "nonexistent_seed_test.json"
         timing.seed_cache_from_previous_run(cache_path)
         assert not cache_path.exists()
 
+    @patch.object(timing, "_find_previous_build_id")
     @patch.object(timing, "_session")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
-    def test_write_failure_no_crash(self, mock_session, tmp_path):
-        cache_data = json.dumps({"runs": {"111": VALID_RUN}})
+    def test_write_failure_no_crash(self, mock_session, mock_find_build, tmp_path):
+        mock_find_build.return_value = "199"
 
-        latest_resp = MagicMock()
-        latest_resp.text = "199\n"
-        latest_resp.raise_for_status = MagicMock()
+        cache_data = json.dumps({"runs": {"111": VALID_RUN}})
 
         cache_resp = MagicMock()
         cache_resp.text = cache_data
         cache_resp.raise_for_status = MagicMock()
-
-        mock_session.get.side_effect = [latest_resp, cache_resp]
+        mock_session.get.return_value = cache_resp
 
         cache_path = tmp_path / "nonexistent_seed_test.json"
         with patch.object(Path, "write_text", side_effect=OSError("disk full")):

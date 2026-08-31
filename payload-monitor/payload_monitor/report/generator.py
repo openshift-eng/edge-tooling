@@ -25,7 +25,6 @@ from ..models import (
     JobResult,
     JobRun,
     JobType,
-    JiraBug,
     MonitorReport,
     Payload,
     PayloadStatus,
@@ -114,7 +113,11 @@ def _build_template_context(report: MonitorReport) -> dict:
     informing_failures = 0
     blocking_jobs_seen: set[str] = set()
     blocking_jobs_list: list[dict] = []
-    for item in all_failing:
+    # Map each blocking job name to the 1-based index of its first row in
+    # all_failing, matching the template's `detail-{{ loop.index }}` anchors so
+    # the findings summary can jump straight to the job's detail row.
+    blocking_job_first_idx: dict[str, int] = {}
+    for idx, item in enumerate(all_failing, start=1):
         if item["job"].job_type == JobType.BLOCKING:
             blocking_failures += 1
             name = item["job"].name
@@ -122,6 +125,7 @@ def _build_template_context(report: MonitorReport) -> dict:
             if name not in blocking_jobs_seen:
                 blocking_jobs_seen.add(name)
                 blocking_jobs_list.append(item)
+                blocking_job_first_idx[name] = idx
             if name not in blocking_job_versions:
                 blocking_job_versions[name] = []
                 blocking_job_tests[name] = []
@@ -242,10 +246,10 @@ def _build_template_context(report: MonitorReport) -> dict:
         "escalation_risk_jobs": set(er.job_name for er in report.escalation_risks),
         "escalation_risk_by_job": {er.job_name: er for er in report.escalation_risks},
         "cross_topology": report.cross_topology,
-        "jira_matches_by_job": report.jira_matches,
         "suggested_bugs_by_job": {b.job_name: b for b in report.suggested_bugs},
         "blocking_job_versions": blocking_job_versions,
         "blocking_job_tests": blocking_job_tests,
+        "blocking_job_first_idx": blocking_job_first_idx,
         "retried_successes": retried_successes,
         "stream_views": stream_views,
         "blocking_failures": blocking_failures,
@@ -292,17 +296,11 @@ def generate_json(report: MonitorReport, output_path: Path) -> None:
     data = {
         "generated_at": report.generated_at,
         "streams": [],
-        "jira_bugs": [asdict(b) for b in report.jira_bugs],
         "suggested_bugs": [asdict(b) for b in report.suggested_bugs],
         "component_regressions": [asdict(cr) for cr in report.component_regressions],
         "failure_counts": report.failure_counts,
-        "jira_matches": {
-            name: [asdict(b) for b in bugs]
-            for name, bugs in report.jira_matches.items()
-        },
         "escalation_risks": [asdict(er) for er in report.escalation_risks],
         "cross_topology": report.cross_topology,
-        "jira_errors": report.jira_errors,
         "recurring_threshold": report.recurring_threshold,
         "persistent_threshold": report.persistent_threshold,
     }
@@ -630,20 +628,12 @@ def load_json(json_path: Path) -> MonitorReport:
             regressions=regressions,
         ))
 
-    jira_bugs = [
-        _safe_dataclass_init(JiraBug, b) for b in data.get("jira_bugs", [])
-    ]
     suggested_bugs = [
         _safe_dataclass_init(SuggestedBug, b) for b in data.get("suggested_bugs", [])
     ]
     comp_regressions = [
         _safe_dataclass_init(ComponentRegression, cr) for cr in data.get("component_regressions", [])
     ]
-
-    # Deserialize jira_matches (job_name -> list[JiraBug])
-    jira_matches = {}
-    for name, bugs_raw in data.get("jira_matches", {}).items():
-        jira_matches[name] = [_safe_dataclass_init(JiraBug, b) for b in bugs_raw]
 
     # Deserialize escalation_risks
     escalation_risks = [
@@ -653,14 +643,11 @@ def load_json(json_path: Path) -> MonitorReport:
     return MonitorReport(
         generated_at=data.get("generated_at", ""),
         streams=streams,
-        jira_bugs=jira_bugs,
         suggested_bugs=suggested_bugs,
         component_regressions=comp_regressions,
         failure_counts=data.get("failure_counts", {}),
-        jira_matches=jira_matches,
         escalation_risks=escalation_risks,
         cross_topology=data.get("cross_topology", {}),
-        jira_errors=data.get("jira_errors", []),
         recurring_threshold=data.get("recurring_threshold", 2),
         persistent_threshold=data.get("persistent_threshold", 3),
     )

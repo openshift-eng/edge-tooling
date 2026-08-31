@@ -4,6 +4,20 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Edge OCP Payload Monitor</title>
+  <script>
+    // Resolve the theme before first paint to avoid a flash of the wrong theme.
+    // Precedence: explicit user choice (localStorage) > system preference.
+    (function () {
+      try {
+        var stored = localStorage.getItem('theme');
+        var theme = stored
+          || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    })();
+  </script>
   <style>{{ css | safe }}</style>
 </head>
 <body>
@@ -15,6 +29,10 @@
     <div class="meta"><a href="https://github.com/openshift-eng/edge-context/blob/main/roles/ocp-payload-manager.md" target="_blank">Review the Edge CI Payload Manager Responsibilities</a></div>
   </div>
   <div style="text-align:right">
+    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle color theme" title="Toggle light/dark theme">
+      <span class="theme-icon-sun" aria-hidden="true">☀︎</span>
+      <span class="theme-icon-moon" aria-hidden="true">☾</span>
+    </button>
     <div class="meta"><a href="https://github.com/openshift-eng/edge-tooling" target="_blank" style="color:var(--text-muted)">View source on GitHub ↗</a></div>
     <div class="meta">Generated: {{ report.generated_at }}</div>
     {% set has_ai = [] %}{% set has_blocking = [] %}{% for item in all_failing %}{% if item.job.deep_analysis %}{% if has_ai.append(1) %}{% endif %}{% endif %}{% if item.job.job_type.value == "blocking" %}{% if has_blocking.append(1) %}{% endif %}{% endif %}{% endfor %}
@@ -46,7 +64,7 @@
 <!-- Tab: Payload Health -->
 <div class="tab-panel active" id="tab-payload-health">
 
-{% if report.skip_prow or report.skip_sippy or report.skip_jira or report.skip_timing %}
+{% if report.skip_prow or report.skip_sippy or report.skip_timing %}
 <div class="skip-banner">
   <strong>Note:</strong> This report was generated with limited data.
   {% if report.skip_prow %}
@@ -54,9 +72,6 @@
   {% endif %}
   {% if report.skip_sippy %}
   <span class="skip-flag">--skip-sippy</span> Sippy regression check was skipped - Sippy Job Regressions section is not available.
-  {% endif %}
-  {% if report.skip_jira %}
-  <span class="skip-flag">JIRA</span> JIRA_TOKEN not set - bug matching and suggested bugs are unavailable. Set JIRA_TOKEN to enable (optionally JIRA_USERNAME for Basic auth).
   {% endif %}
   {% if report.skip_timing %}
   <span class="skip-flag">Insights</span> Timing insights are disabled by default. Use <code>--with-timing</code> to include install/upgrade timing data.
@@ -71,20 +86,6 @@
     <summary>Show details</summary>
     <ul>
       {% for err in report.data_errors %}
-      <li>{{ err }}</li>
-      {% endfor %}
-    </ul>
-  </details>
-</div>
-{% endif %}
-
-{% if report.jira_errors %}
-<div class="warning-banner">
-  <strong>JIRA search errors:</strong> {{ report.jira_errors | length }} JIRA search{{ 'es' if report.jira_errors | length != 1 else '' }} failed. Bug matching may be incomplete for affected jobs.
-  <details class="error-details">
-    <summary>Show details</summary>
-    <ul>
-      {% for err in report.jira_errors %}
       <li>{{ err }}</li>
       {% endfor %}
     </ul>
@@ -228,7 +229,6 @@
   total_payloads=total_payloads,
   regression_count=all_regressions|length,
   component_regression_count=component_regressions|length,
-  bugs_found=report.jira_bugs|length,
   bugs_suggested=report.suggested_bugs|length
 ) %}
 
@@ -510,26 +510,12 @@
     </div><!-- /claude-suggestion -->
     {% endif %}
 
-    {# Inline JIRA matches for this job #}
-    {% set job_bugs = jira_matches_by_job.get(detail.job.name, []) %}
-    {% if job_bugs %}
-    <div class="inline-jira-matches">
-      <strong>Related JIRA Bugs:</strong>
-      {% for bug in job_bugs %}
-      <a href="{{ bug.url }}" target="_blank" class="inline-jira-badge">
-        <span class="key">{{ bug.key }}</span>
-        <span class="status-indicator {% if bug.status in ['New', 'Open', 'In Progress'] %}open{% else %}resolved{% endif %}">{{ bug.status }}</span>
-      </a>
-      {% endfor %}
-    </div>
-    {% elif not report.skip_jira %}
+    {# Suggested bug creation for this job #}
     {% set suggested = suggested_bugs_by_job.get(detail.job.name) %}
     {% if suggested %}
     <div class="inline-create-bug">
-      <span style="color:var(--text-muted);font-size:12px">No existing JIRA bug found for this job.</span>
       <a href="{{ suggested.create_url }}" target="_blank" class="create-btn" style="margin:0;padding:4px 12px;font-size:11px">Create Bug in JIRA</a>
     </div>
-    {% endif %}
     {% endif %}
 
     {# Escalation risk: consecutive failure history #}
@@ -784,31 +770,10 @@
 {% endif %}
 {% endif %}
 
-<!-- JIRA Bugs -->
-{% if report.jira_bugs %}
-<h2 id="section-jira-bugs">Related JIRA Bugs</h2>
-{% for bug in report.jira_bugs %}
-<div class="jira-card">
-  <div>
-    <a href="{{ bug.url }}" target="_blank" class="key">{{ bug.key }}</a>
-    <span class="summary">{{ bug.summary }}</span>
-  </div>
-  <div>
-    <span class="status-badge {% if bug.status in ['New', 'Open', 'In Progress'] %}failure{% else %}success{% endif %}">
-      {{ bug.status }}
-    </span>
-    {% if bug.assignee %}
-    <span style="font-size:12px;color:var(--text-muted);margin-left:8px">{{ bug.assignee }}</span>
-    {% endif %}
-  </div>
-</div>
-{% endfor %}
-{% endif %}
-
 <!-- Suggested Bugs -->
 {% if report.suggested_bugs %}
 <h2 id="section-suggested-bugs">Suggested New Bugs</h2>
-<div class="meta" style="margin-bottom:8px">Failing edge jobs (SNO/TNA/TNF) with no existing JIRA bug matching the job name. Deduplicated by job name across payloads and versions.</div>
+<div class="meta" style="margin-bottom:8px">Failing edge jobs (SNO/TNA/TNF), deduplicated by job name across payloads and versions.</div>
 {% for bug in report.suggested_bugs %}
 <div class="suggest-card">
   <div class="title">{{ bug.title }}</div>

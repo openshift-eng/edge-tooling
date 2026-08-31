@@ -16,7 +16,6 @@ from payload_monitor.models import (
     JobResult,
     JobRun,
     JobType,
-    JiraBug,
     MonitorReport,
     Payload,
     PayloadStatus,
@@ -244,6 +243,19 @@ class TestGenerateHtml:
         generate_html(sample_report, out)
         assert out.exists()
 
+    def test_theme_toggle_present(self, sample_report):
+        """The dashboard ships a theme toggle button, a no-flash bootstrap
+        script that honors localStorage + system preference, and a light
+        palette so the toggle has something to switch to."""
+        html = generate_html(sample_report)
+        # Toggle control in the header
+        assert 'id="theme-toggle"' in html
+        # No-flash bootstrap: resolve theme before body renders
+        assert "localStorage.getItem('theme')" in html
+        assert "prefers-color-scheme: dark" in html
+        # Light palette exists to switch into
+        assert '[data-theme="light"]' in html
+
 
 class TestGenerateJson:
     def test_generates_json(self, sample_report, tmp_path):
@@ -453,7 +465,6 @@ class TestLoadJson:
                 }],
                 "regressions": [],
             }],
-            "jira_bugs": [],
             "suggested_bugs": [],
             "component_regressions": [],
         }
@@ -519,21 +530,7 @@ class TestCrossTopologyContext:
         assert ctx["cross_topology"] == {"j1": ["TNA"]}
 
 
-class TestJiraMatchesContext:
-    def test_context_includes_jira_matches(self):
-        bug = JiraBug(key="OCPBUGS-1", summary="bug", status="New", url="https://issues.redhat.com/browse/OCPBUGS-1")
-        job = JobRun("j1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")
-        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
-        stream = StreamReport("s", "4.19", payloads=[payload])
-        report = MonitorReport(
-            generated_at="now",
-            streams=[stream],
-            jira_matches={"j1": [bug]},
-        )
-        ctx = _build_template_context(report)
-        assert "jira_matches_by_job" in ctx
-        assert ctx["jira_matches_by_job"] == {"j1": [bug]}
-
+class TestSuggestedBugsContext:
     def test_context_includes_suggested_bugs_by_job(self):
         suggested = SuggestedBug(
             title="Bug", description="desc", job_name="j2",
@@ -563,18 +560,6 @@ class TestJsonRoundTripNewFields:
         generate_json(report, out)
         loaded = load_json(out)
         assert loaded.failure_counts == {"j1": 3, "j2": 1}
-
-    def test_jira_matches_round_trip(self, tmp_path):
-        bug = JiraBug(key="OCPBUGS-1", summary="b", status="New")
-        report = MonitorReport(
-            generated_at="now",
-            jira_matches={"j1": [bug]},
-        )
-        out = tmp_path / "report.json"
-        generate_json(report, out)
-        loaded = load_json(out)
-        assert "j1" in loaded.jira_matches
-        assert loaded.jira_matches["j1"][0].key == "OCPBUGS-1"
 
     def test_escalation_risks_round_trip(self, tmp_path):
         er = EscalationRisk(
@@ -618,16 +603,6 @@ class TestJsonRoundTripNewFields:
         loaded = load_json(out)
         assert loaded.recurring_threshold == 5
         assert loaded.persistent_threshold == 10
-
-    def test_jira_errors_round_trip(self, tmp_path):
-        report = MonitorReport(
-            generated_at="now",
-            jira_errors=["JIRA search failed for j1: timeout", "JIRA search failed for j2: 403"],
-        )
-        out = tmp_path / "report.json"
-        generate_json(report, out)
-        loaded = load_json(out)
-        assert loaded.jira_errors == ["JIRA search failed for j1: timeout", "JIRA search failed for j2: 403"]
 
 
 class TestRetriedSuccessesContext:
@@ -734,7 +709,6 @@ class TestRetryJsonRoundTrip:
                 }],
                 "regressions": [],
             }],
-            "jira_bugs": [],
             "suggested_bugs": [],
             "component_regressions": [],
         }
@@ -767,18 +741,18 @@ class TestRetryJsonRoundTrip:
 
 class TestSafeDataclassInit:
     def test_ignores_unknown_keys(self):
-        result = _safe_dataclass_init(JiraBug, {
-            "key": "X-1", "summary": "s", "status": "New",
+        result = _safe_dataclass_init(AttemptAnalysis, {
+            "prow_url": "https://prow/1", "root_cause": "x",
             "unknown_field": "should be ignored",
         })
-        assert result.key == "X-1"
+        assert result.prow_url == "https://prow/1"
         assert not hasattr(result, "unknown_field")
 
     def test_uses_defaults_for_missing_optional(self):
-        result = _safe_dataclass_init(JiraBug, {
-            "key": "X-1", "summary": "s", "status": "New",
+        result = _safe_dataclass_init(AttemptAnalysis, {
+            "prow_url": "https://prow/1",
         })
-        assert result.assignee == ""
+        assert result.failure_type == ""
 
 
 class TestBlockingJobFirstIdx:

@@ -10,7 +10,6 @@ from payload_monitor.models import (
     JobResult,
     JobRun,
     JobType,
-    JiraBug,
     MonitorReport,
     Payload,
     PayloadStatus,

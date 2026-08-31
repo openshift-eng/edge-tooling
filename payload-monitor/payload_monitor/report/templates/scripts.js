@@ -1,3 +1,17 @@
+// Theme toggle (light/dark). The initial theme is resolved before first paint
+// by the bootstrap script in <head>; this handles explicit user toggles and
+// persists the choice so it wins over system preference on the next visit.
+document.addEventListener('DOMContentLoaded', function() {
+  var btn = document.getElementById('theme-toggle');
+  if (!btn) return;
+  btn.addEventListener('click', function() {
+    var current = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+    var next = current === 'light' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('theme', next); } catch (e) {}
+  });
+});
+
 // Tab switching
 document.addEventListener('DOMContentLoaded', function() {
   document.querySelectorAll('.tab-btn').forEach(function(btn) {
