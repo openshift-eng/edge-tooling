@@ -511,6 +511,30 @@ class TestParseSippyTimestamp:
         # real Sippy response.
         timing._parse_sippy_timestamp("2026-08-30T22:36:19Z")
 
+    def test_offset_aware_string_is_normalized_to_utc(self):
+        # A non-UTC offset must be converted, not kept as-is, so downstream
+        # comparisons/formatting treat it as the same instant in UTC.
+        from datetime import timezone
+
+        dt = timing._parse_sippy_timestamp("2026-08-30T22:36:19+02:00")
+        assert dt.tzinfo == timezone.utc
+        assert dt.hour == 20 and dt.day == 30
+
+    def test_offset_less_string_is_treated_as_utc(self):
+        # Regression test: an offset-naive datetime compared against the
+        # tz-aware cutoff in `_within_retention_window` raises
+        # "TypeError: can't compare offset-naive and offset-aware datetimes".
+        from datetime import timezone
+
+        dt = timing._parse_sippy_timestamp("2026-08-30T22:36:19")
+        assert dt.tzinfo == timezone.utc
+
+    def test_offset_less_string_does_not_raise_in_retention_window(self):
+        assert timing._within_retention_window("2026-08-30T22:36:19", days=7) in (
+            True,
+            False,
+        )
+
 
 class TestWithinRetentionWindow:
     def test_recent_iso_timestamp_is_within(self):

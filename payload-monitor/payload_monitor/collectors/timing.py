@@ -205,9 +205,12 @@ def _parse_sippy_timestamp(value) -> Optional[datetime]:
         return None
     if isinstance(value, str):
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
     if isinstance(value, (int, float)):
         try:
             return datetime.fromtimestamp(value / 1000, tz=timezone.utc)
