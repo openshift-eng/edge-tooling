@@ -1,6 +1,6 @@
 ---
 name: microshift-release:advisory-promotion
-argument-hint: <version> [--prod] [--verbose] [--json] [--errata <advisory_id>]
+argument-hint: <version> (-s | -p | -s -p) [--json] [--errata <advisory_id>]
 description: Validate advisory promotion for QE sign-off — Konflux bootc images (default) or Errata Tool RPM advisory (--errata)
 user-invocable: true
 allowed-tools: Bash
@@ -11,8 +11,8 @@ allowed-tools: Bash
 ## Synopsis
 
 ```bash
-/microshift-release:advisory-promotion <version> [--prod] [--verbose]
-/microshift-release:advisory-promotion <version> --errata <advisory_id> [--verbose]
+/microshift-release:advisory-promotion <version> (-s | -p | -s -p) [--json]
+/microshift-release:advisory-promotion <version> --errata <advisory_id>
 ```
 
 ## Description
@@ -64,8 +64,11 @@ Requires VPN and a valid Kerberos ticket (`kinit`).
   - RC: `4.22.0-rc.2`
   - EC: `5.0.0-ec.3`
 - `--errata <advisory_id>` (optional): Switch to Errata Tool mode. `advisory_id` is the ET advisory numeric ID or name (e.g., `12345` or `RHBA-2026:12345`)
-- `--prod` (optional, bootc only): Check both stage and prod catalogs (default: stage only)
-- `--verbose` (optional): Show detailed markdown report
+- `-s`/`--stage` (required\*, bootc only): Check stage catalog and shipment errata (common checks always included)
+- `-p`/`--prod` (required\*, bootc only): Check prod catalog and shipment errata (common checks always included)
+- `--json` (optional): Output raw JSON
+
+\*At least one of `--stage` or `--prod` must be provided for bootc mode. Both can be used together.
 
 ## Scripts Directory
 
@@ -83,15 +86,15 @@ SCRIPTS_DIR=plugins/microshift-release/scripts
    - Route to **Errata mode** (Step 2b)
    - If `--errata` is present but no advisory ID follows, error: "Missing advisory ID after --errata"
 3. If `--errata` is not present, route to **Bootc mode** (Step 2a)
-4. Pass through `--verbose` and `--json` flags if present
+4. Pass through `-s`/`--stage`, `-p`/`--prod`, and `--json` flags if present
 
 ### Step 2a: Run Bootc Checks (default)
 
 ```bash
-bash $SCRIPTS_DIR/advisory_promotion.sh <version> --prod [--verbose]
+bash $SCRIPTS_DIR/advisory_promotion.sh <version> -s -p [--json]
 ```
 
-Always pass `--prod` so that all checks run (stage and prod catalogs). Display stderr only if the script exits non-zero.
+Always pass `-s -p` so that all checks run (stage and prod catalogs). Display stderr only if the script exits non-zero.
 
 ### Step 2b: Run Errata Tool Checks
 
@@ -237,22 +240,19 @@ On failure, details appear below the failing check:
                              OCPBUGS-67890: ON_QA
 ```
 
-**Verbose (--verbose):** Markdown table with full evidence per check.
-
 ## Examples
 
 ```bash
 # Bootc mode
-/microshift-release:advisory-promotion 4.20.26             # Z-stream (el9 only)
-/microshift-release:advisory-promotion 4.22.2              # Z-stream (el9 + el10)
-/microshift-release:advisory-promotion 4.22.0              # X/Y GA
-/microshift-release:advisory-promotion 4.20.26 --prod      # check prod catalog too
-/microshift-release:advisory-promotion 4.20.26 --verbose   # detailed report
+/microshift-release:advisory-promotion 4.20.26 -s            # stage only
+/microshift-release:advisory-promotion 4.20.26 -p            # prod only
+/microshift-release:advisory-promotion 4.20.26 -s -p         # all checks
+/microshift-release:advisory-promotion 4.22.2 -s -p          # el9 + el10
+/microshift-release:advisory-promotion 4.20.26 -s --json     # machine-readable
 
 # Errata Tool mode
 /microshift-release:advisory-promotion 4.20.26 --errata 12345
 /microshift-release:advisory-promotion 4.20.26 --errata RHBA-2026:12345
-/microshift-release:advisory-promotion 4.22.0 --errata RHEA-2026:67890 --verbose
 ```
 
 ## Notes
@@ -261,4 +261,4 @@ On failure, details appear below the failing check:
 - **Bootc mode**: VPN + GITLAB_API_TOKEN required; version 4.18+ only
 - **Errata mode**: VPN + Kerberos ticket (`kinit`) required; works with any MicroShift version that has an ET advisory
 - Exit code is non-zero if any check returns FAIL
-- Both modes support `--verbose` for detailed markdown output and `--json` for machine-readable JSON
+- Bootc mode supports `--json` for machine-readable JSON output
