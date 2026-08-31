@@ -17,9 +17,9 @@ Automate MicroShift Release Testing Activities — from pre-release evaluation t
 | `/microshift-release:release-versions` | Info (Phase 0) | Anytime after ART has created RPMs and bootc images | Report details about all artifacts: RPMs, bootc images, and Brew builds |
 | `/microshift-release:validate-artifacts` | Build Validation (Phase 1) | As soon as ART has created RPMs and bootc images | Validate MicroShift built artifacts (RPMs and bootc images) produced by ART |
 | `/microshift-release:automated-testing` | Automated Testing (Phase 2) | As soon as Phase 1 is done | Run the full Prow CI release testing workflow — create PR, trigger jobs, check status, download and upload artifacts |
-| Not Applicable | Manual Testing (Phase 3) | Only for RHEA versions (X.Y.0). As soon as Phase 1 is done | Run some manual tests  |
-| `/microshift-release:advisory-promotion` | Advisory Promotion (Phase 4) | Start in parallel with Phase 1, but wait for Phase 2 to finish before signing off Errata and Shipment | Validate Konflux bootc advisory promotion for QE sign-off — verify advisory YAML, catalog presence, shipment MR, and commit provenance |
-| `/microshift-release:post-release` | Post-Release (Phase 5) | After sign-off in Errata Tool (REL_PREP) and Shipment (approved) | Verify all artifacts and docs are publicly available after shipping — bootc images, RPMs, errata, documentation, and lifecycle page |
+| Not Applicable | Manual Testing (Phase 2) | Manual testing must be performed on new features only for non-z-stream versions (X.Y.0 or RHEA), in case they cannot be automated or haven't been automated yet. As soon as Phase 1 is done | Run some manual tests  |
+| `/microshift-release:advisory-promotion` | Advisory Promotion (Phase 3) | Start in parallel with Phase 1, but wait for Phase 2 to finish before signing off Errata and Shipment | Validate Konflux bootc advisory promotion for QE sign-off — verify advisory YAML, catalog presence, shipment MR, and commit provenance |
+| `/microshift-release:post-release` | Post-Release (Phase 4) | After sign-off in Errata Tool (REL_PREP) and Shipment (approved) | Verify all artifacts and docs are publicly available after shipping — bootc images, RPMs, errata, documentation, and lifecycle page |
 
 ## How To
 
