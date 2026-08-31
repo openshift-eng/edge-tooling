@@ -1,9 +1,9 @@
 ---
 name: microshift-release:pre-check
-argument-hint: [Z|X|Y|RC|EC|nightly] [version|time-range...] [--verbose]
+argument-hint: [Z|X|Y|RC|EC|nightly] [version|time-range...]
 description: Check OCP release schedule, verify availability, evaluate z-stream need, or check nightly build gaps
 user-invocable: true
-allowed-tools: Bash, mcp__jira__jira_get_issue, mcp__jira__jira_search
+allowed-tools: Bash, mcp__jira__jira_search
 ---
 
 # microshift-release:pre-check
@@ -27,7 +27,8 @@ When a time range is provided (e.g., "this week"), it queries ART Jira for OCP r
 | Requirement | Needed for | Mandatory? |
 |---|---|---|
 | VPN | Brew RPM checks (nightly, EC/RC), advisory report | Yes for nightly/ecrc — xyz degrades gracefully (skips advisory, 90-day rule) |
-| Jira MCP | OCPBUGS enrichment, ART ticket queries, time range lookups | Yes — required to analyze OCPBUGS resolution and release action |
+| Jira MCP | ART ticket queries, time range lookups | Yes — required for resolving versions from time ranges |
+| `JIRA_API_TOKEN` + `JIRA_USERNAME` | OCPBUGS enrichment, advisory CVE enrichment, component CVE discovery | No — script degrades gracefully (shows "Pending Jira lookup") |
 | `GITLAB_API_TOKEN` | Advisory report for 4.20+ (shipment MR data) | No — advisory skipped for 4.20+ without it |
 
 ## Arguments
@@ -39,7 +40,6 @@ When a time range is provided (e.g., "this week"), it queries ART Jira for OCP r
   - `this week`, `next week`
   - `next 3 days`, `next 7 days`
   - `this month`
-- `--verbose` (optional): Show extra detail (tables for xyz, NVR/nightly names for nightly, next versions for EC/RC).
 
 ## Scripts Directory
 
@@ -121,84 +121,37 @@ Map each release type to the corresponding `precheck.sh` subcommand and run via 
 | `EC` | `ART_TICKETS_JSON=/tmp/art_tickets.json bash ${SCRIPTS_DIR}/precheck.sh ecrc EC [version]` |
 | `RC` | `ART_TICKETS_JSON=/tmp/art_tickets.json bash ${SCRIPTS_DIR}/precheck.sh ecrc RC [version]` |
 
-**IMPORTANT**: Only append `--verbose` to the command if the user explicitly passed `--verbose` in their arguments. Do NOT add it by default.
-
 Stderr contains progress messages — only display it if the script exits non-zero.
 
 **Multiple types** (e.g., `nightly EC RC`): Run each command as a separate Bash call in parallel.
 
 ### Step 5: Display Output
 
-Display the script output **verbatim** — do not reformat, add tables, or change the layout. The scripts produce deterministic pre-formatted text. Do NOT add any commentary, explanation, or summary after the output.
+The script produces two output modes:
 
-**OCPBUGS follow-up**: If any version shows OCPBUGS in the output (e.g., `1 OCPBUGS`), automatically re-run the command with `--verbose` to list the specific bugs. Only do this once — do not re-run if `--verbose` was already passed.
+The script outputs all analysis in a single run:
 
-### Step 6: Enrich OCPBUGS via MCP
+1. **One-liner summaries** — quick action per version
+2. **Release Schedule** — ART ticket, due date, OCP status, lifecycle
+3. **Z-Stream Evaluation** — last released, days since, commits, CVE impact, OCPBUGS count
+4. **Advisory Report** — per-advisory CVE details with MicroShift impact reasons
+5. **Resolved OCPBUGS** — enriched bug details (status, release action, summary)
+6. **Recommendations** — combined table with: Recommendation, Version, OCP, CVEs, OCPBUGS, Last Release, Reason
+7. **CVEs Requiring Release** — detail table when there are must-release CVEs
 
-After displaying the output (including any `--verbose` re-run), if any OCPBUGS appeared in the results:
+Display the **complete stdout** as **rendered markdown** (NOT as a
+code block). The script outputs markdown tables — they MUST render
+as formatted tables, not raw text. Every section must be visible
+to the user. Do not summarize, abbreviate, or replace the output
+with your own tables or commentary. Bold the Recommendation column
+values in the Recommendations table.
 
-1. **Collect OCPBUGS keys**: Extract all unique `OCPBUGS-XXXXX` keys from the output (they appear in the Resolved OCPBUGS table or the one-line summaries).
-2. **Fetch each bug via MCP**: For each unique key, call `mcp__jira__jira_get_issue` with:
-   - `issue_key`: the OCPBUGS key (e.g., `"OCPBUGS-12345"`)
-   - `fields`: `summary,status,resolution,labels,issuetype,priority`
-   Make all `jira_get_issue` calls **in parallel** (multiple tool calls in one message).
-3. **Build enriched JSON**: For each successfully fetched bug, build a JSON object:
+The Recommendations table already combines summary data with
+recommendation reasons — no parsing or reformatting needed.
+No `--verbose` re-run or MCP enrichment steps are needed — the
+script handles everything internally via `JIRA_API_TOKEN`.
 
-   ```json
-   {
-     "key": "OCPBUGS-12345",
-     "version": "4.21",
-     "summary": "<from MCP response: fields.summary>",
-     "status": "<from MCP response: fields.status.name>",
-     "labels": ["<from MCP response: fields.labels array>"],
-     "issuetype": "<from MCP response: fields.issuetype.name>",
-     "priority": "<from MCP response: fields.priority.name>"
-   }
-   ```
-
-   The `version` field is the minor version (e.g., `"4.21"`) from the evaluation that referenced the bug. If a bug appears in multiple versions, include one entry per version.
-4. **Render enrichment table**: Pipe the JSON array through the enrichment script:
-
-   ```bash
-   echo '<json_array>' | bash ${SCRIPTS_DIR}/precheck.sh enrich
-   ```
-
-5. **Display the enrichment output** after the main precheck output. This shows real summaries, statuses, release actions (release-required/release-not-required/needs-review), and updated recommendations.
-
-If `mcp__jira__jira_get_issue` is not available, skip enrichment and note that the Jira MCP is required for OCPBUGS analysis.
-
-### Step 7: Enrich Advisory CVEs via MCP
-
-After displaying the output, if any version shows "advisory CVEs" or "pending" in the CVE impact column:
-
-1. **Collect CVE IDs**: Extract all CVE IDs from the Advisory / CVE Details table (they appear as `CVE-YYYY-NNNNN` with impact "found").
-2. **Search Jira for each CVE**: For each unique CVE ID, call `mcp__jira__jira_search` with:
-   - `jql`: `summary ~ "CVE-YYYY-NNNNN" AND project = OCPBUGS`
-   - `fields`: `summary,status,resolution`
-   - `limit`: `5`
-   Make all `jira_search` calls **in parallel** (multiple tool calls in one message).
-3. **Interpret each CVE**: For each CVE, based on the Jira ticket found:
-   - **No ticket found** → CVE does not affect MicroShift → no action
-   - **Resolution = "Done"** → fix landed but not yet shipped → **must release**
-   - **Resolution = "Done-Errata"** → fix already shipped → no action
-   - **Resolution = "Not a Bug"** → does not affect MicroShift → no action
-   - **Any other status** (In Progress, Verified, etc.) → fix not yet landed → no action
-4. **Present enriched results**: Display a summary table of each CVE with its Jira ticket, resolution, and whether it triggers a release. If any CVE has resolution "Done", update the version recommendation to "ASK ART TO CREATE ARTIFACTS" with the CVE list.
-
-If `mcp__jira__jira_search` is not available, skip CVE enrichment and note that the Jira MCP is required for advisory CVE analysis.
-
-### Step 8: Final Recommendations Table
-
-After all enrichment steps (OCPBUGS + CVE), **always** end with a `## Final Recommendations` table — one row per evaluated version. Use this format:
-
-| Version | ART Ticket | Due | OCPBUGS | CVEs (MicroShift) | Recommendation |
-|---------|-----------|-----|---------|-------------------|----------------|
-| 4.22.6 | ART-21670 (Closed) | Jul-21 | 4 needs-review | none | **NEEDS REVIEW** — reason |
-| 4.21.25 | ART-21668 (Closed) | Jul-21 | 1 unresolved | none | **SKIP** — reason |
-
-Every version gets a row, even if the action is SKIP. Never summarize as prose paragraphs instead of a table.
-
-### Step 9: Handle Errors
+### Step 6: Handle Errors
 
 If the script exits non-zero, display stderr and suggest:
 
@@ -221,10 +174,20 @@ If the script exits non-zero, display stderr and suggest:
 /microshift-release:pre-check nightly EC RC               # combined report
 ```
 
+## Recommendation statuses
+
+| Emoji | Status | Meaning |
+|-------|--------|---------|
+| 🔴 **ASK ART** | Create ticket to ART | OCP payload ready, must release |
+| ⏳ **BLOCKED** | Action decided, waiting | Need to release but OCP payload not ready yet |
+| 🟡 **NEEDS REVIEW** | Human judgment needed | Unlabeled OCPBUGS, ambiguous cases |
+| 🟢 **SKIP** | No action | No CVEs, no bugs, within 90 days |
+| ✅ **ALREADY RELEASED** | Done | Already shipped |
+
 ## Notes
 
 - Read-only — does NOT create tickets or modify external state
 - Scripts support `--json` for raw JSON output when called directly (e.g., `bash ${SCRIPTS_DIR}/precheck.sh xyz 4.21.10 --json`)
 - `--verbose` works for all types: detailed tables for xyz, NVR/nightly names for nightly, next versions for EC/RC
-- OCPBUGS enrichment uses Jira MCP (OAuth) — no PAT env vars needed; the script discovers bug keys from git commits, and the skill enriches them via `jira_get_issue`
+- OCPBUGS and CVE enrichment run inside the script via Jira REST API (`JIRA_API_TOKEN` + `JIRA_USERNAME`)
 - VPN required for Brew and errata access
