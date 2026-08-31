@@ -91,10 +91,10 @@ SCRIPTS_DIR=plugins/microshift-release/scripts
 ### Step 2a: Run Bootc Checks (default)
 
 ```bash
-bash $SCRIPTS_DIR/advisory_promotion.sh <version> -s -p [--json]
+bash $SCRIPTS_DIR/advisory_promotion.sh <version> <stage/prod flags> [--json]
 ```
 
-Always pass `-s -p` so that all checks run (stage and prod catalogs). Display stderr only if the script exits non-zero.
+Forward only the `-s`/`-p` flags the user provided. If neither was supplied, ask which environment to check — the CLI requires at least one. Display stderr only if the script exits non-zero.
 
 ### Step 2b: Run Errata Tool Checks
 
