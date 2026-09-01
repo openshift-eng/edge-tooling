@@ -253,7 +253,7 @@ Offer follow-up actions the user can take from this session:
 
 - **Create JIRA bugs** for untracked failures
 - **Set release blocker** on a JIRA issue (`ci:set-release-blocker`)
-- **Triage a regression** in Component Readiness (`ci:triage-regression`)
+- **Investigate a regression** in Component Readiness (`ci:ask-sippy`)
 - **Trigger payload job** to test a fix (`ci:trigger-payload-job`)
 - **Investigate an informing job** further (`ci:prow-job-analysis`)
 
@@ -263,7 +263,7 @@ Offer follow-up actions the user can take from this session:
 
 - The Python tool must be run from the `$TOOL_DIR` directory
 - Dependencies are checked and installed automatically in Step 2
-- JIRA features require a `JIRA_TOKEN` environment variable with **read-only** permissions — the tool only searches for existing bugs, never creates or modifies issues
+- Suggested-bug "Create Bug in JIRA" links require no authentication — they open a browser-based create form for manual review before submission
 - Prow artifact fetching requires `gsutil` (Google Cloud SDK)
 - Do NOT modify the Python source code — this skill is an orchestration layer on top
 - Do NOT duplicate report data in your output — the HTML dashboard is the primary output, keep your response brief

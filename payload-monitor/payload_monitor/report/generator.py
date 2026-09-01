@@ -25,7 +25,6 @@ from ..models import (
     JobResult,
     JobRun,
     JobType,
-    JiraBug,
     MonitorReport,
     Payload,
     PayloadStatus,
@@ -171,20 +170,29 @@ def _build_template_context(report: MonitorReport) -> dict:
         affected = sorted({
             j.topology for p in stream.payloads for j in p.failing_edge_jobs if j.topology
         })
-        mid = len(stream.payloads) // 2
-        recent_fails = sum(
-            len(p.blocking_edge_failures) + len(p.informing_edge_failures)
-            for p in stream.payloads[:mid]
-        )
-        older_fails = sum(
-            len(p.blocking_edge_failures) + len(p.informing_edge_failures)
-            for p in stream.payloads[mid:]
-        )
+
+        # Trend is a per-payload failure rate (not a raw count) so an uneven
+        # recent/older split (e.g. 2 vs 3 payloads) can't tip the label on
+        # its own. Blocking failures are weighted 3x informing ones since
+        # they're what actually reject a payload. trend_signal gates whether
+        # an arrow is shown at all, so a single low-severity blip renders as
+        # stable rather than a false worsening/improving signal.
+        mid = max(len(stream.payloads) // 2, 1)
+        recent, older = stream.payloads[:mid], stream.payloads[mid:]
+
+        def _weighted(ps):
+            return sum(3 * len(p.blocking_edge_failures) + len(p.informing_edge_failures) for p in ps)
+
+        recent_fails = _weighted(recent) / len(recent) if recent else 0.0
+        older_fails = _weighted(older) / len(older) if older else 0.0
+        trend_signal = _weighted(stream.payloads)
+
         stream_views.append({
             "stream": stream,
             "affected_topologies": affected,
             "recent_fails": recent_fails,
             "older_fails": older_fails,
+            "trend_signal": trend_signal,
         })
 
     # Unique topology names and versions for filters
@@ -242,7 +250,6 @@ def _build_template_context(report: MonitorReport) -> dict:
         "escalation_risk_jobs": set(er.job_name for er in report.escalation_risks),
         "escalation_risk_by_job": {er.job_name: er for er in report.escalation_risks},
         "cross_topology": report.cross_topology,
-        "jira_matches_by_job": report.jira_matches,
         "suggested_bugs_by_job": {b.job_name: b for b in report.suggested_bugs},
         "blocking_job_versions": blocking_job_versions,
         "blocking_job_tests": blocking_job_tests,
@@ -292,17 +299,11 @@ def generate_json(report: MonitorReport, output_path: Path) -> None:
     data = {
         "generated_at": report.generated_at,
         "streams": [],
-        "jira_bugs": [asdict(b) for b in report.jira_bugs],
         "suggested_bugs": [asdict(b) for b in report.suggested_bugs],
         "component_regressions": [asdict(cr) for cr in report.component_regressions],
         "failure_counts": report.failure_counts,
-        "jira_matches": {
-            name: [asdict(b) for b in bugs]
-            for name, bugs in report.jira_matches.items()
-        },
         "escalation_risks": [asdict(er) for er in report.escalation_risks],
         "cross_topology": report.cross_topology,
-        "jira_errors": report.jira_errors,
         "recurring_threshold": report.recurring_threshold,
         "persistent_threshold": report.persistent_threshold,
     }
@@ -630,20 +631,12 @@ def load_json(json_path: Path) -> MonitorReport:
             regressions=regressions,
         ))
 
-    jira_bugs = [
-        _safe_dataclass_init(JiraBug, b) for b in data.get("jira_bugs", [])
-    ]
     suggested_bugs = [
         _safe_dataclass_init(SuggestedBug, b) for b in data.get("suggested_bugs", [])
     ]
     comp_regressions = [
         _safe_dataclass_init(ComponentRegression, cr) for cr in data.get("component_regressions", [])
     ]
-
-    # Deserialize jira_matches (job_name -> list[JiraBug])
-    jira_matches = {}
-    for name, bugs_raw in data.get("jira_matches", {}).items():
-        jira_matches[name] = [_safe_dataclass_init(JiraBug, b) for b in bugs_raw]
 
     # Deserialize escalation_risks
     escalation_risks = [
@@ -653,14 +646,11 @@ def load_json(json_path: Path) -> MonitorReport:
     return MonitorReport(
         generated_at=data.get("generated_at", ""),
         streams=streams,
-        jira_bugs=jira_bugs,
         suggested_bugs=suggested_bugs,
         component_regressions=comp_regressions,
         failure_counts=data.get("failure_counts", {}),
-        jira_matches=jira_matches,
         escalation_risks=escalation_risks,
         cross_topology=data.get("cross_topology", {}),
-        jira_errors=data.get("jira_errors", []),
         recurring_threshold=data.get("recurring_threshold", 2),
         persistent_threshold=data.get("persistent_threshold", 3),
     )

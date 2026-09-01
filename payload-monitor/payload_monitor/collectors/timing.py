@@ -28,6 +28,7 @@ RUN_SUMMARY_URL = f"{BASE_URL}/api/job/run/summary"
 DURATIONS_URL = f"{BASE_URL}/api/tests/durations"
 
 GCS_BASE = "https://storage.googleapis.com/test-platform-results/logs"
+GCS_LIST_URL = "https://storage.googleapis.com/storage/v1/b/test-platform-results/o"
 
 CACHE_ARTIFACT_RELPATH = (
     "artifacts/ocp-ci-monitor/"
@@ -41,11 +42,75 @@ _session = create_session()
 # GCS cache seeding (cross-run persistence)
 # ---------------------------------------------------------------------------
 
+# Safety bound on pagination — at ~1000 build folders per page, this covers
+# decades of a daily job's history before it would ever bite.
+_MAX_LIST_PAGES = 50
+
+
+def _find_previous_build_ids(job_name: str, current_build: str, limit: int = 1) -> list[str]:
+    """Find the most recent completed build IDs for *job_name* in GCS.
+
+    ``latest-build.txt`` can't be used for this — Prow writes it to point at
+    the currently-running build as soon as the job starts, so by the time this
+    code runs mid-job it always equals *current_build*. Instead, list the
+    job's build-ID subdirectories directly and pick the highest ones that
+    aren't the current build.
+
+    GCS returns listings in ascending lexicographic order with no
+    server-side reverse-sort, so the builds we want — the most recent ones —
+    are on the *last* page, not the first. Pagination is followed to the end
+    rather than reading a single page, to avoid silently picking an old
+    build once a job accumulates more history than fits on one page.
+
+    Returns up to *limit* build IDs, most-recent-first. Prow creates a
+    build's directory as soon as it starts, so a rerun/retest can leave a
+    newer, still-in-progress build ahead of the last completed one —
+    callers should be ready to fall back to an older candidate.
+    """
+    build_ids: list[str] = []
+    page_token = None
+
+    for _ in range(_MAX_LIST_PAGES):
+        params = {"prefix": f"logs/{job_name}/", "delimiter": "/"}
+        if page_token:
+            params["pageToken"] = page_token
+
+        try:
+            resp = _session.get(GCS_LIST_URL, params=params, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+        except requests_lib.RequestException as e:
+            logger.warning("Could not list GCS builds for %s (%s)", job_name, type(e).__name__)
+            return []
+
+        if not isinstance(data, dict):
+            return []
+
+        prefixes = data.get("prefixes")
+        if isinstance(prefixes, list):
+            for prefix in prefixes:
+                build_id = prefix.strip("/").rsplit("/", 1)[-1]
+                if build_id.isdigit() and build_id != current_build:
+                    build_ids.append(build_id)
+
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+
+    if not build_ids:
+        return []
+    return sorted(build_ids, key=int, reverse=True)[:limit]
+
+
 def seed_cache_from_previous_run(cache_path: Path) -> None:
     """Download timing_cache.json from the previous Prow run's GCS artifacts.
 
-    Uses the ``latest-build.txt`` convention to find the most recent completed
-    build, then fetches its ``timing_cache.json`` artifact over public HTTPS.
+    Lists the job's GCS build directories to find the most recent completed
+    builds, then fetches ``timing_cache.json`` from the first one that has it.
+    A rerun/retest can leave a newer, still-in-progress build directory ahead
+    of the last completed one — its cache artifact 404s since the job hasn't
+    finished writing it yet — so a few candidates are tried in descending
+    order rather than giving up after the single most-recent build.
     Skips gracefully on any failure (logging a warning) — this must never be
     fatal, because a cold start is the natural fallback.
     """
@@ -58,38 +123,33 @@ def seed_cache_from_previous_run(cache_path: Path) -> None:
 
     current_build = os.environ.get("BUILD_ID", "")
 
-    try:
-        resp = _session.get(
-            f"{GCS_BASE}/{job_name}/latest-build.txt", timeout=10,
-        )
-        resp.raise_for_status()
-        latest_build = resp.text.strip()
-    except requests_lib.RequestException as e:
-        logger.warning(f"Could not fetch latest-build.txt for {job_name}: {e}")
+    previous_builds = _find_previous_build_ids(job_name, current_build, limit=3)
+    if not previous_builds:
+        logger.warning(f"No previous completed build found for {job_name}")
         return
 
-    if not latest_build or "<" in latest_build:
-        logger.warning(f"Invalid latest-build.txt content for {job_name}")
-        return
-
-    # Don't download our own (in-progress) artifacts.
-    if current_build and latest_build == current_build:
-        logger.info("latest-build.txt points to current run, skipping seed")
-        return
-
-    cache_url = f"{GCS_BASE}/{job_name}/{latest_build}/{CACHE_ARTIFACT_RELPATH}"
-    try:
-        resp = _session.get(cache_url, timeout=30)
-        resp.raise_for_status()
-    except requests_lib.RequestException as e:
-        logger.warning(f"Could not fetch previous cache artifact: {e}")
+    for previous_build in previous_builds:
+        cache_url = f"{GCS_BASE}/{job_name}/{previous_build}/{CACHE_ARTIFACT_RELPATH}"
+        try:
+            resp = _session.get(cache_url, timeout=30)
+        except requests_lib.RequestException as e:
+            logger.warning(
+                "Could not fetch previous cache artifact (build %s) (%s)",
+                previous_build, type(e).__name__,
+            )
+            continue
+        if not resp.ok:
+            continue
+        break
+    else:
+        logger.warning(f"No previous build with a timing cache found for {job_name}")
         return
 
     try:
         payload = json.loads(resp.text)
     except (json.JSONDecodeError, ValueError) as e:
         logger.warning(
-            f"Previous cache artifact is not valid JSON (build {latest_build}): {e}"
+            f"Previous cache artifact is not valid JSON (build {previous_build}): {e}"
         )
         return
 
@@ -104,7 +164,7 @@ def seed_cache_from_previous_run(cache_path: Path) -> None:
         logger.warning(f"Could not write seeded cache to {cache_path}: {e}")
         return
     logger.info(
-        f"Seeded timing cache from build {latest_build} "
+        f"Seeded timing cache from build {previous_build} "
         f"({len(payload.get('runs', {}))} runs)"
     )
 
@@ -150,18 +210,40 @@ def _is_valid_cache_payload(data) -> bool:
     return True
 
 
-def _within_retention_window(timestamp_ms, days: int) -> bool:
-    """Return True if *timestamp_ms* falls within the last *days* days.
+def _parse_sippy_timestamp(value) -> Optional[datetime]:
+    """Parse a Sippy ``timestamp`` field into a UTC datetime.
 
-    Returns True for missing/zero/non-numeric timestamps (can't judge age).
+    ``/api/jobs/runs`` returns ISO-8601 strings (e.g. "2026-08-30T22:36:19Z"),
+    not epoch milliseconds — despite the ``_ms``-style naming used historically
+    in this module. Epoch-millisecond numerics are still accepted for
+    robustness against other callers/formats. Returns None for anything
+    missing or unparseable.
     """
-    if not timestamp_ms:
-        return True
-    if not isinstance(timestamp_ms, (int, float)) or isinstance(timestamp_ms, bool):
-        return True
-    try:
-        run_time = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
-    except (OSError, ValueError, OverflowError):
+    if not value or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(value / 1000, tz=timezone.utc)
+        except (OSError, ValueError, OverflowError):
+            return None
+    return None
+
+
+def _within_retention_window(timestamp, days: int) -> bool:
+    """Return True if *timestamp* falls within the last *days* days.
+
+    Returns True for missing/unparseable timestamps (can't judge age).
+    """
+    run_time = _parse_sippy_timestamp(timestamp)
+    if run_time is None:
         return True
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     return run_time >= cutoff
@@ -460,6 +542,34 @@ def fetch_step_durations(job_name: str, run_id: str) -> dict[str, float]:
     return steps
 
 
+def _build_timing_run(
+    job_name: str,
+    run_data: dict,
+    version: str,
+    topology: str,
+    run_type: str,
+    variant: dict,
+    summary: Optional[dict],
+    step_durations: dict[str, float],
+) -> TimingRun:
+    """Build a TimingRun from raw Sippy job-run + run-summary data."""
+    start_dt = _parse_sippy_timestamp(run_data.get("timestamp"))
+    start_time = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ") if start_dt else ""
+    duration = summary.get("durationSeconds", 0) if summary else 0
+
+    return TimingRun(
+        job_name=job_name,
+        topology=topology,
+        release=version,
+        start_time=start_time,
+        duration_seconds=duration,
+        result=run_data.get("overall_result", "U"),
+        run_type=run_type,
+        variant=variant,
+        step_durations=step_durations,
+    )
+
+
 def collect(
     config: Config,
     versions: list[str],
@@ -570,28 +680,9 @@ def collect(
 
         added = 0
         for rid, job_name, run_data, version, topology, run_type, variant in new_run_tasks:
-            summary = summaries.get(rid)
-
-            ts_ms = run_data.get("timestamp", 0)
-            if ts_ms:
-                start_time = datetime.fromtimestamp(
-                    ts_ms / 1000, tz=timezone.utc,
-                ).strftime("%Y-%m-%dT%H:%M:%SZ")
-            else:
-                start_time = ""
-
-            duration = summary.get("durationSeconds", 0) if summary else 0
-
-            report.runs[rid] = TimingRun(
-                job_name=job_name,
-                topology=topology,
-                release=version,
-                start_time=start_time,
-                duration_seconds=duration,
-                result=run_data.get("overall_result", "U"),
-                run_type=run_type,
-                variant=variant,
-                step_durations=step_results.get(rid, {}),
+            report.runs[rid] = _build_timing_run(
+                job_name, run_data, version, topology, run_type, variant,
+                summaries.get(rid), step_results.get(rid, {}),
             )
             cached_ids.add(rid)
             added += 1
