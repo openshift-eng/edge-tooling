@@ -15,7 +15,8 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from lib import advisory, art_jira, brew, git_ops, lifecycle, ocpbugs, pyxis, release_controller
+from lib import (advisory, art_jira, brew, git_ops, jira_client,
+                 lifecycle, ocpbugs, pyxis, release_controller)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,10 +27,10 @@ logger = logging.getLogger(__name__)
 
 
 def run_advisory_report(version, repo_root=None):
-    """Get advisory report with CVE IDs (Jira enrichment deferred to skill layer).
+    """Get advisory report with CVE IDs.
 
     Extracts advisory and CVE data from OCP shipment MRs. CVEs are marked
-    as ``pending`` — Jira lookup is handled by the skill layer via MCP.
+    as ``pending`` — enriched by ``enrich_advisory_cves`` via Jira REST API.
 
     Args:
         version: Full version, e.g., "4.21.8".
@@ -41,6 +42,213 @@ def run_advisory_report(version, repo_root=None):
     """
     logger.info("Running advisory publication report for %s...", version)
     return advisory.get_advisory_report(version)
+
+
+def _generate_version_range(last_released, version):
+    """Generate list of z-stream versions from last_released+1 through version.
+
+    Args:
+        last_released: Last released version, e.g., "4.21.16".
+        version: Current evaluation version, e.g., "4.21.28".
+
+    Returns:
+        list[str]: Version strings, e.g., ["4.21.17", ..., "4.21.28"].
+    """
+    parts_last = last_released.split(".")
+    parts_curr = version.split(".")
+
+    if len(parts_last) < 3 or len(parts_curr) < 3:
+        logger.error("Malformed version: last_released=%r, version=%r",
+                      last_released, version)
+        return []
+
+    minor_last = ".".join(parts_last[:2])
+    minor_curr = ".".join(parts_curr[:2])
+    if minor_last != minor_curr:
+        logger.error("Cross-minor range not supported: %s -> %s",
+                      last_released, version)
+        return []
+
+    z_start = int(parts_last[2]) + 1
+    z_end = int(parts_curr[2])
+
+    if z_start > z_end:
+        logger.warning("Inverted version range: last_released=%s > version=%s "
+                        "— evaluating from %s.%d through %s.%d",
+                        last_released, version,
+                        minor_curr, z_end, minor_curr, z_start - 1)
+        z_start, z_end = z_end, z_start - 1
+
+    return [f"{minor_curr}.{z}" for z in range(z_start, z_end + 1)]
+
+
+def run_cumulative_advisory_report(version, last_released):
+    """Fetch and merge advisory reports for all skipped z-stream versions.
+
+    MicroShift often skips many OCP z-stream releases. When evaluating
+    whether to participate in a release, we must check CVEs from ALL
+    advisories between the last MicroShift release and the current
+    evaluation version, not just the current version's advisory.
+
+    Args:
+        version: Current evaluation version, e.g., "4.21.28".
+        last_released: Last released version, e.g., "4.21.16".
+
+    Returns:
+        tuple[dict, int]: (merged_report, versions_checked_count).
+            merged_report: Merged advisory report dict, or
+                           {"error": "...", "skipped": True} on total failure.
+            versions_checked_count: Number of versions whose advisories
+                                    were checked.
+    """
+    versions_to_check = _generate_version_range(last_released, version)
+
+    if not versions_to_check:
+        return run_advisory_report(version), 1
+
+    # Cap at 20 versions to avoid excessive API calls
+    if len(versions_to_check) > 20:
+        logger.warning(
+            "Capping advisory check at 20 versions (would be %d: %s through %s)",
+            len(versions_to_check), versions_to_check[0], versions_to_check[-1],
+        )
+        versions_to_check = versions_to_check[-20:]
+
+    logger.info(
+        "Checking advisories for %d versions (%s through %s)...",
+        len(versions_to_check), versions_to_check[0], versions_to_check[-1],
+    )
+
+    merged_report = {}
+    failed_versions = []
+
+    def _fetch_one(ver):
+        try:
+            return ver, advisory.get_advisory_report(ver)
+        except Exception as e:
+            logger.warning("Advisory fetch failed for %s: %s", ver, e)
+            return ver, None
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(_fetch_one, v): v for v in versions_to_check}
+        for future in as_completed(futures):
+            ver, report = future.result()
+            if report is None or report.get("skipped"):
+                failed_versions.append(ver)
+                continue
+
+            for adv_name, adv_data in report.items():
+                if not isinstance(adv_data, dict) or "type" not in adv_data:
+                    continue
+
+                entry = dict(adv_data)
+                entry["source_version"] = ver
+                if adv_name not in merged_report:
+                    merged_report[adv_name] = entry
+                else:
+                    existing_cves = merged_report[adv_name].get("cves", {})
+                    new_cves = adv_data.get("cves", {})
+                    for cve_id, cve_data in new_cves.items():
+                        if cve_id not in existing_cves:
+                            existing_cves[cve_id] = cve_data
+                    merged_report[adv_name]["cves"] = existing_cves
+
+    if failed_versions:
+        logger.warning(
+            "Advisory fetch failed for %d version(s): %s",
+            len(failed_versions), ", ".join(sorted(failed_versions)),
+        )
+
+    if not merged_report:
+        return {"error": "All advisory fetches failed", "skipped": True}, len(versions_to_check)
+
+    return merged_report, len(versions_to_check)
+
+
+def enrich_advisory_cves(advisory_report, minor=None, shipped_cve_ids=None,
+                         last_released=None):
+    """Replace pending CVE entries with real Jira data.
+
+    Searches Jira for each pending CVE ID and updates the advisory
+    report in-place. After enrichment, ``interpret_cves`` can make
+    definitive decisions instead of returning ``pending_enrichment``.
+
+    Args:
+        advisory_report: Advisory report dict (modified in-place).
+        minor: Minor version string (e.g., "4.22") to filter Jira
+            results to the correct OCP version.
+        shipped_cve_ids: Dict mapping CVE ID → source version for CVEs
+            already shipped in prior MicroShift releases.
+        last_released: Last MicroShift release version (e.g., "4.22.7").
+    """
+    if not advisory_report or advisory_report.get("skipped"):
+        return
+
+    pending_ids = []
+    for adv_data in advisory_report.values():
+        if not isinstance(adv_data, dict):
+            continue
+        for cve_id, cve_data in adv_data.get("cves", {}).items():
+            if cve_data.get("pending"):
+                pending_ids.append(cve_id)
+
+    unique_ids = sorted(set(pending_ids))
+    if not unique_ids:
+        return
+
+    # Search ALL CVEs in Jira first, then apply shipped filter.
+    # This ensures a MicroShift tracker with resolution "Done" is not
+    # accidentally hidden by the shipped advisory filter.
+    shipped = shipped_cve_ids or {}
+
+    logger.info("Enriching %d advisory CVEs via Jira...", len(unique_ids))
+    tickets = jira_client.search_cve_tickets(unique_ids, minor=minor)
+    if tickets is None:
+        logger.warning("Jira unavailable — CVEs remain pending")
+        return
+
+    for adv_data in advisory_report.values():
+        if not isinstance(adv_data, dict):
+            continue
+        cves = adv_data.get("cves", {})
+        for cve_id in list(cves.keys()):
+            if not cves[cve_id].get("pending"):
+                continue
+            ticket = tickets.get(cve_id)
+
+            # Jira search failed for this CVE — leave as pending
+            if isinstance(ticket, dict) and ticket.get("error"):
+                continue
+
+            # CVE was in a shipped advisory — fix is in shipped OCP images.
+            # This is ground truth regardless of Jira ticket status.
+            if cve_id in shipped:
+                src = shipped[cve_id]
+                if src and last_released:
+                    label = f"shipped in OCP {src}, MicroShift {last_released}"
+                elif src:
+                    label = f"shipped in {src}"
+                else:
+                    label = "already shipped"
+                cves[cve_id] = {"reason": label}
+                continue
+
+            # Has a MicroShift tracker (not shipped) — use Jira data
+            if ticket is not None:
+                cves[cve_id] = {"jira_ticket": {
+                    "id": ticket["key"],
+                    "resolution": ticket["resolution"],
+                    "status": ticket["status"],
+                }}
+            else:
+                cves[cve_id] = {"reason": "no MicroShift tracker"}
+
+    with_tracker = sum(1 for t in tickets.values()
+                       if t is not None and not (isinstance(t, dict) and t.get("error")))
+    shipped_count = sum(1 for cve in unique_ids if cve in shipped)
+    logger.info("Enriched %d CVEs: %d with tracker, %d shipped, %d no tracker",
+                len(unique_ids), with_tracker, shipped_count,
+                len(unique_ids) - with_tracker - shipped_count)
 
 
 def interpret_cves(advisory_report):
@@ -105,13 +313,14 @@ def interpret_cves(advisory_report):
             resolution = jira_ticket.get("resolution", "")
             status = jira_ticket.get("status", "")
 
-            if resolution == "Done":
+            if resolution == "Done" or status == "Verified":
                 must_release_cves.append({
                     "cve": cve_id,
                     "jira": jira_ticket.get("id", ""),
-                    "reason": "Fix done, it must be released, new z-stream should be requested",
+                    "reason": "Fix landed, must be released",
                 })
-            elif resolution in ("Done-Errata", "Not a Bug"):
+            elif resolution in ("Done-Errata", "Not a Bug", "Won't Do",
+                                "Duplicate"):
                 continue
             else:
                 skipped_not_actionable += 1
@@ -154,26 +363,43 @@ def compute_recommendation(evaluation):
     ocp_status = evaluation.get("ocp_status", "")
     ocp_available = ocp_status == "available"
 
+    # Shipped CVE dedup warning (appended to reason when collection failed)
+    shipped_warn = ""
+    if evaluation.get("shipped_cve_collection_failed"):
+        shipped_warn = " (⚠ shipped CVE dedup unavailable — CVEs may be overcounted)"
+
     # Must release: CVE with resolution Done (fix landed, not yet shipped)
     if cve_impact == "must_release":
         cve_details = evaluation.get("cve_impact", {}).get("details", [])
-        cve_list = ", ".join(
-            f"{d['cve']} ({d['jira']})" if d.get("jira") else d["cve"]
-            for d in cve_details
-        )
+        count = len(cve_details)
+        label = f"{count} CVE fix{'es' if count != 1 else ''} (resolution Done)"
+        pending = evaluation.get("cve_impact", {}).get("pending_cve_enrichment", [])
+        if pending:
+            label += f", {len(pending)} advisory CVEs pending enrichment"
+        label += shipped_warn
         if not ocp_available:
-            return "NEEDS REVIEW", f"CVE fix: {cve_list} (OCP payload not yet available)"
-        return "ASK ART TO CREATE ARTIFACTS", f"CVE fix: {cve_list}"
+            return "BLOCKED", f"{label} — waiting for OCP payload"
+        return "ASK ART TO CREATE ARTIFACTS", label
 
-    # 90-day rule (hard policy constraint — evaluated before OCPBUGS labels)
-    if days_since is not None and days_since >= 90 and commits > 0:
+    # 90-day rule — gap measured at planned shipping date, not today
+    days_at_release = evaluation.get("days_at_release", days_since)
+    if days_at_release is not None and days_at_release >= 90 and commits > 0:
+        due = evaluation.get("due_date", "")
+        gap_label = (f"90-day rule ({days_at_release}d gap at {due})"
+                     if due else f"90-day rule ({days_at_release}d)")
         if not ocp_available:
-            return ("NEEDS REVIEW",
-                    f"90-day rule ({days_since}d, {commits} commits)"
-                    " — OCP payload not yet available")
+            return ("BLOCKED",
+                    f"{gap_label}, {commits} commits"
+                    " — waiting for OCP payload")
         return ("ASK ART TO CREATE ARTIFACTS",
-                f"90-day rule ({days_since}d since last release,"
-                f" {commits} commits)")
+                f"{gap_label}, {commits} commits")
+
+    # Build pending CVE suffix (appended to any recommendation reason)
+    pending_cves = evaluation.get("cve_impact", {}).get("pending_cve_enrichment", [])
+    cve_suffix = ""
+    if cve_impact == "pending_enrichment" and pending_cves:
+        cve_suffix = f", {len(pending_cves)} advisory CVEs pending enrichment"
+    cve_suffix += shipped_warn
 
     # Resolved OCPBUGS targeting this version
     ocpbugs_data = evaluation.get("ocpbugs", {})
@@ -185,25 +411,38 @@ def compute_recommendation(evaluation):
         if release_required > 0:
             bug_summary = f"{release_required} OCPBUGS labeled release-required"
             if not ocp_available:
-                return "NEEDS REVIEW", f"{bug_summary} (OCP payload not yet available)"
-            return "ASK ART TO CREATE ARTIFACTS", bug_summary
+                return "BLOCKED", f"{bug_summary}{cve_suffix} — waiting for OCP payload"
+            return "ASK ART TO CREATE ARTIFACTS", f"{bug_summary}{cve_suffix}"
         if needs_review_bugs > 0:
-            bug_summary = f"{ocpbugs_count} OCPBUGS ({needs_review_bugs} unlabeled, needs review)"
-            return "NEEDS REVIEW", bug_summary
+            review_details = []
+            for bug in ocpbugs_data.get("bugs", []):
+                if bug.get("release_action") != "needs_review":
+                    continue
+                key = bug.get("key", "?")
+                status = bug.get("status", "unknown")
+                review_details.append(
+                    f"{key} is {status} (no release label)"
+                    f" — must be Verified before releasing"
+                )
+            reason = "; ".join(review_details) if review_details else (
+                f"{needs_review_bugs} OCPBUGS need review"
+            )
+            return "NEEDS REVIEW", f"{reason}{cve_suffix}"
         # All bugs are release-not-required
+        if cve_suffix:
+            return "NEEDS REVIEW", f"{ocpbugs_count} OCPBUGS (release-not-required){cve_suffix}"
         bug_summary = f"{ocpbugs_count} OCPBUGS (all labeled release-not-required)"
         return "SKIP", bug_summary
 
     # Needs review: advisory report skipped or CVEs found without Jira lookup
     if cve_impact in ("unknown", "pending_enrichment"):
-        pending = evaluation.get("cve_impact", {}).get("pending_cve_enrichment", [])
-        if cve_impact == "pending_enrichment" and pending:
-            label = f"{len(pending)} advisory CVEs"
+        if pending_cves:
+            label = f"{len(pending_cves)} advisory CVEs pending enrichment"
         else:
             label = "advisory report unavailable"
         if commits > 0:
             return "NEEDS REVIEW", f"{commits} commits, {label}"
-        return "SKIP", f"No commits, {label}"
+        return "NEEDS REVIEW", f"No commits, {label}"
 
     # Skip: no changes
     if commits == 0:
@@ -364,38 +603,94 @@ def evaluate_version(version, lifecycle_data, repo_root):
     result["commits"] = len(commit_list)
     result["commit_list"] = commit_list
 
-    # 4b: OCPBUGS references from commit messages (enriched via MCP at skill level)
+    # 4b: Resolve last release date (needed by OCPBUGS component CVE filter)
+    last_release_date = None
+    if last_pub:
+        last_release_date = git_ops.get_release_date(last_pub["version"])
+        if not last_release_date and last_pub.get("date"):
+            last_release_date = last_pub["date"]
+        if not last_release_date:
+            last_release_date = pyxis.get_publish_date(last_pub["version"])
+
+    # 4c: Collect CVE IDs already shipped in prior releases
+    # Maps CVE ID → source version where it was shipped
+    shipped_cve_map = {}
+    if last_pub and last_pub.get("version"):
+        try:
+            shipped_versions = _generate_version_range(
+                f"{minor}.0", last_pub["version"]
+            )
+            if shipped_versions:
+                logger.info("Collecting shipped CVEs from %d prior versions...",
+                            len(shipped_versions))
+                shipped_report, _ = run_cumulative_advisory_report(
+                    last_pub["version"], f"{minor}.0"
+                )
+                if shipped_report and not shipped_report.get("skipped"):
+                    for adv_data in shipped_report.values():
+                        if isinstance(adv_data, dict):
+                            src_ver = adv_data.get("source_version", "")
+                            for cve_id in adv_data.get("cves", {}):
+                                if cve_id not in shipped_cve_map:
+                                    shipped_cve_map[cve_id] = src_ver
+                    if shipped_cve_map:
+                        logger.info("Found %d CVEs already shipped in ≤%s",
+                                    len(shipped_cve_map), last_pub["version"])
+        except Exception as e:
+            logger.warning("Shipped CVE collection failed: %s", e)
+            result["shipped_cve_collection_failed"] = True
+
+    # 4d: OCPBUGS references from commit messages + component CVEs
     logger.info("Checking resolved OCPBUGS for %s...", version)
     try:
         result["ocpbugs"] = ocpbugs.query_resolved_bugs(
             version, branch, since_version, since_commit=since_commit,
+            last_release_date=last_release_date,
+            shipped_cve_ids=shipped_cve_map,
         )
     except Exception as e:
         logger.warning("OCPBUGS check failed for %s: %s", version, e)
         result["ocpbugs"] = {"count": 0, "bugs": [], "skipped": True}
 
-    # 4c: Advisory publication report
-    result["advisory_report"] = run_advisory_report(version, repo_root)
+    # 4d: Advisory publication report — scan all skipped z-stream advisories
+    last_released_ver = result.get("last_released")
+    if last_released_ver:
+        report, versions_checked = run_cumulative_advisory_report(
+            version, last_released_ver,
+        )
+        result["advisory_report"] = report
+        result["advisory_versions_checked"] = versions_checked
+    else:
+        result["advisory_report"] = run_advisory_report(version, repo_root)
+        result["advisory_versions_checked"] = 1
 
     # 4d: Interpret CVEs
+    # 4e: Enrich advisory CVEs with Jira data, then interpret
+    last_ver = last_pub["version"] if last_pub else None
+    enrich_advisory_cves(result["advisory_report"], minor=minor,
+                         shipped_cve_ids=shipped_cve_map,
+                         last_released=last_ver)
     result["cve_impact"] = interpret_cves(result["advisory_report"])
 
-    # 4e: 90-day rule — get date of last release from git tags
+    # 4f: 90-day rule — calculate gap at shipping time, not today
     if last_pub:
-        release_date = git_ops.get_release_date(last_pub["version"])
-        if not release_date and last_pub.get("date"):
-            release_date = last_pub["date"]
-            logger.info("Using errata date for %s: %s",
-                        last_pub["version"], release_date)
-        if not release_date:
-            logger.info("Git tag/errata date not found for %s, "
-                        "trying Pyxis...", last_pub["version"])
-            release_date = pyxis.get_publish_date(last_pub["version"])
+        release_date = last_release_date
         if release_date:
             try:
                 build_date = datetime.strptime(release_date, "%Y-%m-%d")
                 result["days_since"] = (datetime.now() - build_date).days
                 result["last_release_date"] = release_date
+
+                # Calculate gap at planned shipping date (ART due date)
+                due = result.get("due_date", "")
+                if due:
+                    try:
+                        ship_date = datetime.strptime(due, "%Y-%m-%d")
+                        result["days_at_release"] = (ship_date - build_date).days
+                    except (ValueError, TypeError):
+                        result["days_at_release"] = result["days_since"]
+                else:
+                    result["days_at_release"] = result["days_since"]
             except (ValueError, TypeError) as e:
                 logger.warning("Failed to parse release date '%s' "
                                "for %s: %s",
@@ -450,22 +745,32 @@ def _build_reason(e):
     # CVE / advisory impact
     cve_impact = e.get("cve_impact", {})
     impact = cve_impact.get("impact", "unknown")
+    versions_checked = e.get("advisory_versions_checked", 1)
+    adv_suffix = ""
+    if versions_checked > 1:
+        last = e.get("last_released", "")
+        last_parts = last.split(".") if last else []
+        ver_parts = e.get("version", "").split(".")
+        if len(last_parts) == 3 and len(ver_parts) == 3:
+            minor = ".".join(ver_parts[:2])
+            first_checked = f"{minor}.{int(last_parts[2]) + 1}"
+            adv_suffix = (f" (checked {versions_checked} versions:"
+                          f" {first_checked}→{e.get('version', '?')})")
+        else:
+            adv_suffix = f" (checked {versions_checked} versions)"
     if impact == "must_release":
         details = cve_impact.get("details", [])
-        cve_list = ", ".join(
-            f"{d['cve']} ({d['jira']})" if d.get("jira") else d.get("cve", "")
-            for d in details
-        )
-        parts.append(f"CVE fix: {cve_list}")
+        count = len(details)
+        parts.append(f"{count} CVE fix{'es' if count != 1 else ''}{adv_suffix}")
     elif impact == "none":
         skipped = cve_impact.get("skipped_not_actionable", 0)
         if skipped > 0:
-            parts.append(f"no actionable CVEs ({skipped} not actionable)")
+            parts.append(f"no actionable CVEs ({skipped} not actionable){adv_suffix}")
         else:
-            parts.append("no CVEs")
+            parts.append(f"no CVEs{adv_suffix}")
     elif impact == "pending_enrichment":
         pending = cve_impact.get("pending_cve_enrichment", [])
-        parts.append(f"{len(pending)} advisory CVEs")
+        parts.append(f"{len(pending)} advisory CVEs{adv_suffix}")
     elif impact == "unknown":
         advisory = e.get("advisory_report", {})
         if advisory and advisory.get("skipped"):
@@ -565,7 +870,7 @@ def format_text_full(output):
     """
     evaluations = output.get("evaluations", [])
     if not evaluations:
-        return "No versions to evaluate."
+        return ""
 
     sections = []
 
@@ -575,7 +880,7 @@ def format_text_full(output):
     sections.append("|---------|-----------|----------|------------|-----------|")
     for e in evaluations:
         v = e.get("version", "?")
-        art = e.get("art_ticket", "--")
+        art = e.get("art_ticket", "None")
         due = e.get("due_date", "--") or "--"
         ocp = e.get("ocp_status", "--")
         lc = e.get("lifecycle_status", "--")
@@ -606,18 +911,35 @@ def format_text_full(output):
         for e in evaluations
     )
     if has_advisories:
+        # Note cumulative advisory scanning when applicable
+        adv_notes = []
+        for e in evaluations:
+            checked = e.get("advisory_versions_checked", 1)
+            if checked > 1:
+                last = e.get("last_released", "")
+                last_parts = last.split(".") if last else []
+                ver_parts = e.get("version", "").split(".")
+                if len(last_parts) == 3 and len(ver_parts) == 3:
+                    minor = ".".join(ver_parts[:2])
+                    first_checked = f"{minor}.{int(last_parts[2]) + 1}"
+                    adv_notes.append(
+                        f"Advisory CVEs checked across {checked} versions"
+                        f" ({first_checked} → {e.get('version', '?')})"
+                    )
         sections.append("\n## Advisory Report\n")
+        for note in adv_notes:
+            sections.append(f"> {note}\n")
         sections.append("| Version | Advisory | Type | CVEs | MicroShift Impact |")
         sections.append("|---------|----------|------|------|-------------------|")
         for e in evaluations:
             report = e.get("advisory_report", {})
             if not report or report.get("skipped"):
                 continue
-            v = e.get("version", "?")
+            eval_ver = e.get("version", "?")
             for adv_name, adv_data in report.items():
-                # Skip non-advisory keys (e.g., "error", "skipped")
                 if not isinstance(adv_data, dict) or "type" not in adv_data:
                     continue
+                v = adv_data.get("source_version", eval_ver)
                 adv_type = adv_data.get("type", "?")
                 cves = adv_data.get("cves", {})
                 if not cves:
@@ -625,11 +947,24 @@ def format_text_full(output):
                 else:
                     for cve_id, cve_data in cves.items():
                         if cve_data.get("pending"):
-                            impact = "found"
+                            impact = "pending"
                         elif cve_data.get("jira_ticket"):
-                            jid = cve_data["jira_ticket"].get('id', '?')
-                            jres = cve_data["jira_ticket"].get('resolution', '?')
-                            impact = f"{jid} ({jres})"
+                            jt = cve_data["jira_ticket"]
+                            jid = jt.get('id', '?')
+                            jres = jt.get('resolution', '')
+                            jstat = jt.get('status', '')
+                            if jres == "Done" or jstat == "Verified":
+                                impact = f"{jid} (**must release**)"
+                            elif jres in ("Not a Bug", "Won't Do"):
+                                impact = f"not affected ({jres})"
+                            elif jres == "Done-Errata":
+                                impact = "already shipped"
+                            elif jres == "Duplicate":
+                                impact = f"not affected (duplicate)"
+                            else:
+                                impact = f"{jid} ({jres or jstat})"
+                        elif cve_data.get("reason"):
+                            impact = cve_data["reason"]
                         else:
                             impact = "not affected"
                         sections.append(f"| {v} | {adv_name} | {adv_type} | {cve_id} | {impact} |")
@@ -640,7 +975,7 @@ def format_text_full(output):
         for e in evaluations
     )
     if has_ocpbugs:
-        sections.append("\n## Resolved OCPBUGS\n")
+        sections.append("\n## OCPBUGS in detail\n")
         header = ("| Version | Bug | Status | Source | Release Action "
                   "| Release Note Type | Release Note Status | Summary |")
         separator = ("|---------|-----|--------|--------|----------------"
@@ -694,15 +1029,94 @@ def format_text_full(output):
                 "internal-only. Use the per-version recommendation table above for the action."
             )
 
-    # Recommendations table
+    # Recommendations table (combined summary + recommendation)
     sections.append("\n## Recommendations\n")
-    sections.append("| Version | Recommendation | Reason |")
-    sections.append("|---------|---------------|--------|")
+    sections.append("| Recommendation | Version | OCP | CVEs | OCPBUGS | Last Release | Reason |")
+    sections.append("|---------------|---------|-----|------|---------|--------------|--------|")
+    _REC_ICON = {
+        "ASK ART TO CREATE ARTIFACTS": "🔴 **ASK ART**",
+        "BLOCKED": "⏳ **BLOCKED**",
+        "NEEDS REVIEW": "🟡 **NEEDS REVIEW**",
+        "SKIP": "🟢 **SKIP**",
+        "ALREADY RELEASED": "✅ **ALREADY RELEASED**",
+    }
+
     for e in evaluations:
         v = e.get("version", "?")
         rec = e.get("recommendation", "UNKNOWN")
+        rec_label = _REC_ICON.get(rec, f"**{rec}**")
         reason = e.get("reason", "").replace("|", "\\|").replace("\n", " ")
-        sections.append(f"| {v} | {rec} | {reason} |")
+
+        if rec == "ALREADY RELEASED":
+            sections.append(f"| {rec_label} | {v} | — | — | — | — | — |")
+            continue
+        if e.get("lifecycle_status") == "End of life":
+            sections.append(f"| {rec_label} | {v} | — | — | — | — | End of life |")
+            continue
+
+        ocp = e.get("ocp_status", "—")
+        last = e.get("last_released", "—")
+        days = e.get("days_since")
+        last_col = f"{last} ({days}d ago)" if days is not None else last
+
+        # CVE summary
+        cve_impact = e.get("cve_impact", {})
+        impact = cve_impact.get("impact", "unknown")
+        versions_checked = e.get("advisory_versions_checked", 1)
+        if impact == "must_release":
+            count = len(cve_impact.get("details", []))
+            cve_col = f"{count} CVE fix{'es' if count != 1 else ''}"
+        elif impact == "none":
+            skipped = cve_impact.get("skipped_not_actionable", 0)
+            cve_col = f"no CVEs ({skipped} not actionable)" if skipped else "no CVEs"
+        elif impact == "pending_enrichment":
+            pending = cve_impact.get("pending_cve_enrichment", [])
+            cve_col = f"{len(pending)} pending"
+        else:
+            cve_col = "—"
+        if versions_checked > 1:
+            cve_col += f" ({versions_checked} versions checked)"
+
+        # OCPBUGS summary
+        ocpbugs_data = e.get("ocpbugs", {})
+        ocpbugs_count = ocpbugs_data.get("count", 0)
+        if ocpbugs_data.get("skipped"):
+            bugs_col = "skipped"
+        elif ocpbugs_count == 0:
+            bugs_col = "none"
+        else:
+            parts = []
+            rr = ocpbugs_data.get("release_required", 0)
+            nr = ocpbugs_data.get("needs_review", 0)
+            nrq = ocpbugs_data.get("release_not_required", 0)
+            if rr:
+                parts.append(f"{rr} release-required")
+            if nrq:
+                parts.append(f"{nrq} release-not-required")
+            if nr:
+                parts.append(f"{nr} unlabeled")
+            bugs_col = f"{ocpbugs_count} ({', '.join(parts)})"
+
+        sections.append(
+            f"| {rec_label} | {v} | {ocp} | {cve_col} | {bugs_col} | {last_col} | {reason} |"
+        )
+
+    # CVEs requiring release (detail table)
+    cve_rows = []
+    for e in evaluations:
+        cve_impact = e.get("cve_impact", {})
+        if cve_impact.get("impact") != "must_release":
+            continue
+        v = e.get("version", "?")
+        for d in cve_impact.get("details", []):
+            cve_rows.append((v, d.get("cve", "?"), d.get("jira", "—"),
+                             d.get("reason", "")))
+    if cve_rows:
+        sections.append("\n## CVEs Requiring Release\n")
+        sections.append("| Version | CVE | Jira Ticket | Detail |")
+        sections.append("|---------|-----|-------------|--------|")
+        for v, cve, jira, reason in cve_rows:
+            sections.append(f"| {v} | {cve} | {jira} | {reason} |")
 
     return "\n".join(sections)
 
@@ -710,8 +1124,6 @@ def format_text_full(output):
 def main():
     parser = argparse.ArgumentParser(description="MicroShift X/Y/Z release evaluation")
     parser.add_argument("versions", nargs="+", help="X.Y or X.Y.Z versions")
-    parser.add_argument("--verbose", action="store_true",
-                        help="Show detailed tables instead of one-line summary")
     parser.add_argument("--json", action="store_true", dest="json_output",
                         help="Output raw JSON instead of formatted text")
     args = parser.parse_args()
@@ -788,7 +1200,6 @@ def main():
     # Step 4: Output
     output = {
         "command": "precheck_xyz",
-        "verbose": args.verbose,
         "timestamp": datetime.now().isoformat(),
         "lifecycle": lifecycle_data,
         "evaluations": evaluations,
@@ -796,10 +1207,13 @@ def main():
 
     if args.json_output:
         print(json.dumps(output, indent=2))
-    elif args.verbose:
-        print(format_text_full(output))
     else:
+        # Always show one-liner summary followed by detail tables
         print(format_text_short(evaluations))
+        details = format_text_full(output)
+        if details.strip():
+            print()
+            print(details)
 
 
 if __name__ == "__main__":

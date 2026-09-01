@@ -242,8 +242,8 @@ def main(
         payloads_per_stream=config.payloads_per_stream,
     )
 
-    # Step 4: Analyze and find JIRA matches
-    logger.info("Step 4: Analyzing failures and searching JIRA...")
+    # Step 4: Analyze failures and suggest bugs
+    logger.info("Step 4: Analyzing failures and suggesting bugs...")
     try:
         analyze(report, config)
     except Exception as e:

@@ -1,6 +1,6 @@
 # Edge OCP Payload Monitor
 
-Automated monitoring tool for OpenShift nightly payload health across edge topologies (SNO, TNA, TNF). Fetches data from the amd64 release controller, Sippy Component Readiness, Prow CI, and JIRA to produce an interactive HTML dashboard.
+Automated monitoring tool for OpenShift nightly payload health across edge topologies (SNO, TNA, TNF). Fetches data from the amd64 release controller, Sippy Component Readiness, and Prow CI to produce an interactive HTML dashboard with suggested JIRA bug links for untracked failures.
 
 ## Quick Start
 
@@ -32,8 +32,7 @@ python -m payload_monitor --merge-analysis reports/analysis-2026-03-25.json --ou
 4. **Queries Sippy** for job-level regressions (pass rate drops) across edge topologies
 5. **Queries Component Readiness** for statistically significant regressions on edge topologies (SNO, TNF) vs HA
 6. **Collects timing insights** (opt-in via `--with-timing`) for install/upgrade durations across SNO/TNA/TNF topologies
-7. **Searches JIRA** for existing bugs matching failure signatures
-8. **Generates an HTML dashboard** with health summaries, failure details, regressions, timing insights, and JIRA integration
+7. **Generates an HTML dashboard** with health summaries, failure details, regressions, timing insights, and suggested JIRA bug links
 
 For a focused Component Readiness triage dump (counts, JIRA-linked triages, optional untriaged tests) without payload/Prow collection, use [ci-tooling/readiness-report](../ci-tooling/readiness-report/).
 
@@ -44,21 +43,21 @@ For a focused Component Readiness triage dump (counts, JIRA-linked triages, opti
                        |   CLI / Skill     |
                        +--------+----------+
                                 |
-     +----------+----------+----+-----+----------+----------+
-     |          |          |          |          |           |
-+----v-----+ +-v------+ +-v------+ +-v--------+ +v--------+ +v---------+
-| Release  | | Sippy  | | Comp.  | | Timing   | | Prow    | | JIRA     |
-| Ctrl     | | Jobs   | | Ready. | | (opt-in) | | Collect.| | Collect. |
-+----+-----+ +--------+ +--------+ +----+-----+ +----+----+ +----------+
-     |                                   |            |           |
-     +---------------+------------------+-------------+-----------+
+     +----------+----------+----+-----+----------+
+     |          |          |          |          |
++----v-----+ +-v------+ +-v------+ +-v--------+ +v--------+
+| Release  | | Sippy  | | Comp.  | | Timing   | | Prow    |
+| Ctrl     | | Jobs   | | Ready. | | (opt-in) | | Collect.|
++----+-----+ +--------+ +--------+ +----+-----+ +----+----+
+     |                                   |            |
+     +---------------+------------------+-------------+
                       |
              +--------v----------+
              |    Analyzer       |
              | (recurring fails, |
              |  unstable jobs,   |
              |  cross-topology,  |
-             |  JIRA matching)   |
+             |  bug suggestions) |
              +--------+----------+
                       |
              +--------v----------+
@@ -78,9 +77,8 @@ For a focused Component Readiness triage dump (counts, JIRA-linked triages, opti
   - Release Controller, Sippy, and Component Readiness APIs run in parallel (`__main__.py`)
   - Per-stream payload tag detail fetches run concurrently within each stream (`collectors/release_controller.py`)
   - Prow artifact enrichment (junit XML downloads) runs across failing jobs in parallel (`collectors/prow.py`)
-  - JIRA bug searches run concurrently across all unique failing jobs (`collectors/jira.py`)
 - **Shared HTTP sessions**: All collectors reuse persistent `requests.Session` instances with automatic retry (3 attempts) and exponential backoff for transient failures (429, 5xx).
-- **No JSON round-trip for AI analysis**: AI analysis is patched directly into the existing HTML report instead of serializing/deserializing the full report data through JSON. The `--json` export preserves all enrichment data (failure counts, JIRA matches, escalation risks, cross-topology correlations, thresholds) for external consumption.
+- **No JSON round-trip for AI analysis**: AI analysis is patched directly into the existing HTML report instead of serializing/deserializing the full report data through JSON. The `--json` export preserves all enrichment data (failure counts, escalation risks, cross-topology correlations, thresholds) for external consumption.
 - **Minimal AI input**: Blocking job data is emitted to stdout via structured markers (`BLOCKING_JOBS_START`/`BLOCKING_JOBS_END`) — Claude reads only job names and Prow URLs, never the full report data. Deep analysis runs only on blocking job failures; informing jobs get a lightweight Claude suggestion instead.
 - **Multi-agent parallelism**: When multiple blocking jobs need analysis, each is analyzed by a separate subagent in parallel.
 
@@ -97,22 +95,6 @@ Configuration is hardcoded in `payload_monitor/config.py`. The defaults are:
 | Recurring threshold | 2 payloads | — |
 | Persistent threshold | 3 payloads | — |
 | Escalation threshold | 3 consecutive | — |
-
-### Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `JIRA_TOKEN` | For JIRA features | Atlassian Cloud Personal Access Token (read-only) |
-
-To obtain a token, go to [Atlassian API Tokens](https://id.atlassian.com/manage-profile/security/api-tokens) and create a new token. **Use read-only permissions** — this tool only searches for existing bugs and never creates or modifies JIRA issues. The "Create in JIRA" links open the browser for manual review before submission.
-
-Set it in your shell before running:
-
-```bash
-export JIRA_TOKEN="your-pat-here"
-```
-
-Or add it to `~/.bashrc` / `~/.zshrc` for persistence.
 
 ## CLI Reference
 
@@ -142,7 +124,6 @@ Options:
 | [Sippy](https://sippy.dptools.openshift.org) | `/api/jobs` | None | Job pass rates, regressions |
 | [Sippy Component Readiness](https://sippy.dptools.openshift.org/sippy-ng/component_readiness/main) | `/api/component_readiness` | None | HA vs edge topology (SNO, TNF) regression detection |
 | [Prow](https://prow.ci.openshift.org) | GCS artifacts via `gsutil` | Google Cloud SDK | Job logs, junit XMLs, failing test details |
-| [JIRA](https://redhat.atlassian.net) | REST API v3 | Token (read-only) | Existing bug search, bug creation links |
 
 ## Topology Job Patterns
 
@@ -162,12 +143,12 @@ The generated HTML report is a single self-contained file (no external dependenc
 
 - **Health overview**: Per-version status badges, blocking/informing counts, topology badges, trend indicators, and payload acceptance timeline
 - **Findings summary**: Situation bar (blocking, informing, regressions, affected topologies) with severity-tiered sections (Critical/Warning/Regressions), inline blocking job list, unstable job details, and prominent action buttons
-- **Failing edge jobs**: Blocking and informing job failures across SNO/TNA/TNF topologies with sortable, filterable tables
+- **Failing edge jobs**: Blocking and informing job failures across SNO/TNA/TNF topologies with a sortable, filterable grid
 - **Failure analysis**: Error messages, failing tests, and AI root cause analysis (when enriched via Claude skill)
-- **Sippy job regressions**: Edge jobs with significant pass rate drops compared to previous periods, with an **Action** column containing copyable `/ci:triage-regression` commands
+- **Sippy job regressions**: Edge jobs with significant pass rate drops compared to previous periods, with an **Action** column containing copyable `/ci:ask-sippy` commands
 - **Component Readiness**: HA vs edge topology (SNO, TNF) regressions detected by Fisher's exact test, with comparison filter and **Action** column for triage commands
 - **Timing insights** (opt-in): Install/upgrade duration stats, variant breakdowns, and phase duration trends per topology
-- **JIRA integration**: Matching existing bugs and suggested new bugs with pre-filled create links
+- **Suggested bugs**: Pre-filled JIRA bug-creation links for failing edge jobs, deduplicated by job name across payloads and versions
 
 ### Failure Intelligence
 
@@ -177,8 +158,7 @@ The analyzer automatically detects patterns across payloads to surface high-prio
 - **Persistent failures** (3+ payloads): Jobs failing across 3 or more payloads are badged as "Persistent (Nx)" and highlighted in the findings summary
 - **Unstable jobs**: Informing jobs with 3+ **consecutive** recent failures are flagged as "Unstable" — these are consistently failing and need attention
 - **Cross-topology correlation**: When the same base job fails across multiple topologies (e.g., SNO and TNA), each failure shows an "Also in: [topology]" hint to surface shared platform issues
-- **Inline JIRA matches**: Each failing job's detail section shows any matching JIRA bugs inline, or a "Create Bug in JIRA" button if no existing bug is found (requires `JIRA_TOKEN`)
-- **JIRA error surfacing**: When individual JIRA searches fail (network errors, auth issues), the dashboard displays a warning banner listing affected jobs — partial JIRA results are still shown for jobs that succeeded
+- **Inline bug suggestions**: Each failing job's detail section shows a "Create Bug in JIRA" button with a pre-filled title and description
 - **Non-fatal analysis**: If the analyzer or any enrichment step fails, the report is still generated with the data collected so far — errors are logged and surfaced in the dashboard rather than aborting the entire run
 - **No dead ends**: Every finding in the dashboard has a clear next step — a JIRA link, a copyable Claude command, a triage URL, or a bug creation button
 

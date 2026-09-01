@@ -16,7 +16,6 @@ from payload_monitor.models import (
     JobResult,
     JobRun,
     JobType,
-    JiraBug,
     MonitorReport,
     Payload,
     PayloadStatus,
@@ -244,6 +243,19 @@ class TestGenerateHtml:
         generate_html(sample_report, out)
         assert out.exists()
 
+    def test_theme_toggle_present(self, sample_report):
+        """The dashboard ships a theme toggle button, a no-flash bootstrap
+        script that honors localStorage + system preference, and a light
+        palette so the toggle has something to switch to."""
+        html = generate_html(sample_report)
+        # Toggle control in the header
+        assert 'id="theme-toggle"' in html
+        # No-flash bootstrap: resolve theme before body renders
+        assert "localStorage.getItem('theme')" in html
+        assert "prefers-color-scheme: dark" in html
+        # Light palette exists to switch into
+        assert '[data-theme="light"]' in html
+
 
 class TestGenerateJson:
     def test_generates_json(self, sample_report, tmp_path):
@@ -453,7 +465,6 @@ class TestLoadJson:
                 }],
                 "regressions": [],
             }],
-            "jira_bugs": [],
             "suggested_bugs": [],
             "component_regressions": [],
         }
@@ -519,21 +530,7 @@ class TestCrossTopologyContext:
         assert ctx["cross_topology"] == {"j1": ["TNA"]}
 
 
-class TestJiraMatchesContext:
-    def test_context_includes_jira_matches(self):
-        bug = JiraBug(key="OCPBUGS-1", summary="bug", status="New", url="https://issues.redhat.com/browse/OCPBUGS-1")
-        job = JobRun("j1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")
-        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED, jobs=[job])
-        stream = StreamReport("s", "4.19", payloads=[payload])
-        report = MonitorReport(
-            generated_at="now",
-            streams=[stream],
-            jira_matches={"j1": [bug]},
-        )
-        ctx = _build_template_context(report)
-        assert "jira_matches_by_job" in ctx
-        assert ctx["jira_matches_by_job"] == {"j1": [bug]}
-
+class TestSuggestedBugsContext:
     def test_context_includes_suggested_bugs_by_job(self):
         suggested = SuggestedBug(
             title="Bug", description="desc", job_name="j2",
@@ -563,18 +560,6 @@ class TestJsonRoundTripNewFields:
         generate_json(report, out)
         loaded = load_json(out)
         assert loaded.failure_counts == {"j1": 3, "j2": 1}
-
-    def test_jira_matches_round_trip(self, tmp_path):
-        bug = JiraBug(key="OCPBUGS-1", summary="b", status="New")
-        report = MonitorReport(
-            generated_at="now",
-            jira_matches={"j1": [bug]},
-        )
-        out = tmp_path / "report.json"
-        generate_json(report, out)
-        loaded = load_json(out)
-        assert "j1" in loaded.jira_matches
-        assert loaded.jira_matches["j1"][0].key == "OCPBUGS-1"
 
     def test_escalation_risks_round_trip(self, tmp_path):
         er = EscalationRisk(
@@ -618,16 +603,6 @@ class TestJsonRoundTripNewFields:
         loaded = load_json(out)
         assert loaded.recurring_threshold == 5
         assert loaded.persistent_threshold == 10
-
-    def test_jira_errors_round_trip(self, tmp_path):
-        report = MonitorReport(
-            generated_at="now",
-            jira_errors=["JIRA search failed for j1: timeout", "JIRA search failed for j2: 403"],
-        )
-        out = tmp_path / "report.json"
-        generate_json(report, out)
-        loaded = load_json(out)
-        assert loaded.jira_errors == ["JIRA search failed for j1: timeout", "JIRA search failed for j2: 403"]
 
 
 class TestRetriedSuccessesContext:
@@ -734,7 +709,6 @@ class TestRetryJsonRoundTrip:
                 }],
                 "regressions": [],
             }],
-            "jira_bugs": [],
             "suggested_bugs": [],
             "component_regressions": [],
         }
@@ -767,34 +741,18 @@ class TestRetryJsonRoundTrip:
 
 class TestSafeDataclassInit:
     def test_ignores_unknown_keys(self):
-        result = _safe_dataclass_init(JiraBug, {
-            "key": "X-1", "summary": "s", "status": "New",
+        result = _safe_dataclass_init(AttemptAnalysis, {
+            "prow_url": "https://prow/1", "root_cause": "x",
             "unknown_field": "should be ignored",
         })
-        assert result.key == "X-1"
+        assert result.prow_url == "https://prow/1"
         assert not hasattr(result, "unknown_field")
 
     def test_uses_defaults_for_missing_optional(self):
-        result = _safe_dataclass_init(JiraBug, {
-            "key": "X-1", "summary": "s", "status": "New",
+        result = _safe_dataclass_init(AttemptAnalysis, {
+            "prow_url": "https://prow/1",
         })
-        assert result.assignee == ""
-
-
-class TestBlockingJobFirstIdx:
-    def test_blocking_job_first_idx(self):
-        blocking = JobRun("b1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")
-        informing = JobRun("i1", "url", JobResult.FAILURE, JobType.INFORMING, "SNO")
-        blocking2 = JobRun("b1", "url2", JobResult.FAILURE, JobType.BLOCKING, "SNO")
-        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED,
-                          jobs=[informing, blocking, blocking2])
-        stream = StreamReport("s", "4.19", payloads=[payload])
-        report = MonitorReport(generated_at="now", streams=[stream])
-
-        ctx = _build_template_context(report)
-        # blocking is sorted first, so b1 should be at index 1
-        assert "blocking_job_first_idx" in ctx
-        assert "b1" in ctx["blocking_job_first_idx"]
+        assert result.failure_type == ""
 
 
 class TestPatchAnalysisHtml:
@@ -1171,8 +1129,68 @@ class TestStreamViewsContext:
         sv = ctx["stream_views"][0]
         assert sv["stream"] is stream
         assert sv["affected_topologies"] == ["SNO", "TNA"]
-        assert isinstance(sv["recent_fails"], int)
-        assert isinstance(sv["older_fails"], int)
+        assert isinstance(sv["recent_fails"], float)
+        assert isinstance(sv["older_fails"], float)
+        assert isinstance(sv["trend_signal"], int)
+
+    def test_equal_rate_across_uneven_split_is_stable(self):
+        """5 payloads (newest-first) each fail the same blocking job once.
+        The 2-vs-3 recent/older split must not skew a flat failure rate
+        into a false 'improving' signal."""
+        payloads = [
+            Payload(f"t{i}", "s", "4.22", PayloadStatus.REJECTED,
+                    jobs=[JobRun("b1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")])
+            for i in range(5)
+        ]
+        stream = StreamReport("s", "4.22", payloads=payloads)
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        sv = ctx["stream_views"][0]
+        assert sv["recent_fails"] == sv["older_fails"]
+        assert sv["trend_signal"] >= 2
+
+    def test_single_informing_failure_below_trend_signal_threshold(self):
+        """A lone informing-job failure shouldn't register enough signal
+        to justify a directional (worsening/improving) trend arrow."""
+        payloads = [
+            Payload("t0", "s", "4.23", PayloadStatus.ACCEPTED,
+                    jobs=[JobRun("i1", "url", JobResult.FAILURE, JobType.INFORMING, "TNA")]),
+        ] + [
+            Payload(f"t{i}", "s", "4.23", PayloadStatus.ACCEPTED, jobs=[])
+            for i in range(1, 5)
+        ]
+        stream = StreamReport("s", "4.23", payloads=payloads)
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        sv = ctx["stream_views"][0]
+        assert sv["trend_signal"] < 2
+
+    def test_empty_payloads_no_zero_division(self):
+        """A stream with no payloads yet (e.g. no terminal tags) must not
+        raise ZeroDivisionError computing the trend rates."""
+        stream = StreamReport("s", "4.19", payloads=[])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        sv = ctx["stream_views"][0]
+        assert sv["recent_fails"] == 0.0
+        assert sv["older_fails"] == 0.0
+        assert sv["trend_signal"] == 0
+
+    def test_mid_never_zero_for_single_payload(self):
+        """A single-payload stream must not divide by zero computing the
+        recent-half rate."""
+        p = Payload("t0", "s", "4.19", PayloadStatus.ACCEPTED,
+                    jobs=[JobRun("b1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")])
+        stream = StreamReport("s", "4.19", payloads=[p])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        sv = ctx["stream_views"][0]
+        assert sv["recent_fails"] == 3.0
+        assert sv["older_fails"] == 0.0
 
     def test_blocking_and_informing_counts(self):
         b_job = JobRun("b1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")

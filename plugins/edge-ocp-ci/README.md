@@ -1,6 +1,6 @@
 # edge-ocp-ci
 
-Automated monitoring of OpenShift nightly payload health across edge topologies (SNO, TNA, TNF). Generates an interactive HTML dashboard with failure analysis, JIRA integration, Sippy regressions, Component Readiness comparisons, and optional timing insights. When run as a Claude Code skill, blocking job failures are automatically analyzed by AI subagents.
+Automated monitoring of OpenShift nightly payload health across edge topologies (SNO, TNA, TNF). Generates an interactive HTML dashboard with failure analysis, suggested JIRA bug links, Sippy regressions, Component Readiness comparisons, and optional timing insights. When run as a Claude Code skill, blocking job failures are automatically analyzed by AI subagents.
 
 ## Installation
 
@@ -35,13 +35,12 @@ Automated monitoring of OpenShift nightly payload health across edge topologies 
 
 - Python 3 (venv created automatically)
 - `gsutil` (Google Cloud SDK) — for Prow artifact fetching
-- `JIRA_TOKEN` environment variable — for bug matching (read-only, optional)
 - Marketplace CI skills from [ai-helpers](https://github.com/openshift-eng/ai-helpers) — for deep analysis of blocking failures
 - **Category:** ci-cd
 
 ## How It Works
 
-1. Runs the `payload-monitor` Python tool to collect data from Release Controller, Sippy, Component Readiness, Prow, and JIRA
+1. Runs the `payload-monitor` Python tool to collect data from Release Controller, Sippy, Component Readiness, and Prow
 2. Generates a self-contained HTML dashboard report
 3. Parses blocking job failures from the tool's stdout
 4. Spawns AI subagents (one per blocking failure) to perform root cause analysis using marketplace CI skills

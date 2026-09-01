@@ -48,6 +48,29 @@ class TestParseVersion(unittest.TestCase):
         with self.assertRaises(ValueError):
             prow.parse_version("4.21")
 
+    def test_rejects_major_below_4(self):
+        with self.assertRaises(ValueError):
+            prow.parse_version("3.22.0")
+
+    def test_valid_5x_xyz(self):
+        result = prow.parse_version("5.0.0")
+        self.assertEqual(result["version"], "5.0.0")
+        self.assertEqual(result["minor"], "5.0")
+        self.assertEqual(result["branch"], "release-5.0")
+        self.assertEqual(result["pr_title"], "[release-5.0] Release Testing 5.0.0")
+
+    def test_valid_5x_rc(self):
+        result = prow.parse_version("5.0.0-rc.0")
+        self.assertEqual(result["version"], "5.0.0-rc.0")
+        self.assertEqual(result["minor"], "5.0")
+        self.assertEqual(result["release_type"], "RC")
+
+    def test_valid_5x_ec(self):
+        result = prow.parse_version("5.1.0-ec.3")
+        self.assertEqual(result["version"], "5.1.0-ec.3")
+        self.assertEqual(result["minor"], "5.1")
+        self.assertEqual(result["release_type"], "EC")
+
 
 class TestCiJobs(unittest.TestCase):
 
@@ -70,6 +93,11 @@ class TestCiJobs(unittest.TestCase):
     def test_future_version_uses_422_jobs(self):
         jobs = prow.ci_jobs("4.25")
         self.assertEqual(len(jobs), 6)
+
+    def test_5x_uses_422_jobs(self):
+        jobs = prow.ci_jobs("5.0")
+        self.assertEqual(len(jobs), 6)
+        self.assertIn("e2e-aws-tests-bootc-release-el9", jobs)
 
 
 class TestMatchCiJobs(unittest.TestCase):

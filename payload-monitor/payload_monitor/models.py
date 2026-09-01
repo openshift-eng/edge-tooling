@@ -152,17 +152,6 @@ class ComponentRegression:
 
 
 @dataclass
-class JiraBug:
-    key: str
-    summary: str
-    status: str
-    assignee: str = ""
-    priority: str = ""
-    url: str = ""
-    component: str = ""
-
-
-@dataclass
 class SuggestedBug:
     title: str
     description: str
@@ -214,20 +203,16 @@ class EscalationRisk:
 class MonitorReport:
     generated_at: str = ""
     streams: list[StreamReport] = field(default_factory=list)
-    jira_bugs: list[JiraBug] = field(default_factory=list)
     suggested_bugs: list[SuggestedBug] = field(default_factory=list)
     component_regressions: list[ComponentRegression] = field(default_factory=list)
     skip_prow: bool = False
     skip_sippy: bool = False
-    skip_jira: bool = False
     skip_timing: bool = False
     timing_report: Optional[TimingReport] = None
     escalation_risks: list[EscalationRisk] = field(default_factory=list)
     cross_topology: dict[str, list[str]] = field(default_factory=dict)
     data_errors: list[str] = field(default_factory=list)
-    jira_errors: list[str] = field(default_factory=list)
     failure_counts: dict[str, int] = field(default_factory=dict)
-    jira_matches: dict[str, list[JiraBug]] = field(default_factory=dict)
     recurring_threshold: int = 2
     persistent_threshold: int = 3
     payloads_per_stream: int = 5

@@ -41,13 +41,13 @@ _CI_JOBS_422 = [
 
 def ci_jobs(minor):
     """Return the CI job list for a given minor version string (e.g. '4.21')."""
-    minor_num = int(minor.split(".")[1])
-    if minor_num <= 21:
-        return _CI_JOBS_421
-    return _CI_JOBS_422
+    major, minor_num = (int(x) for x in minor.split("."))
+    if major >= 5 or minor_num >= 22:
+        return _CI_JOBS_422
+    return _CI_JOBS_421
 
 
-_VERSION_RE = re.compile(r"^(4)\.(\d+)\.(\d+)(?:-(ec|rc)\.(\d+))?$")
+_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-(ec|rc)\.(\d+))?$")
 _HTTP_TIMEOUT = 60
 _HTTP_RETRIES = 3
 _GH_ACTIVE_STATES = frozenset({"PENDING", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"})
@@ -57,7 +57,7 @@ def parse_version(version_str):
     """Validate and parse a MicroShift version string.
 
     Args:
-        version_str: e.g. "4.21.3", "4.22.0-rc.1", "4.22.0-ec.5".
+        version_str: e.g. "4.21.3", "4.22.0-rc.1", "5.0.0-ec.5".
 
     Returns:
         dict with keys: version, minor, branch, pr_title, release_type, ecrc_num.
@@ -77,14 +77,15 @@ def parse_version(version_str):
             "Expected X.Y.Z, X.Y.Z-rc.N, or X.Y.Z-ec.N."
         )
 
+    major_num = int(match.group(1))
     minor_num = int(match.group(2))
-    if minor_num < 21:
+    if major_num < 4 or (major_num == 4 and minor_num < 21):
         raise ValueError(
-            f"Version 4.{minor_num} uses Jenkins pipelines (USHIFT-6805), "
+            f"Version {major_num}.{minor_num} uses Jenkins pipelines (USHIFT-6805), "
             "not Prow CI. This skill only supports 4.21+."
         )
 
-    minor = f"4.{minor_num}"
+    minor = f"{major_num}.{minor_num}"
     branch = f"release-{minor}"
     pr_title = f"[{branch}] Release Testing {version}"
 

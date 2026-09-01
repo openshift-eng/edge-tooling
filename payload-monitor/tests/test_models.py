@@ -170,12 +170,10 @@ class TestDataclassDefaults:
         report = MonitorReport()
         assert report.generated_at == ""
         assert report.streams == []
-        assert report.jira_bugs == []
         assert report.suggested_bugs == []
         assert report.component_regressions == []
         assert report.skip_prow is False
         assert report.skip_sippy is False
-        assert report.skip_jira is False
         assert report.data_errors == []
 
     def test_suggested_bug_defaults(self):

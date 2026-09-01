@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --bg: #0d1117;
   --surface: #161b22;
   --surface-hover: #1c2128;
@@ -11,7 +12,73 @@
   --yellow: #d29922;
   --orange: #db6d28;
   --purple: #bc8cff;
+  /* Semantic tokens (theme-aware). Neutral rgba tints reference the *-rgb
+     triplets so they invert with the theme; accent-color tints stay literal
+     because a low-opacity accent wash reads correctly on either background. */
+  --text-strong: #f0f6fc;
+  --text-rgb: 230,237,243;
+  --border-rgb: 48,54,61;
+  --hover-overlay: rgba(255,255,255,0.04);
+  --shadow-lg: 0 4px 12px rgba(0,0,0,0.4);
+  --shadow-sm: 0 2px 8px rgba(0,0,0,.3);
+  --on-accent: #000;
+  --dot-neutral: #484f58;
+  --red-emphasis: #ff6961;
 }
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --surface: #f6f8fa;
+  --surface-hover: #eaeef2;
+  --border: #d0d7de;
+  --text: #1f2328;
+  --text-muted: #656d76;
+  --accent: #0969da;
+  --green: #1a7f37;
+  --red: #cf222e;
+  --yellow: #9a6700;
+  --orange: #bc4c00;
+  --purple: #8250df;
+  --text-strong: #010409;
+  --text-rgb: 31,35,40;
+  --border-rgb: 208,215,222;
+  --hover-overlay: rgba(31,35,40,0.05);
+  --shadow-lg: 0 4px 12px rgba(140,149,159,0.25);
+  --shadow-sm: 0 2px 8px rgba(140,149,159,0.2);
+  --on-accent: #fff;
+  --dot-neutral: #afb8c1;
+  --red-emphasis: #e5484d;
+}
+
+/* Theme toggle button (top-right of header) */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 6px;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.theme-toggle:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--surface-hover);
+}
+/* Show the icon for the theme you'd switch INTO: sun while dark, moon while light. */
+.theme-toggle .theme-icon-moon { display: none; }
+.theme-toggle .theme-icon-sun { display: inline; }
+:root[data-theme="light"] .theme-toggle .theme-icon-moon { display: inline; }
+:root[data-theme="light"] .theme-toggle .theme-icon-sun { display: none; }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -174,7 +241,7 @@ a:hover { text-decoration: underline; }
   align-items: center;
   gap: 12px;
   padding: 8px 16px;
-  background: rgba(48,54,61,0.3);
+  background: rgba(var(--border-rgb),0.3);
   border-bottom: 1px solid var(--border);
   border-radius: 8px 8px 0 0;
   font-size: 11px;
@@ -341,7 +408,7 @@ a:hover { text-decoration: underline; }
   transition: background 0.15s;
   min-width: 0;
 }
-.fs-situation-item:hover { background: rgba(255,255,255,0.04); }
+.fs-situation-item:hover { background: var(--hover-overlay); }
 .fs-situation-sep {
   width: 1px;
   background: var(--border);
@@ -489,7 +556,7 @@ a:hover { text-decoration: underline; }
 .fs-blocking-name:hover { text-decoration: underline; }
 .fs-blocking-versions {
   font-size: 13px;
-  color: #f0f6fc;
+  color: var(--text-strong);
   font-weight: 600;
   flex-shrink: 0;
 }
@@ -507,7 +574,7 @@ a:hover { text-decoration: underline; }
 }
 .fs-blocking-test-name {
   font-size: 12px;
-  color: rgba(230,237,243,0.65);
+  color: rgba(var(--text-rgb),0.65);
   font-family: monospace;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -520,7 +587,7 @@ a:hover { text-decoration: underline; }
 }
 .fs-job-version {
   font-size: 12px;
-  color: #f0f6fc;
+  color: var(--text-strong);
   font-weight: 700;
 }
 
@@ -638,8 +705,8 @@ a:hover { text-decoration: underline; }
   font-weight: 700;
 }
 .fs-section-action.fs-action-critical:hover {
-  background: #ff6961;
-  border-color: #ff6961;
+  background: var(--red-emphasis);
+  border-color: var(--red-emphasis);
   text-decoration: none;
 }
 .fs-section-action.fs-action-warning {
@@ -700,10 +767,10 @@ a:hover { text-decoration: underline; }
   transition: transform 0.1s;
 }
 .timeline-dot:hover { transform: scale(1.3); z-index: 2; }
-.timeline-dot.edge-healthy { background: var(--green); color: #000; }
-.timeline-dot.edge-warning { background: var(--yellow); color: #000; }
+.timeline-dot.edge-healthy { background: var(--green); color: var(--on-accent); }
+.timeline-dot.edge-warning { background: var(--yellow); color: var(--on-accent); }
 .timeline-dot.edge-critical { background: var(--red); color: #fff; }
-.timeline-dot.rejected-noedge { background: #484f58; color: var(--text-muted); }
+.timeline-dot.rejected-noedge { background: var(--dot-neutral); color: var(--text-muted); }
 .timeline-dot .tooltip {
   display: none;
   position: absolute;
@@ -720,7 +787,7 @@ a:hover { text-decoration: underline; }
   max-width: 450px;
   z-index: 100;
   color: var(--text);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  box-shadow: var(--shadow-lg);
 }
 .timeline-dot:hover .tooltip { display: block; }
 
@@ -749,7 +816,7 @@ a:hover { text-decoration: underline; }
   transition: all 0.15s;
 }
 .filter-btn:hover { border-color: var(--accent); color: var(--text); }
-.filter-btn.active { background: var(--accent); color: #000; border-color: var(--accent); }
+.filter-btn.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 
 /* Tables */
 .table-wrapper {
@@ -820,9 +887,9 @@ tr:hover { background: var(--surface-hover); }
 .badge.sno { background: rgba(188,140,255,0.2); color: var(--purple); }
 .badge.tna { background: rgba(88,166,255,0.2); color: var(--accent); }
 .badge.tnf { background: rgba(219,109,40,0.2); color: var(--orange); }
-.badge.recurring { background: rgba(210,153,34,0.15); color: #f0d070; }
-.badge.persistent { background: rgba(139,92,246,0.2); color: #b49cfa; }
-.badge.escalation-risk { background: rgba(219,109,40,0.25); color: #f0a050; }
+.badge.recurring { background: rgba(210,153,34,0.15); color: var(--yellow); }
+.badge.persistent { background: rgba(139,92,246,0.2); color: var(--purple); }
+.badge.escalation-risk { background: rgba(219,109,40,0.25); color: var(--orange); }
 .badge.green { background: rgba(63,185,80,0.2); color: var(--green); }
 
 .previous-attempts {
@@ -863,15 +930,6 @@ tr:hover { background: var(--surface-hover); }
   gap: 6px;
 }
 
-.status-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-size: 11px;
-}
-.status-badge.success { background: rgba(63,185,80,0.2); color: var(--green); }
-.status-badge.failure { background: rgba(248,81,73,0.2); color: var(--red); }
-
 /* Expandable details */
 details {
   background: var(--surface);
@@ -888,14 +946,24 @@ details summary {
 details summary:hover { background: var(--surface-hover); }
 
 /* Failure analysis grid layout */
+/* Header and each row's <summary> are separate grid containers (a <details>
+   per row can't be a native table row), so columns must be sized with fixed
+   tracks here rather than `auto` — `auto` sizes to each grid instance's own
+   content, which drifts header vs. row and row vs. row as content varies. */
+:root {
+  /* Fixed-track widths must fit the header label + sort arrow ("⇅") on one
+     line (uppercase, letter-spaced, see .sortable) — that's the true
+     minimum, wider in several columns than the data cells alone need. */
+  --detail-grid-cols: 24px minmax(0, 3fr) 90px minmax(0, 2fr) 95px 95px 180px 150px;
+}
 .detail-grid-header {
   display: grid;
-  grid-template-columns: 24px minmax(0, 3fr) auto minmax(0, 2fr) auto auto auto auto;
+  grid-template-columns: var(--detail-grid-cols);
   gap: 0 8px;
   align-items: center;
   padding: 8px 16px;
   max-width: 100%;
-  background: rgba(48,54,61,0.5);
+  background: rgba(var(--border-rgb),0.5);
   border: 1px solid var(--border);
   border-radius: 8px 8px 0 0;
   margin-bottom: 0;
@@ -917,7 +985,7 @@ details.detail-row:last-of-type {
 details.detail-row > summary {
   list-style: none;
   display: grid;
-  grid-template-columns: 24px minmax(0, 3fr) auto minmax(0, 2fr) auto auto auto auto;
+  grid-template-columns: var(--detail-grid-cols);
   gap: 0 8px;
   align-items: center;
 }
@@ -953,9 +1021,13 @@ details.detail-row:last-of-type > summary:hover { border-radius: 0 0 8px 8px; }
 .detail-cell-job .cross-topo-hint .badge { font-size: 9px; padding: 1px 4px; margin-left: 1px; }
 .detail-cell-version {
   font-weight: 700;
-  color: #f0f6fc;
+  color: var(--text-strong);
   font-size: 14px;
   text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 .detail-cell-payload {
   overflow: hidden;
@@ -978,7 +1050,7 @@ details.detail-row:last-of-type > summary:hover { border-radius: 0 0 8px 8px; }
   font-size: 13px;
   white-space: nowrap;
 }
-.detail-grid-header > div { position: relative; }
+.detail-grid-header > div { position: relative; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 1024px) {
   .detail-grid-header { display: none; }
   details.detail-row { border-radius: 8px; margin-bottom: 8px; border-top: 1px solid var(--border); }
@@ -1005,20 +1077,6 @@ details pre {
   overflow-y: auto;
 }
 
-/* JIRA cards */
-.jira-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px 16px;
-  margin-bottom: 8px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.jira-card .key { font-weight: 600; color: var(--accent); }
-.jira-card .summary { color: var(--text); margin-left: 12px; flex: 1; }
-
 /* Suggested bugs */
 .suggest-card {
   background: var(--surface);
@@ -1035,7 +1093,7 @@ details pre {
   display: inline-block;
   padding: 6px 16px;
   background: var(--accent);
-  color: #000;
+  color: var(--on-accent);
   border-radius: 6px;
   font-size: 12px;
   font-weight: 600;
@@ -1072,7 +1130,7 @@ details pre {
 }
 .da-label {
   font-weight: 600;
-  color: rgba(230,237,243,0.75);
+  color: rgba(var(--text-rgb),0.75);
   margin-right: 6px;
   font-size: 14px;
 }
@@ -1081,7 +1139,7 @@ details pre {
   font-weight: 700;
 }
 .da-field span:not(.da-label, .badge) {
-  color: rgba(230,237,243,0.7);
+  color: rgba(var(--text-rgb),0.7);
   font-size: 14px;
 }
 .badge.da-type { background: rgba(88,166,255,0.2); color: var(--accent); }
@@ -1099,7 +1157,7 @@ details pre {
   font-weight: 700;
 }
 .da-field.da-recommendation span:not(.da-label) {
-  color: rgba(230,237,243,0.85);
+  color: rgba(var(--text-rgb),0.85);
   font-size: 14px;
 }
 .claude-suggestion {
@@ -1156,7 +1214,7 @@ details pre {
   padding: 4px 10px;
   border-radius: 4px;
   background: var(--green);
-  color: #000;
+  color: var(--on-accent);
   font-size: 12px;
   font-weight: 600;
   pointer-events: none;
@@ -1317,14 +1375,10 @@ details pre {
   color: var(--text);
   white-space: nowrap;
   z-index: 100;
-  box-shadow: 0 2px 8px rgba(0,0,0,.3);
+  box-shadow: var(--shadow-sm);
 }
 
-/* Inline JIRA matches in failure details */
-.inline-jira-matches {
-  margin: 8px 0;
-  font-size: 13px;
-}
+/* Inline JIRA bug link (e.g. regression triage) */
 .inline-jira-badge {
   display: inline-flex;
   align-items: center;
@@ -1345,19 +1399,6 @@ details pre {
 .inline-jira-badge .key {
   font-weight: 600;
   color: var(--accent);
-}
-.inline-jira-badge .status-indicator {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 8px;
-}
-.inline-jira-badge .status-indicator.open {
-  background: rgba(248,81,73,0.2);
-  color: var(--red);
-}
-.inline-jira-badge .status-indicator.resolved {
-  background: rgba(63,185,80,0.2);
-  color: var(--green);
 }
 .inline-create-bug {
   display: flex;
