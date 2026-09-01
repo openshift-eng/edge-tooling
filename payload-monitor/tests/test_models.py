@@ -1,5 +1,6 @@
 """Tests for payload_monitor.models."""
 
+import pytest
 
 from payload_monitor.models import (
     JobResult,
@@ -11,6 +12,7 @@ from payload_monitor.models import (
     StreamReport,
     SuggestedBug,
     Topology,
+    sort_versions,
 )
 
 
@@ -86,6 +88,28 @@ class TestStreamReport:
         p2 = Payload("t2", "s", "4.19", PayloadStatus.REJECTED, jobs=[job_f])
         stream = StreamReport("s", "4.19", payloads=[p1, p2])
         assert stream.total_edge_failures == 2
+
+
+class TestSortVersions:
+    def test_numeric_ordering(self):
+        assert sort_versions(["5.10", "5.2", "5.1"]) == ["5.1", "5.2", "5.10"]
+
+    def test_numeric_ordering_across_majors(self):
+        assert sort_versions(["4.19", "5.1", "4.2"]) == ["4.2", "4.19", "5.1"]
+
+    def test_empty_input(self):
+        assert sort_versions([]) == []
+
+    def test_single_version(self):
+        assert sort_versions(["4.19"]) == ["4.19"]
+
+    def test_rejects_missing_minor(self):
+        with pytest.raises(ValueError):
+            sort_versions(["5"])
+
+    def test_rejects_non_numeric_component(self):
+        with pytest.raises(ValueError):
+            sort_versions(["5.x"])
 
 
 class TestEnums:
