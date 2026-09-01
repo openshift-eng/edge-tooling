@@ -47,20 +47,25 @@ _session = create_session()
 _MAX_LIST_PAGES = 50
 
 
-def _find_previous_build_id(job_name: str, current_build: str) -> Optional[str]:
-    """Find the most recent completed build ID for *job_name* in GCS.
+def _find_previous_build_ids(job_name: str, current_build: str, limit: int = 1) -> list[str]:
+    """Find the most recent completed build IDs for *job_name* in GCS.
 
     ``latest-build.txt`` can't be used for this — Prow writes it to point at
     the currently-running build as soon as the job starts, so by the time this
     code runs mid-job it always equals *current_build*. Instead, list the
-    job's build-ID subdirectories directly and pick the highest one that
-    isn't the current build.
+    job's build-ID subdirectories directly and pick the highest ones that
+    aren't the current build.
 
     GCS returns listings in ascending lexicographic order with no
-    server-side reverse-sort, so the build we want — the most recent one —
-    is on the *last* page, not the first. Pagination is followed to the end
+    server-side reverse-sort, so the builds we want — the most recent ones —
+    are on the *last* page, not the first. Pagination is followed to the end
     rather than reading a single page, to avoid silently picking an old
     build once a job accumulates more history than fits on one page.
+
+    Returns up to *limit* build IDs, most-recent-first. Prow creates a
+    build's directory as soon as it starts, so a rerun/retest can leave a
+    newer, still-in-progress build ahead of the last completed one —
+    callers should be ready to fall back to an older candidate.
     """
     build_ids: list[str] = []
     page_token = None
@@ -75,11 +80,11 @@ def _find_previous_build_id(job_name: str, current_build: str) -> Optional[str]:
             resp.raise_for_status()
             data = resp.json()
         except requests_lib.RequestException as e:
-            logger.warning(f"Could not list GCS builds for {job_name}: {e}")
-            return None
+            logger.warning("Could not list GCS builds for %s (%s)", job_name, type(e).__name__)
+            return []
 
         if not isinstance(data, dict):
-            return None
+            return []
 
         prefixes = data.get("prefixes")
         if isinstance(prefixes, list):
@@ -93,15 +98,19 @@ def _find_previous_build_id(job_name: str, current_build: str) -> Optional[str]:
             break
 
     if not build_ids:
-        return None
-    return max(build_ids, key=int)
+        return []
+    return sorted(build_ids, key=int, reverse=True)[:limit]
 
 
 def seed_cache_from_previous_run(cache_path: Path) -> None:
     """Download timing_cache.json from the previous Prow run's GCS artifacts.
 
     Lists the job's GCS build directories to find the most recent completed
-    build, then fetches its ``timing_cache.json`` artifact over public HTTPS.
+    builds, then fetches ``timing_cache.json`` from the first one that has it.
+    A rerun/retest can leave a newer, still-in-progress build directory ahead
+    of the last completed one — its cache artifact 404s since the job hasn't
+    finished writing it yet — so a few candidates are tried in descending
+    order rather than giving up after the single most-recent build.
     Skips gracefully on any failure (logging a warning) — this must never be
     fatal, because a cold start is the natural fallback.
     """
@@ -114,17 +123,26 @@ def seed_cache_from_previous_run(cache_path: Path) -> None:
 
     current_build = os.environ.get("BUILD_ID", "")
 
-    previous_build = _find_previous_build_id(job_name, current_build)
-    if not previous_build:
+    previous_builds = _find_previous_build_ids(job_name, current_build, limit=3)
+    if not previous_builds:
         logger.warning(f"No previous completed build found for {job_name}")
         return
 
-    cache_url = f"{GCS_BASE}/{job_name}/{previous_build}/{CACHE_ARTIFACT_RELPATH}"
-    try:
-        resp = _session.get(cache_url, timeout=30)
-        resp.raise_for_status()
-    except requests_lib.RequestException as e:
-        logger.warning(f"Could not fetch previous cache artifact: {e}")
+    for previous_build in previous_builds:
+        cache_url = f"{GCS_BASE}/{job_name}/{previous_build}/{CACHE_ARTIFACT_RELPATH}"
+        try:
+            resp = _session.get(cache_url, timeout=30)
+        except requests_lib.RequestException as e:
+            logger.warning(
+                "Could not fetch previous cache artifact (build %s) (%s)",
+                previous_build, type(e).__name__,
+            )
+            continue
+        if not resp.ok:
+            continue
+        break
+    else:
+        logger.warning(f"No previous build with a timing cache found for {job_name}")
         return
 
     try:

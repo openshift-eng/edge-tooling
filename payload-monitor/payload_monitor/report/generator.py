@@ -113,11 +113,7 @@ def _build_template_context(report: MonitorReport) -> dict:
     informing_failures = 0
     blocking_jobs_seen: set[str] = set()
     blocking_jobs_list: list[dict] = []
-    # Map each blocking job name to the 1-based index of its first row in
-    # all_failing, matching the template's `detail-{{ loop.index }}` anchors so
-    # the findings summary can jump straight to the job's detail row.
-    blocking_job_first_idx: dict[str, int] = {}
-    for idx, item in enumerate(all_failing, start=1):
+    for item in all_failing:
         if item["job"].job_type == JobType.BLOCKING:
             blocking_failures += 1
             name = item["job"].name
@@ -125,7 +121,6 @@ def _build_template_context(report: MonitorReport) -> dict:
             if name not in blocking_jobs_seen:
                 blocking_jobs_seen.add(name)
                 blocking_jobs_list.append(item)
-                blocking_job_first_idx[name] = idx
             if name not in blocking_job_versions:
                 blocking_job_versions[name] = []
                 blocking_job_tests[name] = []
@@ -175,20 +170,29 @@ def _build_template_context(report: MonitorReport) -> dict:
         affected = sorted({
             j.topology for p in stream.payloads for j in p.failing_edge_jobs if j.topology
         })
-        mid = len(stream.payloads) // 2
-        recent_fails = sum(
-            len(p.blocking_edge_failures) + len(p.informing_edge_failures)
-            for p in stream.payloads[:mid]
-        )
-        older_fails = sum(
-            len(p.blocking_edge_failures) + len(p.informing_edge_failures)
-            for p in stream.payloads[mid:]
-        )
+
+        # Trend is a per-payload failure rate (not a raw count) so an uneven
+        # recent/older split (e.g. 2 vs 3 payloads) can't tip the label on
+        # its own. Blocking failures are weighted 3x informing ones since
+        # they're what actually reject a payload. trend_signal gates whether
+        # an arrow is shown at all, so a single low-severity blip renders as
+        # stable rather than a false worsening/improving signal.
+        mid = max(len(stream.payloads) // 2, 1)
+        recent, older = stream.payloads[:mid], stream.payloads[mid:]
+
+        def _weighted(ps):
+            return sum(3 * len(p.blocking_edge_failures) + len(p.informing_edge_failures) for p in ps)
+
+        recent_fails = _weighted(recent) / len(recent) if recent else 0.0
+        older_fails = _weighted(older) / len(older) if older else 0.0
+        trend_signal = _weighted(stream.payloads)
+
         stream_views.append({
             "stream": stream,
             "affected_topologies": affected,
             "recent_fails": recent_fails,
             "older_fails": older_fails,
+            "trend_signal": trend_signal,
         })
 
     # Unique topology names and versions for filters
@@ -249,7 +253,6 @@ def _build_template_context(report: MonitorReport) -> dict:
         "suggested_bugs_by_job": {b.job_name: b for b in report.suggested_bugs},
         "blocking_job_versions": blocking_job_versions,
         "blocking_job_tests": blocking_job_tests,
-        "blocking_job_first_idx": blocking_job_first_idx,
         "retried_successes": retried_successes,
         "stream_views": stream_views,
         "blocking_failures": blocking_failures,

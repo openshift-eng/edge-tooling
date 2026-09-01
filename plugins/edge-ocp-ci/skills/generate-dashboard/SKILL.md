@@ -253,7 +253,7 @@ Offer follow-up actions the user can take from this session:
 
 - **Create JIRA bugs** for untracked failures
 - **Set release blocker** on a JIRA issue (`ci:set-release-blocker`)
-- **Triage a regression** in Component Readiness (`ci:triage-regression`)
+- **Investigate a regression** in Component Readiness (`ci:ask-sippy`)
 - **Trigger payload job** to test a fix (`ci:trigger-payload-job`)
 - **Investigate an informing job** further (`ci:prow-job-analysis`)
 

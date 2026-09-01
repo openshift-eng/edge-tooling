@@ -142,6 +142,62 @@ class TestAnalyze:
         analyze(report, Config())
         assert report.suggested_bugs == []
 
+    def test_single_informing_flake_not_suggested(self):
+        """A single informing-job failure in an otherwise-passing stream
+        should not generate a suggested bug (not blocking, persistent, or
+        an escalation risk)."""
+        payloads = [
+            _make_payload("t1", [_make_informing_job("j1", result=JobResult.SUCCESS)]),
+            _make_payload("t2", [_make_informing_job("j1", result=JobResult.SUCCESS)]),
+            _make_payload("t3", [_make_informing_job("j1", result=JobResult.SUCCESS)]),
+            _make_payload("t4", [_make_informing_job("j1", result=JobResult.SUCCESS)]),
+            _make_payload("t5", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+        ]
+        report = MonitorReport(
+            generated_at="now",
+            streams=[StreamReport("s", "4.19", payloads=payloads)],
+        )
+        analyze(report, Config())
+        assert report.suggested_bugs == []
+
+    def test_persistent_informing_failure_suggested(self):
+        """An informing job failing in enough payloads to cross the
+        persistent threshold should still get a suggested bug, even
+        without 3 consecutive failures (not an escalation risk)."""
+        payloads = [
+            _make_payload("t1", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+            _make_payload("t2", [_make_informing_job("j1", result=JobResult.SUCCESS)]),
+            _make_payload("t3", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+            _make_payload("t4", [_make_informing_job("j1", result=JobResult.SUCCESS)]),
+            _make_payload("t5", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+        ]
+        report = MonitorReport(
+            generated_at="now",
+            streams=[StreamReport("s", "4.19", payloads=payloads)],
+        )
+        analyze(report, Config())
+        assert report.escalation_risks == []
+        assert {b.job_name for b in report.suggested_bugs} == {"j1"}
+
+    def test_escalation_risk_informing_failure_suggested(self):
+        """An informing job with 3 consecutive failures (escalation risk)
+        should get a suggested bug even below the persistent threshold."""
+        # Payloads are newest-first; j1 fails in the 3 most recent, passed
+        # further back.
+        payloads = [
+            _make_payload("t4", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+            _make_payload("t3", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+            _make_payload("t2", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+            _make_payload("t1", [_make_informing_job("j1", result=JobResult.SUCCESS)]),
+        ]
+        report = MonitorReport(
+            generated_at="now",
+            streams=[StreamReport("s", "4.19", payloads=payloads)],
+        )
+        analyze(report, Config())
+        assert {er.job_name for er in report.escalation_risks} == {"j1"}
+        assert {b.job_name for b in report.suggested_bugs} == {"j1"}
+
 
 def _make_informing_job(name, result=JobResult.FAILURE, topology="SNO"):
     return JobRun(name=name, prow_url=f"https://prow/{name}",
@@ -153,13 +209,13 @@ class TestFindEscalationRisks:
         """Informing job failing in last 3 consecutive payloads -> 1 EscalationRisk."""
         def j(r):
             return _make_informing_job("j1", result=r)
-        # 5 payloads, oldest first; j1 passes in first 2, fails in last 3
+        # 5 payloads, newest first; j1 fails in the most recent 3, passes in the oldest 2
         payloads = [
-            _make_payload("t1", [j(JobResult.SUCCESS)]),
-            _make_payload("t2", [j(JobResult.SUCCESS)]),
-            _make_payload("t3", [j(JobResult.FAILURE)]),
-            _make_payload("t4", [j(JobResult.FAILURE)]),
             _make_payload("t5", [j(JobResult.FAILURE)]),
+            _make_payload("t4", [j(JobResult.FAILURE)]),
+            _make_payload("t3", [j(JobResult.FAILURE)]),
+            _make_payload("t2", [j(JobResult.SUCCESS)]),
+            _make_payload("t1", [j(JobResult.SUCCESS)]),
         ]
         stream = StreamReport("s", "4.19", payloads=payloads)
 
@@ -180,7 +236,7 @@ class TestFindEscalationRisks:
 
     def test_non_consecutive(self):
         """Informing job fails in payloads 1, 3, 5 (gaps) -> no EscalationRisk."""
-        # Oldest first: F, S, F, S, F -> newest first: F, S, F, S, F
+        # Newest first: F, S, F, S, F
         # Consecutive from newest: only 1 (fails, then passes)
         payloads = [
             _make_payload("t1", [_make_informing_job("j1", result=JobResult.FAILURE)]),
@@ -207,12 +263,13 @@ class TestFindEscalationRisks:
 
     def test_below_threshold(self):
         """Informing job fails in 2 consecutive -> no EscalationRisk (threshold is 3)."""
+        # Newest first: 2 recent failures, then passes further back
         payloads = [
-            _make_payload("t1", [_make_informing_job("j1", result=JobResult.SUCCESS)]),
-            _make_payload("t2", [_make_informing_job("j1", result=JobResult.SUCCESS)]),
-            _make_payload("t3", [_make_informing_job("j1", result=JobResult.SUCCESS)]),
-            _make_payload("t4", [_make_informing_job("j1", result=JobResult.FAILURE)]),
             _make_payload("t5", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+            _make_payload("t4", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+            _make_payload("t3", [_make_informing_job("j1", result=JobResult.SUCCESS)]),
+            _make_payload("t2", [_make_informing_job("j1", result=JobResult.SUCCESS)]),
+            _make_payload("t1", [_make_informing_job("j1", result=JobResult.SUCCESS)]),
         ]
         stream = StreamReport("s", "4.19", payloads=payloads)
 
@@ -230,10 +287,11 @@ class TestFindEscalationRisks:
             return JobRun(name="j1", prow_url=url, result=JobResult.FAILURE,
                           job_type=JobType.INFORMING, topology="SNO")
 
+        # Newest first: the most recent failure has no prow_url
         payloads = [
-            _make_payload("t1", [informing_job("https://prow/old")]),
-            _make_payload("t2", [informing_job("https://prow/mid")]),
             _make_payload("t3", [informing_job("")]),
+            _make_payload("t2", [informing_job("https://prow/mid")]),
+            _make_payload("t1", [informing_job("https://prow/old")]),
         ]
         stream = StreamReport("s", "4.19", payloads=payloads)
 
@@ -334,13 +392,13 @@ class TestCorrelateCrossTopology:
 class TestAbsentJobBreaksStreak:
     def test_absent_job_breaks_streak(self):
         """Job absent from a payload should break the consecutive failure streak."""
-        # 5 payloads, oldest first; j1 present in t1-t3 (fail), absent in t4, present in t5 (fail)
+        # 5 payloads, newest first; j1 present+failing in t5, absent in t4, present in t1-t3 (fail)
         payloads = [
-            _make_payload("t1", [_make_informing_job("j1", result=JobResult.FAILURE)]),
-            _make_payload("t2", [_make_informing_job("j1", result=JobResult.FAILURE)]),
-            _make_payload("t3", [_make_informing_job("j1", result=JobResult.FAILURE)]),
-            _make_payload("t4", []),  # j1 absent
             _make_payload("t5", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+            _make_payload("t4", []),  # j1 absent
+            _make_payload("t3", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+            _make_payload("t2", [_make_informing_job("j1", result=JobResult.FAILURE)]),
+            _make_payload("t1", [_make_informing_job("j1", result=JobResult.FAILURE)]),
         ]
         stream = StreamReport("s", "4.19", payloads=payloads)
 

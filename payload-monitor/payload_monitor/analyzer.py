@@ -65,8 +65,10 @@ def _find_escalation_risks(
     """
     risks: list[EscalationRisk] = []
     for stream in streams:
-        # Payloads are stored oldest-first; reverse to get newest-first
-        reversed_payloads = list(reversed(stream.payloads))
+        # Payloads are stored newest-first (collectors.release_controller
+        # sorts them that way, matching StreamReport.latest_payload), so no
+        # reversal is needed to walk from most-recent to oldest.
+        newest_first_payloads = stream.payloads
 
         # Collect all unique informing job names seen in this stream
         informing_jobs: dict[str, str] = {}  # name -> topology
@@ -80,7 +82,7 @@ def _find_escalation_risks(
             latest_prow_url = ""
             latest_failure_seen = False
             streak_runs: list[dict] = []
-            for payload in reversed_payloads:
+            for payload in newest_first_payloads:
                 job_in_payload = None
                 for job in payload.jobs:
                     if job.name == job_name:
@@ -207,22 +209,30 @@ def analyze(
         for name, count in sorted(recurring.items(), key=lambda x: -x[1]):
             logger.info(f"  {name}: {count} payloads")
 
-    # Suggest bugs for all unique failing jobs
-    unique_failing = _find_unique_failing_jobs(report.streams)
-
-    for job, versions in unique_failing:
-        component = config.jira_component_for(job.topology) if job.topology else ""
-        suggested = jira_collector.suggest_bug(job, versions, config, component=component)
-        report.suggested_bugs.append(suggested)
-
-    logger.info(f"Analysis complete: {len(report.suggested_bugs)} suggested bugs")
-
     try:
         report.escalation_risks = _find_escalation_risks(report.streams, config)
     except Exception as e:
         logger.error(f"Escalation risk analysis failed: {e}")
         report.escalation_risks = []
         report.data_errors.append(f"Escalation risk analysis: {e}")
+
+    # Suggest bugs only for failures worth filing: blocking failures, jobs
+    # that have failed persistently, or jobs flagged as escalation risks.
+    # Otherwise a single flake in an accepted stream generates a bug card.
+    escalation_risk_names = {er.job_name for er in report.escalation_risks}
+    unique_failing = _find_unique_failing_jobs(report.streams)
+
+    for job, versions in unique_failing:
+        is_blocking = job.job_type == JobType.BLOCKING
+        is_persistent = failure_counts.get(job.name, 0) >= config.persistent_threshold
+        is_unstable = job.name in escalation_risk_names
+        if not (is_blocking or is_persistent or is_unstable):
+            continue
+        component = config.jira_component_for(job.topology) if job.topology else ""
+        suggested = jira_collector.suggest_bug(job, versions, config, component=component)
+        report.suggested_bugs.append(suggested)
+
+    logger.info(f"Analysis complete: {len(report.suggested_bugs)} suggested bugs")
 
     try:
         report.cross_topology = _correlate_cross_topology(report.streams, config)

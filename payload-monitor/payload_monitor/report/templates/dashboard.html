@@ -169,12 +169,14 @@
     <div class="health-trend">
       {% if blocking_count == 0 and informing_count == 0 %}
       <span class="trend-indicator stable" title="No failures">&#9644;</span>
+      {% elif view.trend_signal < 2 %}
+      <span class="trend-indicator stable" title="Not enough recent failures to establish a trend">&#9644; stable</span>
       {% elif view.recent_fails > view.older_fails %}
-      <span class="trend-indicator worsening" title="More failures in recent payloads ({{ view.recent_fails }} recent vs {{ view.older_fails }} older)">&#9660; worsening</span>
+      <span class="trend-indicator worsening" title="Higher weighted failure rate in recent payloads ({{ '%.1f' | format(view.recent_fails) }} recent vs {{ '%.1f' | format(view.older_fails) }} older)">&#9660; worsening</span>
       {% elif view.recent_fails < view.older_fails %}
-      <span class="trend-indicator improving" title="Fewer failures in recent payloads ({{ view.recent_fails }} recent vs {{ view.older_fails }} older)">&#9650; improving</span>
+      <span class="trend-indicator improving" title="Lower weighted failure rate in recent payloads ({{ '%.1f' | format(view.recent_fails) }} recent vs {{ '%.1f' | format(view.older_fails) }} older)">&#9650; improving</span>
       {% else %}
-      <span class="trend-indicator stable" title="Failure rate unchanged ({{ view.recent_fails }} in each half)">&#9644; stable</span>
+      <span class="trend-indicator stable" title="Failure rate unchanged ({{ '%.1f' | format(view.recent_fails) }} in each half)">&#9644; stable</span>
       {% endif %}
     </div>
     <div class="health-timeline">
@@ -773,7 +775,7 @@
 <!-- Suggested Bugs -->
 {% if report.suggested_bugs %}
 <h2 id="section-suggested-bugs">Suggested New Bugs</h2>
-<div class="meta" style="margin-bottom:8px">Failing edge jobs (SNO/TNA/TNF), deduplicated by job name across payloads and versions.</div>
+<div class="meta" style="margin-bottom:8px">Blocking, Persistent, or Unstable failing edge jobs (SNO/TNA/TNF) worth filing a bug for, deduplicated by job name across payloads and versions. One-off failures below these thresholds are omitted.</div>
 {% for bug in report.suggested_bugs %}
 <div class="suggest-card">
   <div class="title">{{ bug.title }}</div>

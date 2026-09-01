@@ -632,7 +632,7 @@ class TestIsValidCachePayload:
 # GCS build listing (finding the previous completed build)
 # ---------------------------------------------------------------------------
 
-class TestFindPreviousBuildId:
+class TestFindPreviousBuildIds:
     @patch.object(timing, "_session")
     def test_returns_highest_build_excluding_current(self, mock_session):
         resp = MagicMock()
@@ -646,21 +646,39 @@ class TestFindPreviousBuildId:
         }
         mock_session.get.return_value = resp
 
-        result = timing._find_previous_build_id("periodic-ci-test-job", "200")
+        result = timing._find_previous_build_ids("periodic-ci-test-job", "200")
 
-        assert result == "199"
+        assert result == ["199"]
 
     @patch.object(timing, "_session")
-    def test_returns_none_when_no_prefixes(self, mock_session):
+    def test_returns_top_n_candidates_descending(self, mock_session):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {
+            "prefixes": [
+                "logs/periodic-ci-test-job/197/",
+                "logs/periodic-ci-test-job/198/",
+                "logs/periodic-ci-test-job/199/",
+                "logs/periodic-ci-test-job/200/",
+            ],
+        }
+        mock_session.get.return_value = resp
+
+        result = timing._find_previous_build_ids("periodic-ci-test-job", "200", limit=3)
+
+        assert result == ["199", "198", "197"]
+
+    @patch.object(timing, "_session")
+    def test_returns_empty_when_no_prefixes(self, mock_session):
         resp = MagicMock()
         resp.raise_for_status = MagicMock()
         resp.json.return_value = {"prefixes": []}
         mock_session.get.return_value = resp
 
-        assert timing._find_previous_build_id("periodic-ci-test-job", "200") is None
+        assert timing._find_previous_build_ids("periodic-ci-test-job", "200") == []
 
     @patch.object(timing, "_session")
-    def test_returns_none_when_only_current_build_listed(self, mock_session):
+    def test_returns_empty_when_only_current_build_listed(self, mock_session):
         resp = MagicMock()
         resp.raise_for_status = MagicMock()
         resp.json.return_value = {
@@ -668,7 +686,7 @@ class TestFindPreviousBuildId:
         }
         mock_session.get.return_value = resp
 
-        assert timing._find_previous_build_id("periodic-ci-test-job", "200") is None
+        assert timing._find_previous_build_ids("periodic-ci-test-job", "200") == []
 
     @patch.object(timing, "_session")
     def test_ignores_non_numeric_prefixes(self, mock_session):
@@ -682,22 +700,22 @@ class TestFindPreviousBuildId:
         }
         mock_session.get.return_value = resp
 
-        assert timing._find_previous_build_id("periodic-ci-test-job", "200") == "199"
+        assert timing._find_previous_build_ids("periodic-ci-test-job", "200") == ["199"]
 
     @patch.object(timing, "_session")
-    def test_returns_none_on_request_exception(self, mock_session):
+    def test_returns_empty_on_request_exception(self, mock_session):
         mock_session.get.side_effect = requests.RequestException("network error")
 
-        assert timing._find_previous_build_id("periodic-ci-test-job", "200") is None
+        assert timing._find_previous_build_ids("periodic-ci-test-job", "200") == []
 
     @patch.object(timing, "_session")
-    def test_returns_none_when_prefixes_missing(self, mock_session):
+    def test_returns_empty_when_prefixes_missing(self, mock_session):
         resp = MagicMock()
         resp.raise_for_status = MagicMock()
         resp.json.return_value = {}
         mock_session.get.return_value = resp
 
-        assert timing._find_previous_build_id("periodic-ci-test-job", "200") is None
+        assert timing._find_previous_build_ids("periodic-ci-test-job", "200") == []
 
     @patch.object(timing, "_session")
     def test_follows_pagination_to_find_highest_build(self, mock_session):
@@ -716,9 +734,9 @@ class TestFindPreviousBuildId:
         }
         mock_session.get.side_effect = [page1, page2]
 
-        result = timing._find_previous_build_id("periodic-ci-test-job", "200")
+        result = timing._find_previous_build_ids("periodic-ci-test-job", "200")
 
-        assert result == "199"
+        assert result == ["199"]
         assert mock_session.get.call_count == 2
         assert mock_session.get.call_args_list[1].kwargs["params"]["pageToken"] == "token-2"
 
@@ -744,11 +762,11 @@ class TestSeedCacheFromPreviousRun:
         timing.seed_cache_from_previous_run(cache_path)
         assert not cache_path.exists()
 
-    @patch.object(timing, "_find_previous_build_id")
+    @patch.object(timing, "_find_previous_build_ids")
     @patch.object(timing, "_session")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
     def test_success_writes_cache(self, mock_session, mock_find_build):
-        mock_find_build.return_value = "199"
+        mock_find_build.return_value = ["199"]
 
         cache_data = json.dumps({
             "last_updated": "2026-07-15T07:00:00Z",
@@ -774,51 +792,81 @@ class TestSeedCacheFromPreviousRun:
             loaded = json.loads(cache_path.read_text())
             assert "111" in loaded["runs"]
 
-        mock_find_build.assert_called_once_with("periodic-ci-test-job", "200")
+        mock_find_build.assert_called_once_with("periodic-ci-test-job", "200", limit=3)
 
-    @patch.object(timing, "_find_previous_build_id")
+    @patch.object(timing, "_find_previous_build_ids")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
     def test_no_previous_build_found_no_crash(self, mock_find_build, tmp_path):
-        mock_find_build.return_value = None
+        mock_find_build.return_value = []
 
         cache_path = tmp_path / "nonexistent_seed_test.json"
         timing.seed_cache_from_previous_run(cache_path)
         assert not cache_path.exists()
 
-    @patch.object(timing, "_find_previous_build_id")
+    @patch.object(timing, "_find_previous_build_ids")
     @patch.object(timing, "_session")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
     def test_cache_artifact_404_no_crash(self, mock_session, mock_find_build, tmp_path):
-        mock_find_build.return_value = "199"
+        mock_find_build.return_value = ["199"]
 
         cache_resp = MagicMock()
-        cache_resp.raise_for_status.side_effect = requests.RequestException("404")
+        cache_resp.ok = False
+        cache_resp.status_code = 404
         mock_session.get.return_value = cache_resp
 
         cache_path = tmp_path / "nonexistent_seed_test.json"
         timing.seed_cache_from_previous_run(cache_path)
         assert not cache_path.exists()
 
-    @patch.object(timing, "_find_previous_build_id")
+    @patch.object(timing, "_find_previous_build_ids")
+    @patch.object(timing, "_session")
+    @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
+    def test_falls_back_to_older_build_on_404(self, mock_session, mock_find_build, tmp_path):
+        """The most recent candidate 404s (e.g. an in-progress rerun) —
+        the next-older candidate's cache should be used instead."""
+        mock_find_build.return_value = ["200_inprogress", "199"]
+
+        missing_resp = MagicMock()
+        missing_resp.ok = False
+        missing_resp.status_code = 404
+
+        cache_data = json.dumps({"runs": {"111": VALID_RUN}})
+        found_resp = MagicMock()
+        found_resp.ok = True
+        found_resp.text = cache_data
+
+        mock_session.get.side_effect = [missing_resp, found_resp]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = Path(tmpdir) / "timing_cache.json"
+            timing.seed_cache_from_previous_run(cache_path)
+
+            assert cache_path.exists()
+            loaded = json.loads(cache_path.read_text())
+            assert "111" in loaded["runs"]
+
+        assert mock_session.get.call_count == 2
+
+    @patch.object(timing, "_find_previous_build_ids")
     @patch.object(timing, "_session")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
     def test_invalid_json_from_artifact_no_crash(self, mock_session, mock_find_build, tmp_path):
-        mock_find_build.return_value = "199"
+        mock_find_build.return_value = ["199"]
 
         cache_resp = MagicMock()
         cache_resp.text = "not valid json {"
-        cache_resp.raise_for_status = MagicMock()
+        cache_resp.ok = True
         mock_session.get.return_value = cache_resp
 
         cache_path = tmp_path / "nonexistent_seed_test.json"
         timing.seed_cache_from_previous_run(cache_path)
         assert not cache_path.exists()
 
-    @patch.object(timing, "_find_previous_build_id")
+    @patch.object(timing, "_find_previous_build_ids")
     @patch.object(timing, "_session")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
     def test_structurally_invalid_json_no_crash(self, mock_session, mock_find_build, tmp_path):
-        mock_find_build.return_value = "199"
+        mock_find_build.return_value = ["199"]
 
         # Valid JSON, but not the shape load_cache() expects (runs entries
         # missing required string fields).
@@ -826,18 +874,18 @@ class TestSeedCacheFromPreviousRun:
 
         cache_resp = MagicMock()
         cache_resp.text = cache_data
-        cache_resp.raise_for_status = MagicMock()
+        cache_resp.ok = True
         mock_session.get.return_value = cache_resp
 
         cache_path = tmp_path / "nonexistent_seed_test.json"
         timing.seed_cache_from_previous_run(cache_path)
         assert not cache_path.exists()
 
-    @patch.object(timing, "_find_previous_build_id")
+    @patch.object(timing, "_find_previous_build_ids")
     @patch.object(timing, "_session")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
     def test_write_failure_no_crash(self, mock_session, mock_find_build, tmp_path):
-        mock_find_build.return_value = "199"
+        mock_find_build.return_value = ["199"]
 
         cache_data = json.dumps({"runs": {"111": VALID_RUN}})
 

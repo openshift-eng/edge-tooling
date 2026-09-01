@@ -755,22 +755,6 @@ class TestSafeDataclassInit:
         assert result.failure_type == ""
 
 
-class TestBlockingJobFirstIdx:
-    def test_blocking_job_first_idx(self):
-        blocking = JobRun("b1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")
-        informing = JobRun("i1", "url", JobResult.FAILURE, JobType.INFORMING, "SNO")
-        blocking2 = JobRun("b1", "url2", JobResult.FAILURE, JobType.BLOCKING, "SNO")
-        payload = Payload("t", "s", "4.19", PayloadStatus.REJECTED,
-                          jobs=[informing, blocking, blocking2])
-        stream = StreamReport("s", "4.19", payloads=[payload])
-        report = MonitorReport(generated_at="now", streams=[stream])
-
-        ctx = _build_template_context(report)
-        # blocking is sorted first, so b1 should be at index 1
-        assert "blocking_job_first_idx" in ctx
-        assert "b1" in ctx["blocking_job_first_idx"]
-
-
 class TestPatchAnalysisHtml:
     PROW_URL = "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/test-job/123"
     ANALYSIS = {
@@ -1145,8 +1129,68 @@ class TestStreamViewsContext:
         sv = ctx["stream_views"][0]
         assert sv["stream"] is stream
         assert sv["affected_topologies"] == ["SNO", "TNA"]
-        assert isinstance(sv["recent_fails"], int)
-        assert isinstance(sv["older_fails"], int)
+        assert isinstance(sv["recent_fails"], float)
+        assert isinstance(sv["older_fails"], float)
+        assert isinstance(sv["trend_signal"], int)
+
+    def test_equal_rate_across_uneven_split_is_stable(self):
+        """5 payloads (newest-first) each fail the same blocking job once.
+        The 2-vs-3 recent/older split must not skew a flat failure rate
+        into a false 'improving' signal."""
+        payloads = [
+            Payload(f"t{i}", "s", "4.22", PayloadStatus.REJECTED,
+                    jobs=[JobRun("b1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")])
+            for i in range(5)
+        ]
+        stream = StreamReport("s", "4.22", payloads=payloads)
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        sv = ctx["stream_views"][0]
+        assert sv["recent_fails"] == sv["older_fails"]
+        assert sv["trend_signal"] >= 2
+
+    def test_single_informing_failure_below_trend_signal_threshold(self):
+        """A lone informing-job failure shouldn't register enough signal
+        to justify a directional (worsening/improving) trend arrow."""
+        payloads = [
+            Payload("t0", "s", "4.23", PayloadStatus.ACCEPTED,
+                    jobs=[JobRun("i1", "url", JobResult.FAILURE, JobType.INFORMING, "TNA")]),
+        ] + [
+            Payload(f"t{i}", "s", "4.23", PayloadStatus.ACCEPTED, jobs=[])
+            for i in range(1, 5)
+        ]
+        stream = StreamReport("s", "4.23", payloads=payloads)
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        sv = ctx["stream_views"][0]
+        assert sv["trend_signal"] < 2
+
+    def test_empty_payloads_no_zero_division(self):
+        """A stream with no payloads yet (e.g. no terminal tags) must not
+        raise ZeroDivisionError computing the trend rates."""
+        stream = StreamReport("s", "4.19", payloads=[])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        sv = ctx["stream_views"][0]
+        assert sv["recent_fails"] == 0.0
+        assert sv["older_fails"] == 0.0
+        assert sv["trend_signal"] == 0
+
+    def test_mid_never_zero_for_single_payload(self):
+        """A single-payload stream must not divide by zero computing the
+        recent-half rate."""
+        p = Payload("t0", "s", "4.19", PayloadStatus.ACCEPTED,
+                    jobs=[JobRun("b1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")])
+        stream = StreamReport("s", "4.19", payloads=[p])
+        report = MonitorReport(generated_at="now", streams=[stream])
+
+        ctx = _build_template_context(report)
+        sv = ctx["stream_views"][0]
+        assert sv["recent_fails"] == 3.0
+        assert sv["older_fails"] == 0.0
 
     def test_blocking_and_informing_counts(self):
         b_job = JobRun("b1", "url", JobResult.FAILURE, JobType.BLOCKING, "SNO")

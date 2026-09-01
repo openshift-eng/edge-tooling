@@ -143,9 +143,9 @@ The generated HTML report is a single self-contained file (no external dependenc
 
 - **Health overview**: Per-version status badges, blocking/informing counts, topology badges, trend indicators, and payload acceptance timeline
 - **Findings summary**: Situation bar (blocking, informing, regressions, affected topologies) with severity-tiered sections (Critical/Warning/Regressions), inline blocking job list, unstable job details, and prominent action buttons
-- **Failing edge jobs**: Blocking and informing job failures across SNO/TNA/TNF topologies with sortable, filterable tables
+- **Failing edge jobs**: Blocking and informing job failures across SNO/TNA/TNF topologies with a sortable, filterable grid
 - **Failure analysis**: Error messages, failing tests, and AI root cause analysis (when enriched via Claude skill)
-- **Sippy job regressions**: Edge jobs with significant pass rate drops compared to previous periods, with an **Action** column containing copyable `/ci:triage-regression` commands
+- **Sippy job regressions**: Edge jobs with significant pass rate drops compared to previous periods, with an **Action** column containing copyable `/ci:ask-sippy` commands
 - **Component Readiness**: HA vs edge topology (SNO, TNF) regressions detected by Fisher's exact test, with comparison filter and **Action** column for triage commands
 - **Timing insights** (opt-in): Install/upgrade duration stats, variant breakdowns, and phase duration trends per topology
 - **Suggested bugs**: Pre-filled JIRA bug-creation links for failing edge jobs, deduplicated by job name across payloads and versions
