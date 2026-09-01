@@ -8,7 +8,7 @@ Automated monitoring tool for OpenShift nightly payload health across edge topol
 # Install dependencies
 pip install -r requirements.txt
 
-# Run with defaults (monitors versions 4.18 through 5.0)
+# Run with defaults (monitors versions 4.18 through 5.1)
 python -m payload_monitor
 
 # Run and open report in browser
@@ -26,7 +26,7 @@ python -m payload_monitor --merge-analysis reports/analysis-2026-03-25.json --ou
 
 ## What It Does
 
-1. **Fetches nightly payloads** from the [amd64 release controller](https://amd64.ocp.releases.ci.openshift.org) for OCP nightly streams (4.18 through 5.0 by default, overridable with `--versions`)
+1. **Fetches nightly payloads** from the [amd64 release controller](https://amd64.ocp.releases.ci.openshift.org) for OCP nightly streams (4.18 through 5.1 by default, overridable with `--versions`)
 2. **Filters for edge topology jobs** (SNO, TNA, TNF) in blocking and informing job results
 3. **Analyzes failures** by fetching Prow job logs and extracting failing test names and error signatures
 4. **Queries Sippy** for job-level regressions (pass rate drops) across edge topologies
@@ -88,7 +88,7 @@ Configuration is hardcoded in `payload_monitor/config.py`. The defaults are:
 
 | Setting | Default | Override |
 |---------|---------|----------|
-| Versions | 4.18, 4.19, 4.20, 4.21, 4.22, 4.23, 5.0 | `--versions` CLI flag |
+| Versions | 4.18, 4.19, 4.20, 4.21, 4.22, 4.23, 5.0, 5.1 | `--versions` CLI flag |
 | Payloads per stream | 5 | `--payloads` CLI flag (1-10) |
 | JIRA project | OCPBUGS | — |
 | Report directory | `./reports` | `--output` CLI flag |
@@ -158,7 +158,7 @@ The analyzer automatically detects patterns across payloads to surface high-prio
 - **Persistent failures** (3+ payloads): Jobs failing across 3 or more payloads are badged as "Persistent (Nx)" and highlighted in the findings summary
 - **Unstable jobs**: Informing jobs with 3+ **consecutive** recent failures are flagged as "Unstable" — these are consistently failing and need attention
 - **Cross-topology correlation**: When the same base job fails across multiple topologies (e.g., SNO and TNA), each failure shows an "Also in: [topology]" hint to surface shared platform issues
-- **Inline bug suggestions**: Each failing job's detail section shows a "Create Bug in JIRA" button with a pre-filled title and description
+- **Inline bug suggestions**: Failing jobs worth filing — blocking, persistent, or flagged as escalation risks — show a "Create Bug in JIRA" button in their detail section with a pre-filled title and description
 - **Non-fatal analysis**: If the analyzer or any enrichment step fails, the report is still generated with the data collected so far — errors are logged and surfaced in the dashboard rather than aborting the entire run
 - **No dead ends**: Every finding in the dashboard has a clear next step — a JIRA link, a copyable Claude command, a triage URL, or a bug creation button
 

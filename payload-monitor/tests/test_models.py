@@ -1,18 +1,13 @@
 """Tests for payload_monitor.models."""
 
-import pytest
 
 from payload_monitor.models import (
-    ComponentRegression,
-    DeepAnalysis,
-    FailingTest,
     JobResult,
     JobRun,
     JobType,
     MonitorReport,
     Payload,
     PayloadStatus,
-    Regression,
     StreamReport,
     SuggestedBug,
     Topology,

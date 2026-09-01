@@ -47,7 +47,9 @@ _session = create_session()
 _MAX_LIST_PAGES = 50
 
 
-def _find_previous_build_ids(job_name: str, current_build: str, limit: int = 1) -> list[str]:
+def _find_previous_build_ids(
+    job_name: str, current_build: str, limit: int = 1
+) -> list[str]:
     """Find the most recent completed build IDs for *job_name* in GCS.
 
     ``latest-build.txt`` can't be used for this — Prow writes it to point at
@@ -80,7 +82,9 @@ def _find_previous_build_ids(job_name: str, current_build: str, limit: int = 1) 
             resp.raise_for_status()
             data = resp.json()
         except requests_lib.RequestException as e:
-            logger.warning("Could not list GCS builds for %s (%s)", job_name, type(e).__name__)
+            logger.warning(
+                "Could not list GCS builds for %s (%s)", job_name, type(e).__name__
+            )
             return []
 
         if not isinstance(data, dict):

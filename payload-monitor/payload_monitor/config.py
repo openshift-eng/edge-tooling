@@ -8,7 +8,7 @@ from typing import Optional
 from .models import Topology
 
 # Hardcoded list of OCP versions to monitor
-VERSIONS = ["4.18", "4.19", "4.20", "4.21", "4.22", "4.23", "5.0"]
+VERSIONS = ["4.18", "4.19", "4.20", "4.21", "4.22", "4.23", "5.0", "5.1"]
 
 TOPOLOGIES = [
     Topology("SNO", ["sno", "single-node", "metal-single-node"], [

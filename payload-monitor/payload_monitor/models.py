@@ -5,7 +5,20 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Iterable, Optional
+
+
+def _version_sort_key(version: str) -> tuple[int, int]:
+    major, minor = version.split(".", 1)
+    return (int(major), int(minor))
+
+
+def sort_versions(versions: Iterable[str]) -> list[str]:
+    """Sort 'X.Y' OCP version strings numerically, e.g. '5.2' before '5.10'.
+
+    Plain string sort would put '5.10' before '5.2'.
+    """
+    return sorted(versions, key=_version_sort_key)
 
 
 class PayloadStatus(Enum):

@@ -1,8 +1,7 @@
 """Tests for payload_monitor.collectors.prow."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from payload_monitor.collectors import prow
 from payload_monitor.models import FailingTest, JobResult, JobRun, JobType, PreviousAttempt
