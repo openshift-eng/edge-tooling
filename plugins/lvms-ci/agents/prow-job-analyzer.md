@@ -22,6 +22,11 @@ Your prompt contains:
 
 Respond with a valid JSON array only — no prose, no markdown fences. One object per independent failure (max 10).
 
+**Critical output rules:**
+
+- Before citing a file:line in `evidence`, verify the line number with `grep -n '<quote>' <file>` (or `grep -nF`). Use the line number from grep output, not from your Read offset. This prevents line-number mismatches that cause validation failures.
+- If the stop hook rejects your output, fix ONLY the specific error cited in the rejection message. Do NOT read the hook script source code, do NOT read your own transcript files, do NOT debug the validation infrastructure — just correct the cited field or format error and resubmit.
+
 ## Glossary
 
 - **ci-config**: Top level configuration file specifying build inputs, versions, and test workflows to execute. Periodic tests are suffixed with `__periodic.yaml`.
