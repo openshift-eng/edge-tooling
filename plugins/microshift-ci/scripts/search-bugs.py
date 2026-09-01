@@ -1,35 +1,5 @@
 #!/usr/bin/env python3
-"""
-Prepare bug candidates from per-job analysis reports.
-
-Parses per-job JSON report files, groups by ERROR_SIGNATURE similarity,
-extracts Jira search keywords, and writes a candidates JSON file for
-the create-bugs skill to search Jira against.
-
-Usage:
-    search-bugs.py <source> --workdir DIR
-    search-bugs.py --merge <bugs-file1.json> <bugs-file2.json> ... --output FILE --workdir DIR
-    search-bugs.py --report <results.json> --candidates <merged.json> --workdir DIR
-
-    <source> is one of:
-      - Release version: 4.22, main
-      - PR number: pr-6396, pr6396
-      - Rebase shorthand: rebase-release-4.22
-
-    --merge mode reads multiple bug-candidates-<source>.json
-    files and merges candidates across sources using fuzzy signature
-    matching for cross-release dedup.
-
-    --report mode reads a results JSON and merged candidates JSON,
-    validates 1:1 match by error_signature, and writes a deterministic
-    text report.
-
-Output:
-    ${WORKDIR}/bugs/bug-candidates-<source>.json  (default mode)
-    <output>                                                   (--merge mode, via --output)
-    ${WORKDIR}/bugs/create-bugs-<source>.txt   (--report mode, per-source)
-    ${WORKDIR}/report-create-bugs.txt                       (--report mode, merged)
-"""
+"""Prepare bug candidates from per-job analysis reports. Run with --help for usage."""
 
 import json
 import sys
@@ -46,6 +16,27 @@ from parse import (
 
 # Additional stop words filtered only during keyword extraction for Jira search,
 # not during signature grouping (which uses the shared STOP_WORDS).
+USAGE = """\
+usage: search-bugs.py <source> --workdir DIR
+       search-bugs.py --merge <file1.json> [<file2.json> ...] --output FILE --workdir DIR
+       search-bugs.py --report <results.json> --candidates <merged.json> --workdir DIR
+
+Prepare bug candidates from per-job analysis reports.
+
+positional arguments:
+  <source>              release version (4.22, main), PR number (pr-6396),
+                        or rebase shorthand (rebase-release-4.22)
+  <file.json>           candidate files to merge (--merge mode)
+
+options:
+  --workdir DIR         working directory (required)
+  --merge               merge multiple candidate files with fuzzy dedup
+  --output FILE         output path for merged candidates (--merge mode)
+  --report FILE         results JSON to generate a report from
+  --candidates FILE     merged candidates JSON (required with --report)
+  -h, --help            show this help message and exit
+"""
+
 KEYWORD_STOP_WORDS = STOP_WORDS | frozenset({
     "ci", "microshift", "failure", "failed", "error", "test", "tests",
     "job", "jobs", "step", "periodic",
@@ -469,8 +460,8 @@ def merge_candidate_files(filepaths, workdir=None):
 # Report generation
 # ---------------------------------------------------------------------------
 
-VALID_ACTIONS = {"create", "skip", "update", "failed"}
-VALID_SKIP_CATEGORIES = {"infrastructure", "stale_regression", "up_to_date"}
+VALID_ACTIONS = {"suggest", "skip", "linked"}
+VALID_SKIP_CATEGORIES = {"infrastructure", "stale_regression"}
 JIRA_URL_BASE = "https://redhat.atlassian.net/browse"
 SEPARATOR = "=" * 63
 
@@ -482,7 +473,7 @@ def _validate_results(results_data, candidates_data):
     mode = results_data.get("mode", "")
     if not mode:
         errors.append("results JSON missing 'mode' field")
-    elif mode not in ("dry-run", "create"):
+    elif mode != "search":
         errors.append(f"invalid mode: {mode}")
 
     if "date" not in results_data:
@@ -514,8 +505,10 @@ def _validate_results(results_data, candidates_data):
 
         if "jira_key" not in r:
             errors.append(f"{prefix}: missing jira_key field")
-        elif mode == "create" and action in ("create", "update") and not r["jira_key"]:
-            errors.append(f"{prefix}: {action} action requires non-empty jira_key")
+        elif action == "linked" and not r["jira_key"]:
+            errors.append(f"{prefix}: linked action requires non-empty jira_key")
+        elif action != "linked" and r["jira_key"] != "":
+            errors.append(f"{prefix}: jira_key must be empty for action '{action}'")
 
         if "skip_category" not in r:
             errors.append(f"{prefix}: missing skip_category field")
@@ -588,31 +581,29 @@ def _format_jobs(jobs):
 def _compute_summary_counters(results):
     """Compute summary counters from results list."""
     counters = {
-        "create": 0,
+        "suggest": 0,
+        "linked": 0,
         "skip_infrastructure": 0,
         "skip_stale_regression": 0,
-        "skip_up_to_date": 0,
-        "update": 0,
-        "failed": 0,
     }
     for r in results:
         action = r["action"]
         if action == "skip":
             cat = r["skip_category"]
-            counters[f"skip_{cat}"] += 1
+            key = f"skip_{cat}"
+            if key in counters:
+                counters[key] += 1
         elif action in counters:
             counters[action] += 1
     return counters
 
 
 def format_report(candidates_data, results_data):
-    """Produce deterministic report for both dry-run and create modes."""
+    """Produce deterministic bug search report."""
     candidates = candidates_data["candidates"]
     results = results_data["results"]
     sources = candidates_data["sources"]
     date = results_data["date"]
-    mode = results_data["mode"]
-    is_dry_run = mode == "dry-run"
 
     result_lookup = {r["error_signature"]: r for r in results}
     counters = _compute_summary_counters(results)
@@ -620,17 +611,14 @@ def format_report(candidates_data, results_data):
     n_total = candidates_data["total_candidates"]
     n_sources = len(sources)
 
-    title = "DRY-RUN REPORT" if is_dry_run else "CREATION REPORT"
-    section = "CANDIDATES" if is_dry_run else "RESULTS"
-
     lines = [
         SEPARATOR,
-        f"ANALYZE-CI CREATE BUGS - {title}",
+        "BUG SEARCH REPORT",
         f"Sources: {', '.join(sources)}",
         f"Date: {date}",
         SEPARATOR,
         "",
-        f"{section} ({n_unique} unique failures from {n_total} total across {n_sources} {'source' if n_sources == 1 else 'sources'})",
+        f"CANDIDATES ({n_unique} unique failures from {n_total} total across {n_sources} {'source' if n_sources == 1 else 'sources'})",
     ]
 
     for i, cand in enumerate(candidates, 1):
@@ -638,17 +626,12 @@ def format_report(candidates_data, results_data):
         action = r["action"]
         jira_key = r.get("jira_key", "")
 
-        if is_dry_run:
-            tag_map = {"skip": "WOULD SKIP", "create": "WOULD CREATE", "update": "WOULD UPDATE"}
-            tag = f"[{tag_map.get(action, f'WOULD {action.upper()}')}]"
-        else:
-            action_labels = {
-                "create": f"{jira_key} (CREATED)",
-                "skip": "SKIPPED",
-                "update": f"{jira_key} (UPDATED)",
-                "failed": "FAILED",
-            }
-            tag = action_labels.get(action, action.upper())
+        tag_map = {
+            "skip": "[SKIP]",
+            "suggest": "[SUGGEST]",
+            "linked": f"[LINKED \u2192 {jira_key}]" if jira_key else "[LINKED]",
+        }
+        tag = tag_map.get(action, f"[{action.upper()}]")
 
         lines.append("")
         lines.append(f"  {i}. {tag}")
@@ -667,7 +650,7 @@ def format_report(candidates_data, results_data):
         if jobs_block:
             lines.append(jobs_block)
 
-        if not is_dry_run and jira_key and action in ("create", "update"):
+        if jira_key and action == "linked":
             lines.append(f"     URL: {JIRA_URL_BASE}/{jira_key}")
 
         lines.append(f"     Decision: {r['reason']}")
@@ -677,26 +660,11 @@ def format_report(candidates_data, results_data):
         "SUMMARY",
         f"  Sources processed: {n_sources}",
         f"  Unique failures: {n_unique} (from {n_total} total candidates)",
+        f"  Suggest filing: {counters['suggest']}",
+        f"  Linked to existing: {counters['linked']}",
+        f"  Skipped (infrastructure): {counters['skip_infrastructure']}",
+        f"  Skipped (stale regression): {counters['skip_stale_regression']}",
     ])
-    if is_dry_run:
-        sources_str = ",".join(sources)
-        lines.extend([
-            f"  Would create: {counters['create']}",
-            f"  Would update: {counters['update']}",
-            f"  Would skip (already up-to-date): {counters['skip_up_to_date']}",
-            f"  Would skip (infrastructure): {counters['skip_infrastructure']}",
-            f"  Would skip (stale regression): {counters['skip_stale_regression']}",
-            "",
-            "To create these bugs, run:",
-            f"  /microshift-ci:create-bugs {sources_str} --create",
-        ])
-    else:
-        lines.extend([
-            f"  Created: {counters['create']}",
-            f"  Updated: {counters['update']}",
-            f"  Skipped: {counters['skip_infrastructure'] + counters['skip_stale_regression'] + counters['skip_up_to_date']}",
-            f"  Failed: {counters['failed']}",
-        ])
 
     return "\n".join(lines)
 
@@ -725,10 +693,10 @@ def main_report(report_file, candidates_file, workdir):
     else:
         tag = "merged" if len(sources) > 1 else sources[0]
     if tag == "merged":
-        filename = "report-create-bugs.txt"
+        filename = "report-find-regressions.txt"
         output_path = os.path.join(workdir, filename)
     else:
-        filename = f"create-bugs-{tag}.txt"
+        filename = f"find-regressions-{tag}.txt"
         bugs_dir = os.path.join(workdir, "bugs")
         os.makedirs(bugs_dir, exist_ok=True)
         output_path = os.path.join(bugs_dir, filename)
@@ -784,6 +752,9 @@ def main():
                 sys.exit(1)
             output_file = args[i + 1]
             i += 2
+        elif args[i] in ("-h", "--help"):
+            print(USAGE, end="")
+            sys.exit(0)
         elif args[i].startswith("-"):
             print(f"Unknown option: {args[i]}", file=sys.stderr)
             sys.exit(1)
@@ -807,13 +778,7 @@ def main():
         return main_merge(merge_files, output_file, workdir)
 
     if not source:
-        print(
-            "Usage: search-bugs.py <source> --workdir DIR\n"
-            "       search-bugs.py --merge <bugs-file1.json> ... --output FILE --workdir DIR\n"
-            "       search-bugs.py --report <results.json> --candidates <merged.json> --workdir DIR\n"
-            "  <source>: release version (4.22), PR (pr-6396), or rebase (rebase-release-4.22)",
-            file=sys.stderr,
-        )
+        print(USAGE, end="", file=sys.stderr)
         sys.exit(1)
 
     if workdir is None:

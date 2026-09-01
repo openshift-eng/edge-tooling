@@ -1,6 +1,6 @@
 # microshift-ci
 
-Analyze MicroShift CI failures, produce HTML reports, and create JIRA bugs.
+Analyze MicroShift CI failures, produce HTML reports, and draft JIRA bug suggestions.
 
 ## Installation
 
@@ -36,7 +36,7 @@ python3 plugins/microshift-ci/scripts/run-doctor.py \
 | `/microshift-ci:prow-job` | Root cause analysis of a single Prow job |
 | `/microshift-ci:test-job` | Comprehensive job metadata and scenario results |
 | `/microshift-ci:test-scenario` | Analyze individual test scenario results |
-| `/microshift-ci:create-bugs` | Search JIRA for duplicates and create bugs (dry-run by default) |
+| `/microshift-ci:find-regressions` | Search JIRA for pre-existing bugs and draft ticket suggestions |
 | `/microshift-ci:close-stale-bugs` | Close stale, unlinked, unassigned AI-generated bugs (dry-run by default) |
 | `/microshift-ci:continue-session` | Download CI Doctor artifacts from a completed prow job |
 | `/microshift-ci:fix-test-bugs` | Attempt to fix CI bugs by opening PRs in openshift/microshift (dry-run by default) |
@@ -56,17 +56,15 @@ python3 plugins/microshift-ci/scripts/run-doctor.py \
 /microshift-ci:prow-job https://prow.ci.openshift.org/view/gs/test-platform-results/logs/<job-name>/<job-id>
 ```
 
-### Create bugs from analysis
+### Search for bugs and draft suggestions
 
 ```text
-/microshift-ci:create-bugs 4.22           # dry-run
-/microshift-ci:create-bugs 4.22 --create  # create/update bugs
+/microshift-ci:find-regressions 4.22
 ```
 
-Note: The scheduled CI Doctor job runs `create-bugs` in dry-run mode only
-(for bug correlation in the HTML report). Bugs are created manually via the
-prefilled "Create Bug in JIRA" buttons in the report, or by running
-`create-bugs --create` explicitly.
+Searches JIRA for pre-existing bugs matching CI failures and drafts ticket
+suggestions for unmatched ones. Bugs are filed manually via the prefilled
+"Create Bug in JIRA" buttons in the HTML report.
 
 ## Requirements
 
