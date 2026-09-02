@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from jinja2 import Environment, FileSystemLoader
-from markupsafe import Markup, escape
+from markupsafe import escape
 
 from ..models import (
     AttemptAnalysis,
@@ -32,6 +32,7 @@ from ..models import (
     Regression,
     StreamReport,
     SuggestedBug,
+    sort_versions,
 )
 import dataclasses
 from .timing_section import render_timing_section
@@ -199,7 +200,7 @@ def _build_template_context(report: MonitorReport) -> dict:
     topologies = sorted(set(
         job["job"].topology for job in all_failing if job["job"].topology
     ))
-    versions = sorted(set(stream.version for stream in report.streams))
+    versions = sort_versions(set(stream.version for stream in report.streams))
 
     # Generate timing HTML if available
     timing_html = ""
@@ -224,7 +225,7 @@ def _build_template_context(report: MonitorReport) -> dict:
             cr.variants.get("Platform", "") for cr in report.component_regressions
             if cr.variants.get("Platform")
         )),
-        "cr_versions": sorted(set(
+        "cr_versions": sort_versions(set(
             cr.version for cr in report.component_regressions
         )),
         "cr_comparisons": sorted(set(
@@ -236,7 +237,7 @@ def _build_template_context(report: MonitorReport) -> dict:
         "reg_topologies": sorted(set(
             r.topology for r in all_regressions if r.topology
         )),
-        "reg_versions": sorted(set(
+        "reg_versions": sort_versions(set(
             r.version for r in all_regressions if r.version
         )),
         "timing_html": timing_html,

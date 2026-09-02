@@ -211,7 +211,7 @@ def analyze(
 
     try:
         report.escalation_risks = _find_escalation_risks(report.streams, config)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — non-fatal analysis step, must not abort the run
         logger.error(f"Escalation risk analysis failed: {e}")
         report.escalation_risks = []
         report.data_errors.append(f"Escalation risk analysis: {e}")
@@ -236,7 +236,7 @@ def analyze(
 
     try:
         report.cross_topology = _correlate_cross_topology(report.streams, config)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — non-fatal analysis step, must not abort the run
         logger.error(f"Cross-topology correlation failed: {e}")
         report.cross_topology = {}
         report.data_errors.append(f"Cross-topology correlation: {e}")

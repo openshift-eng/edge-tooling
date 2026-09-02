@@ -4,8 +4,6 @@ import pytest
 
 from payload_monitor.config import Config
 from payload_monitor.models import (
-    ComponentRegression,
-    DeepAnalysis,
     FailingTest,
     JobResult,
     JobRun,
@@ -13,21 +11,13 @@ from payload_monitor.models import (
     MonitorReport,
     Payload,
     PayloadStatus,
-    Regression,
     StreamReport,
-    SuggestedBug,
-    Topology,
 )
 
 
 @pytest.fixture
 def config():
     return Config()
-
-
-@pytest.fixture
-def sample_topology():
-    return Topology("SNO", ["sno", "single-node"], ["telco"], "SNO")
 
 
 @pytest.fixture

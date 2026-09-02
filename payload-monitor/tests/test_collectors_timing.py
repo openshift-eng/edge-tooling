@@ -6,11 +6,9 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 import requests
 
 from payload_monitor.collectors import timing
-from payload_monitor.config import Config
 from payload_monitor.models import TimingRun, TimingReport
 
 
@@ -821,7 +819,9 @@ class TestSeedCacheFromPreviousRun:
     @patch.object(timing, "_find_previous_build_ids")
     @patch.object(timing, "_session")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
-    def test_falls_back_to_older_build_on_404(self, mock_session, mock_find_build, tmp_path):
+    def test_falls_back_to_older_build_on_404(
+        self, mock_session, mock_find_build, tmp_path
+    ):
         """The most recent candidate 404s (e.g. an in-progress rerun) —
         the next-older candidate's cache should be used instead."""
         mock_find_build.return_value = ["200_inprogress", "199"]
@@ -850,7 +850,9 @@ class TestSeedCacheFromPreviousRun:
     @patch.object(timing, "_find_previous_build_ids")
     @patch.object(timing, "_session")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
-    def test_invalid_json_from_artifact_no_crash(self, mock_session, mock_find_build, tmp_path):
+    def test_invalid_json_from_artifact_no_crash(
+        self, mock_session, mock_find_build, tmp_path
+    ):
         mock_find_build.return_value = ["199"]
 
         cache_resp = MagicMock()
@@ -865,7 +867,9 @@ class TestSeedCacheFromPreviousRun:
     @patch.object(timing, "_find_previous_build_ids")
     @patch.object(timing, "_session")
     @patch.dict(os.environ, {"JOB_NAME": "periodic-ci-test-job", "BUILD_ID": "200"})
-    def test_structurally_invalid_json_no_crash(self, mock_session, mock_find_build, tmp_path):
+    def test_structurally_invalid_json_no_crash(
+        self, mock_session, mock_find_build, tmp_path
+    ):
         mock_find_build.return_value = ["199"]
 
         # Valid JSON, but not the shape load_cache() expects (runs entries

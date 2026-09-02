@@ -7,7 +7,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from ..collectors.timing import compute_stats
-from ..models import TimingReport, TimingRun
+from ..models import TimingReport, TimingRun, sort_versions
 
 
 def _fmt_duration(seconds: float) -> str:
@@ -127,7 +127,7 @@ def render_summary_table(report: TimingReport) -> str:
             )
 
         # Per-version rows — hidden by default, shown when a version filter is active
-        versions_for_group = sorted(set(
+        versions_for_group = sort_versions(set(
             r.release for r in all_groups[(topo, rtype)]
         ))
         for ver in versions_for_group:
@@ -159,7 +159,7 @@ def render_summary_table(report: TimingReport) -> str:
                     f'</tr>'
                 )
 
-    all_versions = sorted(set(r.release for r in all_runs))
+    all_versions = sort_versions(set(r.release for r in all_runs))
     version_list = ", ".join(all_versions)
     legend = (
         f'<div style="font-size:11px;color:var(--text-muted);margin-top:4px">'
@@ -221,7 +221,7 @@ def render_variant_table(report: TimingReport) -> str:
             + '</tr>'
         )
         # Per-version rows — hidden by default, shown when version filter active
-        for ver in sorted(set(r.release for r in group)):
+        for ver in sort_versions(set(r.release for r in group)):
             ver_runs = version_variant.get((topo, rtype, vk, ver), [])
             if ver_runs:
                 ver_stats = compute_stats(ver_runs)
@@ -237,7 +237,7 @@ def render_variant_table(report: TimingReport) -> str:
                     + '</tr>'
                 )
 
-    all_versions = sorted(set(r.release for r in runs))
+    all_versions = sort_versions(set(r.release for r in runs))
     version_list = ", ".join(all_versions)
     legend = (
         f'<div style="font-size:11px;color:var(--text-muted);margin-top:4px">'
@@ -573,7 +573,7 @@ def render_version_comparison(report: TimingReport) -> str:
         ver_groups[(r.topology, r.run_type, r.release)].append(r)
 
     # Only show if we have data for multiple versions
-    versions = sorted(set(r.release for r in runs))
+    versions = sort_versions(set(r.release for r in runs))
     if len(versions) < 2:
         return ""
 
@@ -607,7 +607,9 @@ def render_version_comparison(report: TimingReport) -> str:
             else:
                 cells += '<td style="color:var(--text-muted)">—</td><td>—</td>'
                 prev_avg = None
-        combo_versions = " ".join(sorted(v for v in versions if ver_groups.get((topo, rtype, v))))
+        combo_versions = " ".join(sort_versions(
+            v for v in versions if ver_groups.get((topo, rtype, v))
+        ))
         rows.append(f'<tr class="timing-row" data-ttopology="{html.escape(topo)}" data-ttype="{html.escape(rtype)}" data-tversion="{html.escape(combo_versions)}">{cells}</tr>')
 
     # Build header
@@ -703,7 +705,7 @@ def _render_filter_bar(report: TimingReport) -> str:
     all_runs = list(report.runs.values())
     topologies = sorted(set(r.topology for r in all_runs))
     types = sorted(set(r.run_type for r in all_runs))
-    versions = sorted(set(r.release for r in all_runs))
+    versions = sort_versions(set(r.release for r in all_runs))
 
     parts = ['<div class="filters" id="timing-filters">']
 

@@ -2,16 +2,13 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 import requests
 
 from payload_monitor.collectors import release_controller as rc
-from payload_monitor.config import Config
 from payload_monitor.models import (
     JobResult,
     JobType,
     PayloadStatus,
-    PreviousAttempt,
     StreamReport,
 )
 

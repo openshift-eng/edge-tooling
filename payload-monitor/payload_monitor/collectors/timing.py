@@ -47,7 +47,9 @@ _session = create_session()
 _MAX_LIST_PAGES = 50
 
 
-def _find_previous_build_ids(job_name: str, current_build: str, limit: int = 1) -> list[str]:
+def _find_previous_build_ids(
+    job_name: str, current_build: str, limit: int = 1
+) -> list[str]:
     """Find the most recent completed build IDs for *job_name* in GCS.
 
     ``latest-build.txt`` can't be used for this — Prow writes it to point at

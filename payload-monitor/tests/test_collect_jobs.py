@@ -1,6 +1,5 @@
 """Tests for _collect_jobs_by_type and _emit_job_section in payload_monitor.__main__."""
 
-import pytest
 
 from payload_monitor.__main__ import _collect_jobs_by_type, _emit_job_section
 from payload_monitor.models import (

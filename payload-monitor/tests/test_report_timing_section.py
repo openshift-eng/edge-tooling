@@ -1,6 +1,5 @@
 """Tests for payload_monitor.report.timing_section."""
 
-import pytest
 
 from payload_monitor.models import TimingRun, TimingReport
 from payload_monitor.report.timing_section import (

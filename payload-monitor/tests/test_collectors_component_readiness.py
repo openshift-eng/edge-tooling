@@ -2,7 +2,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 import requests
 
 from payload_monitor.collectors import component_readiness as cr

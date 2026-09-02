@@ -12,7 +12,6 @@ from payload_monitor.analyzer import (
 )
 from payload_monitor.config import Config
 from payload_monitor.models import (
-    FailingTest,
     JobResult,
     JobRun,
     JobType,

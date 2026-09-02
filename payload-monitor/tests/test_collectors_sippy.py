@@ -2,12 +2,9 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 import requests
 
 from payload_monitor.collectors import sippy
-from payload_monitor.config import Config
-from payload_monitor.models import Regression
 
 
 class TestFetchEdgeJobs:
