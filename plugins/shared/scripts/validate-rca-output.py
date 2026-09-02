@@ -164,16 +164,40 @@ def validate_entry(entry, index, file_cache):
     return errors
 
 
+def _try_extract_json_array(text):
+    """Attempt to extract a JSON array from text with surrounding prose.
+
+    LLMs sometimes prepend or append prose around the JSON array.
+    Find the first ``[`` and greedily match to the last ``]``, then
+    try json.loads on that substring.  Returns the parsed list on
+    success, None on failure.
+    """
+    first_bracket = text.find("[")
+    last_bracket = text.rfind("]")
+    if first_bracket == -1 or last_bracket == -1 or last_bracket <= first_bracket:
+        return None
+    candidate = text[first_bracket:last_bracket + 1]
+    try:
+        data = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(data, list):
+        return data
+    return None
+
+
 def validate_json_text(text):
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
-        if "--- STRUCTURED SUMMARY ---" in text:
-            return [
-                "Output contains prose and STRUCTURED SUMMARY markers. "
-                "Your entire response must be a valid JSON array only — no prose, no markers."
-            ]
-        return [f"Output is not valid JSON: {e}. Your entire response must be a valid JSON array."]
+        # Fallback: try to extract a JSON array from prose-wrapped text.
+        # The LLM sometimes writes prose before/after the JSON array;
+        # extracting it avoids a rejection → retry spiral.
+        extracted = _try_extract_json_array(text)
+        if extracted is not None:
+            data = extracted
+        else:
+            return [f"Output is not valid JSON: {e}. Your entire response must be a valid JSON array."]
 
     if isinstance(data, dict):
         return [
