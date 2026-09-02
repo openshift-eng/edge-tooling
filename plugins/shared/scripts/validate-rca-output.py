@@ -92,7 +92,12 @@ def validate_evidence(evidence, quote, prefix, file_cache):
     cited_line = " ".join(lines[line_no - 1].split()).lower()
     normalized_quote = " ".join(quote.split()).lower()
     if normalized_quote not in cited_line:
-        return [f"{prefix}: quote not found on line {line_no}"]
+        actual_preview = cited_line[:200] + ("..." if len(cited_line) > 200 else "")
+        return [
+            f"{prefix}: quote not found on line {line_no}. "
+            f"Expected: \"{normalized_quote}\". "
+            f"Actual line {line_no}: \"{actual_preview}\""
+        ]
 
     return []
 
@@ -305,6 +310,20 @@ def main():
         # Unknown/absent hook_event_name (older CC, unexpected payload): fail safe — do not block.
         print(f"WARNING: validate-rca-output: unrecognized hook_event_name {hook_event!r}, skipping", file=sys.stderr)
         sys.exit(0)
+
+    # Log what the hook actually received for debugging stale-output issues.
+    if message:
+        preview = message[:500] + ("..." if len(message) > 500 else "")
+        print(
+            f"DEBUG: validate-rca-output: last_assistant_message "
+            f"({len(message)} chars): {preview}",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "DEBUG: validate-rca-output: last_assistant_message is empty/None",
+            file=sys.stderr,
+        )
 
     errors = validate_message(message)
 
