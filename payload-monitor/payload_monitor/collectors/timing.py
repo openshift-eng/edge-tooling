@@ -82,9 +82,7 @@ def _find_previous_build_ids(
             resp.raise_for_status()
             data = resp.json()
         except requests_lib.RequestException as e:
-            logger.warning(
-                "Could not list GCS builds for %s (%s)", job_name, type(e).__name__
-            )
+            logger.warning("Could not list GCS builds for %s (%s)", job_name, type(e).__name__)
             return []
 
         if not isinstance(data, dict):

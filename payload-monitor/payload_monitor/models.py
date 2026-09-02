@@ -9,8 +9,11 @@ from typing import Iterable, Optional
 
 
 def _version_sort_key(version: str) -> tuple[int, int]:
-    major, minor = version.split(".", 1)
-    return (int(major), int(minor))
+    try:
+        major, minor = version.split(".", 1)
+        return (int(major), int(minor))
+    except ValueError as e:
+        raise ValueError(f"Invalid version string {version!r}, expected 'X.Y'") from e
 
 
 def sort_versions(versions: Iterable[str]) -> list[str]:
