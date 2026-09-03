@@ -177,9 +177,12 @@ def _try_extract_json_array(text):
     try json.loads on that substring.  Returns the parsed list on
     success, None on failure.
     """
-    first_bracket = text.find("[")
+    m = re.search(r'\[\s*\{', text)
+    if m is None:
+        return None
+    first_bracket = m.start()
     last_bracket = text.rfind("]")
-    if first_bracket == -1 or last_bracket == -1 or last_bracket <= first_bracket:
+    if last_bracket == -1 or last_bracket <= first_bracket:
         return None
     candidate = text[first_bracket:last_bracket + 1]
     try:
