@@ -45,6 +45,26 @@ VALID_STACK_LAYERS = {
 BINARY_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".tar.xz", ".gz", ".bz2", ".xz", ".zip")
 
 
+def _log_debug(event, **fields):
+    """Append a JSONL event to the debug log (CI_DOCTOR_HOOK_LOG).
+
+    Uses O_APPEND for concurrency safety — multiple hook processes may
+    write to the same file simultaneously.
+    """
+    log_path = os.environ.get("CI_DOCTOR_HOOK_LOG")
+    if not log_path:
+        return
+    entry = {"event": event, **fields}
+    try:
+        fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            os.write(fd, (json.dumps(entry) + "\n").encode())
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
 def _read_lines(path, cache):
     """Read file lines with caching to avoid re-reading large build logs."""
     if path in cache:
@@ -174,24 +194,24 @@ def _try_extract_json_array(text):
 
     LLMs sometimes prepend or append prose around the JSON array.
     Find the first ``[`` and greedily match to the last ``]``, then
-    try json.loads on that substring.  Returns the parsed list on
-    success, None on failure.
+    try json.loads on that substring.  Returns a
+    ``(parsed_list, debug_reason)`` tuple — the list on success or
+    ``None`` on failure, with a reason string for diagnostics.
     """
-    m = re.search(r'\[\s*\{', text)
-    if m is None:
-        return None
-    first_bracket = m.start()
+    first_bracket = text.find("[")
+    if first_bracket == -1:
+        return None, "no opening bracket found"
     last_bracket = text.rfind("]")
     if last_bracket == -1 or last_bracket <= first_bracket:
-        return None
+        return None, f"no valid closing bracket (first={first_bracket}, last={last_bracket})"
     candidate = text[first_bracket:last_bracket + 1]
     try:
         data = json.loads(candidate)
-    except json.JSONDecodeError:
-        return None
+    except json.JSONDecodeError as e:
+        return None, f"json.loads failed: {e} (first={first_bracket}, last={last_bracket})"
     if isinstance(data, list):
-        return data
-    return None
+        return data, f"success (first={first_bracket}, last={last_bracket})"
+    return None, f"parsed value is {type(data).__name__}, not list (first={first_bracket}, last={last_bracket})"
 
 
 def validate_json_text(text):
@@ -201,11 +221,12 @@ def validate_json_text(text):
         # Fallback: try to extract a JSON array from prose-wrapped text.
         # The LLM sometimes writes prose before/after the JSON array;
         # extracting it avoids a rejection → retry spiral.
-        extracted = _try_extract_json_array(text)
+        extracted, extract_debug = _try_extract_json_array(text)
+        _log_debug("extract_attempt", success=extracted is not None, reason=extract_debug)
         if extracted is not None:
             data = extracted
         else:
-            return [f"Output is not valid JSON: {e}. Your entire response must be a valid JSON array."]
+            return [f"Output is not valid JSON: {e}. Extract attempt: {extract_debug}. Your entire response must be a valid JSON array."]
 
     if isinstance(data, dict):
         return [
@@ -328,7 +349,14 @@ def main():
             file=sys.stderr,
         )
 
+    _log_debug("hook_input",
+               input_len=len(message) if message else 0,
+               input_preview=(message[:500] if message else ""))
+
     errors = validate_message(message)
+
+    decision = "block" if errors else "allow"
+    _log_debug("validation_result", errors=errors, decision=decision)
 
     if errors:
         reason = "RCA output validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
