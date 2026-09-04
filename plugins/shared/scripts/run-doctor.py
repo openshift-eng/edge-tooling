@@ -904,7 +904,8 @@ def _analyze_single_job(job_info, plugin_dir, model, agent_system_prompt,
     limits = STAGE_LIMITS["analyze"]
 
     env = os.environ.copy()
-    env["CI_DOCTOR_RCA_SESSION"] = "1"
+    env["CI_DOCTOR_RCA_SESSION"] = Path(job_info["output_name"]).stem
+    env["CI_DOCTOR_HOOK_LOG"] = str(Path(workdir) / "hook-debug.jsonl")
 
     add_dirs = [d for d in [
         job_info.get("artifacts_dir"),
