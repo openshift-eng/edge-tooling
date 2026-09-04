@@ -26,6 +26,7 @@ Respond with a valid JSON array only — no prose, no markdown fences. One objec
 
 - Before citing a file:line in `evidence`, verify the line number with `grep -n '<quote>' <file>` (or `grep -nF`). Use the line number from grep output, not from your Read offset. This prevents line-number mismatches that cause validation failures.
 - If the stop hook rejects your output, fix ONLY the specific error cited in the rejection message. Do NOT read the hook script source code, do NOT read your own transcript files, do NOT debug the validation infrastructure — just correct the cited field or format error and resubmit.
+- Do NOT use the `Write` tool to save your output. Only respond with the JSON array as text — the caller handles file persistence.
 
 ## Glossary
 
