@@ -1,6 +1,6 @@
 ---
 name: microshift-release:post-release
-argument-hint: <version> [--verbose] [--json]
+argument-hint: <version> [--json]
 description: Verify all artifacts and docs are publicly available after shipping — bootc images, RPMs, errata, documentation, and lifecycle page
 user-invocable: true
 allowed-tools: Bash
@@ -11,7 +11,7 @@ allowed-tools: Bash
 ## Synopsis
 
 ```bash
-/microshift-release:post-release <version> [--verbose] [--json]
+/microshift-release:post-release <version> [--json]
 ```
 
 ## Description
@@ -54,7 +54,6 @@ For versions 4.22.2+, both el9 and el10 bootc images are checked.
   - Z-stream: `4.21.7`
   - GA: `4.22.0`
   - EC/RC/nightly versions are **rejected**
-- `--verbose` (optional): Show detailed markdown report
 - `--json` (optional): Output raw JSON
 
 ## Scripts Directory
@@ -68,12 +67,12 @@ SCRIPTS_DIR=plugins/microshift-release/scripts
 ### Step 1: Parse Arguments
 
 1. Extract `version` from `$ARGUMENTS` — the first non-flag token
-2. Pass through `--verbose` and `--json` flags if present
+2. Pass through `--json` flag if present
 
 ### Step 2: Run Checks
 
 ```bash
-bash $SCRIPTS_DIR/post_release.sh <version> [--verbose] [--json]
+bash $SCRIPTS_DIR/post_release.sh <version> [--json]
 ```
 
 Display stderr only if the script exits non-zero.
@@ -154,15 +153,12 @@ On failure, details appear below the failing check:
                                No matching image found for version 4.21.7
 ```
 
-**Verbose (--verbose):** Markdown table with full evidence per check.
-
 ## Examples
 
 ```bash
 /microshift-release:post-release 4.21.7              # z-stream
 /microshift-release:post-release 4.22.0              # GA (includes lifecycle checks)
 /microshift-release:post-release 4.22.2              # z-stream (el9 + el10)
-/microshift-release:post-release 4.21.7 --verbose    # detailed report
 /microshift-release:post-release 4.21.7 --json       # machine-readable output
 ```
 

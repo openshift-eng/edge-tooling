@@ -4,7 +4,7 @@
 QE sign-off checks for bootc image advisories before shipping.
 Every check is atomic and split per image variant (arch + RHEL version).
 
-Usage: advisory_promotion.py <version> [--verbose] [--json]
+Usage: advisory_promotion.py <version> (-s | -p | -s -p) [--json]
 """
 
 import argparse
@@ -82,12 +82,19 @@ def _variant_key(arch, rhel):
     return f"{arch}_el{rhel}"
 
 
-def _all_check_ids(version_info):
+def _all_check_ids(version_info, check_stage=True, check_prod=True):
     rhel_vers = _rhel_versions(version_info)
+    suffixes = [s for s in _PER_VARIANT_CHECKS
+                if (check_stage or not s.startswith("catalog_stage_"))
+                and (check_prod or not s.startswith("catalog_prod_"))]
     ids = [f"{_variant_key(arch, rhel)}_{suffix}"
            for arch, rhel in _variants(version_info)
-           for suffix in _PER_VARIANT_CHECKS]
+           for suffix in suffixes]
     for gc in _GLOBAL_CHECKS:
+        if not check_stage and gc == "shipment_errata_stage_url":
+            continue
+        if not check_prod and gc == "shipment_errata_prod_url":
+            continue
         rhel_match = re.search(r"el(\d+)", gc)
         if rhel_match and int(rhel_match.group(1)) not in rhel_vers:
             continue
@@ -168,11 +175,9 @@ def check_image_sha(vk, arch, rhel, advisory_details):
                  [f"Full: sha256:{sha}"])
 
 
-def check_in_catalog(vk, catalog_env, catalog_result, version_info, phase="stage"):
+def check_in_catalog(vk, catalog_env, catalog_result, version_info):
     """Image is published in the specified catalog (uses prefetched result)."""
     check_id = f"{vk}_catalog_{catalog_env}_present"
-    if catalog_env == "prod" and phase == "stage":
-        return _skip(check_id, "N/A (stage mode)")
     if catalog_env == "prod" and version_info["type"] in ("EC", "RC"):
         return _skip(check_id, f"N/A ({version_info['type']} not shipped to prod)")
     if catalog_result.get("valid"):
@@ -544,9 +549,9 @@ def check_shipment_mr_approved(shipment):
 # ── Orchestrator ─────────────────────────────────────────────────
 
 
-def run_advisory_promotion_checks(version_info, phase="stage"):
+def run_advisory_promotion_checks(version_info, check_stage=True, check_prod=True):
     """Run all advisory promotion checks and return results in canonical order."""
-    all_ids = _all_check_ids(version_info)
+    all_ids = _all_check_ids(version_info, check_stage, check_prod)
     minor = version_info["minor"]
     if _minor_tuple(minor) < _BOOTC_MIN_MINOR:
         return [_skip(c, f"N/A (requires 4.18+, version is {minor})") for c in all_ids]
@@ -568,7 +573,8 @@ def run_advisory_promotion_checks(version_info, phase="stage"):
         advisory_details = artifacts.fetch_advisory_details(advisory_url)
 
     # Fetch catalog data per variant
-    catalog_envs = ("stage", "prod") if phase == "prod" else ("stage",)
+    catalog_envs = tuple(env for env in ("stage", "prod")
+                         if (env == "stage" and check_stage) or (env == "prod" and check_prod))
     logger.info("Querying catalog (%s)...", "/".join(catalog_envs))
     catalog = {}
     with ThreadPoolExecutor(max_workers=8) as ex:
@@ -603,7 +609,9 @@ def run_advisory_promotion_checks(version_info, phase="stage"):
             futures[ex.submit(check_image_sha, vk, arch, rhel, advisory_details)] = \
                 f"{vk}_advisory_image_sha"
             for env, cat_data in (("stage", stage_cat), ("prod", prod_cat)):
-                futures[ex.submit(check_in_catalog, vk, env, cat_data, version_info, phase)] = \
+                if env not in catalog_envs:
+                    continue
+                futures[ex.submit(check_in_catalog, vk, env, cat_data, version_info)] = \
                     f"{vk}_catalog_{env}_present"
                 futures[ex.submit(check_tag_commit_id, vk, env, cat_data)] = \
                     f"{vk}_catalog_{env}_tag_commit"
@@ -619,10 +627,12 @@ def run_advisory_promotion_checks(version_info, phase="stage"):
             "advisory_type"
         futures[ex.submit(check_shipment_type, shipment, version_info)] = \
             "shipment_type"
-        futures[ex.submit(check_shipment_errata_stage_url, shipment, advisory_details)] = \
-            "shipment_errata_stage_url"
-        futures[ex.submit(check_shipment_errata_prod_url, shipment, advisory_details, version_info)] = \
-            "shipment_errata_prod_url"
+        if check_stage:
+            futures[ex.submit(check_shipment_errata_stage_url, shipment, advisory_details)] = \
+                "shipment_errata_stage_url"
+        if check_prod:
+            futures[ex.submit(check_shipment_errata_prod_url, shipment, advisory_details, version_info)] = \
+                "shipment_errata_prod_url"
         futures[ex.submit(check_shipment_filename, shipment, version_info)] = \
             "shipment_filename"
         futures[ex.submit(check_shipment_nvr_commit, shipment, version_info)] = \
@@ -737,13 +747,16 @@ def parse_args():
     )
     parser.add_argument("version",
                         help="Version string, e.g., 4.18.3, 4.19.0")
-    parser.add_argument("--prod", action="store_true",
-                        help="Check both stage and prod catalogs (default: stage only)")
-    parser.add_argument("--verbose", action="store_true",
-                        help="Show detailed markdown report")
+    parser.add_argument("-s", "--stage", action="store_true",
+                        help="Check stage catalog and shipment errata (common checks always included)")
+    parser.add_argument("-p", "--prod", action="store_true",
+                        help="Check prod catalog and shipment errata (common checks always included)")
     parser.add_argument("--json", dest="json_output", action="store_true",
                         help="Output raw JSON")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.stage and not args.prod:
+        parser.error("at least one of --stage/-s or --prod/-p is required")
+    return args
 
 
 def main():
@@ -764,8 +777,7 @@ def main():
     logger.info("Checking advisory promotion for %s (%s)...",
                 args.version, version_info["type"])
 
-    phase = "prod" if args.prod else "stage"
-    results = run_advisory_promotion_checks(version_info, phase=phase)
+    results = run_advisory_promotion_checks(version_info, args.stage, args.prod)
 
     if args.json_output:
         output = {
@@ -777,10 +789,7 @@ def main():
         print(json.dumps(output, indent=2))
         return
 
-    if args.verbose:
-        print(format_text_full(args.version, results, version_info))
-    else:
-        print(format_text_short(args.version, results, version_info))
+    print(format_text_short(args.version, results, version_info))
 
     if any(r["status"] == "FAIL" for r in results):
         sys.exit(1)

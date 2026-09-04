@@ -5,7 +5,7 @@ Post-release checks for GA and z-stream MicroShift releases. Confirms
 bootc images, RPMs, errata, documentation, and lifecycle page are
 accessible to customers.
 
-Usage: post_release.py <version> [--verbose] [--json]
+Usage: post_release.py <version> [--json]
 """
 
 import argparse
@@ -817,8 +817,6 @@ def parse_args():
     )
     parser.add_argument("version",
                         help="Version string, e.g., 4.21.7, 4.22.0")
-    parser.add_argument("--verbose", action="store_true",
-                        help="Show detailed markdown report")
     parser.add_argument("--json", dest="json_output", action="store_true",
                         help="Output raw JSON")
     return parser.parse_args()
@@ -857,8 +855,6 @@ def main():
             "post_release_checks": results,
         }
         print(json.dumps(output, indent=2))
-    elif args.verbose:
-        print(format_text_full(args.version, results, version_info))
     else:
         print(format_text_short(args.version, results))
 
