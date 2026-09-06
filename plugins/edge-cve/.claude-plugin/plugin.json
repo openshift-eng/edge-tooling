@@ -1,0 +1,10 @@
+{
+  "name": "edge-cve",
+  "description": "Investigate open Black CVE Jira tickets with govulncheck scans and actionable remediation reports",
+  "version": "1.0.0",
+  "author": {
+    "name": "edge-tooling"
+  },
+  "homepage": "https://github.com/openshift-eng/edge-tooling",
+  "license": "Apache-2.0"
+}
