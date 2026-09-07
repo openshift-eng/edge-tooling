@@ -9,6 +9,7 @@ plugins/microshift-ci/scripts/run-doctor.py -> component "microshift").
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -16,11 +17,25 @@ import re
 import signal
 import subprocess
 import sys
-import threading
-import time
 import textwrap
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+from analysis_index import (
+    add_entry,
+    build_index_entry,
+    compute_analyzer_fingerprint,
+    compute_validator_version,
+    discover_predecessor_index,
+    get_entry,
+    load_index,
+    lookup_predecessor,
+    make_reuse_key,
+    new_index,
+    rebase_evidence_paths,
+    save_index,
+)
 
 log = logging.getLogger("doctor")
 
@@ -145,6 +160,17 @@ def parse_args():
                         help="Include pull request analysis")
     parser.add_argument("--repo",
                         help="GitHub org/repo for source checkout (e.g. openshift/microshift)")
+    parser.add_argument("--predecessor-workdir",
+                        default=os.environ.get("CI_DOCTOR_PREDECESSOR_WORKDIR"),
+                        help="Path to a predecessor run's workdir for RCA reuse "
+                             "(also reads CI_DOCTOR_PREDECESSOR_WORKDIR env var)")
+    parser.add_argument("--auto-predecessor", action="store_true",
+                        default=True, dest="auto_predecessor",
+                        help="Auto-discover predecessor from Prow data.js "
+                             "(default: enabled)")
+    parser.add_argument("--no-auto-predecessor", action="store_false",
+                        dest="auto_predecessor",
+                        help="Disable auto-predecessor discovery")
     return parser.parse_args()
 
 
@@ -194,12 +220,85 @@ class DoctorPipeline:
         self.prepare_summary = None
         self.analyze_costs = {}
 
+        # Predecessor handoff state — manual flag takes precedence
+        self.predecessor_workdir = args.predecessor_workdir
+        if not self.predecessor_workdir and getattr(args, "auto_predecessor", True):
+            self.predecessor_workdir = self._auto_discover_predecessor()
+        self.current_index = new_index()
+        self.predecessor_index = None
+        self._analyzer_fingerprint = None
+        self._validator_version = None
+        self._prompt_hash = None
+        self.reuse_stats = {"reused": 0, "fresh": 0, "predecessor_miss": 0,
+                            "fingerprint_mismatch": 0}
+
     @property
     def agent_system_prompt(self):
         if self._agent_system_prompt is None:
             text = self.agent_prompt_path.read_text()
             self._agent_system_prompt = strip_frontmatter(text)
         return self._agent_system_prompt
+
+    @property
+    def validator_version(self):
+        if self._validator_version is None:
+            self._validator_version = compute_validator_version()
+        return self._validator_version
+
+    @property
+    def prompt_hash(self):
+        if self._prompt_hash is None:
+            h = hashlib.sha256(self.agent_system_prompt.encode("utf-8"))
+            self._prompt_hash = h.hexdigest()
+        return self._prompt_hash
+
+    @property
+    def analyzer_fingerprint(self):
+        if self._analyzer_fingerprint is None:
+            self._analyzer_fingerprint = compute_analyzer_fingerprint(
+                self.model, self.agent_system_prompt, self.validator_version)
+        return self._analyzer_fingerprint
+
+    def _load_predecessor_index(self):
+        """Load the predecessor analysis index (once, lazily)."""
+        if self.predecessor_index is not None:
+            return self.predecessor_index
+        if not self.predecessor_workdir:
+            self.predecessor_index = new_index()
+            return self.predecessor_index
+        pred_path = Path(self.predecessor_workdir)
+        if not pred_path.is_dir():
+            log.warning("Predecessor workdir does not exist: %s", pred_path)
+            self.predecessor_index = new_index()
+            return self.predecessor_index
+        self.predecessor_index = load_index(self.predecessor_workdir)
+        entry_count = len(self.predecessor_index["entries"])
+        if entry_count > 0:
+            log.info("Loaded predecessor index with %d entries from %s",
+                     entry_count, pred_path)
+        else:
+            log.info("Predecessor index is empty or missing at %s", pred_path)
+        return self.predecessor_index
+
+    def _auto_discover_predecessor(self):
+        """Auto-discover predecessor index from Prow data.js."""
+        doctor_job_patterns = {
+            "lvm-operator": "lvms-ci-doctor",
+            "microshift": "microshift-ci-doctor",
+        }
+        pattern = doctor_job_patterns.get(self.component)
+        if not pattern:
+            log.info("[AUTO] No doctor job pattern for component '%s'",
+                     self.component)
+            return None
+
+        current_build_id = os.environ.get("BUILD_ID")
+        result = discover_predecessor_index(pattern, current_build_id)
+        if result:
+            log.info("[AUTO] Discovered predecessor index at %s", result)
+        else:
+            log.info("[AUTO] No predecessor found, running fresh")
+        return result
 
     def message(self, msg):
         """Append a diagnostic message to diagnostics.txt and log it."""
@@ -474,6 +573,16 @@ class DoctorPipeline:
 
         log.info("Analyzing %d jobs (max %d parallel)...", len(jobs), self.max_parallel)
 
+        # Pre-compute values needed for predecessor handoff
+        pred_index = self._load_predecessor_index()
+        fingerprint = self.analyzer_fingerprint
+        validator_ver = self.validator_version
+        prompt_hash_val = self.prompt_hash
+
+        # Pre-load the validation module before spawning workers to avoid
+        # a lazy-init race under ThreadPoolExecutor (B-I1).
+        _load_validate_module()
+
         results = {}
         with ThreadPoolExecutor(max_workers=self.max_parallel) as pool:
             futures = {}
@@ -486,6 +595,11 @@ class DoctorPipeline:
                     agent_system_prompt=self.agent_system_prompt,
                     logs_dir=str(self.logs_dir),
                     workdir=str(self.workdir),
+                    component=self.component,
+                    predecessor_index=pred_index,
+                    analyzer_fingerprint=fingerprint,
+                    validator_version=validator_ver,
+                    prompt_hash=prompt_hash_val,
                 )
                 futures[future] = job_info
 
@@ -504,6 +618,33 @@ class DoctorPipeline:
                         "cost_usd": stats.get("cost_usd", 0),
                         "duration_ms": stats.get("duration_ms", 0),
                     }
+
+                    # Track reuse stats
+                    if stats.get("reused"):
+                        self.reuse_stats["reused"] += 1
+                    else:
+                        self.reuse_stats["fresh"] += 1
+                    if stats.get("predecessor_miss"):
+                        self.reuse_stats["predecessor_miss"] += 1
+                    if stats.get("fingerprint_mismatch"):
+                        self.reuse_stats["fingerprint_mismatch"] += 1
+
+                    # B-I2: update predecessor entry's reused_count from the
+                    # main thread (safe – single-threaded after executor join).
+                    pred_key = stats.get("predecessor_reuse_key")
+                    if pred_key and pred_index:
+                        pred_entry = get_entry(pred_index, pred_key)
+                        if pred_entry:
+                            pred_entry["reused_count"] = (
+                                pred_entry.get("reused_count", 0) + 1
+                            )
+
+                    # Update current index with the analysis result
+                    index_entry = stats.get("index_entry")
+                    index_key = stats.get("index_key")
+                    if index_key and index_entry:
+                        add_entry(self.current_index, index_key, index_entry)
+
                     if success:
                         log.info("[OK] %s", label)
                     else:
@@ -513,12 +654,25 @@ class DoctorPipeline:
                             f"WARNING: Post-hoc validation failed for {label}:\n"
                             + "\n".join(f"  - {e}" for e in validation_errors)
                         )
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     self.message(f"ERROR: {label} raised exception: {exc}")
                     results[label] = {
                         "success": False, "output_path": None, "validation_errors": [],
                         "stats": {"cost_usd": 0, "stop_hook_count": 0},
                     }
+
+        # Save current index
+        save_index(self.current_index, self.workdir)
+        log.info("Saved analysis index with %d entries",
+                 len(self.current_index["entries"]))
+
+        # Log reuse stats
+        rs = self.reuse_stats
+        if rs["reused"] > 0 or self.predecessor_workdir:
+            log.info("Reuse stats: %d reused, %d fresh, %d predecessor miss, "
+                     "%d fingerprint mismatch",
+                     rs["reused"], rs["fresh"],
+                     rs["predecessor_miss"], rs["fingerprint_mismatch"])
 
         succeeded = sum(1 for r in results.values() if r["success"])
         log.info("Analyze complete: %d/%d succeeded", succeeded, len(results))
@@ -862,9 +1016,8 @@ def _extract_job_stats(log_path):
                     msg = record.get("message", {})
                     if isinstance(msg, dict):
                         for block in msg.get("content", []):
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                if block.get("text", "").strip() == "Prompt is too long":
-                                    context_exhausted = True
+                            if isinstance(block, dict) and block.get("type") == "text" and block.get("text", "").strip() == "Prompt is too long":
+                                context_exhausted = True
                 elif record.get("type") == "assistant" and record.get("parent_tool_use_id"):
                     subagent_turns += 1
                 elif record.get("type") == "user" and not record.get("parent_tool_use_id"):
@@ -957,73 +1110,187 @@ def _run_claude_session(prompt, system_prompt, plugin_dir, model, log_path,
 
 
 def _analyze_single_job(job_info, plugin_dir, model, agent_system_prompt,
-                        logs_dir, workdir):
-    """Analyze a single prow job via claude -p. Called in a subprocess."""
-    prompt_parts = [
-        "Analyze this prow job:",
-        f"artifacts_dir: {job_info['artifacts_dir']}",
-        f"job_url: {job_info['job_url']}",
-        f"job_name: {job_info['job_name']}",
-    ]
-    if job_info.get("graphs_dir"):
-        prompt_parts.append(f"graphs_dir: {job_info['graphs_dir']}")
-    if job_info.get("source_dir"):
-        prompt_parts.append(f"source_dir: {job_info['source_dir']}")
+                        logs_dir, workdir, component=None,
+                        predecessor_index=None, analyzer_fingerprint=None,
+                        validator_version=None, prompt_hash=None):
+    """Analyze a single prow job via claude -p. Called in a subprocess.
 
-    prompt = "\n".join(prompt_parts)
-    log_path = Path(logs_dir) / job_info["log_name"]
-    log_stem = Path(job_info["log_name"]).stem
-    debug_file = str(Path(logs_dir) / f"{log_stem}-debug.log")
+    When a predecessor index is available, checks for a matching prior
+    analysis before spawning Claude.  On hit, rebases evidence paths
+    and reuses the RCA output.
+    """
+    build_id = job_info["build_id"]
+    job_name = job_info["job_name"]
     output_path = Path(workdir) / "jobs" / job_info["output_name"]
-    limits = STAGE_LIMITS["analyze"]
 
-    env = os.environ.copy()
-    env["CI_DOCTOR_RCA_SESSION"] = "1"
-    env["CI_DOCTOR_HOOK_LOG"] = str(Path(logs_dir) / f"{log_stem}-hook.log")
-    env["CLAUDE_CODE_DEBUG_LOG_LEVEL"] = "verbose"
+    # Determine workflow from job_name (last segment after the repo/branch)
+    workflow = job_name.rsplit("-", 1)[0] if job_name else "unknown"
 
-    add_dirs = [d for d in [
-        job_info.get("artifacts_dir"),
-        job_info.get("graphs_dir"),
-        job_info.get("source_dir"),
-    ] if d]
+    reuse_key = make_reuse_key(component or "unknown", workflow, build_id)
 
-    success, final_text = _run_claude_session(
-        prompt=prompt,
-        system_prompt=agent_system_prompt,
-        plugin_dir=plugin_dir,
-        model=model,
-        log_path=log_path,
-        max_turns=limits["max_turns"],
-        timeout=limits["timeout"],
-        env=env,
-        allowed_tools=["Bash", "Read", "Glob", "Grep"],
-        add_dirs=add_dirs,
-        debug_file=debug_file,
-    )
+    # --- Predecessor lookup ---
+    reused = False
+    pred_miss = False
+    fp_mismatch = False
+    rca_output = None
 
-    timed_out = success is None
-    if timed_out:
-        final_text = _extract_result_text_standalone(log_path)
+    if predecessor_index and analyzer_fingerprint:
+        entry, valid = lookup_predecessor(
+            predecessor_index, reuse_key, analyzer_fingerprint)
+        if entry and valid:
+            old_workdir = entry.get("workdir", "")
+            rebased, warnings = rebase_evidence_paths(
+                entry.get("rca_output", []), old_workdir, workdir)
 
-    validation_errors = []
-    if timed_out:
-        validation_errors.append(f"Timed out after {limits['timeout']}s")
+            # Guard: rebase_evidence_paths can return non-list input
+            # unchanged when rca_output was malformed (B-I3).
+            if not isinstance(rebased, list):
+                log.warning("[FRESH] Rebased output is %s, not list – "
+                            "falling through to fresh analysis for %s",
+                            type(rebased).__name__, reuse_key)
+                rebased = None
 
-    saved = False
-    if final_text:
-        validation_errors.extend(_run_validation(final_text))
-        data, parse_errors = _parse_json_output(final_text)
-        if data is not None:
-            with open(output_path, "w") as f:
-                json.dump(data, f, indent=2)
-            saved = True
+            # Validate rebased output
+            validation_errors = (
+                _run_validation(json.dumps(rebased))
+                if rebased is not None else ["rebased output was not a list"]
+            )
+            if not validation_errors:
+                rca_output = rebased
+                reused = True
+                log.info("[REUSE] Reusing predecessor analysis for %s", reuse_key)
+
+                # Add rebase warnings to analysis_gaps
+                if warnings and isinstance(rebased, list):
+                    for rca_entry in rebased:
+                        if isinstance(rca_entry, dict):
+                            gaps = rca_entry.get("analysis_gaps", [])
+                            if isinstance(gaps, list):
+                                gaps.extend(warnings)
+                                rca_entry["analysis_gaps"] = gaps
+
+                # Save the output
+                try:
+                    with open(output_path, "w") as f:
+                        json.dump(rebased, f, indent=2)
+                except OSError as e:
+                    log.warning("Failed to write reused output: %s", e)
+                    reused = False
+
+            else:
+                log.info("[FRESH] Rebased output failed validation for %s, "
+                         "running fresh analysis", reuse_key)
+                reused = False
+        elif entry:
+            fp_mismatch = True
+            log.info("[FRESH] Fingerprint mismatch for %s, running fresh analysis",
+                     reuse_key)
         else:
-            validation_errors.extend(parse_errors)
-    else:
-        validation_errors.append("No assistant text found in stream-json log")
+            pred_miss = True
+            log.info("[FRESH] No predecessor entry for %s, running fresh analysis",
+                     reuse_key)
 
-    stats = _extract_job_stats(log_path)
+    # --- Fresh analysis ---
+    stats = {"cost_usd": 0, "duration_ms": 0, "stop_hook_count": 0,
+             "num_turns": 0, "permission_denials": 0, "first_hook_at_turn": 0,
+             "context_exhausted": False}
+    validation_errors = []
+
+    if not reused:
+        prompt_parts = [
+            "Analyze this prow job:",
+            f"artifacts_dir: {job_info['artifacts_dir']}",
+            f"job_url: {job_info['job_url']}",
+            f"job_name: {job_info['job_name']}",
+        ]
+        if job_info.get("graphs_dir"):
+            prompt_parts.append(f"graphs_dir: {job_info['graphs_dir']}")
+        if job_info.get("source_dir"):
+            prompt_parts.append(f"source_dir: {job_info['source_dir']}")
+
+        prompt = "\n".join(prompt_parts)
+        log_path = Path(logs_dir) / job_info["log_name"]
+        log_stem = Path(job_info["log_name"]).stem
+        debug_file = str(Path(logs_dir) / f"{log_stem}-debug.log")
+        limits = STAGE_LIMITS["analyze"]
+
+        env = os.environ.copy()
+        env["CI_DOCTOR_RCA_SESSION"] = "1"
+        env["CI_DOCTOR_HOOK_LOG"] = str(Path(logs_dir) / f"{log_stem}-hook.log")
+        env["CLAUDE_CODE_DEBUG_LOG_LEVEL"] = "verbose"
+
+        add_dirs = [d for d in [
+            job_info.get("artifacts_dir"),
+            job_info.get("graphs_dir"),
+            job_info.get("source_dir"),
+        ] if d]
+
+        success, final_text = _run_claude_session(
+            prompt=prompt,
+            system_prompt=agent_system_prompt,
+            plugin_dir=plugin_dir,
+            model=model,
+            log_path=log_path,
+            max_turns=limits["max_turns"],
+            timeout=limits["timeout"],
+            env=env,
+            allowed_tools=["Bash", "Read", "Glob", "Grep"],
+            add_dirs=add_dirs,
+            debug_file=debug_file,
+        )
+
+        timed_out = success is None
+        if timed_out:
+            final_text = _extract_result_text_standalone(log_path)
+
+        if timed_out:
+            validation_errors.append(f"Timed out after {limits['timeout']}s")
+
+        if final_text:
+            validation_errors.extend(_run_validation(final_text))
+            data, parse_errors = _parse_json_output(final_text)
+            if data is not None:
+                rca_output = data
+                with open(output_path, "w") as f:
+                    json.dump(data, f, indent=2)
+            else:
+                validation_errors.extend(parse_errors)
+                rca_output = None
+        else:
+            validation_errors.append("No assistant text found in stream-json log")
+
+        stats = _extract_job_stats(log_path)
+
+    saved = output_path.is_file()
+
+    # Build the index entry for the current run
+    index_entry = None
+    index_key = None
+    if rca_output is not None and component and analyzer_fingerprint:
+        index_key = reuse_key
+        index_entry = build_index_entry(
+            component=component,
+            workflow=workflow,
+            build_id=build_id,
+            fingerprint=analyzer_fingerprint,
+            model=model,
+            prompt_hash=prompt_hash or "",
+            validator_version=validator_version or "",
+            workdir=str(workdir),
+            rca_output=rca_output,
+        )
+        if reused:
+            index_entry["reused_count"] = 1
+
+    stats["reused"] = reused
+    stats["predecessor_miss"] = pred_miss
+    stats["fingerprint_mismatch"] = fp_mismatch
+    stats["index_key"] = index_key
+    stats["index_entry"] = index_entry
+    # B-I2: return the predecessor key so the main thread can safely
+    # update reused_count outside the worker thread.
+    stats["predecessor_reuse_key"] = reuse_key if reused else None
+
     return saved, str(output_path) if saved else None, validation_errors, stats
 
 
