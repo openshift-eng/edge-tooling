@@ -66,12 +66,18 @@ def _log_debug(event, **fields):
 
 
 def _read_lines(path, cache):
-    """Read file lines with caching to avoid re-reading large build logs."""
+    """Read file lines with caching to avoid re-reading large build logs.
+
+    Opens with newline='' and strips ``\\r`` to match grep's line counting.
+    Python's universal newlines treat standalone ``\\r`` as a line break,
+    but grep splits only on ``\\n`` — log files with bare carriage returns
+    cause line-number mismatches without this normalization.
+    """
     if path in cache:
         return cache[path]
     try:
-        with open(path, errors="replace") as f:
-            lines = f.readlines()
+        with open(path, newline='', errors="replace") as f:
+            lines = f.read().replace('\r', '').splitlines(True)
     except OSError:
         lines = None
     cache[path] = lines
@@ -301,6 +307,8 @@ def main():
         print("WARNING: validate-rca-output: malformed JSON on stdin, skipping validation", file=sys.stderr)
         sys.exit(0)
 
+    print(f"DEBUG: validate-rca-output: stdin input: {json.dumps(payload)}", file=sys.stderr)
+
     if not isinstance(payload, dict):
         print("WARNING: validate-rca-output: expected dict payload, skipping validation", file=sys.stderr)
         sys.exit(0)
@@ -360,7 +368,11 @@ def main():
 
     if errors:
         reason = "RCA output validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
-        json.dump({"decision": "block", "reason": reason}, sys.stdout)
+        result = {"decision": "block", "reason": reason}
+        print(f"DEBUG: validate-rca-output: stdout output: {json.dumps(result)}", file=sys.stderr)
+        json.dump(result, sys.stdout)
+    else:
+        print("DEBUG: validate-rca-output: stdout output: (none, allowing)", file=sys.stderr)
 
     sys.exit(0)
 
