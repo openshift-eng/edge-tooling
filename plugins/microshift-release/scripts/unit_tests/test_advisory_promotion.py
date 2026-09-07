@@ -23,6 +23,7 @@ from advisory_promotion import (  # noqa: E402
     check_shipment_mr_approved,
     format_text_short,
     format_text_full,
+    parse_args,
     _expected_repo,
     _all_check_ids,
     _rhel_versions,
@@ -111,6 +112,32 @@ class TestCheckIds(unittest.TestCase):
         self.assertIn("advisory_sha_distinct_el10", ids)
         self.assertIn("advisory_sha_distinct_el9", ids)
         self.assertIn("advisory_sha_distinct_el10", ids)
+
+    def test_stage_only(self):
+        ids = _all_check_ids(_version("4.18.3"), check_stage=True, check_prod=False)
+        self.assertTrue(any("catalog_stage_" in i for i in ids))
+        self.assertFalse(any("catalog_prod_" in i for i in ids))
+        self.assertIn("shipment_errata_stage_url", ids)
+        self.assertNotIn("shipment_errata_prod_url", ids)
+        self.assertIn("advisory_type", ids)
+        self.assertIn("shipment_mr_approved", ids)
+        el9_ids = [i for i in ids if i.startswith("amd64_el9_")]
+        self.assertEqual(len(el9_ids), 8)  # 3 common + 5 stage catalog
+
+    def test_prod_only(self):
+        ids = _all_check_ids(_version("4.18.3"), check_stage=False, check_prod=True)
+        self.assertFalse(any("catalog_stage_" in i for i in ids))
+        self.assertTrue(any("catalog_prod_" in i for i in ids))
+        self.assertNotIn("shipment_errata_stage_url", ids)
+        self.assertIn("shipment_errata_prod_url", ids)
+        self.assertIn("advisory_type", ids)
+        el9_ids = [i for i in ids if i.startswith("amd64_el9_")]
+        self.assertEqual(len(el9_ids), 8)  # 3 common + 5 prod catalog
+
+    def test_both_stage_and_prod(self):
+        ids_both = _all_check_ids(_version("4.18.3"), check_stage=True, check_prod=True)
+        ids_default = _all_check_ids(_version("4.18.3"))
+        self.assertEqual(ids_both, ids_default)
 
 
 # ── Per-variant: in_advisory ─────────────────────────────────────
@@ -265,21 +292,16 @@ class TestCHIFreshness(unittest.TestCase):
 
 
 class TestCheckInCatalog(unittest.TestCase):
-    def test_stage_mode_skips_prod(self):
-        r = check_in_catalog("amd64_el9", "prod", {}, _version("4.18.3"), phase="stage")
-        self.assertEqual(r["status"], "SKIP")
-        self.assertIn("stage mode", r["reason"])
-
-    def test_prod_mode_checks_prod(self):
-        r = check_in_catalog("amd64_el9", "prod", {"valid": True}, _version("4.18.3"), phase="prod")
+    def test_prod_checks_prod(self):
+        r = check_in_catalog("amd64_el9", "prod", {"valid": True}, _version("4.18.3"))
         self.assertEqual(r["status"], "PASS")
 
-    def test_ec_skips_prod_regardless(self):
-        r = check_in_catalog("amd64_el9", "prod", {}, _version("5.0.0-ec.3"), phase="prod")
+    def test_ec_skips_prod(self):
+        r = check_in_catalog("amd64_el9", "prod", {}, _version("5.0.0-ec.3"))
         self.assertEqual(r["status"], "SKIP")
 
-    def test_stage_always_checked(self):
-        r = check_in_catalog("amd64_el9", "stage", {"valid": True}, _version("4.18.3"), phase="stage")
+    def test_stage_checked(self):
+        r = check_in_catalog("amd64_el9", "stage", {"valid": True}, _version("4.18.3"))
         self.assertEqual(r["status"], "PASS")
 
 
@@ -462,6 +484,40 @@ class TestFormatFull(unittest.TestCase):
         out = format_text_full("4.18.3", results, vi)
         self.assertIn("## amd64_el9", out)
         self.assertIn("## Global", out)
+
+
+# ── Argument parsing ──────────────────────────────────────────
+
+
+class TestParseArgs(unittest.TestCase):
+    @patch("sys.argv", ["advisory_promotion.py", "4.18.3", "-s"])
+    def test_stage_flag(self):
+        args = parse_args()
+        self.assertTrue(args.stage)
+        self.assertFalse(args.prod)
+        self.assertEqual(args.version, "4.18.3")
+
+    @patch("sys.argv", ["advisory_promotion.py", "4.18.3", "-p"])
+    def test_prod_flag(self):
+        args = parse_args()
+        self.assertFalse(args.stage)
+        self.assertTrue(args.prod)
+
+    @patch("sys.argv", ["advisory_promotion.py", "4.18.3", "-s", "-p"])
+    def test_both_flags(self):
+        args = parse_args()
+        self.assertTrue(args.stage)
+        self.assertTrue(args.prod)
+
+    @patch("sys.argv", ["advisory_promotion.py", "4.18.3"])
+    def test_no_flags_error(self):
+        with self.assertRaises(SystemExit):
+            parse_args()
+
+    @patch("sys.argv", ["advisory_promotion.py", "4.18.3", "--verbose"])
+    def test_verbose_rejected(self):
+        with self.assertRaises(SystemExit):
+            parse_args()
 
 
 if __name__ == "__main__":
