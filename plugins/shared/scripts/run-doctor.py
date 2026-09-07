@@ -348,6 +348,41 @@ class DoctorPipeline:
         with open(self.diagnostics_file, "a") as f:
             f.write("\n".join(lines) + "\n")
 
+    def _write_evidence_gaps(self, results):
+        """Collect analysis_gaps from job outputs and write to diagnostics.txt."""
+        gaps_by_job = {}
+        for label in sorted(results):
+            r = results[label]
+            output_path = r.get("output_path")
+            if not output_path or not Path(output_path).is_file():
+                continue
+            try:
+                data = json.loads(Path(output_path).read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+            if not isinstance(data, list):
+                continue
+            job_gaps = []
+            for entry in data:
+                if not isinstance(entry, dict):
+                    continue
+                for gap in entry.get("analysis_gaps", []):
+                    if isinstance(gap, str) and gap and gap not in job_gaps:
+                        job_gaps.append(gap)
+            if job_gaps:
+                gaps_by_job[label] = job_gaps
+
+        if not gaps_by_job:
+            return
+
+        lines = ["Evidence Gaps:"]
+        for label in sorted(gaps_by_job):
+            for gap in gaps_by_job[label]:
+                lines.append(f"  {label}: {gap}")
+
+        with open(self.diagnostics_file, "a") as f:
+            f.write("\n".join(lines) + "\n")
+
     # ------------------------------------------------------------------
     # Stages
     # ------------------------------------------------------------------
@@ -473,6 +508,7 @@ class DoctorPipeline:
         succeeded = sum(1 for r in results.values() if r["success"])
         log.info("Analyze complete: %d/%d succeeded", succeeded, len(results))
         self._write_job_diagnostics(results)
+        self._write_evidence_gaps(results)
         return succeeded > 0 or not results
 
     def _collect_jobs_to_analyze(self):
@@ -836,7 +872,8 @@ def _extract_job_stats(log_path):
 
 def _run_claude_session(prompt, system_prompt, plugin_dir, model, log_path,
                         max_turns=30, timeout=600, env=None,
-                        allowed_tools=None, add_dirs=None):
+                        allowed_tools=None, add_dirs=None,
+                        debug_file=None):
     """Run a claude -p session, writing stream-json to log_path.
 
     Returns (success, final_text). Returns (None, None) on timeout.
@@ -850,6 +887,8 @@ def _run_claude_session(prompt, system_prompt, plugin_dir, model, log_path,
         "--output-format", "stream-json",
         "--verbose",
     ]
+    if debug_file:
+        cmd.extend(["--debug-file", debug_file])
     if allowed_tools:
         cmd.extend(["--allowed-tools", ",".join(allowed_tools)])
     if add_dirs:
@@ -900,12 +939,15 @@ def _analyze_single_job(job_info, plugin_dir, model, agent_system_prompt,
 
     prompt = "\n".join(prompt_parts)
     log_path = Path(logs_dir) / job_info["log_name"]
+    log_stem = Path(job_info["log_name"]).stem
+    debug_file = str(Path(logs_dir) / f"{log_stem}-debug.log")
     output_path = Path(workdir) / "jobs" / job_info["output_name"]
     limits = STAGE_LIMITS["analyze"]
 
     env = os.environ.copy()
-    env["CI_DOCTOR_RCA_SESSION"] = Path(job_info["output_name"]).stem
+    env["CI_DOCTOR_RCA_SESSION"] = "1"
     env["CI_DOCTOR_HOOK_LOG"] = str(Path(workdir) / "hook-debug.jsonl")
+    env["CLAUDE_CODE_DEBUG_LOG_LEVEL"] = "verbose"
 
     add_dirs = [d for d in [
         job_info.get("artifacts_dir"),
@@ -924,6 +966,7 @@ def _analyze_single_job(job_info, plugin_dir, model, agent_system_prompt,
         env=env,
         allowed_tools=["Bash", "Read", "Glob", "Grep"],
         add_dirs=add_dirs,
+        debug_file=debug_file,
     )
 
     timed_out = success is None
