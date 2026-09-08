@@ -21,6 +21,59 @@ Automate MicroShift Release Testing Activities — from pre-release evaluation t
 | `/microshift-release:advisory-promotion` | Advisory Promotion (Phase 3) | Start in parallel with Phase 1, but wait for Phase 2 to finish before signing off Errata and Shipment | Validate Konflux bootc advisory promotion for QE sign-off — verify advisory YAML, catalog presence, shipment MR, and commit provenance |
 | `/microshift-release:post-release` | Post-Release (Phase 4) | After sign-off in Errata Tool (REL_PREP) and Shipment (approved) | Verify all artifacts and docs are publicly available after shipping — bootc images, RPMs, errata, documentation, and lifecycle page |
 
+## Running the scripts directly
+
+Prefer not to go through Claude? Every skill except `release-versions` is a thin
+wrapper over a bash script in `scripts/` and produces the same output when run
+directly.
+
+Each `.sh` wrapper auto-creates a Python venv at `_output/release_testing` and
+installs `scripts/requirements.txt` on first run, so the only extra prerequisite
+is `python3` — plus the tokens and VPN listed under [Requirements](#requirements).
+The scripts resolve the repository root via `git rev-parse --show-toplevel`, so
+**run them from inside the `edge-tooling` git checkout**. Most scripts accept
+`--json` for machine-readable output.
+
+Paths below are relative to the repository root:
+
+```bash
+SCRIPTS_DIR=plugins/microshift-release/scripts
+```
+
+| Skill | Direct bash equivalent |
+|---|---|
+| `pre-check` (Z/X/Y) | `bash $SCRIPTS_DIR/precheck.sh xyz <versions...> [--verbose] [--json]` |
+| `pre-check` (nightly) | `bash $SCRIPTS_DIR/precheck.sh nightly [version] [--verbose]` |
+| `pre-check` (EC/RC) | `bash $SCRIPTS_DIR/precheck.sh ecrc <EC\|RC> [version] [--verbose]` |
+| `release-versions` | *No script — Claude/WebFetch only (see notes below)* |
+| `validate-artifacts` | `bash $SCRIPTS_DIR/validate.sh <version> [--verbose]` |
+| `automated-testing` | `bash $SCRIPTS_DIR/prow_testing.sh <action> <version> [--execute]` |
+| `advisory-promotion` (bootc) | `bash $SCRIPTS_DIR/advisory_promotion.sh <version> [-s] [-p] [--json]` |
+| `advisory-promotion` (errata) | `bash $SCRIPTS_DIR/errata_promotion.sh <version> <advisory_id> [--verbose]` |
+| `post-release` | `bash $SCRIPTS_DIR/post_release.sh <version> [--json]` |
+
+### Automated testing is multi-step
+
+`automated-testing` runs `prow_testing.sh` once per step, in this order:
+
+```text
+preflight → create-pr → trigger → status → scenarios → download → upload → complete
+```
+
+Mutating actions (`create-pr`, `trigger`, `download`, `upload`, `complete`) are
+**dry-run by default** — pass `--execute` to actually perform them. The
+non-mutating actions (`preflight`, `status`, `scenarios`) always run for real.
+
+### Notes on running scripts directly
+
+- **`release-versions`** has no bash script — it is implemented entirely via
+  Claude's WebFetch and inline `curl` calls, so it must be run through Claude.
+- **`pre-check`** run directly skips the Jira/MCP enrichment the skill performs:
+  there is no ART-ticket schedule table and no natural-language time-range
+  resolution (e.g. "this week"), so pass explicit versions instead of a time
+  range. The script still runs and degrades gracefully; everything else is
+  identical.
+
 ## How To
 
 ### Request ART to create a new Z-Stream
