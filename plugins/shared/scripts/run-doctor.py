@@ -320,12 +320,16 @@ class DoctorPipeline:
             cost = stats.get("cost_usd", 0)
             hooks = stats.get("stop_hook_count", 0)
             num_turns = stats.get("num_turns", 0)
+            subagent_turns = stats.get("subagent_turns", 0)
             perm_denials = stats.get("permission_denials", 0)
             status = "OK" if r["success"] else "FAILED"
             timed_out = any("Timed out" in e for e in r.get("validation_errors", []))
             hit_max_turns = max_turns_limit > 0 and num_turns >= max_turns_limit
 
-            parts = [f"  {label}: {status}, ${cost:.2f}, {num_turns} turns"]
+            turn_str = f"{num_turns} turns"
+            if subagent_turns > 0:
+                turn_str += f" (+{subagent_turns} subagent)"
+            parts = [f"  {label}: {status}, ${cost:.2f}, {turn_str}"]
             if timed_out:
                 parts.append("TIMED OUT")
             if hit_max_turns:
@@ -819,6 +823,7 @@ def _extract_job_stats(log_path):
     duration_ms = 0
     stop_hook_count = 0
     num_turns = 0
+    subagent_turns = 0
     permission_denials = 0
     parent_user_msgs = 0
     first_hook_at_turn = 0
@@ -849,6 +854,8 @@ def _extract_job_stats(log_path):
                             if isinstance(block, dict) and block.get("type") == "text":
                                 if block.get("text", "").strip() == "Prompt is too long":
                                     context_exhausted = True
+                elif record.get("type") == "assistant" and record.get("parent_tool_use_id"):
+                    subagent_turns += 1
                 elif record.get("type") == "user" and not record.get("parent_tool_use_id"):
                     is_hook = False
                     if record.get("isSynthetic"):
@@ -869,7 +876,8 @@ def _extract_job_stats(log_path):
         pass
     return {"cost_usd": cost_usd, "duration_ms": duration_ms,
             "stop_hook_count": stop_hook_count,
-            "num_turns": num_turns, "permission_denials": permission_denials,
+            "num_turns": num_turns, "subagent_turns": subagent_turns,
+            "permission_denials": permission_denials,
             "first_hook_at_turn": first_hook_at_turn,
             "context_exhausted": context_exhausted}
 
