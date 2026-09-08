@@ -211,25 +211,44 @@ def _try_extract_json_array(text):
     """Attempt to extract a JSON array from text with surrounding prose.
 
     LLMs sometimes prepend or append prose around the JSON array.
-    Find the first ``[`` and greedily match to the last ``]``, then
-    try json.loads on that substring.  Returns a
-    ``(parsed_list, debug_reason)`` tuple — the list on success or
-    ``None`` on failure, with a reason string for diagnostics.
+    Tries up to 10 ``[`` positions (first to last) paired with the
+    last ``]`` after each one.  Returns a ``(parsed_list, debug_reason)``
+    tuple — the list on success or ``None`` on failure, with a reason
+    string for diagnostics.
     """
-    first_bracket = text.find("[")
-    if first_bracket == -1:
+    # Collect all '[' positions, capped at 10 to avoid pathological input.
+    MAX_ATTEMPTS = 10
+    bracket_positions = []
+    pos = 0
+    while len(bracket_positions) < MAX_ATTEMPTS:
+        idx = text.find("[", pos)
+        if idx == -1:
+            break
+        bracket_positions.append(idx)
+        pos = idx + 1
+
+    if not bracket_positions:
         return None, "no opening bracket found"
-    last_bracket = text.rfind("]")
-    if last_bracket == -1 or last_bracket <= first_bracket:
-        return None, f"no valid closing bracket (first={first_bracket}, last={last_bracket})"
-    candidate = text[first_bracket:last_bracket + 1]
-    try:
-        data = json.loads(candidate)
-    except json.JSONDecodeError as e:
-        return None, f"json.loads failed: {e} (first={first_bracket}, last={last_bracket})"
-    if isinstance(data, list):
-        return data, f"success (first={first_bracket}, last={last_bracket})"
-    return None, f"parsed value is {type(data).__name__}, not list (first={first_bracket}, last={last_bracket})"
+
+    total = len(bracket_positions)
+    last_error = None
+
+    for attempt, first_bracket in enumerate(bracket_positions, 1):
+        last_bracket = text.rfind("]", first_bracket)
+        if last_bracket == -1 or last_bracket <= first_bracket:
+            last_error = f"no valid closing bracket (first={first_bracket}, last={last_bracket})"
+            continue
+        candidate = text[first_bracket:last_bracket + 1]
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError as e:
+            last_error = f"json.loads failed: {e} (bracket {attempt}/{total}, first={first_bracket}, last={last_bracket})"
+            continue
+        if isinstance(data, list):
+            return data, f"success (bracket {attempt}/{total}, first={first_bracket}, last={last_bracket})"
+        last_error = f"parsed value is {type(data).__name__}, not list (bracket {attempt}/{total}, first={first_bracket}, last={last_bracket})"
+
+    return None, last_error or "no opening bracket found"
 
 
 def parse_json_output(text):
