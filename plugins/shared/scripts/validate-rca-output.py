@@ -117,6 +117,18 @@ def validate_evidence(evidence, quote, prefix, file_cache):
 
     cited_line = " ".join(lines[line_no - 1].split()).lower()
     normalized_quote = " ".join(quote.split()).lower()
+
+    # Normalize escape sequences and Unicode smart quotes so that
+    # cosmetic differences in quoting style don't cause false negatives.
+    cited_line = (cited_line
+                  .replace('\\"', '"')
+                  .replace('\u201c', '"').replace('\u201d', '"')
+                  .replace('\u2018', "'").replace('\u2019', "'"))
+    normalized_quote = (normalized_quote
+                        .replace('\\"', '"')
+                        .replace('\u201c', '"').replace('\u201d', '"')
+                        .replace('\u2018', "'").replace('\u2019', "'"))
+
     if normalized_quote not in cited_line:
         actual_preview = cited_line[:200] + ("..." if len(cited_line) > 200 else "")
         return [
@@ -218,6 +230,28 @@ def _try_extract_json_array(text):
     if isinstance(data, list):
         return data, f"success (first={first_bracket}, last={last_bracket})"
     return None, f"parsed value is {type(data).__name__}, not list (first={first_bracket}, last={last_bracket})"
+
+
+def parse_json_output(text):
+    """Parse agent output text as a JSON array.
+
+    Tries ``json.loads`` first; on failure, falls back to
+    ``_try_extract_json_array`` to handle prose-wrapped output.
+
+    Returns ``(parsed_data, errors)`` — *parsed_data* is the parsed
+    list on success or ``None`` on failure, and *errors* is a
+    (possibly empty) list of error strings.
+    """
+    try:
+        data = json.loads(text)
+        if isinstance(data, list):
+            return data, []
+        return None, [f"Parsed JSON is {type(data).__name__}, expected array"]
+    except json.JSONDecodeError:
+        extracted, reason = _try_extract_json_array(text)
+        if extracted is not None:
+            return extracted, []
+        return None, [f"Failed to parse JSON: {reason}"]
 
 
 def validate_json_text(text):

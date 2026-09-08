@@ -805,6 +805,10 @@ def _run_validation(text):
     return _load_validate_module().validate_message(text)
 
 
+def _parse_json_output(text):
+    return _load_validate_module().parse_json_output(text)
+
+
 def _extract_result_text_standalone(log_path):
     return _load_validate_module()._extract_last_assistant_message_from_transcript(log_path)
 
@@ -885,6 +889,7 @@ def _run_claude_session(prompt, system_prompt, plugin_dir, model, log_path,
         "--model", model,
         "--max-turns", str(max_turns),
         "--output-format", "stream-json",
+        "--forward-subagent-text",
         "--verbose",
     ]
     if debug_file:
@@ -980,13 +985,13 @@ def _analyze_single_job(job_info, plugin_dir, model, agent_system_prompt,
     saved = False
     if final_text:
         validation_errors.extend(_run_validation(final_text))
-        try:
-            data = json.loads(final_text)
+        data, parse_errors = _parse_json_output(final_text)
+        if data is not None:
             with open(output_path, "w") as f:
                 json.dump(data, f, indent=2)
             saved = True
-        except json.JSONDecodeError:
-            validation_errors.append("Output is not valid JSON")
+        else:
+            validation_errors.extend(parse_errors)
     else:
         validation_errors.append("No assistant text found in stream-json log")
 
