@@ -890,6 +890,15 @@ def _run_claude_session(prompt, system_prompt, plugin_dir, model, log_path,
 
     Returns (success, final_text). Returns (None, None) on timeout.
     """
+    # Prevent the primary agent from delegating to a same-name subagent.
+    # The agents/ dir registers prow-job-analyzer as a spawnable tool, but
+    # the primary agent IS the analyzer and should do the work directly.
+    system_prompt += (
+        "\n\nDo NOT spawn or delegate to the prow-job-analyzer subagent"
+        " — YOU are the analyzer. Do the analysis yourself and output"
+        " the JSON array directly."
+    )
+
     cmd = [
         "claude", "-p", prompt,
         "--append-system-prompt", system_prompt,
