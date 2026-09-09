@@ -6,6 +6,12 @@ ENV EDGE_TOOLING_DIR=/opt/app-root/src/edge-tooling
 # Copy over repo contents to be used with claude-ai-helpers
 COPY . /opt/app-root/src/edge-tooling
 RUN chmod -R g+rwx /opt/app-root/src/edge-tooling
+# Save commit metadata before removing .git
+RUN cd /opt/app-root/src/edge-tooling && \
+    git rev-parse --short HEAD > .commit-sha && \
+    git log -1 --format='%s' > .commit-subject && \
+    git log -1 --format='%aI' > .commit-date && \
+    rm -rf .git
 
 WORKDIR /opt/app-root/src/edge-tooling
 
