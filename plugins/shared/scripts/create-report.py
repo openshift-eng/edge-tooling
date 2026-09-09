@@ -1749,6 +1749,7 @@ def _read_commit_info():
     """Read commit metadata from files baked into the container image."""
     info = {"sha": "unknown", "subject": "", "date": ""}
     etd = os.environ.get("EDGE_TOOLING_DIR", os.path.dirname(os.path.abspath(__file__)))
+    print(f"Commit info: looking in {etd}", file=sys.stderr)
     for key, filename in (
         ("sha", ".commit-sha"),
         ("subject", ".commit-subject"),
@@ -1757,8 +1758,10 @@ def _read_commit_info():
         try:
             with open(os.path.join(etd, filename), encoding="utf-8") as f:
                 info[key] = f.read().strip()
-        except OSError:
-            pass
+            print(f"Commit info: {filename} = {info[key]}", file=sys.stderr)
+        except OSError as exc:
+            print(f"Commit info: {filename} not found ({type(exc).__name__})", file=sys.stderr)
+    print(f"Commit info: result: sha={info['sha']}, subject={info['subject']}, date={info['date']}", file=sys.stderr)
     return info
 
 
