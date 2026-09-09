@@ -267,6 +267,25 @@ function badgeClass(total, hasCritical) {
     return 'badge-issues';
 }
 
+// === Shared helpers (used by filter + export) ===
+function matchIssue(iss, q) {
+    var fields = [iss.title||'', iss.root_cause||'', iss.failure_type||'', iss.severity||'', iss.next_steps||''];
+    (iss.affected_jobs||[]).forEach(function(j){fields.push(j.name||'');});
+    (iss.scenarios||[]).forEach(function(s){fields.push(s);});
+    return fields.join(' ').toLowerCase().indexOf(q) !== -1;
+}
+function issueToRow(iss, source, release) {
+    var dates = (iss.affected_jobs||[]).map(function(j){return j.date||'';}).filter(Boolean).sort();
+    return {
+        source: source, release: release, issue_number: iss.number,
+        title: iss.title||'', severity: iss.severity||'', failure_type: iss.failure_type||'',
+        root_cause: iss.root_cause||'', confidence: iss.confidence||'',
+        affected_job_count: iss.job_count||0,
+        first_seen: dates.length ? dates[0] : '', last_seen: dates.length ? dates[dates.length-1] : '',
+        bug_match_count: (iss.bug_match && iss.bug_match.duplicates) ? iss.bug_match.duplicates.length : 0
+    };
+}
+
 // === JIRA bug URL builder ===
 function jiraEscape(text) {
     return (text || '').replace(/[\\\\{}\\[\\]|*^~_]/g, '\\\\$&');
@@ -577,7 +596,10 @@ function renderOverview(parent) {
             if (status) {
                 var total = status.length, passed = status.filter(function(j){return j.status==='success';}).length;
                 var rate = total > 0 ? Math.round(passed/total*100) : 0;
-                numDiv.innerHTML = failed + '<span style="font-size:0.5em;font-weight:400;color:#6c757d">/' + total + '</span>';
+                numDiv.textContent = String(failed);
+                var suffix = h('span', '', '/' + total);
+                suffix.style.cssText = 'font-size:0.5em;font-weight:400;color:#6c757d';
+                numDiv.appendChild(suffix);
                 sub = rate + '% pass rate';
             } else { numDiv.textContent = String(failed); }
         } else { numDiv.textContent = '?'; }
@@ -843,7 +865,9 @@ function renderPRs(parent) {
 // === Bugs tab ===
 function renderBugs(parent) {
     var bd = D.bugs_tab_data;
-    if (!bd || (!bd.linked.length && !bd.unlinked.length)) {
+    var linked = (bd && bd.linked) || [];
+    var unlinked = (bd && bd.unlinked) || [];
+    if (!bd || (!linked.length && !unlinked.length)) {
         var sec = h('div', 'release-section');
         sec.appendChild(h('p', '', 'No bug data available. Run the full doctor workflow to populate bug information.'));
         parent.appendChild(sec); return;
@@ -851,7 +875,7 @@ function renderBugs(parent) {
     var sec2 = h('div', 'release-section');
     sec2.appendChild(h('div', 'release-header', h('h2', '', 'AI-Generated Bugs')));
     var grid = h('div', 'overview-grid');
-    var totalLinked = bd.linked.length, totalUnlinked = bd.unlinked.length;
+    var totalLinked = linked.length, totalUnlinked = unlinked.length;
     var total = bd.jira_query_available ? bd.total_open : totalLinked;
     grid.appendChild(h('div', 'overview-card', [h('div', 'number', String(total)), h('div', 'label', 'Total Open')]));
     var lnCss = totalLinked > 0 ? 'status-pass' : '';
@@ -907,13 +931,13 @@ function renderBugs(parent) {
         table.appendChild(tbody);
         return table;
     }
-    if (bd.linked.length) {
+    if (linked.length) {
         sec2.appendChild(h('h3', '', 'Linked to Failures'));
-        sec2.appendChild(renderBugTable(bd.linked.slice(), true));
+        sec2.appendChild(renderBugTable(linked.slice(), true));
     }
-    if (bd.unlinked.length && bd.jira_query_available) {
+    if (unlinked.length && bd.jira_query_available) {
         sec2.appendChild(h('h3', '', 'Not Linked'));
-        sec2.appendChild(renderBugTable(bd.unlinked.slice(), false));
+        sec2.appendChild(renderBugTable(unlinked.slice(), false));
     }
     parent.appendChild(sec2);
 }
@@ -1170,12 +1194,6 @@ document.querySelectorAll('.data-table').forEach(function(table) {
     var countEl = document.getElementById('filter-count');
     if (!input || !countEl) return;
     var debounceTimer;
-    function matchIssue(iss, q) {
-        var fields = [iss.title||'', iss.root_cause||'', iss.failure_type||'', iss.severity||'', iss.next_steps||''];
-        (iss.affected_jobs||[]).forEach(function(j){fields.push(j.name||'');});
-        (iss.scenarios||[]).forEach(function(s){fields.push(s);});
-        return fields.join(' ').toLowerCase().indexOf(q) !== -1;
-    }
     function applyFilter() {
         var q = input.value.trim().toLowerCase();
         var shown = 0, total = 0;
@@ -1245,42 +1263,16 @@ document.querySelectorAll('.data-table').forEach(function(table) {
         for (var ver in rd) {
             if (!rd[ver] || !rd[ver].issues) continue;
             rd[ver].issues.forEach(function(iss) {
-                if (q) {
-                    var fields = [iss.title||'',iss.root_cause||'',iss.failure_type||'',iss.severity||'',iss.next_steps||''];
-                    (iss.affected_jobs||[]).forEach(function(j){fields.push(j.name||'');});
-                    (iss.scenarios||[]).forEach(function(s){fields.push(s);});
-                    if (fields.join(' ').toLowerCase().indexOf(q) === -1) return;
-                }
-                var dates = (iss.affected_jobs||[]).map(function(j){return j.date||'';}).filter(Boolean).sort();
-                rows.push({
-                    source: 'periodic', release: ver, issue_number: iss.number,
-                    title: iss.title||'', severity: iss.severity||'', failure_type: iss.failure_type||'',
-                    root_cause: iss.root_cause||'', confidence: iss.confidence||'',
-                    affected_job_count: iss.job_count||0,
-                    first_seen: dates.length ? dates[0] : '', last_seen: dates.length ? dates[dates.length-1] : '',
-                    bug_match_count: (iss.bug_match && iss.bug_match.duplicates) ? iss.bug_match.duplicates.length : 0
-                });
+                if (q && !matchIssue(iss, q)) return;
+                rows.push(issueToRow(iss, 'periodic', ver));
             });
         }
         var prData = D.pr_data;
         if (prData && prData.prs) {
             prData.prs.forEach(function(pr) {
                 (pr.issues||[]).forEach(function(iss) {
-                    if (q) {
-                        var fields = [iss.title||'',iss.root_cause||'',iss.failure_type||'',iss.severity||'',iss.next_steps||''];
-                        (iss.affected_jobs||[]).forEach(function(j){fields.push(j.name||'');});
-                        (iss.scenarios||[]).forEach(function(s){fields.push(s);});
-                        if (fields.join(' ').toLowerCase().indexOf(q) === -1) return;
-                    }
-                    var dates = (iss.affected_jobs||[]).map(function(j){return j.date||'';}).filter(Boolean).sort();
-                    rows.push({
-                        source: 'pr', release: 'PR#' + pr.number, issue_number: iss.number,
-                        title: iss.title||'', severity: iss.severity||'', failure_type: iss.failure_type||'',
-                        root_cause: iss.root_cause||'', confidence: iss.confidence||'',
-                        affected_job_count: iss.job_count||0,
-                        first_seen: dates.length ? dates[0] : '', last_seen: dates.length ? dates[dates.length-1] : '',
-                        bug_match_count: (iss.bug_match && iss.bug_match.duplicates) ? iss.bug_match.duplicates.length : 0
-                    });
+                    if (q && !matchIssue(iss, q)) return;
+                    rows.push(issueToRow(iss, 'pr', 'PR#' + pr.number));
                 });
             });
         }
