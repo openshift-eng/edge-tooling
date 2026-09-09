@@ -1491,7 +1491,7 @@ def render_release_section(version, rdata, bug_candidates, index_info=None, jira
         lines.append(f'            <summary>Failure Analysis &mdash; {total} {label}</summary>')
     lines.append('            <table class="issues-table">')
     for issue in rdata["issues"]:
-        bug_match = match_issue_to_bugs(issue["title"], bug_candidates)
+        bug_match = issue.get("bug_match") or match_issue_to_bugs(issue["title"], bug_candidates)
         jc = issue["job_count"]
         sev = issue.get("severity", "UNKNOWN").upper()
         sev_css = f"severity-{sev.lower()}" if sev in ("HIGH", "MEDIUM", "LOW", "CRITICAL") else ""
@@ -1661,7 +1661,7 @@ def render_pr_section(pr_data, bug_candidates, pr_status, pr_error=None, jira_cf
 
             lines.append('            <table class="issues-table">')
             for issue in analysis["issues"]:
-                bug_match = match_issue_to_bugs(issue.get("title", ""), bug_candidates)
+                bug_match = issue.get("bug_match") or match_issue_to_bugs(issue.get("title", ""), bug_candidates)
                 jc = issue["job_count"]
                 sev = issue.get("severity", "UNKNOWN").upper()
                 sev_css = f"severity-{sev.lower()}" if sev in ("HIGH", "MEDIUM", "LOW", "CRITICAL") else ""
@@ -1748,6 +1748,57 @@ def _render_diagnostics_banner(text):
 def generate_html(component_title, releases_data, all_bug_candidates, pr_data, pr_status, timestamp, pr_error=None, bugs_tab_data=None, images_tab_data=None, index_data=None, jira_cfg=None, status_data=None, diagnostics_text=None):
     date_str = timestamp.strftime("%Y-%m-%d")
     time_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+
+    # --- Pre-compute bug matches and metrics for JSON data model ---
+    # Store results in each issue dict so they are available both in the
+    # embedded REPORT_DATA JSON and in the (still-active) Python renderers.
+    for _ver, _rd in releases_data.items():
+        if _rd and _rd.get("issues"):
+            for iss in _rd["issues"]:
+                if "bug_match" not in iss:
+                    iss["bug_match"] = match_issue_to_bugs(
+                        iss.get("title", ""), all_bug_candidates)
+                for ajob in iss.get("affected_jobs", []):
+                    if "metrics" not in ajob:
+                        bid = _extract_build_id(ajob.get("url", ""))
+                        if bid:
+                            met = _load_job_metrics(bid)
+                            if met:
+                                ajob["metrics"] = met
+
+    if pr_data and pr_data.get("prs"):
+        for pr_item in pr_data["prs"]:
+            for iss in pr_item.get("issues", []):
+                if "bug_match" not in iss:
+                    iss["bug_match"] = match_issue_to_bugs(
+                        iss.get("title", ""), all_bug_candidates)
+                for ajob in iss.get("affected_jobs", []):
+                    if "metrics" not in ajob:
+                        bid = _extract_build_id(ajob.get("url", ""))
+                        if bid:
+                            met = _load_job_metrics(bid)
+                            if met:
+                                ajob["metrics"] = met
+
+    # --- Build unified data model for client-side rendering ---
+    report_data = {
+        "component_title": component_title,
+        "timestamp": time_str,
+        "date": date_str,
+        "releases_data": releases_data,
+        "pr_data": pr_data,
+        "pr_status": pr_status,
+        "pr_error": pr_error,
+        "bugs_tab_data": bugs_tab_data,
+        "images_tab_data": images_tab_data,
+        "index_data": index_data,
+        "jira_cfg": jira_cfg,
+        "status_data": status_data,
+        "diagnostics_text": diagnostics_text,
+        "has_chartjs": bool(_CHARTJS_SRC),
+    }
+    report_json_str = json.dumps(report_data, default=str, separators=(",", ":"))
+    safe_report_json = report_json_str.replace("</", "<\\/").replace("<!--", "<\\!--")
 
     cards = []
     for version, rdata in releases_data.items():
@@ -1844,6 +1895,7 @@ def generate_html(component_title, releases_data, all_bug_candidates, pr_data, p
     <style>
 {CSS}
     </style>
+    <script>window.REPORT_DATA = {safe_report_json};</script>
 </head>
 <body>
 <div id="loading" style="display:flex;align-items:center;justify-content:center;height:80vh;font-family:sans-serif;color:#6c757d;font-size:1.2em;">Loading report&hellip;</div>
