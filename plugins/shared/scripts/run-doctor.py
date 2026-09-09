@@ -320,12 +320,16 @@ class DoctorPipeline:
             cost = stats.get("cost_usd", 0)
             hooks = stats.get("stop_hook_count", 0)
             num_turns = stats.get("num_turns", 0)
+            subagent_turns = stats.get("subagent_turns", 0)
             perm_denials = stats.get("permission_denials", 0)
             status = "OK" if r["success"] else "FAILED"
             timed_out = any("Timed out" in e for e in r.get("validation_errors", []))
             hit_max_turns = max_turns_limit > 0 and num_turns >= max_turns_limit
 
-            parts = [f"  {label}: {status}, ${cost:.2f}, {num_turns} turns"]
+            turn_str = f"{num_turns} turns"
+            if subagent_turns > 0:
+                turn_str += f" (+{subagent_turns} subagent)"
+            parts = [f"  {label}: {status}, ${cost:.2f}, {turn_str}"]
             if timed_out:
                 parts.append("TIMED OUT")
             if hit_max_turns:
@@ -805,6 +809,10 @@ def _run_validation(text):
     return _load_validate_module().validate_message(text)
 
 
+def _parse_json_output(text):
+    return _load_validate_module().parse_json_output(text)
+
+
 def _extract_result_text_standalone(log_path):
     return _load_validate_module()._extract_last_assistant_message_from_transcript(log_path)
 
@@ -815,6 +823,7 @@ def _extract_job_stats(log_path):
     duration_ms = 0
     stop_hook_count = 0
     num_turns = 0
+    subagent_turns = 0
     permission_denials = 0
     parent_user_msgs = 0
     first_hook_at_turn = 0
@@ -845,6 +854,8 @@ def _extract_job_stats(log_path):
                             if isinstance(block, dict) and block.get("type") == "text":
                                 if block.get("text", "").strip() == "Prompt is too long":
                                     context_exhausted = True
+                elif record.get("type") == "assistant" and record.get("parent_tool_use_id"):
+                    subagent_turns += 1
                 elif record.get("type") == "user" and not record.get("parent_tool_use_id"):
                     is_hook = False
                     if record.get("isSynthetic"):
@@ -865,7 +876,8 @@ def _extract_job_stats(log_path):
         pass
     return {"cost_usd": cost_usd, "duration_ms": duration_ms,
             "stop_hook_count": stop_hook_count,
-            "num_turns": num_turns, "permission_denials": permission_denials,
+            "num_turns": num_turns, "subagent_turns": subagent_turns,
+            "permission_denials": permission_denials,
             "first_hook_at_turn": first_hook_at_turn,
             "context_exhausted": context_exhausted}
 
@@ -878,6 +890,15 @@ def _run_claude_session(prompt, system_prompt, plugin_dir, model, log_path,
 
     Returns (success, final_text). Returns (None, None) on timeout.
     """
+    # Prevent the primary agent from delegating to a same-name subagent.
+    # The agents/ dir registers prow-job-analyzer as a spawnable tool, but
+    # the primary agent IS the analyzer and should do the work directly.
+    system_prompt += (
+        "\n\nDo NOT spawn or delegate to the prow-job-analyzer subagent"
+        " — YOU are the analyzer. Do the analysis yourself and output"
+        " the JSON array directly."
+    )
+
     cmd = [
         "claude", "-p", prompt,
         "--append-system-prompt", system_prompt,
@@ -885,6 +906,7 @@ def _run_claude_session(prompt, system_prompt, plugin_dir, model, log_path,
         "--model", model,
         "--max-turns", str(max_turns),
         "--output-format", "stream-json",
+        "--forward-subagent-text",
         "--verbose",
     ]
     if debug_file:
@@ -980,13 +1002,13 @@ def _analyze_single_job(job_info, plugin_dir, model, agent_system_prompt,
     saved = False
     if final_text:
         validation_errors.extend(_run_validation(final_text))
-        try:
-            data = json.loads(final_text)
+        data, parse_errors = _parse_json_output(final_text)
+        if data is not None:
             with open(output_path, "w") as f:
                 json.dump(data, f, indent=2)
             saved = True
-        except json.JSONDecodeError:
-            validation_errors.append("Output is not valid JSON")
+        else:
+            validation_errors.extend(parse_errors)
     else:
         validation_errors.append("No assistant text found in stream-json log")
 
