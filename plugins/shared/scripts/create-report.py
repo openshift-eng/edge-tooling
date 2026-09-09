@@ -13,9 +13,7 @@ import json
 import sys
 import os
 import re
-import html as html_mod
 import glob as glob_mod
-import urllib.parse
 from datetime import datetime, timezone
 from filter_images import tag_matches_release
 
@@ -202,48 +200,816 @@ CSS = """\
         .filter-bar input[type="text"] { flex: 1; max-width: 360px; padding: 6px 12px; border: 1px solid #dee2e6; border-radius: 6px; font-size: 0.9em; outline: none; }
         .filter-bar input[type="text"]:focus { border-color: #e94560; box-shadow: 0 0 0 2px rgba(233,69,96,0.15); }
         .filter-bar .filter-count { font-size: 0.85em; color: #6c757d; white-space: nowrap; }
+        .export-bar { display: inline-flex; gap: 6px; margin-left: auto; }
+        .export-btn { padding: 5px 12px; border: 1px solid #dee2e6; border-radius: 6px; background: #fff; font-size: 0.85em; cursor: pointer; color: #495057; font-weight: 600; }
+        .export-btn:hover { background: #f8f9fa; border-color: #adb5bd; }
         .release-section.side-by-side .section-panels { display: flex; gap: 20px; }
         .release-section.side-by-side .section-panels > .section-toggle { flex: 1; min-width: 0; }
         @media (max-width: 1200px) { .release-section.side-by-side .section-panels { flex-direction: column; } }"""
 
+# ---------------------------------------------------------------------------
+# Client-side JS renderer — builds all DOM from window.REPORT_DATA
+# ---------------------------------------------------------------------------
+
 JS = """\
-function showTab(e, name) {
-    document.querySelectorAll('.tab-content').forEach(function(el) {
-        el.classList.remove('active');
+(function() {
+var D = window.REPORT_DATA;
+if (!D) return;
+var JIRA_BASE = 'https://issues.redhat.com';
+var _gc = 0;
+
+// === DOM helpers ===
+function h(tag, cls, children) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (children == null) return e;
+    if (typeof children === 'string') { e.textContent = children; return e; }
+    if (children.nodeType) { e.appendChild(children); return e; }
+    if (Array.isArray(children)) children.forEach(function(c) {
+        if (c == null) return;
+        e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
     });
-    document.querySelectorAll('.tab-btn').forEach(function(el) {
-        el.classList.remove('active');
-    });
-    document.getElementById('tab-' + name).classList.add('active');
-    e.target.classList.add('active');
+    return e;
 }
-document.querySelectorAll('.col-title').forEach(function(el) {
-    el.addEventListener('click', function() {
-        this.classList.toggle('active');
-        var row = this.closest('tr').nextElementSibling;
-        if (row && row.classList.contains('detail-row')) {
-            row.classList.toggle('show');
+function setAttr(el, obj) { for (var k in obj) if (obj[k] != null) el.setAttribute(k, obj[k]); return el; }
+function makeLink(href, text, cls, target) {
+    var a = h('a', cls || '', text);
+    a.href = href;
+    if (target) a.target = target;
+    return a;
+}
+function anchorLink(id) {
+    var a = makeLink('#' + id, '\\u{1F517}', 'anchor-link');
+    a.title = 'Copy link';
+    return a;
+}
+function sectionAnchor(id) {
+    var a = makeLink('#' + id, '\\u{1F517}', 'section-anchor');
+    a.title = 'Copy link to this section';
+    return a;
+}
+
+// === Formatters ===
+function fmtEpoch(v) {
+    try { var d = new Date(parseInt(v, 10) * 1000); return d.toISOString().replace('T', ' ').substring(0, 16); }
+    catch(e) { return String(v || ''); }
+}
+function fmtDuration(v) {
+    try {
+        var s = Math.floor(parseFloat(v));
+        if (s >= 3600) return Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm';
+        return Math.floor(s/60) + 'm ' + (s%60) + 's';
+    } catch(e) { return String(v || ''); }
+}
+function badgeClass(total, hasCritical) {
+    if (total === 0) return 'badge-ok';
+    if (total >= 5 || hasCritical) return 'badge-critical';
+    return 'badge-issues';
+}
+
+// === JIRA bug URL builder ===
+function jiraEscape(text) {
+    return (text || '').replace(/[\\\\{}\\[\\]|*^~_]/g, '\\\\$&');
+}
+function createBugUrl(issue, sourceLabel) {
+    var cfg = D.jira_cfg;
+    if (!cfg) return null;
+    var summary = ((cfg.summary_prefix || '') + (issue.title || '')).substring(0, 100);
+    var rc = jiraEscape(issue.root_cause || '');
+    var ns = jiraEscape(issue.next_steps || '');
+    var sev = issue.severity || 'UNKNOWN';
+    var ft = issue.failure_type || 'test';
+    var conf = issue.confidence || '';
+    var scenarios = issue.scenarios || [];
+    var chain = issue.causal_chain || [];
+    var jobs = (issue.affected_jobs || []).slice(0, 5);
+    var lines = ['h2. Description of problem', '', 'CI job failures detected: ' + sourceLabel, '', rc || '', '',
+        'h2. How reproducible', '', 'N/A', '', 'h2. Steps to Reproduce', '',
+        '# Run the CI job(s) listed below', '# Observe failure in step: ' + ft, '',
+        'h2. Expected results', '', 'CI job should pass successfully.', '',
+        'h2. Additional info', '', '*Error Severity:* ' + sev];
+    if (conf) lines.push('*Analysis confidence:* ' + conf);
+    if (scenarios.length) lines.push('*Affected scenarios:* ' + scenarios.join(', '));
+    lines.push('*Number of affected jobs:* ' + (issue.job_count || jobs.length));
+    if (jobs.length) {
+        var dates = jobs.map(function(j) { return j.date || ''; }).filter(Boolean).sort();
+        if (dates.length) lines.push('*Last observed:* ' + dates[dates.length - 1]);
+    }
+    if (chain.length) {
+        lines.push(''); lines.push('*Root cause chain:*');
+        chain.forEach(function(link) { if (link && link.cause) lines.push('# ' + jiraEscape(link.cause)); });
+    }
+    if (ns) { lines.push(''); lines.push('*Remediation:* ' + ns); }
+    if (jobs.length) {
+        lines.push(''); lines.push('*Affected Jobs:*');
+        jobs.forEach(function(j) {
+            var n = j.name || 'unknown';
+            lines.push(j.url ? '- [' + n + '|' + j.url + ']' : '- ' + n);
+        });
+    }
+    lines.push(''); lines.push('Prefilled by the CI Doctor report.');
+    var params = {pid: cfg.pid, issuetype: cfg.issuetype, components: cfg.component,
+        labels: cfg.labels, reporter: cfg.reporter || '', summary: summary, description: lines.join('\\n')};
+    var qs = Object.keys(params).filter(function(k) { return params[k]; }).map(function(k) {
+        return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+    }).join('&');
+    var url = JIRA_BASE + '/secure/CreateIssueDetails!init.jspa?' + qs;
+    if (url.length > 3800 && params.description) {
+        var over = url.length - 3800;
+        var desc = params.description;
+        var suffix = '\\n\\n(truncated \\u2014 open the bug to add more detail)';
+        params.description = desc.substring(0, Math.max(0, desc.length - over - suffix.length)) + suffix;
+        qs = Object.keys(params).filter(function(k) { return params[k]; }).map(function(k) {
+            return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+        }).join('&');
+        url = JIRA_BASE + '/secure/CreateIssueDetails!init.jspa?' + qs;
+    }
+    return url;
+}
+
+// === Bug links rendering ===
+function renderBugLinks(parent, bugMatch, issue, sourceLabel) {
+    var div = h('div', 'bug-links');
+    var url = createBugUrl(issue, sourceLabel);
+    if (url) {
+        var btn = makeLink(url, '+ Create Bug in JIRA', 'bug-tag create-bug-btn', '_blank');
+        div.appendChild(btn);
+    }
+    var hasDups = bugMatch && bugMatch.duplicates && bugMatch.duplicates.length;
+    var hasRegs = bugMatch && bugMatch.regressions && bugMatch.regressions.length;
+    if (!hasDups && !hasRegs) {
+        if (url) div.appendChild(document.createElement('br'));
+        var nb = h('span', 'no-bugs', 'No tracked bugs');
+        div.appendChild(nb);
+        parent.appendChild(div); return;
+    }
+    if (url) div.appendChild(document.createElement('br'));
+    if (hasDups) {
+        div.appendChild(h('strong', '', 'Bugs:')); div.appendChild(document.createElement('br'));
+        bugMatch.duplicates.forEach(function(d) {
+            var a = makeLink(JIRA_BASE + '/browse/' + d.key, d.key, 'bug-tag bug-tag-open', '_blank');
+            div.appendChild(a);
+            var info = ' ' + (d.summary || '') + ' (' + (d.status || '');
+            if (d.assignee) info += ', ' + d.assignee;
+            info += ')';
+            var sp = h('span', 'job-date', info); div.appendChild(sp);
+            div.appendChild(document.createElement('br'));
+        });
+    }
+    if (hasRegs) {
+        div.appendChild(h('strong', '', 'Regressions:')); div.appendChild(document.createElement('br'));
+        bugMatch.regressions.forEach(function(r) {
+            var a = makeLink(JIRA_BASE + '/browse/' + r.key, r.key + ' \\u27F2', 'bug-tag bug-tag-regression', '_blank');
+            div.appendChild(a);
+            var info = ' ' + (r.summary || '') + ' (' + (r.status || '');
+            if (r.assignee) info += ', ' + r.assignee;
+            info += ')';
+            div.appendChild(h('span', 'job-date', info));
+            div.appendChild(document.createElement('br'));
+        });
+    }
+    parent.appendChild(div);
+}
+
+// === Investigation rendering ===
+function renderInvestigation(parent, issue) {
+    var scenarios = issue.scenarios || [];
+    if (scenarios.length) {
+        var sd = h('div', 'scenarios');
+        sd.appendChild(h('strong', '', 'Scenarios: '));
+        scenarios.forEach(function(s) { sd.appendChild(h('span', 'scenario-chip', s)); });
+        parent.appendChild(sd);
+    }
+    var chain = (issue.causal_chain || []).filter(function(l) { return l && l.cause; });
+    if (chain.length) {
+        var cd = h('div', 'causal-chain');
+        cd.appendChild(h('strong', '', 'Causal chain:'));
+        var ol = document.createElement('ol');
+        chain.forEach(function(link) {
+            var li = document.createElement('li');
+            li.appendChild(document.createTextNode(link.cause));
+            if (link.evidence) { li.appendChild(document.createTextNode(' \\u2014 ')); var ev = h('span', 'evidence', link.evidence); li.appendChild(ev); }
+            if (link.quote) { li.appendChild(document.createTextNode(' ')); li.appendChild(h('code', '', link.quote)); }
+            ol.appendChild(li);
+        });
+        cd.appendChild(ol); parent.appendChild(cd);
+    }
+    var gaps = (issue.analysis_gaps || []).filter(Boolean);
+    if (gaps.length) parent.appendChild(h('div', 'analysis-gaps', 'Evidence gaps: ' + gaps.join(', ')));
+}
+
+// === Affected jobs list with PCP charts ===
+function renderAffectedJobs(parent, jobs) {
+    if (!jobs || !jobs.length) return;
+    parent.appendChild(h('p', '', h('strong', '', 'Affected Jobs:')));
+    var ul = document.createElement('ul');
+    jobs.forEach(function(job) {
+        var li = document.createElement('li');
+        var dateSpan = h('span', 'job-date', '[' + (job.date || '') + ']');
+        li.appendChild(dateSpan); li.appendChild(document.createTextNode(' '));
+        if (job.url) { li.appendChild(makeLink(job.url, job.name || '', '', '_blank')); }
+        else { li.appendChild(document.createTextNode(job.name || '')); }
+        // PCP chart toggle
+        if (job.metrics && typeof pcpCharts !== 'undefined') {
+            _gc++;
+            var gid = 'gp' + _gc;
+            var toggle = document.createElement('a');
+            toggle.className = 'graph-toggle'; toggle.textContent = '\\u{1F4CA}';
+            toggle.title = 'Host performance graphs'; toggle.href = 'javascript:void(0)';
+            var panel = h('div', 'perf-graphs');
+            panel.id = gid; panel.style.display = 'none';
+            panel.appendChild(h('div', 'graph-source', 'Host metrics (PCP)'));
+            var grid = h('div', 'pcp-chart-grid');
+            panel.appendChild(grid);
+            (function(pid, m, g) {
+                toggle.addEventListener('click', function() {
+                    var el = document.getElementById(pid);
+                    if (!el) return;
+                    var show = el.style.display === 'none';
+                    el.style.display = show ? 'block' : 'none';
+                    if (show && !el.dataset.rendered) {
+                        el.dataset.rendered = '1';
+                        pcpCharts.init({cardClass:'pcp-chart-card',headingTag:'h4',statsClass:'pcp-stats-row'});
+                        if (m.cpu) pcpCharts.renderCpu(g, m.cpu);
+                        if (m.mem) pcpCharts.renderMem(g, m.mem);
+                        if (m.io) pcpCharts.renderIo(g, m.io);
+                        if (m.disk) pcpCharts.renderDisk(g, m.disk);
+                    }
+                });
+            })(gid, job.metrics, grid);
+            li.appendChild(document.createTextNode(' ')); li.appendChild(toggle);
+            li.appendChild(panel);
         }
+        ul.appendChild(li);
+    });
+    parent.appendChild(ul);
+}
+
+// === Issue table rendering (shared by periodics + PRs) ===
+function renderIssueTable(parent, issues, anchorPrefix, sourceLabel) {
+    if (!issues || !issues.length) return;
+    var table = h('table', 'issues-table');
+    issues.forEach(function(issue) {
+        var jc = issue.job_count || 0;
+        var sev = (issue.severity || 'UNKNOWN').toUpperCase();
+        var sevCss = ({HIGH:1,MEDIUM:1,LOW:1,CRITICAL:1})[sev] ? 'severity-' + sev.toLowerCase() : '';
+        var ftype = issue.failure_type || 'test';
+        var ftypeLabel = ftype === 'infrastructure' ? 'INFRA' : ftype.toUpperCase();
+        var ftypeCss = ftype === 'infrastructure' ? 'ftype-infra' : 'ftype-' + ftype;
+        var jobDates = [];
+        (issue.affected_jobs || []).forEach(function(j) { if (j.date) jobDates.push(j.date.substring(0, 10)); });
+        jobDates = jobDates.filter(function(v, i, a) { return a.indexOf(v) === i; }).sort();
+        var anchorId = anchorPrefix + '-' + issue.number;
+        // Issue row
+        var tr = h('tr', 'issue-row');
+        tr.id = anchorId;
+        if (jobDates.length) tr.setAttribute('data-dates', jobDates.join(' '));
+        var tdSev = h('td', 'col-sev', h('span', 'severity-badge ' + sevCss, sev));
+        var tdFtype = h('td', 'col-ftype', h('span', 'ftype-badge ' + ftypeCss, ftypeLabel));
+        var tdTitle = h('td', 'col-title', issue.title || '');
+        var tdJobs = h('td', 'col-jobs', jc + ' ' + (jc === 1 ? 'job' : 'jobs'));
+        var tdLink = h('td', 'col-link', anchorLink(anchorId));
+        tr.appendChild(tdSev); tr.appendChild(tdFtype); tr.appendChild(tdTitle);
+        tr.appendChild(tdJobs); tr.appendChild(tdLink);
+        table.appendChild(tr);
+        // Expand/collapse
+        tdTitle.addEventListener('click', function() {
+            this.classList.toggle('active');
+            var next = this.closest('tr').nextElementSibling;
+            if (next && next.classList.contains('detail-row')) next.classList.toggle('show');
+        });
+        // Detail row
+        var dtr = h('tr', 'detail-row');
+        var dtd = document.createElement('td'); dtd.colSpan = 5;
+        if (issue.root_cause) {
+            var rc = h('div', 'root-cause');
+            rc.appendChild(h('strong', '', 'Root Cause: '));
+            var conf = (issue.confidence || '').toLowerCase();
+            if (['high','medium','low'].indexOf(conf) !== -1) {
+                var cb = h('span', 'confidence-badge confidence-' + conf, conf);
+                cb.title = 'Root cause analysis confidence';
+                rc.appendChild(cb); rc.appendChild(document.createTextNode(' '));
+            }
+            rc.appendChild(document.createTextNode(issue.root_cause));
+            dtd.appendChild(rc);
+        }
+        renderInvestigation(dtd, issue);
+        renderBugLinks(dtd, issue.bug_match, issue, sourceLabel);
+        renderAffectedJobs(dtd, issue.affected_jobs);
+        if (issue.next_steps) {
+            var p = document.createElement('p');
+            p.appendChild(h('em', '', 'Next Steps: ')); p.appendChild(document.createTextNode(issue.next_steps));
+            dtd.appendChild(p);
+        }
+        dtr.appendChild(dtd); table.appendChild(dtr);
+    });
+    parent.appendChild(table);
+}
+
+// === Index image info (LVMS-specific) ===
+function renderIndexImage(parent, info) {
+    if (!info) return;
+    var div = h('div', 'index-image-info');
+    if (info.image) { div.appendChild(h('strong', '', 'Catalog Index Image: ')); div.appendChild(h('code', '', info.image)); div.appendChild(document.createElement('br')); }
+    if (info.digest) { div.appendChild(h('strong', '', 'Digest: ')); div.appendChild(h('code', '', info.digest)); div.appendChild(document.createElement('br')); }
+    if (info.built) { div.appendChild(h('strong', '', 'Built: ')); div.appendChild(document.createTextNode(info.built)); div.appendChild(document.createElement('br')); }
+    if (info.commit) {
+        var short = info.commit.length >= 12 ? info.commit.substring(0, 12) : info.commit;
+        div.appendChild(h('strong', '', 'Source Commit: '));
+        div.appendChild(makeLink('https://github.com/openshift/lvm-operator/commit/' + info.commit, short, '', '_blank'));
+    }
+    if (info.error) {
+        div.appendChild(document.createElement('br'));
+        var em = h('em', '', 'Inspect failed: ' + info.error);
+        em.style.color = '#856404'; div.appendChild(em);
+    }
+    parent.appendChild(div);
+}
+
+// === Build job-issue map for cross-referencing status table → issues ===
+function buildJobIssueMap() {
+    var result = {};
+    var rd = D.releases_data || {};
+    for (var ver in rd) {
+        if (!rd[ver] || !rd[ver].issues) continue;
+        rd[ver].issues.forEach(function(issue) {
+            var anchor = 'release-' + ver + '-' + issue.number;
+            (issue.affected_jobs || []).forEach(function(j) {
+                if (j.name) {
+                    if (!result[j.name]) result[j.name] = [];
+                    result[j.name].push({anchor: anchor, title: issue.title || ''});
+                }
+            });
+        });
+    }
+    return result;
+}
+
+// === Diagnostics banner ===
+function renderDiagnostics(parent) {
+    var text = D.diagnostics_text;
+    if (!text || !text.trim()) return;
+    var details = document.createElement('details');
+    details.className = 'diagnostics-banner';
+    var summary = document.createElement('summary');
+    summary.textContent = 'Pipeline Diagnostics';
+    details.appendChild(summary);
+    var pre = document.createElement('pre');
+    pre.textContent = text.trim();
+    details.appendChild(pre);
+    parent.appendChild(details);
+}
+
+// === Overview cards ===
+function renderOverview(parent) {
+    var rd = D.releases_data || {};
+    var sd = D.status_data || {};
+    var versions = Object.keys(rd);
+    versions.forEach(function(ver) {
+        var rdata = rd[ver]; var status = sd[ver];
+        var card = h('div', 'overview-card');
+        var numDiv = h('div', 'number');
+        var sub = '';
+        if (rdata && rdata.collection_error) { numDiv.textContent = '!'; numDiv.className = 'number status-fail'; }
+        else if (rdata) {
+            var failed = rdata.total_failed;
+            numDiv.className = 'number ' + (failed > 0 ? 'status-fail' : 'status-pass');
+            if (status) {
+                var total = status.length, passed = status.filter(function(j){return j.status==='success';}).length;
+                var rate = total > 0 ? Math.round(passed/total*100) : 0;
+                numDiv.innerHTML = failed + '<span style="font-size:0.5em;font-weight:400;color:#6c757d">/' + total + '</span>';
+                sub = rate + '% pass rate';
+            } else { numDiv.textContent = String(failed); }
+        } else { numDiv.textContent = '?'; }
+        card.appendChild(numDiv);
+        card.appendChild(h('div', 'label', 'Release ' + ver));
+        if (sub) { var sd2 = document.createElement('div'); sd2.style.cssText = 'font-size:0.8em;color:#6c757d'; sd2.textContent = sub; card.appendChild(sd2); }
+        parent.appendChild(card);
+    });
+    // PR overview card
+    var prCard = h('div', 'overview-card');
+    var prNum = h('div', 'number');
+    if (D.pr_error) { prNum.textContent = '!'; prNum.className = 'number status-fail'; }
+    else if (D.pr_status) {
+        var f = D.pr_status.reduce(function(a,p){return a+(p.failed||0);},0);
+        prNum.textContent = String(f); prNum.className = 'number ' + (f > 0 ? 'status-fail' : 'status-pass');
+    } else if (D.pr_data) {
+        var f2 = D.pr_data.total_failed || 0;
+        prNum.textContent = String(f2); prNum.className = 'number ' + (f2 > 0 ? 'status-fail' : 'status-pass');
+    } else { prNum.textContent = '0'; prNum.className = 'number status-pass'; }
+    prCard.appendChild(prNum); prCard.appendChild(h('div', 'label', 'Pull Requests'));
+    parent.appendChild(prCard);
+}
+
+// === Periodics tab ===
+function renderPeriodics(parent) {
+    var rd = D.releases_data || {};
+    var sd = D.status_data || {};
+    var versions = Object.keys(rd);
+    var jim = buildJobIssueMap();
+    // TOC
+    var toc = h('div', 'toc');
+    var tocHeader = h('div', 'toc-header');
+    tocHeader.appendChild(h('h3', '', 'Table of Contents'));
+    var todayLabel = document.createElement('label'); todayLabel.className = 'filter-toggle';
+    var todayCb = document.createElement('input'); todayCb.type = 'checkbox'; todayCb.id = 'filter-today';
+    todayLabel.appendChild(todayCb); todayLabel.appendChild(document.createTextNode(' Today only'));
+    tocHeader.appendChild(todayLabel);
+    var sbsLabel = document.createElement('label'); sbsLabel.className = 'filter-toggle';
+    var sbsCb = document.createElement('input'); sbsCb.type = 'checkbox'; sbsCb.id = 'toggle-side-by-side';
+    sbsLabel.appendChild(sbsCb); sbsLabel.appendChild(document.createTextNode(' Side by side'));
+    tocHeader.appendChild(sbsLabel);
+    toc.appendChild(tocHeader);
+    var tocUl = document.createElement('ul');
+    versions.forEach(function(ver) {
+        var rdata = rd[ver]; var status = sd[ver];
+        var li = document.createElement('li');
+        li.appendChild(makeLink('#release-' + ver, 'Release ' + ver));
+        if (rdata && rdata.collection_error) {
+            li.appendChild(document.createTextNode(' \\u2014 collection error'));
+        } else if (rdata) {
+            var b = rdata.breakdown || {};
+            var passInfo = '';
+            if (status) {
+                var total = status.length, passed = status.filter(function(j){return j.status==='success';}).length;
+                passInfo = ' \\u2014 ' + passed + '/' + total + ' passed (' + Math.round(passed/total*100) + '%)';
+            }
+            var countsSpan = h('span', '', rdata.total_failed + ' failures (' + (b.build||0) + ' build, ' + (b.test||0) + ' test, ' + (b.infrastructure||0) + ' infra)' + passInfo);
+            countsSpan.className = 'toc-counts';
+            countsSpan.setAttribute('data-release', ver);
+            li.appendChild(document.createTextNode(' \\u2014 ')); li.appendChild(countsSpan);
+        } else { li.appendChild(document.createTextNode(' \\u2014 no data')); }
+        tocUl.appendChild(li);
+    });
+    toc.appendChild(tocUl);
+    parent.appendChild(toc);
+    // Release sections
+    versions.forEach(function(ver) {
+        renderReleaseSection(parent, ver, rd[ver], sd[ver], jim);
+    });
+    // Event handlers
+    todayCb.addEventListener('change', function() { filterToday(this.checked); });
+    sbsCb.addEventListener('change', function() { toggleSideBySide(this.checked); });
+}
+
+function renderReleaseSection(parent, version, rdata, status, jim) {
+    var sec = h('div', 'release-section');
+    sec.id = 'release-' + version;
+    if (!rdata) {
+        var hdr = h('div', 'release-header');
+        hdr.appendChild(h('h2', '', 'Release ' + version));
+        hdr.appendChild(h('span', 'badge badge-nodata', 'no data'));
+        sec.appendChild(hdr);
+        sec.appendChild(h('p', '', 'Analysis failed to produce results.'));
+        parent.appendChild(sec); return;
+    }
+    if (rdata.collection_error) {
+        var hdr2 = h('div', 'release-header');
+        hdr2.appendChild(h('h2', '', 'Release ' + version));
+        hdr2.appendChild(h('span', 'badge badge-nodata', 'collection error'));
+        sec.appendChild(hdr2);
+        var pre = document.createElement('pre');
+        pre.textContent = 'Data collection failed: ' + rdata.collection_error;
+        sec.appendChild(pre); parent.appendChild(sec); return;
+    }
+    var total = rdata.total_failed;
+    var hasCrit = (rdata.issues || []).some(function(i) { return (i.severity || '').toUpperCase() === 'CRITICAL'; });
+    var label = total === 1 ? 'failure' : 'failures';
+    var hdr3 = h('div', 'release-header');
+    var heading = h('h2', '', ['Release ' + version]);
+    heading.appendChild(sectionAnchor('release-' + version));
+    hdr3.appendChild(heading);
+    var badge = h('span', 'badge ' + badgeClass(total, hasCrit) + ' release-badge', total + ' ' + label);
+    badge.setAttribute('data-release', version);
+    hdr3.appendChild(badge);
+    sec.appendChild(hdr3);
+    // Index image
+    var idxData = (D.index_data || {})[version];
+    renderIndexImage(sec, idxData);
+    // Breakdown
+    var b = rdata.breakdown || {};
+    var bd = h('div', 'breakdown');
+    bd.appendChild(h('span', 'breakdown-item', [h('strong', 'bd-build', String(b.build || 0)), ' Build']));
+    bd.appendChild(h('span', 'breakdown-item', [h('strong', 'bd-test', String(b.test || 0)), ' Test']));
+    bd.appendChild(h('span', 'breakdown-item', [h('strong', 'bd-infra', String(b.infrastructure || 0)), ' Infrastructure']));
+    sec.appendChild(bd);
+    var panels = h('div', 'section-panels');
+    // All Jobs table
+    if (status && status.length) {
+        var totalS = status.length, passedS = status.filter(function(j){return j.status==='success';}).length;
+        var rateS = totalS > 0 ? Math.round(passedS/totalS*100) : 0;
+        var rateCss = rateS >= 90 ? 'status-pass' : (rateS < 70 ? 'status-fail' : '');
+        var jobsDet = document.createElement('details'); jobsDet.className = 'section-toggle';
+        var jobsSum = document.createElement('summary');
+        jobsSum.appendChild(document.createTextNode('All Jobs \\u2014 '));
+        var rateSpan = h('span', rateCss, passedS + '/' + totalS + ' passed (' + rateS + '%)');
+        jobsSum.appendChild(rateSpan);
+        jobsDet.appendChild(jobsSum);
+        var jTable = h('table', 'data-table');
+        jTable.setAttribute('data-default-sort', '2,asc');
+        var thead = document.createElement('thead');
+        var thRow = document.createElement('tr');
+        ['Status','Job Name','Finished','Duration','Issues'].forEach(function(t) {
+            var th2 = document.createElement('th'); th2.textContent = t; thRow.appendChild(th2);
+        });
+        thead.appendChild(thRow); jTable.appendChild(thead);
+        var tbody = document.createElement('tbody');
+        var sorted = status.slice().sort(function(a,b) { return (a.finished||'').toString().localeCompare((b.finished||'').toString()); });
+        sorted.forEach(function(sj) {
+            var tr = document.createElement('tr');
+            var st = sj.status || 'unknown';
+            var stBadge = h('span', 'severity-badge', '');
+            if (st === 'success') { stBadge.className = 'severity-badge severity-low'; stBadge.style.background = '#d4edda'; stBadge.style.color = '#155724'; stBadge.textContent = 'PASS'; }
+            else if (st === 'failure') { stBadge.className = 'severity-badge severity-high'; stBadge.textContent = 'FAIL'; }
+            else if (st === 'pending') { stBadge.className = 'severity-badge'; stBadge.style.background = '#cce5ff'; stBadge.style.color = '#004085'; stBadge.textContent = 'RUNNING'; }
+            else { stBadge.className = 'severity-badge'; stBadge.style.background = '#e2e3e5'; stBadge.style.color = '#383d41'; stBadge.textContent = st.toUpperCase(); }
+            tr.appendChild(h('td', '', stBadge));
+            var nameTd = document.createElement('td');
+            if (sj.url) { nameTd.appendChild(makeLink(sj.url, sj.job || '', '', '_blank')); }
+            else { nameTd.textContent = sj.job || ''; }
+            tr.appendChild(nameTd);
+            tr.appendChild(h('td', '', fmtEpoch(sj.finished)));
+            tr.appendChild(h('td', '', fmtDuration(sj.duration)));
+            // Issues cross-reference
+            var issTd = document.createElement('td'); issTd.style.fontSize = '0.85em';
+            var refs = jim[sj.job || ''];
+            if (refs && refs.length) {
+                var refUl = document.createElement('ul');
+                refUl.style.cssText = 'margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:4px';
+                refs.forEach(function(ref) {
+                    var rli = document.createElement('li');
+                    var short = ref.title.length > 60 ? ref.title.substring(0, 60) + '...' : ref.title;
+                    var ra = makeLink('#' + ref.anchor, short, 'issue-ref');
+                    ra.title = ref.title;
+                    rli.appendChild(ra); refUl.appendChild(rli);
+                });
+                issTd.appendChild(refUl);
+            }
+            tr.appendChild(issTd);
+            tbody.appendChild(tr);
+        });
+        jTable.appendChild(tbody); jobsDet.appendChild(jTable);
+        panels.appendChild(jobsDet);
+    }
+    // Failure analysis
+    if (rdata.issues && rdata.issues.length) {
+        var faDet = document.createElement('details'); faDet.className = 'section-toggle';
+        var faSum = document.createElement('summary');
+        faSum.textContent = 'Failure Analysis \\u2014 ' + total + ' ' + label;
+        faDet.appendChild(faSum);
+        renderIssueTable(faDet, rdata.issues, 'release-' + version, 'Release ' + version);
+        panels.appendChild(faDet);
+    }
+    sec.appendChild(panels);
+    parent.appendChild(sec);
+}
+
+// === PRs tab ===
+function renderPRs(parent) {
+    if (D.pr_error) {
+        var sec = h('div', 'release-section');
+        sec.appendChild(h('div', 'release-header', [h('h2', '', 'Pull Requests'), h('span', 'badge badge-nodata', 'collection error')]));
+        var pre = document.createElement('pre'); pre.textContent = 'Data collection failed: ' + D.pr_error;
+        sec.appendChild(pre); parent.appendChild(sec); return;
+    }
+    var analyzed = {};
+    if (D.pr_data && D.pr_data.has_content) {
+        (D.pr_data.prs || []).forEach(function(pr) { analyzed[pr.number] = pr; });
+    }
+    var allPrs = [];
+    if (D.pr_status) {
+        D.pr_status.forEach(function(s) {
+            var entry = {number: s.pr_number, title: s.title || '', url: s.url || '', passed: s.passed || 0, failed: s.failed || 0, pending: s.pending || 0, total: s.total || 0};
+            if (analyzed[s.pr_number]) entry.analysis = analyzed[s.pr_number];
+            allPrs.push(entry);
+        });
+    } else if (Object.keys(analyzed).length) {
+        (D.pr_data.prs || []).forEach(function(pr) {
+            allPrs.push({number: pr.number, title: pr.title || '', url: pr.url || '', passed: 0, failed: pr.failed || 0, pending: 0, total: pr.failed || 0, analysis: pr});
+        });
+    }
+    if (!allPrs.length) {
+        var sec2 = h('div', 'release-section');
+        sec2.appendChild(h('div', 'release-header', [h('h2', '', 'Pull Requests'), h('span', 'badge badge-ok', '0 failures')]));
+        sec2.appendChild(h('p', '', 'No open pull requests found.'));
+        parent.appendChild(sec2); return;
+    }
+    // TOC
+    var toc = h('div', 'toc');
+    toc.appendChild(h('h3', '', 'Table of Contents'));
+    var ul = document.createElement('ul');
+    allPrs.forEach(function(pr) {
+        var b = (pr.analysis && pr.analysis.breakdown) || {build:0,test:0,infrastructure:0};
+        var li = document.createElement('li');
+        li.appendChild(makeLink('#pr-' + pr.number, 'PR# ' + pr.number));
+        var info = ' \\u2014 ' + pr.failed + ' failures (' + (b.build||0) + ' build, ' + (b.test||0) + ' test, ' + (b.infrastructure||0) + ' infra)';
+        if (pr.pending) info += ' \\u2014 ' + pr.pending + ' running';
+        li.appendChild(document.createTextNode(info));
+        ul.appendChild(li);
+    });
+    toc.appendChild(ul); parent.appendChild(toc);
+    // PR sections
+    allPrs.forEach(function(pr) {
+        var sec3 = h('div', 'release-section');
+        sec3.id = 'pr-' + pr.number;
+        var hdr = h('div', 'release-header');
+        var heading = document.createElement('h2');
+        if (pr.url) { heading.appendChild(setAttr(makeLink(pr.url, 'PR# ' + pr.number, '', '_blank'), {title: pr.title})); }
+        else { var sp = h('span', '', 'PR# ' + pr.number); sp.title = pr.title; heading.appendChild(sp); }
+        var prRelM = (pr.title || '').match(/rebase-(release-[0-9.]+|main)/);
+        if (prRelM) heading.appendChild(document.createTextNode(' (rebase ' + prRelM[1] + ')'));
+        else if (pr.title) heading.appendChild(document.createTextNode(': ' + pr.title));
+        heading.appendChild(sectionAnchor('pr-' + pr.number));
+        hdr.appendChild(heading);
+        var totalFailed = pr.failed;
+        var lbl = totalFailed === 1 ? 'failure' : 'failures';
+        hdr.appendChild(h('span', 'badge ' + badgeClass(totalFailed, false), totalFailed + ' ' + lbl));
+        sec3.appendChild(hdr);
+        var b2 = (pr.analysis && pr.analysis.breakdown) || {build:0,test:0,infrastructure:0};
+        var bd = h('div', 'breakdown');
+        bd.appendChild(h('span', 'breakdown-item', [h('strong', '', String(b2.build||0)), ' Build']));
+        bd.appendChild(h('span', 'breakdown-item', [h('strong', '', String(b2.test||0)), ' Test']));
+        bd.appendChild(h('span', 'breakdown-item', [h('strong', '', String(b2.infrastructure||0)), ' Infrastructure']));
+        if (pr.passed) bd.appendChild(h('span', 'breakdown-item', [h('strong', '', String(pr.passed)), ' Passed']));
+        if (pr.pending) bd.appendChild(h('span', 'breakdown-item', [h('strong', '', String(pr.pending)), ' Running']));
+        sec3.appendChild(bd);
+        if (pr.analysis && pr.analysis.issues && pr.analysis.issues.length) {
+            renderIssueTable(sec3, pr.analysis.issues, 'pr-' + pr.number, 'PR #' + pr.number);
+        }
+        parent.appendChild(sec3);
+    });
+}
+
+// === Bugs tab ===
+function renderBugs(parent) {
+    var bd = D.bugs_tab_data;
+    if (!bd || (!bd.linked.length && !bd.unlinked.length)) {
+        var sec = h('div', 'release-section');
+        sec.appendChild(h('p', '', 'No bug data available. Run the full doctor workflow to populate bug information.'));
+        parent.appendChild(sec); return;
+    }
+    var sec2 = h('div', 'release-section');
+    sec2.appendChild(h('div', 'release-header', h('h2', '', 'AI-Generated Bugs')));
+    var grid = h('div', 'overview-grid');
+    var totalLinked = bd.linked.length, totalUnlinked = bd.unlinked.length;
+    var total = bd.jira_query_available ? bd.total_open : totalLinked;
+    grid.appendChild(h('div', 'overview-card', [h('div', 'number', String(total)), h('div', 'label', 'Total Open')]));
+    var lnCss = totalLinked > 0 ? 'status-pass' : '';
+    grid.appendChild(h('div', 'overview-card', [h('div', 'number ' + lnCss, String(totalLinked)), h('div', 'label', 'Linked to Failures')]));
+    if (bd.jira_query_available) {
+        var ulCss = totalUnlinked > 0 ? 'status-fail' : '';
+        grid.appendChild(h('div', 'overview-card', [h('div', 'number ' + ulCss, String(totalUnlinked)), h('div', 'label', 'Not Linked')]));
+    }
+    sec2.appendChild(grid);
+    if (!bd.jira_query_available) {
+        sec2.appendChild(h('p', 'job-date', 'Only bugs linked to current failures are shown. Run the full doctor workflow to include all open AI-generated bugs.'));
+    }
+    var PRIO = {blocker:0,critical:1,major:2,normal:3,minor:4,trivial:5};
+    function sortBugs(a,b) { var pa = PRIO[(a.priority||'').toLowerCase()]||99, pb = PRIO[(b.priority||'').toLowerCase()]||99; return pa-pb || (a.key||'').localeCompare(b.key||''); }
+    function renderBugTable(bugs, showReleases) {
+        var table = h('table', 'data-table');
+        var thead = document.createElement('thead'); var tr = document.createElement('tr');
+        var cols = ['JIRA','Status','Assignee','Summary'];
+        if (showReleases) cols.push('Releases');
+        cols.push('Updated','');
+        cols.forEach(function(c) { var th2 = document.createElement('th'); th2.textContent = c; tr.appendChild(th2); });
+        thead.appendChild(tr); table.appendChild(thead);
+        var tbody = document.createElement('tbody');
+        bugs.sort(sortBugs).forEach(function(bug) {
+            var btr = document.createElement('tr');
+            btr.id = 'bug-' + bug.key;
+            var tdKey = document.createElement('td');
+            tdKey.appendChild(makeLink(JIRA_BASE + '/browse/' + bug.key, bug.key, '', '_blank'));
+            btr.appendChild(tdKey);
+            btr.appendChild(h('td', '', bug.status || ''));
+            btr.appendChild(h('td', '', bug.assignee || ''));
+            btr.appendChild(h('td', '', bug.summary || ''));
+            if (showReleases) {
+                var rlTd = document.createElement('td');
+                if (bug.links) {
+                    var byRel = {};
+                    bug.links.forEach(function(l) { byRel[l.release] = (byRel[l.release]||0) + (l.affected_jobs||0); });
+                    var parts = [];
+                    Object.keys(byRel).sort().forEach(function(r) {
+                        var anchor = r === 'PRs' ? 'tab-pull-requests' : 'release-' + r;
+                        var a2 = makeLink('#' + anchor, r);
+                        rlTd.appendChild(a2);
+                        rlTd.appendChild(document.createTextNode(' (' + byRel[r] + ') '));
+                    });
+                }
+                btr.appendChild(rlTd);
+            }
+            btr.appendChild(h('td', '', bug.updated || ''));
+            var linkTd = h('td', '', anchorLink('bug-' + bug.key));
+            btr.appendChild(linkTd);
+            tbody.appendChild(btr);
+        });
+        table.appendChild(tbody);
+        return table;
+    }
+    if (bd.linked.length) {
+        sec2.appendChild(h('h3', '', 'Linked to Failures'));
+        sec2.appendChild(renderBugTable(bd.linked.slice(), true));
+    }
+    if (bd.unlinked.length && bd.jira_query_available) {
+        sec2.appendChild(h('h3', '', 'Not Linked'));
+        sec2.appendChild(renderBugTable(bd.unlinked.slice(), false));
+    }
+    parent.appendChild(sec2);
+}
+
+// === Images tab ===
+function renderImages(parent) {
+    var id = D.images_tab_data;
+    if (!id || !id.has_data) {
+        var sec = h('div', 'release-section');
+        sec.appendChild(h('p', '', 'No container image data available. Run the full doctor workflow to populate image health data.'));
+        parent.appendChild(sec); return;
+    }
+    var releases = Object.keys(id.releases).sort().reverse();
+    // TOC
+    var toc = h('div', 'toc');
+    var tocHdr = h('div', 'toc-header');
+    tocHdr.appendChild(h('h3', '', 'Table of Contents'));
+    var latestLabel = document.createElement('label'); latestLabel.className = 'filter-toggle';
+    var latestCb = document.createElement('input'); latestCb.type = 'checkbox'; latestCb.id = 'filter-latest-images';
+    latestLabel.appendChild(latestCb); latestLabel.appendChild(document.createTextNode(' Latest only'));
+    tocHdr.appendChild(latestLabel);
+    toc.appendChild(tocHdr);
+    var tocUl = document.createElement('ul');
+    releases.forEach(function(rel) {
+        var relData = id.releases[rel];
+        var li = document.createElement('li');
+        li.appendChild(makeLink('#images-' + rel, 'Release ' + rel));
+        var repoInfo = relData.repos.map(function(r) {
+            var name = r.display_name;
+            if (r.latest_grade) return name + ' [' + r.latest_grade + ']';
+            return name;
+        }).join(', ');
+        li.appendChild(document.createTextNode(' (' + repoInfo + ')'));
+        tocUl.appendChild(li);
+    });
+    toc.appendChild(tocUl); parent.appendChild(toc);
+    // Sections
+    releases.forEach(function(rel) {
+        var relData = id.releases[rel];
+        var sec2 = h('div', 'release-section');
+        sec2.id = 'images-' + rel;
+        var hdr = h('div', 'release-header');
+        var heading = h('h2', '', 'Release ' + rel);
+        heading.appendChild(sectionAnchor('images-' + rel));
+        hdr.appendChild(heading); sec2.appendChild(hdr);
+        relData.repos.forEach(function(repo) {
+            var repoUrl = repo.catalog_id ? 'https://catalog.redhat.com/en/software/containers/' + repo.name + '/' + repo.catalog_id : '';
+            if (repoUrl) { sec2.appendChild(h('h3', '', makeLink(repoUrl, repo.display_name, '', '_blank'))); }
+            else { sec2.appendChild(h('h3', '', repo.display_name)); }
+            var table = h('table', 'data-table');
+            var thead = document.createElement('thead'); var thRow = document.createElement('tr');
+            ['Version','Architectures','Image Created','Grade Updated'].forEach(function(t) { var th2 = document.createElement('th'); th2.textContent = t; thRow.appendChild(th2); });
+            thead.appendChild(thRow); table.appendChild(thead);
+            var tbody = document.createElement('tbody');
+            repo.versions.forEach(function(ver, vi) {
+                var tr = document.createElement('tr');
+                if (vi === 0) tr.setAttribute('data-latest', '1');
+                tr.appendChild(h('td', '', ver.tag));
+                var archTd = document.createElement('td');
+                ver.archs.forEach(function(a, ai) {
+                    if (ai > 0) archTd.appendChild(document.createTextNode(' '));
+                    if (repoUrl && a.image_id) {
+                        archTd.appendChild(makeLink(repoUrl + '?image=' + a.image_id + '&architecture=' + a.arch, a.arch, '', '_blank'));
+                    } else { archTd.appendChild(document.createTextNode(a.arch)); }
+                    archTd.appendChild(document.createTextNode('\\u00A0'));
+                    archTd.appendChild(h('span', 'grade-badge ' + (a.grade_css || 'grade-na'), a.grade || 'N/A'));
+                });
+                tr.appendChild(archTd);
+                tr.appendChild(h('td', '', ver.creation_date || ''));
+                tr.appendChild(h('td', '', ver.last_update_date || ''));
+                tbody.appendChild(tr);
+            });
+            table.appendChild(tbody); sec2.appendChild(table);
+        });
+        parent.appendChild(sec2);
+    });
+    latestCb.addEventListener('change', function() {
+        var on = this.checked;
+        document.querySelectorAll('#tab-images .data-table tbody tr').forEach(function(row) {
+            row.style.display = (!on || row.hasAttribute('data-latest')) ? '' : 'none';
+        });
+    });
+}
+
+// === Tab switching ===
+document.querySelectorAll('.tab-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        var name = this.getAttribute('data-tab');
+        document.querySelectorAll('.tab-content').forEach(function(el) { el.classList.remove('active'); });
+        document.querySelectorAll('.tab-btn').forEach(function(el) { el.classList.remove('active'); });
+        document.getElementById('tab-' + name).classList.add('active');
+        this.classList.add('active');
     });
 });
-function toggleGraph(id) {
-    var el = document.getElementById(id);
-    if (!el) return;
-    var show = el.style.display === 'none';
-    el.style.display = show ? 'block' : 'none';
-    if (show && !el.dataset.rendered) {
-        el.dataset.rendered = '1';
-        pcpCharts.init({ cardClass: 'pcp-chart-card', headingTag: 'h4', statsClass: 'pcp-stats-row' });
-        var dataEl = el.querySelector('script[type="application/json"]');
-        if (!dataEl) return;
-        var m = JSON.parse(dataEl.textContent);
-        var grid = el.querySelector('.pcp-chart-grid');
-        if (m.cpu) pcpCharts.renderCpu(grid, m.cpu);
-        if (m.mem) pcpCharts.renderMem(grid, m.mem);
-        if (m.io) pcpCharts.renderIo(grid, m.io);
-        if (m.disk) pcpCharts.renderDisk(grid, m.disk);
-    }
-}
+
+// === Today filter ===
 function filterToday(on) {
     var today = new Date().toISOString().split('T')[0];
     document.querySelectorAll('#tab-periodics .issue-row').forEach(function(row) {
@@ -264,41 +1030,32 @@ function filterToday(on) {
             if (r.style.display !== 'none') {
                 total++;
                 var ft = r.querySelector('.col-ftype .ftype-badge');
-                if (ft) {
-                    var t = ft.textContent.trim().toLowerCase();
-                    if (t === 'build') bd.build++;
-                    else if (t === 'infra') bd.infra++;
-                    else bd.test++;
-                }
+                if (ft) { var t = ft.textContent.trim().toLowerCase(); if (t==='build') bd.build++; else if (t==='infra') bd.infra++; else bd.test++; }
             }
         });
         var lbl = total === 1 ? 'failure' : 'failures';
         var summary = total + ' ' + lbl + ' (' + bd.build + ' build, ' + bd.test + ' test, ' + bd.infra + ' infra)';
-        var toc = document.querySelector('.toc-counts[data-release="' + id + '"]');
-        if (toc) toc.textContent = summary;
+        var tocEl = document.querySelector('.toc-counts[data-release="' + id + '"]');
+        if (tocEl) tocEl.textContent = summary;
         var badge = sec.querySelector('.release-badge');
-        if (badge) {
-            badge.textContent = total + ' ' + lbl;
-            badge.className = 'badge release-badge ' + (total === 0 ? 'badge-ok' : total >= 5 ? 'badge-critical' : 'badge-issues');
-        }
-        var bdb = sec.querySelector('.bd-build');
-        var bdt = sec.querySelector('.bd-test');
-        var bdi = sec.querySelector('.bd-infra');
+        if (badge) { badge.textContent = total + ' ' + lbl; badge.className = 'badge release-badge ' + (total===0?'badge-ok':total>=5?'badge-critical':'badge-issues'); }
+        var bdb = sec.querySelector('.bd-build'), bdt = sec.querySelector('.bd-test'), bdi = sec.querySelector('.bd-infra');
         if (bdb) bdb.textContent = bd.build;
         if (bdt) bdt.textContent = bd.test;
         if (bdi) bdi.textContent = bd.infra;
     });
 }
+
+// === Side-by-side toggle ===
 function toggleSideBySide(on) {
     document.querySelector('.container').classList.toggle('wide', on);
     document.querySelectorAll('#tab-periodics .release-section').forEach(function(sec) {
         sec.classList.toggle('side-by-side', on);
-        var toggles = sec.querySelectorAll('.section-toggle');
-        if (on) {
-            toggles.forEach(function(d) { d.open = true; });
-        }
+        if (on) sec.querySelectorAll('.section-toggle').forEach(function(d) { d.open = true; });
     });
 }
+
+// === Issue-ref click handler (side-by-side cross-reference) ===
 document.addEventListener('click', function(e) {
     var link = e.target.closest('a.issue-ref');
     if (!link) return;
@@ -319,78 +1076,26 @@ document.addEventListener('click', function(e) {
         detail.classList.remove('show');
     }
 });
-function filterLatestImages(on) {
-    document.querySelectorAll('#tab-images .data-table tbody tr').forEach(function(row) {
-        row.style.display = (!on || row.hasAttribute('data-latest')) ? '' : 'none';
-    });
-}
-document.getElementById('loading').style.display='none';
-document.querySelector('.container').style.display='';
-(function() {
-    var toast = document.createElement('div');
-    toast.className = 'copy-toast';
-    toast.textContent = 'Link copied';
-    document.body.appendChild(toast);
-    var timer;
-    function copyAnchor(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        var href = e.currentTarget.getAttribute('href');
-        var url = location.href.split('#')[0] + href;
-        if (!navigator.clipboard || !navigator.clipboard.writeText) {
-            location.hash = href.slice(1);
-            return;
-        }
-        navigator.clipboard.writeText(url).then(function() {
-            toast.classList.add('show');
-            clearTimeout(timer);
-            timer = setTimeout(function() { toast.classList.remove('show'); }, 1500);
-        }).catch(function() {
-            location.hash = href.slice(1);
-        });
-    }
-    document.querySelectorAll('.anchor-link, .section-anchor').forEach(function(el) {
-        el.addEventListener('click', copyAnchor);
-    });
-})();
-(function() {
-    function openAnchor() {
-        var hash = location.hash;
-        if (!hash) return;
-        var target = document.getElementById(hash.substring(1));
-        if (!target) return;
-        if (target.classList.contains('issue-row')) {
-            var title = target.querySelector('.col-title');
-            if (title && !title.classList.contains('active')) {
-                title.classList.add('active');
-                var detail = target.nextElementSibling;
-                if (detail && detail.classList.contains('detail-row')) {
-                    detail.classList.add('show');
-                }
-            }
-        }
-        var section = target.closest('.tab-content');
-        if (section && !section.classList.contains('active')) {
-            document.querySelectorAll('.tab-content').forEach(function(el) { el.classList.remove('active'); });
-            document.querySelectorAll('.tab-btn').forEach(function(el) { el.classList.remove('active'); });
-            section.classList.add('active');
-            document.querySelectorAll('.tab-btn').forEach(function(el) {
-                if (el.getAttribute('onclick') && el.getAttribute('onclick').indexOf(section.id.replace('tab-', '')) !== -1) {
-                    el.classList.add('active');
-                }
-            });
-        }
-        requestAnimationFrame(function() {
-            target.scrollIntoView({ behavior: 'smooth' });
-        });
-    }
-    openAnchor();
-    window.addEventListener('hashchange', openAnchor);
-})();
+
+// === Render everything ===
+document.getElementById('report-title').textContent = D.component_title + ' CI Doctor Report';
+document.getElementById('report-timestamp').textContent = 'Generated: ' + D.timestamp + ' UTC';
+renderDiagnostics(document.getElementById('diagnostics-slot'));
+renderOverview(document.getElementById('overview-slot'));
+renderPeriodics(document.getElementById('tab-periodics'));
+renderPRs(document.getElementById('tab-pull-requests'));
+renderBugs(document.getElementById('tab-bugs'));
+renderImages(document.getElementById('tab-images'));
+
+// Show container, hide loading
+document.getElementById('loading').style.display = 'none';
+document.querySelector('.container').style.display = '';
+
+// === Table sorting ===
 document.querySelectorAll('.data-table').forEach(function(table) {
     var headers = table.querySelectorAll('th');
     function sortBy(colIdx, asc) {
-        headers.forEach(function(h) { h.classList.remove('sort-asc', 'sort-desc'); });
+        headers.forEach(function(h2) { h2.classList.remove('sort-asc', 'sort-desc'); });
         headers[colIdx].classList.add(asc ? 'sort-asc' : 'sort-desc');
         var tbody = table.querySelector('tbody');
         var rows = Array.from(tbody.querySelectorAll('tr'));
@@ -403,42 +1108,77 @@ document.querySelectorAll('.data-table').forEach(function(table) {
     }
     headers.forEach(function(th, colIdx) {
         if (!th.textContent.trim()) return;
-        th.addEventListener('click', function() {
-            sortBy(colIdx, !th.classList.contains('sort-asc'));
-        });
+        th.addEventListener('click', function() { sortBy(colIdx, !th.classList.contains('sort-asc')); });
     });
-    // Default sort: use data-default-sort="col,asc" if present, otherwise second-to-last column descending.
     var ds = table.getAttribute('data-default-sort');
-    if (ds) {
-        var parts = ds.split(',');
-        sortBy(parseInt(parts[0], 10), parts[1] === 'asc');
-    } else if (headers.length >= 2) {
-        sortBy(headers.length - 2, false);
-    }
+    if (ds) { var parts = ds.split(','); sortBy(parseInt(parts[0], 10), parts[1] === 'asc'); }
+    else if (headers.length >= 2) { sortBy(headers.length - 2, false); }
 });
-// --- Text filter: search issues across all tabs via REPORT_DATA ---
+
+// === Anchor link copy-to-clipboard ===
+(function() {
+    var toast = h('div', 'copy-toast', 'Link copied');
+    document.body.appendChild(toast);
+    var timer;
+    function copyAnchor(e) {
+        e.preventDefault(); e.stopPropagation();
+        var href = e.currentTarget.getAttribute('href');
+        var url = location.href.split('#')[0] + href;
+        if (!navigator.clipboard || !navigator.clipboard.writeText) { location.hash = href.slice(1); return; }
+        navigator.clipboard.writeText(url).then(function() {
+            toast.classList.add('show'); clearTimeout(timer);
+            timer = setTimeout(function() { toast.classList.remove('show'); }, 1500);
+        }).catch(function() { location.hash = href.slice(1); });
+    }
+    document.querySelectorAll('.anchor-link, .section-anchor').forEach(function(el) { el.addEventListener('click', copyAnchor); });
+})();
+
+// === Hash-based deep linking ===
+(function() {
+    function openAnchor() {
+        var hash = location.hash;
+        if (!hash) return;
+        var target = document.getElementById(hash.substring(1));
+        if (!target) return;
+        if (target.classList.contains('issue-row')) {
+            var title = target.querySelector('.col-title');
+            if (title && !title.classList.contains('active')) {
+                title.classList.add('active');
+                var detail = target.nextElementSibling;
+                if (detail && detail.classList.contains('detail-row')) detail.classList.add('show');
+            }
+        }
+        var section = target.closest('.tab-content');
+        if (section && !section.classList.contains('active')) {
+            document.querySelectorAll('.tab-content').forEach(function(el) { el.classList.remove('active'); });
+            document.querySelectorAll('.tab-btn').forEach(function(el) { el.classList.remove('active'); });
+            section.classList.add('active');
+            var tabId = section.id.replace('tab-', '');
+            document.querySelectorAll('.tab-btn').forEach(function(el) {
+                if (el.getAttribute('data-tab') === tabId) el.classList.add('active');
+            });
+        }
+        requestAnimationFrame(function() { target.scrollIntoView({behavior: 'smooth'}); });
+    }
+    openAnchor();
+    window.addEventListener('hashchange', openAnchor);
+})();
+
+// === Text filter ===
 (function() {
     var input = document.getElementById('report-filter');
     var countEl = document.getElementById('filter-count');
-    if (!input || !countEl || !window.REPORT_DATA) return;
+    if (!input || !countEl) return;
     var debounceTimer;
     function matchIssue(iss, q) {
-        var fields = [
-            iss.title || '',
-            iss.root_cause || '',
-            iss.failure_type || '',
-            iss.severity || '',
-            iss.next_steps || ''
-        ];
-        (iss.affected_jobs || []).forEach(function(j) { fields.push(j.name || ''); });
-        (iss.scenarios || []).forEach(function(s) { fields.push(s); });
-        var text = fields.join(' ').toLowerCase();
-        return text.indexOf(q) !== -1;
+        var fields = [iss.title||'', iss.root_cause||'', iss.failure_type||'', iss.severity||'', iss.next_steps||''];
+        (iss.affected_jobs||[]).forEach(function(j){fields.push(j.name||'');});
+        (iss.scenarios||[]).forEach(function(s){fields.push(s);});
+        return fields.join(' ').toLowerCase().indexOf(q) !== -1;
     }
     function applyFilter() {
         var q = input.value.trim().toLowerCase();
         var shown = 0, total = 0;
-        // Filter periodics tab issue rows
         document.querySelectorAll('#tab-periodics .issue-row').forEach(function(row) {
             total++;
             if (!q) { row.style.display = ''; shown++; return; }
@@ -446,7 +1186,7 @@ document.querySelectorAll('.data-table').forEach(function(table) {
             var parts = id.match(/^release-(.+)-(\\d+)$/);
             if (!parts) { row.style.display = ''; shown++; return; }
             var ver = parts[1], num = parseInt(parts[2], 10);
-            var rd = (window.REPORT_DATA.releases_data || {})[ver];
+            var rd = (D.releases_data || {})[ver];
             if (!rd || !rd.issues) { row.style.display = ''; shown++; return; }
             var iss = rd.issues.find(function(i) { return i.number === num; });
             var vis = iss ? matchIssue(iss, q) : true;
@@ -458,7 +1198,6 @@ document.querySelectorAll('.data-table').forEach(function(table) {
                 else { detail.style.display = ''; }
             }
         });
-        // Filter PR tab issue rows
         document.querySelectorAll('#tab-pull-requests .issue-row').forEach(function(row) {
             total++;
             if (!q) { row.style.display = ''; shown++; return; }
@@ -466,9 +1205,8 @@ document.querySelectorAll('.data-table').forEach(function(table) {
             var parts = id.match(/^pr-(\\d+)-(\\d+)$/);
             if (!parts) { row.style.display = ''; shown++; return; }
             var prNum = parseInt(parts[1], 10), issNum = parseInt(parts[2], 10);
-            var prData = window.REPORT_DATA.pr_data;
-            var pr = prData && prData.prs ? prData.prs.find(function(p) { return p.number === prNum; }) : null;
-            var iss = pr && pr.issues ? pr.issues.find(function(i) { return i.number === issNum; }) : null;
+            var pr = D.pr_data && D.pr_data.prs ? D.pr_data.prs.find(function(p){return p.number===prNum;}) : null;
+            var iss = pr && pr.issues ? pr.issues.find(function(i){return i.number===issNum;}) : null;
             var vis = iss ? matchIssue(iss, q) : true;
             row.style.display = vis ? '' : 'none';
             if (vis) shown++;
@@ -478,21 +1216,15 @@ document.querySelectorAll('.data-table').forEach(function(table) {
                 else { detail.style.display = ''; }
             }
         });
-        // Filter bugs tab rows
         document.querySelectorAll('#tab-bugs .data-table tbody tr').forEach(function(row) {
-            total++;
-            if (!q) { row.style.display = ''; shown++; return; }
-            var text = row.textContent.toLowerCase();
-            var vis = text.indexOf(q) !== -1;
-            row.style.display = vis ? '' : 'none';
-            if (vis) shown++;
+            total++; if (!q) { row.style.display = ''; shown++; return; }
+            var vis = row.textContent.toLowerCase().indexOf(q) !== -1;
+            row.style.display = vis ? '' : 'none'; if (vis) shown++;
         });
         countEl.textContent = q ? (shown + ' / ' + total + ' matches') : '';
     }
-    input.addEventListener('input', function() {
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(applyFilter, 300);
-    });
+    input.addEventListener('input', function() { clearTimeout(debounceTimer); debounceTimer = setTimeout(applyFilter, 300); });
+})();
 })();"""
 
 
@@ -757,125 +1489,6 @@ def build_bugs_tab_data(open_bugs_data, bug_data, pr_bug_paths, releases_data=No
     }
 
 
-def _format_release_links(links):
-    """Format release associations as linked '4.20 (2), 4.22 (1)'."""
-    by_release = {}
-    for link in links:
-        rel = link["release"]
-        by_release[rel] = by_release.get(rel, 0) + link["affected_jobs"]
-    parts = []
-    for r, c in sorted(by_release.items()):
-        anchor = "tab-pull-requests" if r == "PRs" else f"release-{_e(r)}"
-        parts.append(f'<a href="#{anchor}">{_e(r)}</a> ({c})')
-    return ", ".join(parts)
-
-
-_PRIORITY_ORDER = {"blocker": 0, "critical": 1, "major": 2, "normal": 3, "minor": 4, "trivial": 5}
-
-
-def _bug_sort_key(bug):
-    prio = _PRIORITY_ORDER.get(bug.get("priority", "").lower(), 99)
-    return (prio, bug.get("key", ""))
-
-
-def _render_bugs_table(bugs, show_releases=True):
-    lines = []
-    lines.append('            <table class="data-table">')
-    lines.append("            <thead><tr>")
-    cols = '<th>JIRA</th><th>Status</th><th>Assignee</th><th>Summary</th>'
-    if show_releases:
-        cols += '<th>Releases</th>'
-    cols += '<th>Updated</th><th></th>'
-    lines.append(f'                {cols}')
-    lines.append("            </tr></thead>")
-    lines.append("            <tbody>")
-    for bug in bugs:
-        key = _e(bug["key"])
-        href = f"https://issues.redhat.com/browse/{key}"
-        summary = _e(bug.get("summary", ""))
-        status = _e(bug.get("status", ""))
-        assignee = _e(bug.get("assignee", ""))
-        updated = _e(bug.get("updated", ""))
-        anchor_id = f'bug-{key}'
-        lines.append(f'            <tr id="{anchor_id}">')
-        lines.append(f'                <td><a href="{href}" target="_blank">{key}</a></td>')
-        lines.append(f"                <td>{status}</td>")
-        lines.append(f"                <td>{assignee}</td>")
-        lines.append(f"                <td>{summary}</td>")
-        if show_releases:
-            releases_cell = _format_release_links(bug["links"]) if bug.get("links") else ""
-            lines.append(f"                <td>{releases_cell}</td>")
-        lines.append(f"                <td>{updated}</td>")
-        lines.append(f'                <td><a href="#{anchor_id}" class="anchor-link" title="Copy link to this bug">&#128279;</a></td>')
-        lines.append("            </tr>")
-    lines.append("            </tbody>")
-    lines.append("            </table>")
-    return lines
-
-
-def render_bugs_section(bugs_data):
-    """Render the Bugs tab HTML."""
-    linked = bugs_data["linked"]
-    unlinked = bugs_data["unlinked"]
-    jira_available = bugs_data["jira_query_available"]
-
-    if not linked and not unlinked:
-        return (
-            '        <div class="release-section">\n'
-            "            <p>No bug data available. "
-            "Run the full doctor workflow to populate bug information.</p>\n"
-            "        </div>"
-        )
-
-    lines = []
-
-    # Summary cards
-    total_linked = len(linked)
-    total_unlinked = len(unlinked)
-    total = bugs_data["total_open"] if jira_available else total_linked
-
-    lines.append('        <div class="release-section">')
-    lines.append('            <div class="release-header">')
-    lines.append('                <h2>AI-Generated Bugs</h2>')
-    lines.append('            </div>')
-    lines.append('            <div class="overview-grid">')
-    lines.append('                <div class="overview-card">')
-    lines.append(f'                    <div class="number">{total}</div>')
-    lines.append('                    <div class="label">Total Open</div>')
-    lines.append('                </div>')
-    lines.append('                <div class="overview-card">')
-    css = "status-pass" if total_linked > 0 else ""
-    lines.append(f'                    <div class="number {css}">{total_linked}</div>')
-    lines.append('                    <div class="label">Linked to Failures</div>')
-    lines.append('                </div>')
-    if jira_available:
-        lines.append('                <div class="overview-card">')
-        css = "status-fail" if total_unlinked > 0 else ""
-        lines.append(f'                    <div class="number {css}">{total_unlinked}</div>')
-        lines.append('                    <div class="label">Not Linked</div>')
-        lines.append('                </div>')
-    lines.append('            </div>')
-
-    if not jira_available:
-        lines.append(
-            '            <p class="job-date">Only bugs linked to current failures are shown. '
-            "Run the full doctor workflow to include all open AI-generated bugs.</p>"
-        )
-
-    # Linked table
-    if linked:
-        lines.append('            <h3>Linked to Failures</h3>')
-        lines.extend(_render_bugs_table(sorted(linked, key=_bug_sort_key), show_releases=True))
-
-    # Unlinked table
-    if unlinked and jira_available:
-        lines.append('            <h3>Not Linked</h3>')
-        lines.extend(_render_bugs_table(sorted(unlinked, key=_bug_sort_key), show_releases=False))
-
-    lines.append("        </div>")
-    return "\n".join(lines)
-
-
 # ---------------------------------------------------------------------------
 # Images (Image Health) tab
 # ---------------------------------------------------------------------------
@@ -1036,154 +1649,6 @@ def build_images_tab_data(images_data, releases):
     return {"has_data": bool(releases_out), "releases": releases_out}
 
 
-def render_images_section(images_tab_data):
-    """Render the Image Health (Images) tab HTML.
-
-    Mirrors the Periodics tab layout: a Table of Contents at the top
-    followed by one release-section card per release, each containing
-    a table per repository.
-    """
-    if not images_tab_data or not images_tab_data.get("has_data"):
-        return (
-            '        <div class="release-section">\n'
-            "            <p>No container image data available. "
-            "Run the full doctor workflow to populate image health data.</p>\n"
-            "        </div>"
-        )
-
-    releases_data = images_tab_data["releases"]
-
-    # Table of Contents
-    toc = []
-    toc.append('        <div class="toc">')
-    toc.append('            <div class="toc-header">')
-    toc.append('                <h3>Table of Contents</h3>')
-    toc.append('                <label class="filter-toggle"><input type="checkbox" id="filter-latest-images" onchange="filterLatestImages(this.checked)"> Latest only</label>')
-    toc.append('            </div>')
-    toc.append('            <ul>')
-    for release in sorted(releases_data.keys(), reverse=True):
-        rel = releases_data[release]
-        repo_parts = []
-        for r in rel["repos"]:
-            grade = r.get("latest_grade")
-            if grade:
-                css = _GRADE_CSS.get(grade, "grade-na")
-                repo_parts.append(
-                    f'{_e(r["display_name"])} '
-                    f'<span class="grade-badge {css}" style="font-size:0.8em" '
-                    f'title="Freshness grade of the latest published image">{_e(grade)}</span>'
-                )
-            else:
-                repo_parts.append(_e(r["display_name"]))
-        toc.append(
-            f'                <li><a href="#images-{_e(release)}">Release {_e(release)}</a>'
-            f' <span style="color:#6c757d;font-size:0.85em">({" &nbsp; ".join(repo_parts)})</span></li>'
-        )
-    toc.append('            </ul>')
-    toc.append('        </div>')
-
-    # Per-release sections
-    sections = []
-    for release in sorted(releases_data.keys(), reverse=True):
-        rel = releases_data[release]
-        lines = []
-        lines.append(f'        <div class="release-section" id="images-{_e(release)}">')
-        lines.append('            <div class="release-header">')
-        lines.append(
-            f'                <h2>Release {_e(release)}'
-            f'<a href="#images-{_e(release)}" class="section-anchor" title="Copy link to this section">&#128279;</a></h2>'
-        )
-        lines.append('            </div>')
-
-        for repo in rel["repos"]:
-            catalog_id = repo.get("catalog_id", "")
-            if catalog_id:
-                repo_url = f'https://catalog.redhat.com/en/software/containers/{repo["name"]}/{catalog_id}'
-                lines.append(f'            <h3><a href="{repo_url}" target="_blank">{_e(repo["display_name"])}</a></h3>')
-            else:
-                repo_url = ""
-                lines.append(f'            <h3>{_e(repo["display_name"])}</h3>')
-
-            lines.append('            <table class="data-table">')
-            lines.append('            <thead><tr>')
-            lines.append('                <th>Version</th><th>Architectures</th><th>Image Created</th><th>Grade Updated</th>')
-            lines.append('            </tr></thead>')
-            lines.append('            <tbody>')
-
-            for vi, ver in enumerate(repo["versions"]):
-                latest_attr = ' data-latest="1"' if vi == 0 else ''
-                lines.append(f"            <tr{latest_attr}>")
-                lines.append(f'                <td>{_e(ver["tag"])}</td>')
-                arch_parts = []
-                for a in ver["archs"]:
-                    gcss = a["grade_css"]
-                    badge = f'<span class="grade-badge {gcss}">{_e(a["grade"])}</span>'
-                    if repo_url and a["image_id"]:
-                        href = f'{repo_url}?image={a["image_id"]}&architecture={a["arch"]}'
-                        arch_parts.append(f'<a href="{href}" target="_blank">{_e(a["arch"])}</a>&nbsp;{badge}')
-                    else:
-                        arch_parts.append(f'{_e(a["arch"])}&nbsp;{badge}')
-                lines.append(f'                <td>{"&nbsp; ".join(arch_parts)}</td>')
-                lines.append(f'                <td>{_e(ver["creation_date"])}</td>')
-                lines.append(f'                <td>{_e(ver["last_update_date"])}</td>')
-                lines.append("            </tr>")
-
-            lines.append('            </tbody>')
-            lines.append('            </table>')
-
-        lines.append('        </div>')
-        sections.append("\n".join(lines))
-
-    return "\n".join(toc) + "\n\n" + "\n\n".join(sections)
-
-
-# ---------------------------------------------------------------------------
-# HTML helpers
-# ---------------------------------------------------------------------------
-
-def _e(text):
-    return html_mod.escape(str(text)) if text else ""
-
-
-def _render_confidence_badge(issue):
-    """Confidence badge for the issue title; empty string when unset."""
-    conf = (issue.get("confidence") or "").lower()
-    if conf not in ("high", "medium", "low"):
-        return ""
-    return (f'<span class="confidence-badge confidence-{conf}"'
-            f' title="Root cause analysis confidence">{conf}</span>')
-
-
-def _render_investigation(issue):
-    """Render scenario chips, causal chain, and analysis gaps for an issue.
-
-    Returns a list of HTML lines; empty when the issue (old summary files)
-    has none of the investigation fields.
-    """
-    lines = []
-    scenarios = issue.get("scenarios") or []
-    if scenarios:
-        chips = "".join(f'<span class="scenario-chip">{_e(s)}</span>' for s in scenarios)
-        lines.append(f'                <div class="scenarios"><strong>Scenarios:</strong> {chips}</div>')
-    chain = [
-        link for link in (issue.get("causal_chain") or [])
-        if isinstance(link, dict) and link.get("cause")
-    ]
-    if chain:
-        lines.append('                <div class="causal-chain"><strong>Causal chain:</strong><ol>')
-        for link in chain:
-            item = _e(link.get("cause"))
-            if link.get("evidence"):
-                item += f' — <span class="evidence">{_e(link["evidence"])}</span>'
-            if link.get("quote"):
-                item += f' <code>{_e(link["quote"])}</code>'
-            lines.append(f'                    <li>{item}</li>')
-        lines.append('                </ol></div>')
-    gaps = [g for g in (issue.get("analysis_gaps") or []) if g]
-    if gaps:
-        lines.append(f'                <div class="analysis-gaps">Evidence gaps: {_e(", ".join(gaps))}</div>')
-    return lines
-
 # ---------------------------------------------------------------------------
 # Index image extraction (LVMS-specific)
 # ---------------------------------------------------------------------------
@@ -1199,29 +1664,9 @@ def extract_index_image(workdir, version):
     return load_json(path)
 
 
-def _render_index_image(index_info):
-    """Render index image info box HTML (LVMS-specific)."""
-    if not index_info:
-        return ""
-    lines = ['            <div class="index-image-info">']
-    if index_info.get("image"):
-        lines.append(f'                <strong>Catalog Index Image:</strong> <code>{_e(index_info["image"])}</code><br>')
-    if index_info.get("digest"):
-        lines.append(f'                <strong>Digest:</strong> <code>{_e(index_info["digest"])}</code><br>')
-    if index_info.get("built"):
-        lines.append(f'                <strong>Built:</strong> {_e(index_info["built"])}<br>')
-    if index_info.get("commit"):
-        commit = index_info["commit"]
-        short = commit[:12] if len(commit) >= 12 else commit
-        lines.append(
-            f'                <strong>Source Commit:</strong> '
-            f'<a href="https://github.com/openshift/lvm-operator/commit/{_e(commit)}" target="_blank">{_e(short)}</a>'
-        )
-    if index_info.get("error"):
-        lines.append(f'                <br><em style="color:#856404;">Inspect failed: {_e(index_info["error"])}</em>')
-    lines.append("            </div>")
-    return "\n".join(lines)
-
+# ---------------------------------------------------------------------------
+# Graph / metrics helpers (pre-compute PCP data for JSON model)
+# ---------------------------------------------------------------------------
 
 # Graph workdir and Chart.js source — set by main() before rendering
 _GRAPHS_DIR = None
@@ -1236,8 +1681,6 @@ def _extract_build_id(url):
     m = re.search(r"/(\d+)/?$", url)
     return m.group(1) if m else None
 
-
-_graph_counter = 0
 
 _graph_cache = {}
 
@@ -1265,575 +1708,15 @@ def _load_job_metrics(build_id):
     return metrics
 
 
-def _render_job_with_graphs(job):
-    """Render a single job list item with optional graph icon and inline charts."""
-    global _graph_counter
-    date_str = f'<span class="job-date">[{_e(job["date"])}]</span>'
-    url = job.get("url", "")
-    name = _e(job["name"])
-
-    if url:
-        job_link = f'{date_str} <a href="{_e(url)}" target="_blank">{name}</a>'
-    else:
-        job_link = f'{date_str} {name}'
-
-    bid = _extract_build_id(url)
-    if not bid:
-        return f"<li>{job_link}</li>"
-
-    metrics = _load_job_metrics(bid)
-    if not metrics:
-        return f"<li>{job_link}</li>"
-
-    _graph_counter += 1
-    gid = f"gp{_graph_counter}"
-
-    icon = f' <a class="graph-toggle" onclick="toggleGraph(\'{gid}\')" title="Host performance graphs">&#x1F4CA;</a>'
-
-    metrics_json = json.dumps(metrics, separators=(",", ":"))
-    safe_json = metrics_json.replace("</", "<\\/").replace("<!--", "<\\!--")
-
-    panel = (
-        f'<div id="{gid}" class="perf-graphs" style="display:none">'
-        f'<div class="graph-source">Host metrics (PCP)</div>'
-        f'<script type="application/json">{safe_json}</script>'
-        f'<div class="pcp-chart-grid"></div>'
-        f'</div>'
-    )
-
-    return f"<li>{job_link}{icon}{panel}</li>"
-
-
-def _badge_class(total_failed, has_critical=False):
-    if total_failed == 0:
-        return "badge-ok"
-    if total_failed >= 5 or has_critical:
-        return "badge-critical"
-    return "badge-issues"
-
-
-def _jira_escape(text):
-    for ch in r'\{}[]|*^~_':
-        text = text.replace(ch, '\\' + ch)
-    return text
-
-
-def _create_bug_url(issue, source_label, jira_cfg):
-    """Build a JIRA create-issue URL prefilled with the issue's details.
-
-    Uses Jira wiki markup (not Markdown) since the URL bypasses MCP conversion.
-    The causal chain quotes are omitted to stay within browser URL length limits.
-    """
-    summary = f'{jira_cfg["summary_prefix"]}{issue.get("title", "")}'[:100]
-    root_cause = _jira_escape(issue.get("root_cause", ""))
-    next_steps = _jira_escape(issue.get("next_steps", ""))
-    severity = issue.get("severity", "UNKNOWN")
-    failure_type = issue.get("failure_type", "test")
-    confidence = issue.get("confidence", "")
-    scenarios = issue.get("scenarios", [])
-    causal_chain = issue.get("causal_chain", [])
-    jobs = issue.get("affected_jobs", [])[:5]
-
-    lines = [
-        "h2. Description of problem",
-        "",
-        f"CI job failures detected: {source_label}",
-        "",
-        root_cause or "",
-        "",
-        "h2. How reproducible",
-        "",
-        "N/A",
-        "",
-        "h2. Steps to Reproduce",
-        "",
-        "# Run the CI job(s) listed below",
-        f"# Observe failure in step: {failure_type}",
-        "",
-        "h2. Expected results",
-        "",
-        "CI job should pass successfully.",
-        "",
-        "h2. Additional info",
-        "",
-        f"*Error Severity:* {severity}",
-    ]
-    if confidence:
-        lines.append(f"*Analysis confidence:* {confidence}")
-    if scenarios:
-        lines.append(f"*Affected scenarios:* {', '.join(scenarios)}")
-    lines.append(f"*Number of affected jobs:* {issue.get('job_count', len(jobs))}")
-    if jobs:
-        last_date = max(j.get("date", "") for j in jobs)
-        if last_date:
-            lines.append(f"*Last observed:* {last_date}")
-
-    if causal_chain:
-        lines.append("")
-        lines.append("*Root cause chain:*")
-        for link in causal_chain:
-            if isinstance(link, dict) and link.get("cause"):
-                lines.append(f"# {_jira_escape(link['cause'])}")
-
-    if next_steps:
-        lines.append("")
-        lines.append(f"*Remediation:* {next_steps}")
-
-    if jobs:
-        lines.append("")
-        lines.append("*Affected Jobs:*")
-        for job in jobs:
-            name = job.get("name", "unknown")
-            url = job.get("url", "")
-            if url:
-                lines.append(f"- [{name}|{url}]")
-            else:
-                lines.append(f"- {name}")
-
-    lines.append("")
-    lines.append("Prefilled by the CI Doctor report.")
-
-    params = {
-        "pid": jira_cfg["pid"],
-        "issuetype": jira_cfg["issuetype"],
-        "components": jira_cfg["component"],
-        "labels": jira_cfg["labels"],
-        "reporter": jira_cfg.get("reporter", ""),
-        "summary": summary,
-        "description": "\n".join(lines),
-    }
-    params = {k: v for k, v in params.items() if v}
-    # ~4000 char practical limit for CreateIssueDetails URLs:
-    # - https://gitlab.com/gitlab-org/gitlab/-/issues/276896
-    # - https://jira.atlassian.com/browse/JRA-31774
-    max_url_len = 3800
-    base = f"{JIRA_BASE}/secure/CreateIssueDetails!init.jspa?"
-    qs = urllib.parse.urlencode(params)
-    url = base + qs
-    if len(url) > max_url_len and "description" in params:
-        over = len(url) - max_url_len
-        desc = params["description"]
-        suffix = "\n\n(truncated — open the bug to add more detail)"
-        params["description"] = desc[:max(0, len(desc) - over - len(suffix))] + suffix
-        url = base + urllib.parse.urlencode(params)
-    return url
-
-
-def _render_create_bug_button(issue, source_label, jira_cfg):
-    if not jira_cfg:
-        return ""
-    url = _create_bug_url(issue, source_label, jira_cfg)
-    return (
-        f'<a class="bug-tag create-bug-btn" href="{_e(url)}" '
-        'target="_blank">+ Create Bug in JIRA</a>'
-    )
-
-
-def _render_bug_links(bug_match, issue, source_label, jira_cfg=None):
-    has_dups = bool(bug_match) and bool(bug_match.get("duplicates"))
-    has_regs = bool(bug_match) and bool(bug_match.get("regressions"))
-
-    create_btn = _render_create_bug_button(issue, source_label, jira_cfg)
-
-    if not has_dups and not has_regs:
-        no_bugs = '<span class="no-bugs">No tracked bugs</span>'
-        return f"{no_bugs} {create_btn}" if create_btn else no_bugs
-
-    parts = []
-    if create_btn:
-        parts.append(f"{create_btn}<br>")
-    if has_dups:
-        parts.append("<strong>Bugs:</strong><br>")
-        for d in bug_match["duplicates"]:
-            assignee = d.get("assignee", "")
-            assignee_part = f", {_e(assignee)}" if assignee else ""
-            parts.append(
-                f'<a class="bug-tag bug-tag-open" '
-                f'href="https://issues.redhat.com/browse/{_e(d["key"])}" '
-                f'target="_blank">{_e(d["key"])}</a> '
-                f'<span class="job-date">{_e(d["summary"])} ({_e(d["status"])}{assignee_part})</span><br>'
-            )
-    if has_regs:
-        parts.append("<strong>Regressions:</strong><br>")
-        for r in bug_match["regressions"]:
-            assignee = r.get("assignee", "")
-            assignee_part = f", {_e(assignee)}" if assignee else ""
-            parts.append(
-                f'<a class="bug-tag bug-tag-regression" '
-                f'href="https://issues.redhat.com/browse/{_e(r["key"])}" '
-                f'target="_blank">{_e(r["key"])} &#x27F2;</a> '
-                f'<span class="job-date">{_e(r["summary"])} ({_e(r["status"])}{assignee_part})</span><br>'
-            )
-    return "".join(parts)
-
-
 # ---------------------------------------------------------------------------
-# HTML rendering
+# HTML generation — emits skeleton + embedded data + JS renderer
 # ---------------------------------------------------------------------------
-
-def render_release_section(version, rdata, bug_candidates, index_info=None, jira_cfg=None, release_status=None, job_issue_map=None):
-    if rdata is None:
-        return (
-            f'        <div class="release-section" id="release-{_e(version)}">\n'
-            '            <div class="release-header">\n'
-            f'                <h2>Release {_e(version)}</h2>\n'
-            '                <span class="badge badge-nodata">no data</span>\n'
-            '            </div>\n'
-            "            <p>Analysis failed to produce results.</p>\n"
-            "        </div>"
-        )
-
-    if rdata.get("collection_error"):
-        return (
-            f'        <div class="release-section" id="release-{_e(version)}">\n'
-            '            <div class="release-header">\n'
-            f'                <h2>Release {_e(version)}</h2>\n'
-            '                <span class="badge badge-nodata">collection error</span>\n'
-            '            </div>\n'
-            f'            <pre>Data collection failed: {_e(rdata["collection_error"])}</pre>\n'
-            "        </div>"
-        )
-
-    total = rdata["total_failed"]
-    has_critical = any(i.get("severity", "").upper() == "CRITICAL" for i in rdata["issues"])
-    badge = _badge_class(total, has_critical)
-    b = rdata["breakdown"]
-
-    lines = []
-    lines.append(f'        <div class="release-section" id="release-{_e(version)}">')
-    lines.append('            <div class="release-header">')
-    lines.append(f'                <h2>Release {_e(version)}<a href="#release-{_e(version)}" class="section-anchor" title="Copy link to this section">&#128279;</a></h2>')
-    label = "failure" if total == 1 else "failures"
-    lines.append(f'                <span class="badge {badge} release-badge" data-release="{_e(version)}">{total} {label}</span>')
-    lines.append("            </div>")
-
-    idx_html = _render_index_image(index_info)
-    if idx_html:
-        lines.append(idx_html)
-
-    lines.append('            <div class="breakdown">')
-    lines.append(f'                <span class="breakdown-item"><strong class="bd-build">{b["build"]}</strong> Build</span>')
-    lines.append(f'                <span class="breakdown-item"><strong class="bd-test">{b["test"]}</strong> Test</span>')
-    lines.append(f'                <span class="breakdown-item"><strong class="bd-infra">{b["infrastructure"]}</strong> Infrastructure</span>')
-    lines.append("            </div>")
-
-    lines.append('            <div class="section-panels">')
-
-    if release_status:
-        _jim = job_issue_map or {}
-        total_s = len(release_status)
-        passed_s = sum(1 for j in release_status if j.get("status") == "success")
-        rate_s = round(passed_s / total_s * 100) if total_s > 0 else 0
-        rate_css = "status-pass" if rate_s >= 90 else ("status-fail" if rate_s < 70 else "")
-        lines.append('            <details class="section-toggle">')
-        lines.append(f'            <summary>All Jobs &mdash; <span class="{rate_css}">{passed_s}/{total_s} passed ({rate_s}%)</span></summary>')
-        lines.append('            <table class="data-table" data-default-sort="2,asc">')
-        lines.append('            <thead><tr>')
-        lines.append('                <th>Status</th><th>Job Name</th><th>Finished</th><th>Duration</th><th>Issues</th>')
-        lines.append('            </tr></thead>')
-        lines.append('            <tbody>')
-        sorted_status = sorted(release_status, key=lambda j: j.get("finished") or "")
-        for sj in sorted_status:
-            st = sj.get("status", "unknown")
-            if st == "success":
-                st_badge = '<span class="severity-badge severity-low" style="background:#d4edda;color:#155724">PASS</span>'
-            elif st == "failure":
-                st_badge = '<span class="severity-badge severity-high">FAIL</span>'
-            elif st == "pending":
-                st_badge = '<span class="severity-badge" style="background:#cce5ff;color:#004085">RUNNING</span>'
-            else:
-                st_badge = f'<span class="severity-badge" style="background:#e2e3e5;color:#383d41">{_e(st.upper())}</span>'
-            sj_name = _e(sj.get("job", ""))
-            sj_url = sj.get("url", "")
-            sj_cell = f'<a href="{_e(sj_url)}" target="_blank">{sj_name}</a>' if sj_url else sj_name
-            sj_finished = _e(_format_epoch(sj.get("finished")))
-            sj_duration = _e(_format_duration(sj.get("duration")))
-            sj_issues = _jim.get(sj.get("job", ""), [])
-            if sj_issues:
-                items = []
-                for anchor, title in sj_issues:
-                    short = _e(title[:60] + ("..." if len(title) > 60 else ""))
-                    items.append(f'<li><a href="#{anchor}" class="issue-ref" title="{_e(title)}">{short}</a></li>')
-                issues_cell = f'<ul style="margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:4px">{"".join(items)}</ul>'
-            else:
-                issues_cell = ""
-            lines.append('            <tr>')
-            lines.append(f'                <td>{st_badge}</td>')
-            lines.append(f'                <td>{sj_cell}</td>')
-            lines.append(f'                <td>{sj_finished}</td>')
-            lines.append(f'                <td>{sj_duration}</td>')
-            lines.append(f'                <td style="font-size:0.85em">{issues_cell}</td>')
-            lines.append('            </tr>')
-        lines.append('            </tbody>')
-        lines.append('            </table>')
-        lines.append('            </details>')
-
-    if rdata["issues"]:
-        lines.append('            <details class="section-toggle">')
-        lines.append(f'            <summary>Failure Analysis &mdash; {total} {label}</summary>')
-    lines.append('            <table class="issues-table">')
-    for issue in rdata["issues"]:
-        bug_match = issue.get("bug_match") or match_issue_to_bugs(issue["title"], bug_candidates)
-        jc = issue["job_count"]
-        sev = issue.get("severity", "UNKNOWN").upper()
-        sev_css = f"severity-{sev.lower()}" if sev in ("HIGH", "MEDIUM", "LOW", "CRITICAL") else ""
-        ftype = issue.get("failure_type", "test")
-        ftype_label = "INFRA" if ftype == "infrastructure" else ftype.upper()
-        ftype_css = "ftype-infra" if ftype == "infrastructure" else f"ftype-{ftype}"
-        jobs_label = f'{jc} {"job" if jc == 1 else "jobs"}'
-
-        job_dates = sorted({j["date"][:10] for j in issue.get("affected_jobs", []) if j.get("date")})
-        dates_attr = f' data-dates="{" ".join(job_dates)}"' if job_dates else ""
-        anchor_id = f'release-{_e(version)}-{issue["number"]}'
-        lines.append(f'            <tr class="issue-row" id="{anchor_id}"{dates_attr}>')
-        lines.append(f'                <td class="col-sev"><span class="severity-badge {sev_css}">{sev}</span></td>')
-        lines.append(f'                <td class="col-ftype"><span class="ftype-badge {ftype_css}">{ftype_label}</span></td>')
-        lines.append(f'                <td class="col-title">{_e(issue["title"])}</td>')
-        lines.append(f'                <td class="col-jobs">{jobs_label}</td>')
-        lines.append(f'                <td class="col-link"><a href="#{anchor_id}" class="anchor-link" title="Copy link to this issue">&#128279;</a></td>')
-        lines.append('            </tr>')
-        lines.append('            <tr class="detail-row"><td colspan="5">')
-        if issue.get("root_cause"):
-            conf_badge = _render_confidence_badge(issue)
-            lines.append(f'                <div class="root-cause"><strong>Root Cause:</strong> {conf_badge} {_e(issue["root_cause"])}</div>')
-        lines.extend(_render_investigation(issue))
-        bug_links = _render_bug_links(bug_match, issue, f"Release {version}", jira_cfg)
-        lines.append(f'                <div class="bug-links">{bug_links}</div>')
-        if issue.get("affected_jobs"):
-            lines.append("                <p><strong>Affected Jobs:</strong></p><ul>")
-            for job in issue["affected_jobs"]:
-                lines.append(f"                    {_render_job_with_graphs(job)}")
-            lines.append("                </ul>")
-        if issue.get("next_steps"):
-            lines.append(f"                <p><em>Next Steps:</em> {_e(issue['next_steps'])}</p>")
-        lines.append("            </td></tr>")
-    lines.append('            </table>')
-    if rdata["issues"]:
-        lines.append('            </details>')
-
-    lines.append('            </div>')  # section-panels
-
-    lines.append("        </div>")
-    return "\n".join(lines)
-
-
-def render_pr_section(pr_data, bug_candidates, pr_status, pr_error=None, jira_cfg=None):
-    """Render the Pull Requests tab.
-
-    pr_data: analyzed PR summary (from aggregate), may be None.
-    bug_candidates: flat list of all bug candidates (pooled across all sources).
-    pr_status: list of all PR status snapshots (from prepare), may be None.
-    pr_error: collection error message string, or None.
-    """
-    if pr_error:
-        return (
-            '        <div class="release-section">\n'
-            '            <div class="release-header">\n'
-            "                <h2>Pull Requests</h2>\n"
-            '                <span class="badge badge-nodata">collection error</span>\n'
-            "            </div>\n"
-            f'            <pre>Data collection failed: {_e(pr_error)}</pre>\n'
-            "        </div>"
-        )
-
-    # Build a lookup of analyzed PRs by number
-    analyzed = {}
-    if pr_data and pr_data.get("has_content"):
-        for pr in pr_data["prs"]:
-            analyzed[pr["number"]] = pr
-
-    # Build the full PR list: all PRs from status, merged with analysis
-    all_prs = []
-    if pr_status:
-        for s in pr_status:
-            num = s["pr_number"]
-            entry = {
-                "number": num,
-                "title": s.get("title", ""),
-                "url": s.get("url", ""),
-                "passed": s.get("passed", 0),
-                "failed": s.get("failed", 0),
-                "pending": s.get("pending", 0),
-                "total": s.get("total", 0),
-            }
-            if num in analyzed:
-                entry["analysis"] = analyzed[num]
-            all_prs.append(entry)
-    elif analyzed:
-        # No status file — fall back to analyzed data only
-        for pr in pr_data["prs"]:
-            all_prs.append({
-                "number": pr["number"],
-                "title": pr.get("title", ""),
-                "url": pr.get("url", ""),
-                "passed": 0,
-                "failed": pr.get("failed", 0),
-                "pending": 0,
-                "total": pr.get("failed", 0),
-                "analysis": pr,
-            })
-
-    if not all_prs:
-        return (
-            '        <div class="release-section">\n'
-            '            <div class="release-header">\n'
-            "                <h2>Pull Requests</h2>\n"
-            '                <span class="badge badge-ok">0 failures</span>\n'
-            "            </div>\n"
-            "            <p>No open pull requests found.</p>\n"
-            "        </div>"
-        )
-
-    # TOC
-    toc_lines = []
-    toc_lines.append('        <div class="toc">')
-    toc_lines.append('            <h3>Table of Contents</h3>')
-    toc_lines.append('            <ul>')
-    for pr in all_prs:
-        analysis = pr.get("analysis")
-        if analysis:
-            b = analysis.get("breakdown", {})
-        else:
-            b = {"build": 0, "test": 0, "infrastructure": 0}
-        pending = pr.get("pending", 0)
-        suffix = f' &mdash; {pending} running' if pending else ''
-        toc_lines.append(
-            f'                <li><a href="#pr-{pr["number"]}">PR# {pr["number"]}</a>'
-            f' &mdash; {pr["failed"]} failures ({b.get("build", 0)} build, {b.get("test", 0)} test, {b.get("infrastructure", 0)} infra){suffix}</li>'
-        )
-    toc_lines.append('            </ul>')
-    toc_lines.append('        </div>')
-
-    # Sections
-    lines = []
-    for pr in all_prs:
-        analysis = pr.get("analysis")
-        total_failed = pr["failed"]
-        badge = _badge_class(total_failed)
-
-        lines.append(f'        <div class="release-section" id="pr-{pr["number"]}">')
-        lines.append('            <div class="release-header">')
-        pr_link = f'<a href="{_e(pr["url"])}" target="_blank" title="{_e(pr["title"])}">PR# {pr["number"]}</a>' if pr.get("url") else f'<span title="{_e(pr["title"])}">PR# {pr["number"]}</span>'
-        pr_release_m = re.search(r"rebase-(release-\d+\.\d+|main)", pr.get("title", ""))
-        pr_release_label = f' (rebase {pr_release_m.group(1)})' if pr_release_m else f': {_e(pr["title"])}' if pr.get("title") else ''
-        lines.append(f'                <h2>{pr_link}{pr_release_label}<a href="#pr-{pr["number"]}" class="section-anchor" title="Copy link to this section">&#128279;</a></h2>')
-        label = "failure" if total_failed == 1 else "failures"
-        lines.append(f'                <span class="badge {badge}">{total_failed} {label}</span>')
-
-        lines.append("            </div>")
-
-        # Breakdown: same format as periodics (Build/Test/Infrastructure)
-        # Plus job status (passed/running) when available
-        pending = pr.get("pending", 0)
-        if analysis and analysis.get("breakdown"):
-            b = analysis["breakdown"]
-        else:
-            b = {"build": 0, "test": 0, "infrastructure": 0}
-        lines.append('            <div class="breakdown">')
-        lines.append(f'                <span class="breakdown-item"><strong>{b.get("build", 0)}</strong> Build</span>')
-        lines.append(f'                <span class="breakdown-item"><strong>{b.get("test", 0)}</strong> Test</span>')
-        lines.append(f'                <span class="breakdown-item"><strong>{b.get("infrastructure", 0)}</strong> Infrastructure</span>')
-        if pr["passed"]:
-            lines.append(f'                <span class="breakdown-item"><strong>{pr["passed"]}</strong> Passed</span>')
-        if pending:
-            lines.append(f'                <span class="breakdown-item"><strong>{pending}</strong> Running</span>')
-        lines.append("            </div>")
-
-        if analysis and analysis.get("issues"):
-
-            lines.append('            <table class="issues-table">')
-            for issue in analysis["issues"]:
-                bug_match = issue.get("bug_match") or match_issue_to_bugs(issue.get("title", ""), bug_candidates)
-                jc = issue["job_count"]
-                sev = issue.get("severity", "UNKNOWN").upper()
-                sev_css = f"severity-{sev.lower()}" if sev in ("HIGH", "MEDIUM", "LOW", "CRITICAL") else ""
-                ftype = issue.get("failure_type", "test")
-                ftype_label = "INFRA" if ftype == "infrastructure" else ftype.upper()
-                ftype_css = "ftype-infra" if ftype == "infrastructure" else f"ftype-{ftype}"
-                jobs_label = f'{jc} {"job" if jc == 1 else "jobs"}'
-
-                anchor_id = f'pr-{pr["number"]}-{issue["number"]}'
-                lines.append(f'            <tr class="issue-row" id="{anchor_id}">')
-                lines.append(f'                <td class="col-sev"><span class="severity-badge {sev_css}">{sev}</span></td>')
-                lines.append(f'                <td class="col-ftype"><span class="ftype-badge {ftype_css}">{ftype_label}</span></td>')
-                lines.append(f'                <td class="col-title">{_e(issue["title"])}</td>')
-                lines.append(f'                <td class="col-jobs">{jobs_label}</td>')
-                lines.append(f'                <td class="col-link"><a href="#{anchor_id}" class="anchor-link" title="Copy link to this issue">&#128279;</a></td>')
-                lines.append('            </tr>')
-                lines.append('            <tr class="detail-row"><td colspan="5">')
-                if issue.get("root_cause"):
-                    conf_badge = _render_confidence_badge(issue)
-                    lines.append(f'                <div class="root-cause"><strong>Root Cause:</strong> {conf_badge} {_e(issue["root_cause"])}</div>')
-                lines.extend(_render_investigation(issue))
-                bug_links = _render_bug_links(bug_match, issue, f'PR #{pr["number"]}', jira_cfg)
-                lines.append(f'                <div class="bug-links">{bug_links}</div>')
-                if issue.get("affected_jobs"):
-                    lines.append("                <p><strong>Affected Jobs:</strong></p><ul>")
-                    for job in issue["affected_jobs"]:
-                        lines.append(f"                    {_render_job_with_graphs(job)}")
-                    lines.append("                </ul>")
-                if issue.get("next_steps"):
-                    lines.append(f"                <p><em>Next Steps:</em> {_e(issue['next_steps'])}</p>")
-                lines.append("            </td></tr>")
-            lines.append('            </table>')
-
-        lines.append("        </div>")
-    return "\n".join(toc_lines) + "\n\n" + "\n".join(lines)
-
-
-def _format_epoch(epoch_str):
-    try:
-        return datetime.fromtimestamp(int(epoch_str), tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
-    except (ValueError, TypeError, OSError):
-        return str(epoch_str or "")
-
-
-def _format_duration(dur_str):
-    try:
-        secs = int(float(dur_str))
-        if secs >= 3600:
-            return f"{secs // 3600}h {(secs % 3600) // 60}m"
-        return f"{secs // 60}m {secs % 60}s"
-    except (ValueError, TypeError):
-        return str(dur_str or "")
-
-
-def _build_job_issue_map(releases_data):
-    """Map job name → list of (anchor_id, issue_title) for linking status rows to issues."""
-    result = {}
-    for version, rdata in releases_data.items():
-        if not rdata or not rdata.get("issues"):
-            continue
-        for issue in rdata["issues"]:
-            anchor = f'release-{_e(version)}-{issue["number"]}'
-            title = issue.get("title", "")
-            for job in issue.get("affected_jobs", []):
-                name = job.get("name", "")
-                if name:
-                    result.setdefault(name, []).append((anchor, title))
-    return result
-
-
-
-def _render_diagnostics_banner(text):
-    if not text or not text.strip():
-        return ""
-    lines = _e(text.strip())
-    return (
-        '    <details class="diagnostics-banner">\n'
-        '        <summary>Pipeline Diagnostics</summary>\n'
-        f'        <pre>{lines}</pre>\n'
-        '    </details>'
-    )
-
 
 def generate_html(component_title, releases_data, all_bug_candidates, pr_data, pr_status, timestamp, pr_error=None, bugs_tab_data=None, images_tab_data=None, index_data=None, jira_cfg=None, status_data=None, diagnostics_text=None):
     date_str = timestamp.strftime("%Y-%m-%d")
     time_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
 
     # --- Pre-compute bug matches and metrics for JSON data model ---
-    # Store results in each issue dict so they are available both in the
-    # embedded REPORT_DATA JSON and in the (still-active) Python renderers.
     for _ver, _rd in releases_data.items():
         if _rd and _rd.get("issues"):
             for iss in _rd["issues"]:
@@ -1882,91 +1765,7 @@ def generate_html(component_title, releases_data, all_bug_candidates, pr_data, p
     report_json_str = json.dumps(report_data, default=str, separators=(",", ":"))
     safe_report_json = report_json_str.replace("</", "<\\/").replace("<!--", "<\\!--")
 
-    cards = []
-    for version, rdata in releases_data.items():
-        status = (status_data or {}).get(version)
-        if rdata and rdata.get("collection_error"):
-            count = "!"
-            css = "status-fail"
-            subtitle = ""
-        elif rdata:
-            failed = rdata["total_failed"]
-            if status:
-                total = len(status)
-                passed = sum(1 for j in status if j.get("status") == "success")
-                count = f'{failed}<span style="font-size:0.5em;font-weight:400;color:#6c757d">/{total}</span>'
-                rate = round(passed / total * 100) if total > 0 else 0
-                subtitle = f'<div style="font-size:0.8em;color:#6c757d">{rate}% pass rate</div>'
-            else:
-                count = failed
-                subtitle = ""
-            css = "status-fail" if failed > 0 else "status-pass"
-        else:
-            count = "?"
-            css = ""
-            subtitle = ""
-        cards.append(
-            '        <div class="overview-card">\n'
-            f'            <div class="number {css}">{count}</div>\n'
-            f'            <div class="label">Release {_e(version)}</div>\n'
-            f'            {subtitle}\n'
-            "        </div>"
-        )
-    # PR overview: count failures from status (all PRs) or analysis
-    if pr_error:
-        pr_failed_count = "!"
-        pr_css = "status-fail"
-    elif pr_status:
-        pr_failed_count = sum(p.get("failed", 0) for p in pr_status)
-        pr_css = "status-fail" if pr_failed_count > 0 else "status-pass"
-    elif pr_data:
-        pr_failed_count = pr_data.get("total_failed", 0)
-        pr_css = "status-fail" if pr_failed_count > 0 else "status-pass"
-    else:
-        pr_failed_count = 0
-        pr_css = "status-pass"
-    cards.append(
-        '        <div class="overview-card">\n'
-        f'            <div class="number {pr_css}">{pr_failed_count}</div>\n'
-        f'            <div class="label">Pull Requests</div>\n'
-        "        </div>"
-    )
-
-    toc = []
-    for version, rdata in releases_data.items():
-        status = (status_data or {}).get(version)
-        if rdata and rdata.get("collection_error"):
-            toc.append(
-                f'                <li><a href="#release-{_e(version)}">Release {_e(version)}</a> &mdash; collection error</li>'
-            )
-        elif rdata:
-            b = rdata["breakdown"]
-            pass_info = ""
-            if status:
-                total = len(status)
-                passed = sum(1 for j in status if j.get("status") == "success")
-                rate = round(passed / total * 100) if total > 0 else 0
-                pass_info = f" &mdash; {passed}/{total} passed ({rate}%)"
-            toc.append(
-                f'                <li><a href="#release-{_e(version)}">Release {_e(version)}</a> &mdash; '
-                f'<span class="toc-counts" data-release="{_e(version)}">'
-                f'{rdata["total_failed"]} failures ({b["build"]} build, {b["test"]} test, {b["infrastructure"]} infra)'
-                f'{pass_info}</span></li>'
-            )
-        else:
-            toc.append(f'                <li><a href="#release-{_e(version)}">Release {_e(version)}</a> &mdash; no data</li>')
-
-    job_issue_map = _build_job_issue_map(releases_data)
-
-    sections = []
-    _idx = index_data or {}
-    for version, rdata in releases_data.items():
-        rs = (status_data or {}).get(version)
-        sections.append(render_release_section(version, rdata, all_bug_candidates, _idx.get(version), jira_cfg, release_status=rs, job_issue_map=job_issue_map))
-
-    pr_section = render_pr_section(pr_data, all_bug_candidates, pr_status, pr_error, jira_cfg)
-    bugs_section = render_bugs_section(bugs_tab_data) if bugs_tab_data else ""
-    images_section = render_images_section(images_tab_data)
+    chartjs_tags = f'<script>{_CHARTJS_SRC}</script><script>{_PCP_CHARTS_SRC}</script>' if _CHARTJS_SRC else ''
 
     return f"""\
 <!DOCTYPE html>
@@ -1982,54 +1781,30 @@ def generate_html(component_title, releases_data, all_bug_candidates, pr_data, p
 <body>
 <div id="loading" style="display:flex;align-items:center;justify-content:center;height:80vh;font-family:sans-serif;color:#6c757d;font-size:1.2em;">Loading report&hellip;</div>
 <div class="container" style="display:none">
-    <h1>{component_title} CI Doctor Report</h1>
-    <p class="timestamp">Generated: {time_str} UTC</p>
-{_render_diagnostics_banner(diagnostics_text)}
-    <div class="overview-grid">
-{chr(10).join(cards)}
-    </div>
+    <h1 id="report-title"></h1>
+    <p class="timestamp" id="report-timestamp"></p>
+    <div id="diagnostics-slot"></div>
+    <div id="overview-slot" class="overview-grid"></div>
 
     <div class="tab-bar">
-        <button class="tab-btn active" onclick="showTab(event, 'periodics')">Periodics</button>
-        <button class="tab-btn" onclick="showTab(event, 'pull-requests')">Pull Requests</button>
-        <button class="tab-btn" onclick="showTab(event, 'bugs')">Bugs</button>
-        <button class="tab-btn" onclick="showTab(event, 'images')">Image Health</button>
+        <button class="tab-btn active" data-tab="periodics">Periodics</button>
+        <button class="tab-btn" data-tab="pull-requests">Pull Requests</button>
+        <button class="tab-btn" data-tab="bugs">Bugs</button>
+        <button class="tab-btn" data-tab="images">Image Health</button>
     </div>
     <div class="filter-bar">
-        <input type="text" id="report-filter" placeholder="Filter issues… (title, root cause, job name, severity)">
+        <input type="text" id="report-filter" placeholder="Filter issues\\u2026 (title, root cause, job name, severity)">
         <span class="filter-count" id="filter-count"></span>
     </div>
 
-    <div id="tab-periodics" class="tab-content active">
-        <div class="toc">
-            <div class="toc-header">
-                <h3>Table of Contents</h3>
-                <label class="filter-toggle"><input type="checkbox" id="filter-today" onchange="filterToday(this.checked)"> Today only</label>
-                <label class="filter-toggle"><input type="checkbox" id="toggle-side-by-side" onchange="toggleSideBySide(this.checked)"> Side by side</label>
-            </div>
-            <ul>
-{chr(10).join(toc)}
-            </ul>
-        </div>
-
-{chr(10).join(sections)}
-    </div>
-
-    <div id="tab-pull-requests" class="tab-content">
-{pr_section}
-    </div>
-
-    <div id="tab-bugs" class="tab-content">
-{bugs_section}
-    </div>
-
-    <div id="tab-images" class="tab-content">
-{images_section}
-    </div>
+    <div id="tab-periodics" class="tab-content active"></div>
+    <div id="tab-pull-requests" class="tab-content"></div>
+    <div id="tab-bugs" class="tab-content"></div>
+    <div id="tab-images" class="tab-content"></div>
 
     <p>&nbsp;</p><p>&nbsp;</p><p>&nbsp;</p><p>&nbsp;</p>
 </div>
-{f'<script>{_CHARTJS_SRC}</script><script>{_PCP_CHARTS_SRC}</script>' if _CHARTJS_SRC else ''}
+{chartjs_tags}
 <script>
 {JS}
 </script>
