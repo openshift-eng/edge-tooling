@@ -198,6 +198,10 @@ CSS = """\
         .section-toggle summary::before { content: '\\25B6  '; font-size: 0.8em; color: #6c757d; }
         .section-toggle[open] summary::before { content: '\\25BC  '; }
         .section-toggle summary::-webkit-details-marker { display: none; }
+        .filter-bar { display: flex; align-items: center; gap: 12px; margin: 12px 0 0 0; }
+        .filter-bar input[type="text"] { flex: 1; max-width: 360px; padding: 6px 12px; border: 1px solid #dee2e6; border-radius: 6px; font-size: 0.9em; outline: none; }
+        .filter-bar input[type="text"]:focus { border-color: #e94560; box-shadow: 0 0 0 2px rgba(233,69,96,0.15); }
+        .filter-bar .filter-count { font-size: 0.85em; color: #6c757d; white-space: nowrap; }
         .release-section.side-by-side .section-panels { display: flex; gap: 20px; }
         .release-section.side-by-side .section-panels > .section-toggle { flex: 1; min-width: 0; }
         @media (max-width: 1200px) { .release-section.side-by-side .section-panels { flex-direction: column; } }"""
@@ -411,7 +415,85 @@ document.querySelectorAll('.data-table').forEach(function(table) {
     } else if (headers.length >= 2) {
         sortBy(headers.length - 2, false);
     }
-});"""
+});
+// --- Text filter: search issues across all tabs via REPORT_DATA ---
+(function() {
+    var input = document.getElementById('report-filter');
+    var countEl = document.getElementById('filter-count');
+    if (!input || !countEl || !window.REPORT_DATA) return;
+    var debounceTimer;
+    function matchIssue(iss, q) {
+        var fields = [
+            iss.title || '',
+            iss.root_cause || '',
+            iss.failure_type || '',
+            iss.severity || '',
+            iss.next_steps || ''
+        ];
+        (iss.affected_jobs || []).forEach(function(j) { fields.push(j.name || ''); });
+        (iss.scenarios || []).forEach(function(s) { fields.push(s); });
+        var text = fields.join(' ').toLowerCase();
+        return text.indexOf(q) !== -1;
+    }
+    function applyFilter() {
+        var q = input.value.trim().toLowerCase();
+        var shown = 0, total = 0;
+        // Filter periodics tab issue rows
+        document.querySelectorAll('#tab-periodics .issue-row').forEach(function(row) {
+            total++;
+            if (!q) { row.style.display = ''; shown++; return; }
+            var id = row.id || '';
+            var parts = id.match(/^release-(.+)-(\\d+)$/);
+            if (!parts) { row.style.display = ''; shown++; return; }
+            var ver = parts[1], num = parseInt(parts[2], 10);
+            var rd = (window.REPORT_DATA.releases_data || {})[ver];
+            if (!rd || !rd.issues) { row.style.display = ''; shown++; return; }
+            var iss = rd.issues.find(function(i) { return i.number === num; });
+            var vis = iss ? matchIssue(iss, q) : true;
+            row.style.display = vis ? '' : 'none';
+            if (vis) shown++;
+            var detail = row.nextElementSibling;
+            if (detail && detail.classList.contains('detail-row')) {
+                if (!vis) { detail.classList.remove('show'); detail.style.display = 'none'; }
+                else { detail.style.display = ''; }
+            }
+        });
+        // Filter PR tab issue rows
+        document.querySelectorAll('#tab-pull-requests .issue-row').forEach(function(row) {
+            total++;
+            if (!q) { row.style.display = ''; shown++; return; }
+            var id = row.id || '';
+            var parts = id.match(/^pr-(\\d+)-(\\d+)$/);
+            if (!parts) { row.style.display = ''; shown++; return; }
+            var prNum = parseInt(parts[1], 10), issNum = parseInt(parts[2], 10);
+            var prData = window.REPORT_DATA.pr_data;
+            var pr = prData && prData.prs ? prData.prs.find(function(p) { return p.number === prNum; }) : null;
+            var iss = pr && pr.issues ? pr.issues.find(function(i) { return i.number === issNum; }) : null;
+            var vis = iss ? matchIssue(iss, q) : true;
+            row.style.display = vis ? '' : 'none';
+            if (vis) shown++;
+            var detail = row.nextElementSibling;
+            if (detail && detail.classList.contains('detail-row')) {
+                if (!vis) { detail.classList.remove('show'); detail.style.display = 'none'; }
+                else { detail.style.display = ''; }
+            }
+        });
+        // Filter bugs tab rows
+        document.querySelectorAll('#tab-bugs .data-table tbody tr').forEach(function(row) {
+            total++;
+            if (!q) { row.style.display = ''; shown++; return; }
+            var text = row.textContent.toLowerCase();
+            var vis = text.indexOf(q) !== -1;
+            row.style.display = vis ? '' : 'none';
+            if (vis) shown++;
+        });
+        countEl.textContent = q ? (shown + ' / ' + total + ' matches') : '';
+    }
+    input.addEventListener('input', function() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(applyFilter, 300);
+    });
+})();"""
 
 
 # ---------------------------------------------------------------------------
@@ -1912,6 +1994,10 @@ def generate_html(component_title, releases_data, all_bug_candidates, pr_data, p
         <button class="tab-btn" onclick="showTab(event, 'pull-requests')">Pull Requests</button>
         <button class="tab-btn" onclick="showTab(event, 'bugs')">Bugs</button>
         <button class="tab-btn" onclick="showTab(event, 'images')">Image Health</button>
+    </div>
+    <div class="filter-bar">
+        <input type="text" id="report-filter" placeholder="Filter issues… (title, root cause, job name, severity)">
+        <span class="filter-count" id="filter-count"></span>
     </div>
 
     <div id="tab-periodics" class="tab-content active">
