@@ -1225,6 +1225,85 @@ document.querySelectorAll('.data-table').forEach(function(table) {
     }
     input.addEventListener('input', function() { clearTimeout(debounceTimer); debounceTimer = setTimeout(applyFilter, 300); });
 })();
+
+// === JSON / CSV export ===
+(function() {
+    function download(content, filename, mime) {
+        var blob = new Blob([content], {type: mime});
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+    function collectIssues() {
+        var rows = [];
+        var q = (document.getElementById('report-filter') || {}).value || '';
+        q = q.trim().toLowerCase();
+        var rd = D.releases_data || {};
+        for (var ver in rd) {
+            if (!rd[ver] || !rd[ver].issues) continue;
+            rd[ver].issues.forEach(function(iss) {
+                if (q) {
+                    var fields = [iss.title||'',iss.root_cause||'',iss.failure_type||'',iss.severity||'',iss.next_steps||''];
+                    (iss.affected_jobs||[]).forEach(function(j){fields.push(j.name||'');});
+                    (iss.scenarios||[]).forEach(function(s){fields.push(s);});
+                    if (fields.join(' ').toLowerCase().indexOf(q) === -1) return;
+                }
+                var dates = (iss.affected_jobs||[]).map(function(j){return j.date||'';}).filter(Boolean).sort();
+                rows.push({
+                    source: 'periodic', release: ver, issue_number: iss.number,
+                    title: iss.title||'', severity: iss.severity||'', failure_type: iss.failure_type||'',
+                    root_cause: iss.root_cause||'', confidence: iss.confidence||'',
+                    affected_job_count: iss.job_count||0,
+                    first_seen: dates.length ? dates[0] : '', last_seen: dates.length ? dates[dates.length-1] : '',
+                    bug_match_count: (iss.bug_match && iss.bug_match.duplicates) ? iss.bug_match.duplicates.length : 0
+                });
+            });
+        }
+        var prData = D.pr_data;
+        if (prData && prData.prs) {
+            prData.prs.forEach(function(pr) {
+                (pr.issues||[]).forEach(function(iss) {
+                    if (q) {
+                        var fields = [iss.title||'',iss.root_cause||'',iss.failure_type||'',iss.severity||'',iss.next_steps||''];
+                        (iss.affected_jobs||[]).forEach(function(j){fields.push(j.name||'');});
+                        (iss.scenarios||[]).forEach(function(s){fields.push(s);});
+                        if (fields.join(' ').toLowerCase().indexOf(q) === -1) return;
+                    }
+                    var dates = (iss.affected_jobs||[]).map(function(j){return j.date||'';}).filter(Boolean).sort();
+                    rows.push({
+                        source: 'pr', release: 'PR#' + pr.number, issue_number: iss.number,
+                        title: iss.title||'', severity: iss.severity||'', failure_type: iss.failure_type||'',
+                        root_cause: iss.root_cause||'', confidence: iss.confidence||'',
+                        affected_job_count: iss.job_count||0,
+                        first_seen: dates.length ? dates[0] : '', last_seen: dates.length ? dates[dates.length-1] : '',
+                        bug_match_count: (iss.bug_match && iss.bug_match.duplicates) ? iss.bug_match.duplicates.length : 0
+                    });
+                });
+            });
+        }
+        return rows;
+    }
+    document.getElementById('export-json').addEventListener('click', function() {
+        var q = ((document.getElementById('report-filter') || {}).value || '').trim();
+        var data = q ? {filter: q, issues: collectIssues(), exported: new Date().toISOString()} : D;
+        var json = JSON.stringify(data, null, 2);
+        var name = (D.component_title || 'report').toLowerCase().replace(/\\s+/g, '-') + '-' + (D.date || 'export') + '.json';
+        download(json, name, 'application/json');
+    });
+    document.getElementById('export-csv').addEventListener('click', function() {
+        var rows = collectIssues();
+        if (!rows.length) { alert('No issues to export.'); return; }
+        var cols = ['source','release','issue_number','title','severity','failure_type','root_cause','confidence','affected_job_count','first_seen','last_seen','bug_match_count'];
+        function esc(v) { var s = String(v); return s.indexOf(',') !== -1 || s.indexOf('"') !== -1 || s.indexOf('\\n') !== -1 ? '"' + s.replace(/"/g, '""') + '"' : s; }
+        var lines = [cols.join(',')];
+        rows.forEach(function(r) { lines.push(cols.map(function(c){return esc(r[c]);}).join(',')); });
+        var name = (D.component_title || 'report').toLowerCase().replace(/\\s+/g, '-') + '-' + (D.date || 'export') + '.csv';
+        download(lines.join('\\n'), name, 'text/csv');
+    });
+})();
 })();"""
 
 
@@ -1795,6 +1874,10 @@ def generate_html(component_title, releases_data, all_bug_candidates, pr_data, p
     <div class="filter-bar">
         <input type="text" id="report-filter" placeholder="Filter issues\\u2026 (title, root cause, job name, severity)">
         <span class="filter-count" id="filter-count"></span>
+        <span class="export-bar">
+            <button class="export-btn" id="export-json" title="Download report data as JSON">Export JSON</button>
+            <button class="export-btn" id="export-csv" title="Download issues as CSV">Export CSV</button>
+        </span>
     </div>
 
     <div id="tab-periodics" class="tab-content active"></div>
