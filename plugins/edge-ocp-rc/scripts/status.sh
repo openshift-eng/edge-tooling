@@ -162,10 +162,12 @@ trap 'rm -rf "$RESULTS_DIR"' EXIT
 # Look up a job's number matching launch.sh --list numbering
 job_num_lookup() {
     local topo="$1" target="$2"
+    local release
+    release=$(echo "$target" | awk -F'nightly-' '/nightly-/{split($2,a,"[^0-9.]"); print a[1]}')
     local n=0
-    for f in "$SCRIPT_DIR/jobs/${topo}.txt" \
-             "$SCRIPT_DIR/jobs/${topo}-z-stream.txt" \
-             "$SCRIPT_DIR/jobs/${topo}-y-stream.txt"; do
+    for f in "$SCRIPT_DIR/jobs/${release}/${topo}.txt" \
+             "$SCRIPT_DIR/jobs/${release}/${topo}-z-stream.txt" \
+             "$SCRIPT_DIR/jobs/${release}/${topo}-y-stream.txt"; do
         [[ ! -f "$f" ]] && continue
         while IFS= read -r line; do
             [[ -z "$line" ]] && continue
