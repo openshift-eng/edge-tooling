@@ -1745,7 +1745,24 @@ def _render_diagnostics_banner(text):
     )
 
 
-def generate_html(component_title, releases_data, all_bug_candidates, pr_data, pr_status, timestamp, pr_error=None, bugs_tab_data=None, images_tab_data=None, index_data=None, jira_cfg=None, status_data=None, diagnostics_text=None):
+def _read_commit_info():
+    """Read commit metadata from files baked into the container image."""
+    info = {"sha": "unknown", "subject": "", "date": ""}
+    etd = os.environ.get("EDGE_TOOLING_DIR", os.path.dirname(os.path.abspath(__file__)))
+    for key, filename in (
+        ("sha", ".commit-sha"),
+        ("subject", ".commit-subject"),
+        ("date", ".commit-date"),
+    ):
+        try:
+            with open(os.path.join(etd, filename), encoding="utf-8") as f:
+                info[key] = f.read().strip()
+        except OSError:
+            pass
+    return info
+
+
+def generate_html(component_title, releases_data, all_bug_candidates, pr_data, pr_status, timestamp, pr_error=None, bugs_tab_data=None, images_tab_data=None, index_data=None, jira_cfg=None, status_data=None, diagnostics_text=None, commit_version="unknown", commit_subject="", commit_date=""):
     date_str = timestamp.strftime("%Y-%m-%d")
     time_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1849,7 +1866,7 @@ def generate_html(component_title, releases_data, all_bug_candidates, pr_data, p
 <div id="loading" style="display:flex;align-items:center;justify-content:center;height:80vh;font-family:sans-serif;color:#6c757d;font-size:1.2em;">Loading report&hellip;</div>
 <div class="container" style="display:none">
     <h1>{component_title} CI Doctor Report</h1>
-    <p class="timestamp">Generated: {time_str} UTC</p>
+    <p class="timestamp">Generated: {time_str} UTC | edge-tooling commit: <span title="{html_mod.escape(commit_subject)} ({html_mod.escape(commit_date)})">{commit_version}</span></p>
 {_render_diagnostics_banner(diagnostics_text)}
     <div class="overview-grid">
 {chr(10).join(cards)}
@@ -2112,7 +2129,8 @@ def main():
 
     # Generate HTML
     timestamp = datetime.now(timezone.utc)
-    html_content = generate_html(component_title, releases_data, all_bug_candidates, pr_data, pr_status, timestamp, pr_error, bugs_tab_data, images_tab_data, index_data, COMPONENT_JIRA_CREATE.get(component), status_data=status_data, diagnostics_text=diagnostics_text)
+    commit_info = _read_commit_info()
+    html_content = generate_html(component_title, releases_data, all_bug_candidates, pr_data, pr_status, timestamp, pr_error, bugs_tab_data, images_tab_data, index_data, COMPONENT_JIRA_CREATE.get(component), status_data=status_data, diagnostics_text=diagnostics_text, commit_version=commit_info["sha"], commit_subject=commit_info["subject"], commit_date=commit_info["date"])
 
     output_path = os.path.join(workdir, f"report-{component}-ci-doctor.html")
     with open(output_path, "w", encoding="utf-8") as f:
