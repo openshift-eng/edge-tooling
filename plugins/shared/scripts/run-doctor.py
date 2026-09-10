@@ -968,7 +968,7 @@ def _analyze_single_job(job_info, plugin_dir, model, agent_system_prompt,
 
     env = os.environ.copy()
     env["CI_DOCTOR_RCA_SESSION"] = "1"
-    env["CI_DOCTOR_HOOK_LOG"] = str(Path(workdir) / "hook-debug.jsonl")
+    env["CI_DOCTOR_HOOK_LOG"] = str(Path(logs_dir) / f"{log_stem}-hook.jsonl")
     env["CLAUDE_CODE_DEBUG_LOG_LEVEL"] = "verbose"
 
     add_dirs = [d for d in [
