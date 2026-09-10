@@ -89,7 +89,7 @@ def parse_structured_summary(filepath):
             ][:10],
             "analysis_gaps": [
                 gap for gap in (data.get("analysis_gaps") or [])
-                if isinstance(gap, str)
+                if isinstance(gap, str) or (isinstance(gap, dict) and gap.get("gap"))
             ],
             "scenarios": [
                 s for s in (data.get("scenarios") or [])

@@ -371,8 +371,19 @@ class DoctorPipeline:
                 if not isinstance(entry, dict):
                     continue
                 for gap in entry.get("analysis_gaps", []):
-                    if isinstance(gap, str) and gap and gap not in job_gaps:
-                        job_gaps.append(gap)
+                    if isinstance(gap, str) and gap:
+                        gap_text = gap
+                    elif isinstance(gap, dict) and gap.get("gap"):
+                        gap_text = gap["gap"]
+                        reason = gap.get("reason", "")
+                        detail = gap.get("detail", "")
+                        if reason or detail:
+                            parts = [p for p in (reason, detail) if p]
+                            gap_text += f" ({'; '.join(parts)})"
+                    else:
+                        continue
+                    if gap_text not in job_gaps:
+                        job_gaps.append(gap_text)
             if job_gaps:
                 gaps_by_job[label] = job_gaps
 
@@ -968,7 +979,7 @@ def _analyze_single_job(job_info, plugin_dir, model, agent_system_prompt,
 
     env = os.environ.copy()
     env["CI_DOCTOR_RCA_SESSION"] = "1"
-    env["CI_DOCTOR_HOOK_LOG"] = str(Path(logs_dir) / f"{log_stem}-hook.jsonl")
+    env["CI_DOCTOR_HOOK_LOG"] = str(Path(logs_dir) / f"{log_stem}-hook.log")
     env["CLAUDE_CODE_DEBUG_LOG_LEVEL"] = "verbose"
 
     add_dirs = [d for d in [

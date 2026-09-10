@@ -1,7 +1,7 @@
 {
   "name": "lvms-ci",
   "description": "LVMS CI Automation",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "author": {
     "name": "knarra"
   },
