@@ -1097,9 +1097,26 @@ def _render_investigation(issue):
                 item += f' <code>{_e(link["quote"])}</code>'
             lines.append(f'                    <li>{item}</li>')
         lines.append('                </ol></div>')
-    gaps = [g for g in (issue.get("analysis_gaps") or []) if g]
-    if gaps:
-        lines.append(f'                <div class="analysis-gaps">Evidence gaps: {_e(", ".join(gaps))}</div>')
+    raw_gaps = [g for g in (issue.get("analysis_gaps") or []) if g]
+    if raw_gaps:
+        gap_texts = []
+        for g in raw_gaps:
+            if isinstance(g, str):
+                gap_texts.append(_e(g))
+            elif isinstance(g, dict) and g.get("gap"):
+                text = _e(g["gap"])
+                reason = g.get("reason", "")
+                detail = g.get("detail", "")
+                if reason or detail:
+                    parts = []
+                    if reason:
+                        parts.append(reason)
+                    if detail:
+                        parts.append(detail)
+                    text += f' ({_e("; ".join(parts))})'
+                gap_texts.append(text)
+        if gap_texts:
+            lines.append(f'                <div class="analysis-gaps">Evidence gaps: {", ".join(gap_texts)}</div>')
     return lines
 
 # ---------------------------------------------------------------------------

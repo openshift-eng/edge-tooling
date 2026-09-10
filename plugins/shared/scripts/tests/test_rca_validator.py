@@ -152,5 +152,216 @@ class HookDetectionTests(unittest.TestCase):
             os.unlink(transcript_path)
 
 
+class HtmlEntityNormalizationTests(unittest.TestCase):
+    """Tests for HTML entity normalization in quote validation."""
+
+    def test_html_entities_in_file_match_plain_quote(self):
+        """A file line with &#34; entities should match a plain-text quote."""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".log", delete=False
+        ) as f:
+            f.write('services &#34;prometheus-k8s&#34; not found\n')
+            evidence_path = f.name
+        try:
+            entry = valid_rca_entry(evidence_path)
+            entry["causal_chain"] = [
+                {
+                    "cause": "service not found",
+                    "evidence": f"{evidence_path}:1",
+                    "quote": 'services "prometheus-k8s" not found',
+                }
+            ]
+            payload = {
+                "hook_event_name": "SubagentStop",
+                "last_assistant_message": json.dumps([entry]),
+            }
+            code, out = run_hook(payload)
+            self.assertEqual(code, 0)
+            self.assertFalse(blocked(out), f"unexpected block: {out!r}")
+        finally:
+            os.unlink(evidence_path)
+
+    def test_amp_lt_gt_entities_match(self):
+        """&amp; &lt; &gt; in file should match plain &, <, > in quote."""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".log", delete=False
+        ) as f:
+            f.write('if x &lt; 0 &amp;&amp; y &gt; 1\n')
+            evidence_path = f.name
+        try:
+            entry = valid_rca_entry(evidence_path)
+            entry["causal_chain"] = [
+                {
+                    "cause": "conditional error",
+                    "evidence": f"{evidence_path}:1",
+                    "quote": "if x < 0 && y > 1",
+                }
+            ]
+            payload = {
+                "hook_event_name": "SubagentStop",
+                "last_assistant_message": json.dumps([entry]),
+            }
+            code, out = run_hook(payload)
+            self.assertEqual(code, 0)
+            self.assertFalse(blocked(out), f"unexpected block: {out!r}")
+        finally:
+            os.unlink(evidence_path)
+
+
+class StructuredGapTests(unittest.TestCase):
+    """Tests for structured analysis_gaps format (object with gap/reason/detail)."""
+
+    def _make_entry_with_gaps(self, gaps, evidence_path):
+        entry = valid_rca_entry(evidence_path)
+        entry["analysis_gaps"] = gaps
+        return entry
+
+    def test_structured_gaps_accepted(self):
+        """Structured gap objects with valid reason enum should pass validation."""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".log", delete=False
+        ) as f:
+            f.write("timed out waiting for the condition\n")
+            evidence_path = f.name
+        try:
+            entry = self._make_entry_with_gaps(
+                [
+                    {"gap": "sosreport not extracted", "reason": "deprioritized", "detail": "turn budget exhausted"},
+                    {"gap": "pod logs missing", "reason": "artifact_unavailable", "detail": ""},
+                ],
+                evidence_path,
+            )
+            payload = {
+                "hook_event_name": "SubagentStop",
+                "last_assistant_message": json.dumps([entry]),
+            }
+            code, out = run_hook(payload)
+            self.assertEqual(code, 0)
+            self.assertFalse(blocked(out), f"unexpected block: {out!r}")
+        finally:
+            os.unlink(evidence_path)
+
+    def test_string_gaps_still_accepted(self):
+        """Plain string gaps (old format) must still pass validation."""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".log", delete=False
+        ) as f:
+            f.write("timed out waiting for the condition\n")
+            evidence_path = f.name
+        try:
+            entry = self._make_entry_with_gaps(
+                ["sosreport not extracted", "pod logs missing"],
+                evidence_path,
+            )
+            payload = {
+                "hook_event_name": "SubagentStop",
+                "last_assistant_message": json.dumps([entry]),
+            }
+            code, out = run_hook(payload)
+            self.assertEqual(code, 0)
+            self.assertFalse(blocked(out), f"unexpected block: {out!r}")
+        finally:
+            os.unlink(evidence_path)
+
+    def test_mixed_gaps_accepted(self):
+        """Mix of string and object gaps must pass validation."""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".log", delete=False
+        ) as f:
+            f.write("timed out waiting for the condition\n")
+            evidence_path = f.name
+        try:
+            entry = self._make_entry_with_gaps(
+                [
+                    "plain string gap",
+                    {"gap": "structured gap", "reason": "out_of_scope", "detail": "beyond agent tools"},
+                ],
+                evidence_path,
+            )
+            payload = {
+                "hook_event_name": "SubagentStop",
+                "last_assistant_message": json.dumps([entry]),
+            }
+            code, out = run_hook(payload)
+            self.assertEqual(code, 0)
+            self.assertFalse(blocked(out), f"unexpected block: {out!r}")
+        finally:
+            os.unlink(evidence_path)
+
+    def test_invalid_reason_blocks(self):
+        """Structured gap with invalid reason enum must block."""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".log", delete=False
+        ) as f:
+            f.write("timed out waiting for the condition\n")
+            evidence_path = f.name
+        try:
+            entry = self._make_entry_with_gaps(
+                [{"gap": "something", "reason": "invalid_reason", "detail": ""}],
+                evidence_path,
+            )
+            payload = {
+                "hook_event_name": "SubagentStop",
+                "last_assistant_message": json.dumps([entry]),
+            }
+            code, out = run_hook(payload)
+            self.assertEqual(code, 0)
+            self.assertTrue(blocked(out), f"expected block, got: {out!r}")
+        finally:
+            os.unlink(evidence_path)
+
+    def test_empty_gap_text_blocks(self):
+        """Structured gap with empty 'gap' field must block."""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".log", delete=False
+        ) as f:
+            f.write("timed out waiting for the condition\n")
+            evidence_path = f.name
+        try:
+            entry = self._make_entry_with_gaps(
+                [{"gap": "", "reason": "deprioritized", "detail": ""}],
+                evidence_path,
+            )
+            payload = {
+                "hook_event_name": "SubagentStop",
+                "last_assistant_message": json.dumps([entry]),
+            }
+            code, out = run_hook(payload)
+            self.assertEqual(code, 0)
+            self.assertTrue(blocked(out), f"expected block, got: {out!r}")
+        finally:
+            os.unlink(evidence_path)
+
+    def test_all_reason_enums_accepted(self):
+        """All valid reason enum values must be accepted."""
+        valid_reasons = [
+            "artifact_unavailable", "extraction_failed",
+            "deprioritized", "not_realized", "out_of_scope",
+        ]
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".log", delete=False
+        ) as f:
+            f.write("timed out waiting for the condition\n")
+            evidence_path = f.name
+        try:
+            for reason in valid_reasons:
+                entry = self._make_entry_with_gaps(
+                    [{"gap": f"gap for {reason}", "reason": reason, "detail": ""}],
+                    evidence_path,
+                )
+                payload = {
+                    "hook_event_name": "SubagentStop",
+                    "last_assistant_message": json.dumps([entry]),
+                }
+                code, out = run_hook(payload)
+                self.assertEqual(code, 0)
+                self.assertFalse(
+                    blocked(out),
+                    f"reason '{reason}' unexpectedly blocked: {out!r}",
+                )
+        finally:
+            os.unlink(evidence_path)
+
+
 if __name__ == "__main__":
     unittest.main()

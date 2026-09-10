@@ -106,7 +106,9 @@ Each entry in the output array has exactly these fields:
      "quote": "LVMCluster not ready after 600s"}
   ],
   "confidence": "medium",
-  "analysis_gaps": [],
+  "analysis_gaps": [
+    {"gap": "operator pod previous.log not available", "reason": "artifact_unavailable", "detail": "container had not restarted so no previous.log exists"}
+  ],
   "scenarios": ["[sig-storage] STORAGE Author:mmakwana-High-66241-[OTP][LVMS] Check workload management annotations are present in LVMS resources [Disruptive]"]
 }
 ```
@@ -126,7 +128,7 @@ Each entry in the output array has exactly these fields:
 - `finished`: job finish date (`YYYY-MM-DD`) from `finished.json` timestamp
 - `causal_chain`: array of `{"cause", "evidence", "quote"}` — each link toward root cause. `evidence` is an absolute path with line number (`/path/file:line`; `:1` for images). `quote` is a short verbatim excerpt (empty for images). Re-read every cited `file:line` before finalizing. Aim for 2-4 links.
 - `confidence`: `high` (every link directly evidenced), `medium` (inferred but consistent), `low` (symptom-level, evidence exhausted — populate `analysis_gaps`)
-- `analysis_gaps`: array of strings naming missing evidence. Empty when nothing was skipped.
+- `analysis_gaps`: array of objects describing missing evidence. Each object has `gap` (what's missing), `reason` (one of `artifact_unavailable`, `extraction_failed`, `deprioritized`, `not_realized`, `out_of_scope`), and `detail` (why — can be empty). Empty array when nothing was skipped.
 - `scenarios`: array of Ginkgo test names (`name` field from the integration test step's JSON build-log) affected by this failure. For `stack_layer: "test"` entries, parse the integration test step's `build-log.txt` as JSON and collect the `name` from each entry with `"result": "failed"` that matches this root cause. Empty array only for non-test failures (build, infra, deploy).
 
 ### Severity rubric

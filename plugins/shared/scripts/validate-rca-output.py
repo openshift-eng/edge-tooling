@@ -16,6 +16,7 @@ Validates the message against the expected JSON schema and returns a
 block decision with specific corrections when validation fails.
 """
 
+import html as html_mod
 import json
 import os
 import re
@@ -52,6 +53,7 @@ def _log_debug(event, **fields):
     write to the same file simultaneously.
     """
     log_path = os.environ.get("CI_DOCTOR_HOOK_LOG")
+    print(f"DEBUG: _log_debug: CI_DOCTOR_HOOK_LOG={log_path!r}, event={event}", file=sys.stderr)
     if not log_path:
         return
     entry = {"event": event, **fields}
@@ -115,8 +117,13 @@ def validate_evidence(evidence, quote, prefix, file_cache):
     if not isinstance(quote, str) or not quote:
         return [f"{prefix}: 'quote' must be a non-empty string"]
 
-    cited_line = " ".join(lines[line_no - 1].split()).lower()
-    normalized_quote = " ".join(quote.split()).lower()
+    # Decode HTML entities first (&#34; \u2192 ", &#xa; \u2192 \n, &amp; \u2192 &, etc.)
+    # so that entity-encoded log lines match plain-text quotes.
+    cited_raw = html_mod.unescape(lines[line_no - 1])
+    quote_raw = html_mod.unescape(quote)
+
+    cited_line = " ".join(cited_raw.split()).lower()
+    normalized_quote = " ".join(quote_raw.split()).lower()
 
     # Normalize escape sequences and Unicode smart quotes so that
     # cosmetic differences in quoting style don't cause false negatives.
@@ -189,12 +196,40 @@ def validate_entry(entry, index, file_cache):
                     evidence, quote,
                     f"entry[{index}].causal_chain[{ci}]", file_cache))
 
-    for field in ("analysis_gaps", "scenarios"):
-        val = entry.get(field)
-        if not isinstance(val, list):
-            errors.append(f"entry[{index}]: '{field}' must be an array, got {type(val).__name__}")
-        elif any(not isinstance(item, str) for item in val):
-            errors.append(f"entry[{index}]: '{field}' items must all be strings")
+    VALID_GAP_REASONS = {
+        "artifact_unavailable", "extraction_failed", "deprioritized",
+        "not_realized", "out_of_scope",
+    }
+
+    gaps = entry.get("analysis_gaps")
+    if not isinstance(gaps, list):
+        errors.append(f"entry[{index}]: 'analysis_gaps' must be an array, got {type(gaps).__name__}")
+    else:
+        for gi, item in enumerate(gaps):
+            if isinstance(item, str):
+                # Backward compat: plain strings are accepted
+                continue
+            if not isinstance(item, dict):
+                errors.append(f"entry[{index}].analysis_gaps[{gi}]: must be a string or object, got {type(item).__name__}")
+                continue
+            gap_text = item.get("gap")
+            if not isinstance(gap_text, str) or not gap_text:
+                errors.append(f"entry[{index}].analysis_gaps[{gi}]: 'gap' must be a non-empty string")
+            reason = item.get("reason")
+            if not isinstance(reason, str) or reason not in VALID_GAP_REASONS:
+                errors.append(
+                    f"entry[{index}].analysis_gaps[{gi}]: 'reason' must be one of "
+                    f"{sorted(VALID_GAP_REASONS)}, got {reason!r}"
+                )
+            detail = item.get("detail")
+            if detail is not None and not isinstance(detail, str):
+                errors.append(f"entry[{index}].analysis_gaps[{gi}]: 'detail' must be a string")
+
+    scenarios_val = entry.get("scenarios")
+    if not isinstance(scenarios_val, list):
+        errors.append(f"entry[{index}]: 'scenarios' must be an array, got {type(scenarios_val).__name__}")
+    elif any(not isinstance(item, str) for item in scenarios_val):
+        errors.append(f"entry[{index}]: 'scenarios' items must all be strings")
 
     scenarios = entry.get("scenarios")
     layer = entry.get("stack_layer", "")
@@ -412,7 +447,7 @@ def main():
 
     _log_debug("hook_input",
                input_len=len(message) if message else 0,
-               input_preview=(message[:500] if message else ""))
+               input_text=(message if message else ""))
 
     errors = validate_message(message)
 

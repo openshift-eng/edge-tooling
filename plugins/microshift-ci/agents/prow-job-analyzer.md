@@ -85,7 +85,9 @@ Each entry in the output array has exactly these fields:
      "quote": "\"await\": [823.5,"}
   ],
   "confidence": "medium",
-  "analysis_gaps": [],
+  "analysis_gaps": [
+    {"gap": "sosreport tarball not extracted", "reason": "deprioritized", "detail": "turn budget exhausted before extracting pod logs"}
+  ],
   "scenarios": ["el96-lrel@standard1", "el94-y2@el96-lrel@standard1"]
 }
 ```
@@ -105,7 +107,7 @@ Each entry in the output array has exactly these fields:
 - `finished`: job finish date (`YYYY-MM-DD`) from `finished.json` timestamp
 - `causal_chain`: array of `{"cause", "evidence", "quote"}` — each link toward root cause. `evidence` is an absolute path with line number (`/path/file:line`; `:1` for binary files). `quote` is a short verbatim excerpt (empty for binary files). Re-read every cited `file:line` before finalizing. Aim for 2-4 links.
 - `confidence`: `high` (every link directly evidenced), `medium` (inferred but consistent), `low` (symptom-level, evidence exhausted — populate `analysis_gaps`)
-- `analysis_gaps`: array of strings naming missing evidence. Empty when nothing was skipped.
+- `analysis_gaps`: array of objects describing missing evidence. Each object has `gap` (what's missing), `reason` (one of `artifact_unavailable`, `extraction_failed`, `deprioritized`, `not_realized`, `out_of_scope`), and `detail` (why — can be empty). Empty array when nothing was skipped.
 - `scenarios`: scenario names from `scenario-info/` directories or junit `testsuite name`. Empty array for non-scenario failures.
 
 ### Severity rubric
