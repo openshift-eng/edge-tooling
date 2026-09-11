@@ -34,13 +34,13 @@ Respond with a valid JSON array only — no prose, no markdown fences. One objec
 
 Read `plugins/microshift-ci/agents/references/microshift-ci-primer.md` first for artifact layout, scenario naming, and common failure patterns. Check the step diagram URL at the end of `build-log.txt` when identifying which step failed — not all fatal errors cause the current step to fail but may cause the next one to fail.
 
-The first error found is the anchor for deduplication, not the conclusion of the investigation. Drill from symptom → mechanism → actionable cause, or record the evidence gap in `analysis_gaps`. A timeout is not a root cause — explain what was slow or absent. A crash is not a root cause — explain what triggered it.
+The first error found is the anchor for deduplication, not the conclusion of the investigation. Drill from symptom → mechanism → actionable cause. Recording an evidence gap in `analysis_gaps` is a last resort, valid only after exhausting every available evidence source — journal logs, sosreport pod/container logs, performance metrics, and source code. A `deprioritized` gap when investigation turns remain is a bug in the analysis, not an acceptable outcome. A timeout is not a root cause — explain what was slow or absent. A crash is not a root cause — explain what triggered it.
 
 The purpose of this analysis is to surface product defects. When a product component was unavailable, crashed, or flapped (readiness flips, liveness probe refused, container exits and restarts), reconstruct its timeline from the journal and pod logs before attributing fault. If the component became ready and later failed, that is a product defect even if a test-side wait would mask the symptom. A test defect is when the component was still starting up normally and the test ran too early.
 
 Two `Created container` events for the same pod means the first instance died. Read `previous.log` for the exit reason before concluding a single-startup narrative.
 
-Journal files (`journal_*.log` next to the sosreport tarballs) are readable directly — check them first for service failures, OOM kills, panics, and container exits. Extract a sosreport with `bash plugins/shared/scripts/extract-sosreport.sh <tarball>` when the investigation requires pod/container logs, including crashes, restarts, readiness flaps, or repeated container creation — pod and container logs (especially `previous.log`) exist exclusively inside the tarball. Prefer the on-failure sosreport over end-of-scenario because test-created namespaces are cleaned up by then. Match sosreport to failure by timestamp.
+Journal files (`journal_*.log` next to the sosreport tarballs) are readable directly — check them first for service failures, OOM kills, panics, and container exits. For every failed scenario, extract the on-failure sosreport with `bash plugins/shared/scripts/extract-sosreport.sh <tarball>` and read the relevant pod/container logs — do not decide whether the investigation "requires" them; pod and container logs (especially `previous.log`) exist exclusively inside the tarball and are essential evidence for any failure. Prefer the on-failure sosreport over end-of-scenario because test-created namespaces are cleaned up by then. Match sosreport to failure by timestamp.
 
 When `graphs_dir` is provided and the failure involves timeouts, slowness, or resource pressure, read the JSON metric files (`cpu.json`, `mem.json`, `io.json`, `disk.json`) for CPU/memory/disk/IO correlation with the failure window. Look for sustained patterns (4+ consecutive samples), not isolated spikes.
 
@@ -86,7 +86,7 @@ Each entry in the output array has exactly these fields:
   ],
   "confidence": "medium",
   "analysis_gaps": [
-    {"gap": "sosreport tarball not extracted", "reason": "deprioritized", "detail": "turn budget exhausted before extracting pod logs"}
+    {"gap": "on-failure sosreport missing", "reason": "artifact_unavailable", "detail": "scenario did not produce on-failure sosreport tarball — only end-of-scenario available, test namespaces already cleaned up"}
   ],
   "scenarios": ["el96-lrel@standard1", "el94-y2@el96-lrel@standard1"]
 }
@@ -107,7 +107,7 @@ Each entry in the output array has exactly these fields:
 - `finished`: job finish date (`YYYY-MM-DD`) from `finished.json` timestamp
 - `causal_chain`: array of `{"cause", "evidence", "quote"}` — each link toward root cause. `evidence` is an absolute path with line number (`/path/file:line`; `:1` for binary files). `quote` is a short verbatim excerpt (empty for binary files). Re-read every cited `file:line` before finalizing. Aim for 2-4 links.
 - `confidence`: `high` (every link directly evidenced), `medium` (inferred but consistent), `low` (symptom-level, evidence exhausted — populate `analysis_gaps`)
-- `analysis_gaps`: array of objects describing missing evidence. Each object has `gap` (what's missing), `reason` (one of `artifact_unavailable`, `extraction_failed`, `deprioritized`, `not_realized`, `out_of_scope`), and `detail` (why — can be empty). Empty array when nothing was skipped.
+- `analysis_gaps`: array of objects describing missing evidence. Each object has `gap` (what's missing), `reason` (one of `artifact_unavailable`, `extraction_failed`, `deprioritized`, `not_realized`, `out_of_scope`), and `detail` (why — can be empty). Empty array when nothing was skipped. The `deprioritized` reason is reserved for situations where the job contains 5 or more independent failure groups and the agent cannot fully investigate all of them within the turn budget; it is not valid when fewer independent failures exist.
 - `scenarios`: scenario names from `scenario-info/` directories or junit `testsuite name`. Empty array for non-scenario failures.
 
 ### Severity rubric
