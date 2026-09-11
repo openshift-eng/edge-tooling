@@ -68,7 +68,7 @@ Check the step diagram URL at the end of `build-log.txt` when identifying which 
 
 Check the operator setup chain early: `lvms-catalogsource` → `operatorhub-subscribe-lvm-operator` → `storage-create-lvm-cluster`. If any of these failed, the operator was never fully deployed and all downstream test failures are secondary.
 
-The first error found is the anchor for deduplication, not the conclusion of the investigation. Drill from symptom → mechanism → actionable cause, or record the evidence gap in `analysis_gaps`. A timeout is not a root cause — explain what was slow or absent. A crash is not a root cause — explain what triggered it.
+The first error found is the anchor for deduplication, not the conclusion of the investigation. Drill from symptom → mechanism → actionable cause. Recording an evidence gap in `analysis_gaps` is a last resort, valid only after exhausting every available evidence source — pod logs in gather-extra, events.json, and build-log.txt. A `deprioritized` gap when investigation turns remain is a bug in the analysis, not an acceptable outcome. A timeout is not a root cause — explain what was slow or absent. A crash is not a root cause — explain what triggered it.
 
 The purpose of this analysis is to surface product defects. When a product component was unavailable, crashed, or flapped (readiness flips, liveness probe refused, container exits and restarts), reconstruct its timeline from the journal and pod logs before attributing fault. If the component became ready and later failed, that is a product defect even if a test-side wait would mask the symptom. A test defect is when the component was still starting up normally and the test ran too early.
 
@@ -128,7 +128,7 @@ Each entry in the output array has exactly these fields:
 - `finished`: job finish date (`YYYY-MM-DD`) from `finished.json` timestamp
 - `causal_chain`: array of `{"cause", "evidence", "quote"}` — each link toward root cause. `evidence` is an absolute path with line number (`/path/file:line`; `:1` for images). `quote` is a short verbatim excerpt (empty for images). Re-read every cited `file:line` before finalizing. Aim for 2-4 links.
 - `confidence`: `high` (every link directly evidenced), `medium` (inferred but consistent), `low` (symptom-level, evidence exhausted — populate `analysis_gaps`)
-- `analysis_gaps`: array of objects describing missing evidence. Each object has `gap` (what's missing), `reason` (one of `artifact_unavailable`, `extraction_failed`, `deprioritized`, `not_realized`, `out_of_scope`), and `detail` (why — can be empty). Empty array when nothing was skipped.
+- `analysis_gaps`: array of objects describing missing evidence. Each object has `gap` (what's missing), `reason` (one of `artifact_unavailable`, `extraction_failed`, `deprioritized`, `not_realized`, `out_of_scope`), and `detail` (why — can be empty). Empty array when nothing was skipped. The `deprioritized` reason is reserved for situations where the job contains 5 or more independent failure groups and the agent cannot fully investigate all of them within the turn budget; it is not valid when fewer independent failures exist.
 - `scenarios`: array of Ginkgo test names (`name` field from the integration test step's JSON build-log) affected by this failure. For `stack_layer: "test"` entries, parse the integration test step's `build-log.txt` as JSON and collect the `name` from each entry with `"result": "failed"` that matches this root cause. Empty array only for non-test failures (build, infra, deploy).
 
 ### Severity rubric

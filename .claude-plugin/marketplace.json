@@ -58,7 +58,7 @@
       "name": "lvms-ci",
       "source": "./plugins/lvms-ci",
       "description": "LVMS CI Automation",
-      "version": "1.4.3"
+      "version": "1.4.4"
     },
     {
       "name": "mcp-atlassian",
