@@ -1,7 +1,7 @@
 {
   "name": "microshift-ci",
   "description": "MicroShift CI Automation",
-  "version": "1.6.3",
+  "version": "1.6.4",
   "author": {
     "name": "ggiguash"
   },

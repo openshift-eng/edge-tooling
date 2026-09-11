@@ -70,7 +70,7 @@
       "name": "microshift-ci",
       "source": "./plugins/microshift-ci",
       "description": "MicroShift CI Automation",
-      "version": "1.6.3"
+      "version": "1.6.4"
     },
     {
       "name": "microshift-dev",
