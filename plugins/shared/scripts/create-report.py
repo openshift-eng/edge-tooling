@@ -252,6 +252,9 @@ function filterToday(on) {
             detail.style.display = show ? '' : 'none';
         }
     });
+    document.querySelectorAll('#tab-periodics .detail-row li[data-date]').forEach(function(li) {
+        li.style.display = (!on || li.getAttribute('data-date') === today) ? '' : 'none';
+    });
     document.querySelectorAll('#tab-periodics .release-section').forEach(function(sec) {
         var id = sec.id.replace('release-', '');
         var rows = sec.querySelectorAll('.issue-row');
@@ -1203,6 +1206,7 @@ def _load_job_metrics(build_id):
 def _render_job_with_graphs(job):
     """Render a single job list item with optional graph icon and inline charts."""
     global _graph_counter
+    date_10 = job["date"][:10]
     date_str = f'<span class="job-date">[{_e(job["date"])}]</span>'
     url = job.get("url", "")
     name = _e(job["name"])
@@ -1214,11 +1218,11 @@ def _render_job_with_graphs(job):
 
     bid = _extract_build_id(url)
     if not bid:
-        return f"<li>{job_link}</li>"
+        return f'<li data-date="{date_10}">{job_link}</li>'
 
     metrics = _load_job_metrics(bid)
     if not metrics:
-        return f"<li>{job_link}</li>"
+        return f'<li data-date="{date_10}">{job_link}</li>'
 
     _graph_counter += 1
     gid = f"gp{_graph_counter}"
@@ -1236,7 +1240,7 @@ def _render_job_with_graphs(job):
         f'</div>'
     )
 
-    return f"<li>{job_link}{icon}{panel}</li>"
+    return f'<li data-date="{date_10}">{job_link}{icon}{panel}</li>'
 
 
 def _badge_class(total_failed, has_critical=False):
