@@ -289,10 +289,6 @@ function toggleSideBySide(on) {
     document.querySelector('.container').classList.toggle('wide', on);
     document.querySelectorAll('#tab-periodics .release-section').forEach(function(sec) {
         sec.classList.toggle('side-by-side', on);
-        var toggles = sec.querySelectorAll('.section-toggle');
-        if (on) {
-            toggles.forEach(function(d) { d.open = true; });
-        }
     });
 }
 document.addEventListener('click', function(e) {
