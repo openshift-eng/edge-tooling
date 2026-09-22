@@ -42,6 +42,10 @@ VALID_STACK_LAYERS = {
     "test setup phase", "Test Configuration", "test", "teardown",
 }
 
+IDENTITY_FIELDS = {
+    "cause_identity", "failure_signal", "impacts", "trigger_context",
+}
+
 
 BINARY_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".tar.xz", ".gz", ".bz2", ".xz", ".zip")
 
@@ -174,6 +178,48 @@ def validate_entry(entry, index, file_cache):
     conf = entry.get("confidence")
     if not isinstance(conf, str) or conf not in VALID_CONFIDENCE:
         errors.append(f"entry[{index}]: 'confidence' must be one of {sorted(VALID_CONFIDENCE)}, got {conf!r}")
+
+    # The shared hook also validates LVMS and historical saved reports.  Treat
+    # identity fields as an all-or-nothing extension: legacy entries with none
+    # of them remain valid, while a new MicroShift entry cannot silently omit
+    # part of the causal-identity contract.
+    present_identity_fields = IDENTITY_FIELDS & set(entry.keys())
+    if present_identity_fields and present_identity_fields != IDENTITY_FIELDS:
+        missing_identity_fields = IDENTITY_FIELDS - present_identity_fields
+        errors.append(
+            f"entry[{index}]: causal identity fields must be supplied together; "
+            f"missing: {', '.join(sorted(missing_identity_fields))}"
+        )
+    elif present_identity_fields:
+        cause_identity = entry.get("cause_identity")
+        failure_signal = entry.get("failure_signal")
+        if not isinstance(cause_identity, str) or not cause_identity.strip():
+            errors.append(f"entry[{index}]: 'cause_identity' must be a non-empty string")
+        if not isinstance(failure_signal, str) or not failure_signal.strip():
+            errors.append(f"entry[{index}]: 'failure_signal' must be a non-empty string")
+
+        if isinstance(cause_identity, str) and isinstance(failure_signal, str):
+            normalized_identity = " ".join(cause_identity.lower().split())
+            normalized_signal = " ".join(failure_signal.lower().split())
+            if normalized_identity and normalized_identity == normalized_signal:
+                errors.append(
+                    f"entry[{index}]: 'cause_identity' must explain the cause, not repeat 'failure_signal'"
+                )
+            if normalized_identity.startswith("greenboot health check"):
+                errors.append(
+                    f"entry[{index}]: 'cause_identity' must not be a generic greenboot health-check message"
+                )
+            if re.search(r"\bcleanup[-_ ]?data\b", normalized_identity):
+                errors.append(
+                    f"entry[{index}]: 'cause_identity' must not include cleanup-data scenario context"
+                )
+
+        for field in ("impacts", "trigger_context"):
+            value = entry.get(field)
+            if not isinstance(value, list):
+                errors.append(f"entry[{index}]: '{field}' must be an array, got {type(value).__name__}")
+            elif any(not isinstance(item, str) or not item.strip() for item in value):
+                errors.append(f"entry[{index}]: '{field}' items must all be non-empty strings")
 
     chain = entry.get("causal_chain")
     if not isinstance(chain, list):
