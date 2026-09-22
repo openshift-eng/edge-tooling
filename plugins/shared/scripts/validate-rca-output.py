@@ -205,9 +205,13 @@ def validate_entry(entry, index, file_cache):
                 errors.append(
                     f"entry[{index}]: 'cause_identity' must explain the cause, not repeat 'failure_signal'"
                 )
-            if normalized_identity.startswith("greenboot health check"):
+            if re.match(
+                r"^(pre[_ -]?test[_ -]?greenboot[_ -]?check|"
+                r"greenboot(?:[_ -]?health)?[_ -]?check)\b",
+                normalized_identity,
+            ):
                 errors.append(
-                    f"entry[{index}]: 'cause_identity' must not be a generic greenboot health-check message"
+                    f"entry[{index}]: 'cause_identity' must not be a generic greenboot/check message"
                 )
             if re.search(r"\bcleanup[-_ ]?data\b", normalized_identity):
                 errors.append(

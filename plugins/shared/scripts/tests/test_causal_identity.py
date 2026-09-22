@@ -151,8 +151,18 @@ class CanonicalCausalIdentityTests(unittest.TestCase):
             cause_identity="greenboot health check failed",
         )
         self.assertTrue(any(
-            "generic greenboot health-check" in error
+            "generic greenboot/check" in error
             for error in validate_entry(generic_canary, 0, {})
+        ))
+
+        pre_test_canary = rca_entry(
+            self.evidence_path,
+            cause_identity="pre_test_greenboot_check FAILED",
+            failure_signal="cert-manager webhook was not Ready",
+        )
+        self.assertTrue(any(
+            "generic greenboot/check" in error
+            for error in validate_entry(pre_test_canary, 0, {})
         ))
 
         cleanup_identity = rca_entry(
