@@ -8,7 +8,7 @@ GCSWEB_BASE="gcsweb-ci.apps.ci.l2s4.p1.openshiftapps.com/gcs"
 SIPPY_API="https://sippy.dptools.openshift.org/api/jobs"
 IMAGE_BASE="quay.io/openshift-release-dev/ocp-release"
 ARCH="x86_64"
-DELAY=10
+DELAY="${DELAY:-10}"
 
 # Sippy search terms per topology
 sippy_filter_for() {
@@ -37,16 +37,18 @@ detect_release() {
         return
     fi
 
-    for f in "$JOB_FILE" "$JOB_FILE_Z" "$JOB_FILE_Y"; do
-        if [[ -f "$f" ]]; then
-            local from_jobs
-            from_jobs=$(awk -F'nightly-' '/nightly-/{split($2,a,"[^0-9.]"); print a[1]; exit}' "$f")
-            if [[ -n "$from_jobs" ]]; then
-                echo "$from_jobs"
-                return
-            fi
-        fi
+    local -a releases=()
+    for d in "$SCRIPT_DIR"/jobs/*/; do
+        [[ -d "$d" ]] && releases+=("$(basename "$d")")
     done
+
+    if [[ ${#releases[@]} -eq 1 ]]; then
+        echo "${releases[0]}"
+        return
+    elif [[ ${#releases[@]} -gt 1 ]]; then
+        echo "Error: multiple releases found (${releases[*]}). Provide an explicit version." >&2
+        return 1
+    fi
 
     echo ""
 }
@@ -76,6 +78,9 @@ usage() {
     echo "  $0 tnf 4.22.0-rc.0 --job recovery            # launch all jobs matching 'recovery'"
     echo "  $0 tna 4.22.0-rc.0 --initial 4.21.0 --job all  # launch all jobs including upgrades"
     echo "  $0 tnf 4.22.0-rc.1 --relaunch-failed         # re-launch failures from latest run"
+    echo ""
+    echo "Job files are stored under jobs/<release>/ (e.g., jobs/4.22/tnf.txt)."
+    echo "Use scripts/collect.sh to fetch all topologies and releases at once."
     echo ""
     echo "When --initial is provided, z-stream and y-stream upgrade jobs are included."
     echo "Without --initial, upgrade jobs are skipped."
@@ -145,7 +150,7 @@ if ! $DRY_RUN && ! $LIST_ONLY && ! $REFRESH; then
     fi
 fi
 
-if [[ -n "$RELEASE_IMAGE" ]] && ! $REFRESH; then
+if [[ -n "$RELEASE_IMAGE" ]] && ! $REFRESH && ! $LIST_ONLY; then
     if [[ "$RELEASE_IMAGE" == "${IMAGE_BASE}:"* ]]; then
         RELEASE_TAG="${RELEASE_IMAGE#*:}"
         echo "Verifying image tag: $RELEASE_TAG"
@@ -165,10 +170,14 @@ if [[ -n "$RELEASE_IMAGE" ]] && ! $REFRESH; then
     fi
 fi
 
+# Detect release and set up job file paths under jobs/{release}/
+OCP_RELEASE=$(detect_release "${RELEASE_IMAGE#*:}")
+
 # Three job files per topology: regular, z-stream upgrades, y-stream upgrades
-JOB_FILE="$SCRIPT_DIR/jobs/${TOPOLOGY}.txt"
-JOB_FILE_Z="$SCRIPT_DIR/jobs/${TOPOLOGY}-z-stream.txt"
-JOB_FILE_Y="$SCRIPT_DIR/jobs/${TOPOLOGY}-y-stream.txt"
+JOB_DIR="$SCRIPT_DIR/jobs/${OCP_RELEASE}"
+JOB_FILE="$JOB_DIR/${TOPOLOGY}.txt"
+JOB_FILE_Z="$JOB_DIR/${TOPOLOGY}-z-stream.txt"
+JOB_FILE_Y="$JOB_DIR/${TOPOLOGY}-y-stream.txt"
 
 if $REFRESH; then
     SEARCH_TERM=$(sippy_filter_for "$TOPOLOGY")
@@ -178,12 +187,13 @@ if $REFRESH; then
         exit 0
     fi
 
-    OCP_RELEASE=$(detect_release "${RELEASE_IMAGE#*:}")
     if [[ -z "$OCP_RELEASE" ]]; then
         echo "Error: cannot detect OCP release version."
         echo "Provide a version (e.g., ./launch.sh $TOPOLOGY 4.22.0-rc.0 --refresh)"
         exit 1
     fi
+
+    mkdir -p "$JOB_DIR"
 
     SIPPY_FILTER_JSON=$(printf '{"items":[{"columnField":"name","operatorValue":"contains","value":"%s"}],"linkOperator":"and"}' "$SEARCH_TERM")
     ENCODED_FILTER=$(printf '%s' "$SIPPY_FILTER_JSON" | jq -sRr '@uri')
@@ -192,8 +202,8 @@ if $REFRESH; then
     SIPPY_RESPONSE=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 30 \
          "${SIPPY_API}?release=${OCP_RELEASE}&filter=${ENCODED_FILTER}&period=default&sortField=name&sort=asc")
 
-    # Clear existing files before writing
-    rm -f "$JOB_FILE" "$JOB_FILE_Z" "$JOB_FILE_Y"
+    tmp_file=$(mktemp) tmp_z=$(mktemp) tmp_y=$(mktemp)
+    trap 'rm -f "$tmp_file" "$tmp_z" "$tmp_y"' EXIT
 
     # Sort jobs into separate files by type
     echo "$SIPPY_RESPONSE" \
@@ -202,13 +212,16 @@ if $REFRESH; then
         | sort \
         | while IFS= read -r name; do
             if [[ "$name" == *"upgrade-from-stable"* ]]; then
-                echo "$name" >> "$JOB_FILE_Y"
+                echo "$name" >> "$tmp_y"
             elif [[ "$name" == *"-upgrade"* ]]; then
-                echo "$name" >> "$JOB_FILE_Z"
+                echo "$name" >> "$tmp_z"
             else
-                echo "$name" >> "$JOB_FILE"
+                echo "$name" >> "$tmp_file"
             fi
         done
+
+    mv "$tmp_file" "$JOB_FILE"; mv "$tmp_z" "$JOB_FILE_Z"; mv "$tmp_y" "$JOB_FILE_Y"
+    trap - EXIT
 
     JOB_COUNT=$(wc -l < "$JOB_FILE" 2>/dev/null || echo 0)
     Z_COUNT=$(wc -l < "$JOB_FILE_Z" 2>/dev/null || echo 0)
@@ -242,11 +255,11 @@ has_job_files() {
     return 1
 }
 
-if ! has_job_files; then
-    echo "Error: no job files for topology '$TOPOLOGY'"
-    echo "Expected: ${TOPOLOGY}.txt, ${TOPOLOGY}-z-stream.txt, or ${TOPOLOGY}-y-stream.txt in jobs/"
+if ! $LIST_ONLY && ! has_job_files; then
+    echo "Error: no job files for topology '$TOPOLOGY' (release ${OCP_RELEASE:-unknown})"
+    echo "Expected files in jobs/${OCP_RELEASE:-<release>}/"
     echo ""
-    echo "Run './launch.sh $TOPOLOGY --refresh' to fetch from Sippy"
+    echo "Run './launch.sh $TOPOLOGY <version> --refresh' or './scripts/collect.sh' to fetch from Sippy"
     exit 1
 fi
 
@@ -261,15 +274,6 @@ if ! $LIST_ONLY && ! $REFRESH && ! $RELAUNCH_FAILED && [[ -n "$RELEASE_IMAGE" ]]
     exit 1
 fi
 
-if ! $LIST_ONLY && [[ -n "$RELEASE_IMAGE" ]]; then
-    REQUESTED_RELEASE=$(echo "${RELEASE_IMAGE#*:}" | grep -oE '^[0-9]+\.[0-9]+' || true)
-    JOBS_RELEASE=$(detect_release "")
-    if [[ -n "$REQUESTED_RELEASE" && -n "$JOBS_RELEASE" && "$REQUESTED_RELEASE" != "$JOBS_RELEASE" ]]; then
-        echo "Error: job files are for $JOBS_RELEASE but you requested $REQUESTED_RELEASE"
-        echo "Run './launch.sh $TOPOLOGY $REQUESTED_RELEASE --refresh' to update job files."
-        exit 1
-    fi
-fi
 
 # List jobs from a file with continuous numbering
 # Args: file, section_label, counter_var_name (LINE_NUM is global)
@@ -288,13 +292,30 @@ list_file() {
 }
 
 if $LIST_ONLY; then
-    LINE_NUM=0
-    echo "=== $TOPOLOGY jobs ==="
-    list_file "$JOB_FILE" "$TOPOLOGY"
-    list_file "$JOB_FILE_Z" "$TOPOLOGY z-stream upgrades (--initial required)"
-    list_file "$JOB_FILE_Y" "$TOPOLOGY y-stream upgrades (--initial required)"
-    echo ""
-    echo "Use --job all, --job <number>, --job <n,n,n>, or --job <pattern> to select"
+    if [[ -n "$RELEASE_IMAGE" ]]; then
+        LINE_NUM=0
+        echo "=== $TOPOLOGY jobs (release $OCP_RELEASE) ==="
+        list_file "$JOB_FILE" "$TOPOLOGY"
+        list_file "$JOB_FILE_Z" "$TOPOLOGY z-stream upgrades (--initial required)"
+        list_file "$JOB_FILE_Y" "$TOPOLOGY y-stream upgrades (--initial required)"
+        echo ""
+        echo "Use --job all, --job <number>, --job <n,n,n>, or --job <pattern> to select"
+    else
+        for release_dir in "$SCRIPT_DIR"/jobs/*/; do
+            [[ ! -d "$release_dir" ]] && continue
+            rel=$(basename "$release_dir")
+            rel_file="$release_dir/${TOPOLOGY}.txt"
+            rel_file_z="$release_dir/${TOPOLOGY}-z-stream.txt"
+            rel_file_y="$release_dir/${TOPOLOGY}-y-stream.txt"
+            [[ ! -f "$rel_file" && ! -f "$rel_file_z" && ! -f "$rel_file_y" ]] && continue
+            LINE_NUM=0
+            echo "=== $TOPOLOGY jobs (release $rel) ==="
+            list_file "$rel_file" "$TOPOLOGY"
+            list_file "$rel_file_z" "$TOPOLOGY z-stream upgrades (--initial required)"
+            list_file "$rel_file_y" "$TOPOLOGY y-stream upgrades (--initial required)"
+            echo ""
+        done
+    fi
     exit 0
 fi
 
@@ -458,8 +479,8 @@ if [[ -n "${INITIAL_IMAGE:-}" ]]; then
     launch_from_file "$JOB_FILE_Z" "$INITIAL_IMAGE"
     launch_from_file "$JOB_FILE_Y" "$INITIAL_IMAGE"
 else
-    Z_COUNT=$(wc -l < "$JOB_FILE_Z" 2>/dev/null || echo 0)
-    Y_COUNT=$(wc -l < "$JOB_FILE_Y" 2>/dev/null || echo 0)
+    Z_COUNT=$([[ -f "$JOB_FILE_Z" ]] && wc -l < "$JOB_FILE_Z" || echo 0)
+    Y_COUNT=$([[ -f "$JOB_FILE_Y" ]] && wc -l < "$JOB_FILE_Y" || echo 0)
     SKIP_TOTAL=$((Z_COUNT + Y_COUNT))
     if [[ "$SKIP_TOTAL" -gt 0 ]]; then
         echo "Skipped $SKIP_TOTAL upgrade jobs (no --initial provided)"

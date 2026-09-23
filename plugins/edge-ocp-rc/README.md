@@ -43,11 +43,14 @@ export MY_APPCI_TOKEN="sha256~..."
 ## Quick start
 
 ```bash
-# List available TNF jobs
+# Fetch all job lists from Sippy (TNF + TNA × 4.22, 4.23, 5.0)
+scripts/collect.sh
+
+# List available TNF jobs (all releases)
 scripts/launch.sh tnf --list
 
-# Refresh job lists from Sippy
-scripts/launch.sh tnf --refresh
+# Refresh a single topology from Sippy
+scripts/launch.sh tnf 5.0.0 --refresh
 
 # Launch regular TNF jobs against an RC
 scripts/launch.sh tnf 4.22.0-rc.0 --job all
@@ -83,16 +86,15 @@ Version tags are expanded automatically: `4.22.0-rc.0` becomes `quay.io/openshif
 ```text
 edge-ocp-rc/
 ├── jobs/
-│   ├── tnf.txt              # Regular TNF jobs
-│   ├── tnf-z-stream.txt     # TNF z-stream upgrade jobs
-│   ├── tnf-y-stream.txt     # TNF y-stream upgrade jobs
-│   ├── tna.txt              # Regular TNA jobs
-│   ├── tna-z-stream.txt     # TNA z-stream upgrade jobs
-│   ├── tna-y-stream.txt     # TNA y-stream upgrade jobs
-│   ├── sno.txt              # Regular SNO jobs
-│   ├── sno-z-stream.txt     # SNO z-stream upgrade jobs
-│   └── sno-y-stream.txt     # SNO y-stream upgrade jobs
+│   └── <release>/               # e.g., 4.22/, 4.23/, 5.0/
+│       ├── tnf.txt              # Regular TNF jobs
+│       ├── tnf-z-stream.txt     # TNF z-stream upgrade jobs
+│       ├── tnf-y-stream.txt     # TNF y-stream upgrade jobs
+│       ├── tna.txt              # Regular TNA jobs
+│       ├── tna-z-stream.txt     # TNA z-stream upgrade jobs
+│       └── tna-y-stream.txt     # TNA y-stream upgrade jobs
 ├── scripts/
+│   ├── collect.sh           # Fetch all topologies × releases from Sippy
 │   ├── launch.sh            # Unified launcher (wraps gangway-cli)
 │   └── status.sh            # Status, logs, and Jira reporting
 ├── skills/
@@ -136,7 +138,7 @@ Before launching, the script verifies:
 
 ### Job files and Sippy refresh
 
-Each topology has up to three job files — one per job type:
+Job files are organized by release under `jobs/<release>/`. Each topology has up to three files:
 
 | File | Type | Description |
 |------|------|-------------|
@@ -146,11 +148,17 @@ Each topology has up to three job files — one per job type:
 
 Each file is a plain list of Prow job names, one per line. No prefixes.
 
-Use `--refresh` to update all three from Sippy:
+Use `collect.sh` to fetch all topologies and releases at once:
 
 ```bash
-scripts/launch.sh tnf --refresh        # Fetches nightly jobs matching "two-node-fencing"
-scripts/launch.sh tna --refresh        # Fetches nightly jobs matching "two-node-arbiter"
+scripts/collect.sh                     # Fetches TNF + TNA for 4.22, 4.23, 5.0
+```
+
+Or refresh a single topology with `--refresh`:
+
+```bash
+scripts/launch.sh tnf 5.0.0 --refresh  # Fetches nightly jobs matching "two-node-fencing" for 5.0
+scripts/launch.sh tna 4.22.0 --refresh  # Fetches nightly jobs matching "two-node-arbiter" for 4.22
 ```
 
 Jobs are sorted into files automatically:
@@ -173,7 +181,7 @@ scripts/launch.sh tnf 4.22.0-rc.0 --job all
 scripts/launch.sh tna 4.22.0-rc.0 --initial 4.21.0 --job all
 ```
 
-Jobs are launched sequentially with a 10-second delay between each to avoid rate limiting.
+Jobs are launched sequentially with a 10-second delay between each to avoid rate limiting. Override with `DELAY=30 scripts/launch.sh ...` if Gangway is throttling.
 
 ## status.sh
 
