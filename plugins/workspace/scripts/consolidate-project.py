@@ -25,18 +25,21 @@ THRESHOLD = 10
 KEEP_RECENT = 3
 ARCHIVE_FILENAME = "progress-archive.md"
 SENTINEL = "consolidated in `progress-archive.md`"
+FILE_LINE_THRESHOLD = 100
+NARRATIVE_SECTION = "Progress"
 
 RE_HEADING = re.compile(r"^## (.+)$")
 RE_CHECKED = re.compile(r"^\s*- \[x\] .+$")
 RE_UNCHECKED = re.compile(r"^\s*- \[ \] .+$")
 RE_STRIKETHROUGH = re.compile(r"^\s*- ~~?.+~~?\s*$")
+RE_PLAIN_BULLET = re.compile(r"^\s*-\s+(?!\[[ x]\])(?!~).+$")
 
 
 @dataclass
 class Item:
     line_idx: int
     text: str
-    kind: str  # "checked", "unchecked", "strikethrough", "other"
+    kind: str  # "checked", "unchecked", "strikethrough", "plain_bullet", "paragraph", "other"
 
 
 @dataclass
@@ -60,8 +63,19 @@ class Section:
         return [i for i in self.items if i.kind == "strikethrough"]
 
     @property
+    def narrative(self) -> list[Item]:
+        """Plain bullets and prose paragraphs — narrative bloat outside the checklist model."""
+        return [i for i in self.items if i.kind in ("plain_bullet", "paragraph")]
+
+    @property
     def qualifies(self) -> bool:
-        return len(self.checked) >= THRESHOLD and not self.has_sentinel
+        if self.has_sentinel:
+            return False
+        if len(self.checked) >= THRESHOLD:
+            return True
+        if self.name == NARRATIVE_SECTION and len(self.checked) + len(self.narrative) >= THRESHOLD:
+            return True
+        return False
 
 
 def classify_line(line: str) -> str:
@@ -71,6 +85,11 @@ def classify_line(line: str) -> str:
         return "unchecked"
     if RE_STRIKETHROUGH.match(line):
         return "strikethrough"
+    if RE_PLAIN_BULLET.match(line):
+        return "plain_bullet"
+    stripped = line.strip()
+    if stripped and not stripped.startswith("|") and not stripped.startswith("#"):
+        return "paragraph"
     return "other"
 
 
@@ -143,10 +162,11 @@ def parse_reference_table(text: str) -> tuple[bool, bool, int]:
 def build_archive_block(section: Section, today: str) -> str:
     """Build the archive markdown block for a section."""
     checked = section.checked
-    to_archive = checked[:-KEEP_RECENT] if len(checked) > KEEP_RECENT else checked
+    to_archive = checked[:-KEEP_RECENT]
     strikethroughs = section.strikethrough
+    narrative = section.narrative if section.name == NARRATIVE_SECTION else []
 
-    total_archived = len(to_archive) + len(strikethroughs)
+    total_archived = len(to_archive) + len(strikethroughs) + len(narrative)
     lines = [
         f"## {section.name} (archived {today})",
         "",
@@ -157,6 +177,9 @@ def build_archive_block(section: Section, today: str) -> str:
         lines.append(item.text)
     if strikethroughs:
         for item in strikethroughs:
+            lines.append(item.text)
+    if narrative:
+        for item in narrative:
             lines.append(item.text)
     lines.append("")
     return "\n".join(lines)
@@ -171,6 +194,9 @@ def build_replacement(section: Section, today: str) -> list[str]:
             to_archive_set.add(item.line_idx)
     for item in section.strikethrough:
         to_archive_set.add(item.line_idx)
+    if section.name == NARRATIVE_SECTION:
+        for item in section.narrative:
+            to_archive_set.add(item.line_idx)
 
     archived_count = len(to_archive_set)
     pointer = f"_Earlier items consolidated in `{ARCHIVE_FILENAME}` ({archived_count} items, {today})._"
@@ -206,8 +232,22 @@ def consolidate(project_dir: Path, dry_run: bool = False) -> dict[str, Any]:
     qualifying = [s for s in sections if s.qualifies]
 
     project_name = project_dir.name
+    over_threshold = len(lines) > FILE_LINE_THRESHOLD
 
     if not qualifying:
+        if over_threshold:
+            return {
+                "status": "over_threshold_no_sections",
+                "project": project_name,
+                "claude_md_lines": len(lines),
+                "line_threshold": FILE_LINE_THRESHOLD,
+                "error": (
+                    f"CLAUDE.md is {len(lines)} lines (over the {FILE_LINE_THRESHOLD}-line "
+                    "threshold) but no section has enough archivable items to consolidate "
+                    "automatically. Trim narrative by hand or move it to a detail file."
+                ),
+                "sections": [],
+            }
         total_checked = sum(len(s.checked) for s in sections)
         return {
             "status": "already_lean",
@@ -219,7 +259,8 @@ def consolidate(project_dir: Path, dry_run: bool = False) -> dict[str, Any]:
 
     section_info = []
     for s in qualifying:
-        to_archive = max(0, len(s.checked) - KEEP_RECENT) + len(s.strikethrough)
+        narrative_count = len(s.narrative) if s.name == NARRATIVE_SECTION else 0
+        to_archive = max(0, len(s.checked) - KEEP_RECENT) + len(s.strikethrough) + narrative_count
         section_info.append({
             "name": s.name,
             "checked": len(s.checked),
@@ -241,6 +282,8 @@ def consolidate(project_dir: Path, dry_run: bool = False) -> dict[str, Any]:
             "project": project_name,
             "claude_md_path": display_path,
             "claude_md_lines": len(lines),
+            "over_line_threshold": over_threshold,
+            "line_threshold": FILE_LINE_THRESHOLD,
             "sections": section_info,
         }
 
@@ -324,6 +367,8 @@ def consolidate(project_dir: Path, dry_run: bool = False) -> dict[str, Any]:
         ],
         "claude_md_before": len(lines),
         "claude_md_after": len(new_text.splitlines()),
+        "over_line_threshold": over_threshold,
+        "line_threshold": FILE_LINE_THRESHOLD,
         "archive_file": ARCHIVE_FILENAME,
         "archive_action": archive_action,
         "reference_table_updated": ref_updated,

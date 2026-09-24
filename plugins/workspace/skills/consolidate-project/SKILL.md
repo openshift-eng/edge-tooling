@@ -10,8 +10,10 @@ Archive completed checklist items from bloated sections into a
 `progress-archive.md` detail file. Keeps the last 3 completed items
 and a pointer line in each section for recent context.
 
-Sections with 10+ completed `- [x]` items qualify. Unchecked items,
-strikethroughs, and non-checklist content are never touched.
+Sections with 10+ completed `- [x]` items qualify. Unchecked items and
+strikethroughs are never touched. Non-checklist content (plain bullets,
+prose) is untouched too — except in `## Progress`, where it counts toward
+the threshold and is archived, not deleted, once the section qualifies.
 
 The scripts resolve the workspace root themselves (from `WORKSPACE_ROOT` /
 `CLAUDE_PROJECT_DIR` / the nearest ancestor of the cwd containing
@@ -45,8 +47,11 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/consolidate-project.py" --dry-run <projec
 
 Parse the JSON output:
 
-- **`status: "already_lean"`** — show the `message` and stop.
-- **`status: "error"`** — show the `message` and stop.
+- **`status: "already_lean"`** — show the `error` and stop.
+- **`status: "over_threshold_no_sections"`** — show the `error` and stop
+  (the file is over the line threshold but no section has enough
+  archivable items to fix automatically — it needs manual trimming).
+- **`status: "error"`** — show the `error` and stop.
 - **`status: "needs_consolidation"`** — proceed to Step 3.
 
 ## Step 3: Confirm
