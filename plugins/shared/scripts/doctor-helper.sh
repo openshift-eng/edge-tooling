@@ -80,11 +80,12 @@ cmd_prepare() {
 
         local jobs_file="${WORKDIR}/jobs/release-${release}-jobs.json"
         local status_file="${WORKDIR}/jobs/release-${release}-status.json"
+        local stale_file="${WORKDIR}/jobs/release-${release}-stale.json"
 
         echo "  Collecting periodic jobs..." >&2
         local raw_json raw_err
         raw_err=$(mktemp)
-        if ! raw_json=$(bash "${SCRIPT_DIR}/prow-jobs-for-release.sh" --mode status "${COMPONENT}" "${release}" 2>"${raw_err}"); then
+        if ! raw_json=$(bash "${SCRIPT_DIR}/prow-jobs-for-release.sh" --mode status --stale-output "${stale_file}" "${COMPONENT}" "${release}" 2>"${raw_err}"); then
             echo "  ERROR: failed to collect jobs for release ${release}:" >&2
             local err_msg
             err_msg=$(cat "${raw_err}")
