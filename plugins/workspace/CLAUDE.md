@@ -52,7 +52,7 @@ tests/{test_setup.sh, test_skills.py, test_domain_info.py, test_handoff.py}  Tes
 | `/workspace:update-project` | Update project documentation from this session |
 | `/workspace:consolidate-project` | Consolidate a bloated project CLAUDE.md by archiving completed items |
 | `/workspace:update-domain` | Feed lessons learned from a project back into its domain |
-| `/workspace:auto-update` | Start a 5-minute loop that keeps project docs updated during idle |
+| `/workspace:auto-update` | Automatically save project notes within 50 minutes of any work, during idle |
 
 ## Key Conventions
 

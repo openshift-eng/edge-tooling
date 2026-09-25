@@ -91,7 +91,7 @@ shouldn't live in the repos you contribute to.
 | `/workspace:close-project` | Mark a project done and clean up worktrees |
 | `/workspace:handoff` | Arm a handoff so the next `/clear` auto-resumes |
 | `/workspace:consolidate-project` | Archive completed checklist items from a large project |
-| `/workspace:auto-update` | Start a 5-minute loop that keeps project docs updated during idle |
+| `/workspace:auto-update` | Automatically save project notes within 50 minutes of any work, during idle |
 
 **Workspace setup** — usually one-time:
 

@@ -39,7 +39,13 @@ handoff is still worth arming.
 
 ## Step 3: Decide the Handoff
 
-From the documentation you just wrote, decide two things:
+Read the project's current CLAUDE.md (Read tool). `update-project` runs
+its edits in a fork and only returns a one-line summary to this session —
+the actual edits, including any new detail files or Reference Files
+table rows, are not otherwise visible here. The file on disk is the only
+reliable source for what changed.
+
+From that file, decide two things:
 
 1. **`next_task`** — the single next action, in a short phrase. This is your
    judgment about what should happen next, not merely the first unchecked
