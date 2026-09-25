@@ -508,10 +508,11 @@ def match_issue_to_bugs(issue_title, bug_candidates):
         return None
     matches = []
     for cand in bug_candidates:
-        sig_tokens = _tokenize(cand["error_signature"])
-        if not sig_tokens:
+        identity = cand.get("cause_identity") or cand.get("error_signature", "")
+        identity_tokens = _tokenize(identity)
+        if not identity_tokens:
             continue
-        score = len(issue_tokens & sig_tokens) / len(sig_tokens)
+        score = len(issue_tokens & identity_tokens) / len(identity_tokens)
         if score >= MATCH_THRESHOLD:
             matches.append((score, cand))
     if not matches:
@@ -561,6 +562,7 @@ def _collect_linked_bugs(bug_data, pr_bug_paths, ignore_keys=None):
                 continue
             linked.setdefault(key, []).append({
                 "release": release_label,
+                "cause_identity": cand.get("cause_identity", ""),
                 "error_signature": cand.get("error_signature", ""),
                 "affected_jobs": cand.get("affected_jobs", 0),
             })
@@ -612,6 +614,7 @@ def _add_matched_links(linked_map, linked_details, releases_data, pr_data, all_b
                     continue
                 linked_map.setdefault(key, []).append({
                     "release": release_label,
+                    "cause_identity": match.get("cause_identity", ""),
                     "error_signature": match.get("error_signature", ""),
                     "affected_jobs": issue.get("job_count", 0),
                 })
@@ -1072,12 +1075,30 @@ def _render_confidence_badge(issue):
 
 
 def _render_investigation(issue):
-    """Render scenario chips, causal chain, and analysis gaps for an issue.
+    """Render causal identity context, scenarios, chain, and gaps for an issue.
 
     Returns a list of HTML lines; empty when the issue (old summary files)
     has none of the investigation fields.
     """
     lines = []
+    failure_signals = issue.get("failure_signals") or []
+    if failure_signals:
+        lines.append(
+            f'                <div class="failure-signals"><strong>Failure signals:</strong> '
+            f'{_e("; ".join(failure_signals))}</div>'
+        )
+    impacts = issue.get("impacts") or []
+    if impacts:
+        lines.append(
+            f'                <div class="impacts"><strong>Downstream impacts:</strong> '
+            f'{_e("; ".join(impacts))}</div>'
+        )
+    trigger_context = issue.get("trigger_context") or []
+    if trigger_context:
+        lines.append(
+            f'                <div class="trigger-context"><strong>Trigger context:</strong> '
+            f'{_e("; ".join(trigger_context))}</div>'
+        )
     scenarios = issue.get("scenarios") or []
     if scenarios:
         chips = "".join(f'<span class="scenario-chip">{_e(s)}</span>' for s in scenarios)
@@ -1266,6 +1287,9 @@ def _create_bug_url(issue, source_label, jira_cfg):
     failure_type = issue.get("failure_type", "test")
     confidence = issue.get("confidence", "")
     scenarios = issue.get("scenarios", [])
+    failure_signals = issue.get("failure_signals", [])
+    impacts = issue.get("impacts", [])
+    trigger_context = issue.get("trigger_context", [])
     causal_chain = issue.get("causal_chain", [])
     jobs = issue.get("affected_jobs", [])[:5]
 
@@ -1297,6 +1321,12 @@ def _create_bug_url(issue, source_label, jira_cfg):
         lines.append(f"*Analysis confidence:* {confidence}")
     if scenarios:
         lines.append(f"*Affected scenarios:* {', '.join(scenarios)}")
+    if failure_signals:
+        lines.append(f"*Observed failure signals:* {', '.join(failure_signals)}")
+    if impacts:
+        lines.append(f"*Downstream impacts:* {', '.join(impacts)}")
+    if trigger_context:
+        lines.append(f"*Trigger context:* {', '.join(trigger_context)}")
     lines.append(f"*Number of affected jobs:* {issue.get('job_count', len(jobs))}")
     if jobs:
         last_date = max(j.get("date", "") for j in jobs)
