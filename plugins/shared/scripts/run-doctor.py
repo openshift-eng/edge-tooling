@@ -9,7 +9,6 @@ plugins/microshift-ci/scripts/run-doctor.py -> component "microshift").
 """
 
 import argparse
-import gzip
 import json
 import logging
 import os
@@ -72,7 +71,9 @@ DOCTOR_SH_TIMEOUT = {
     "finalize": 300,
 }
 
-PROW_DATA_URL = "https://prow.ci.openshift.org/data.js"
+GCS_BUCKET = "test-platform-results-public"
+GCS_PUBLIC_BASE = f"https://storage.googleapis.com/{GCS_BUCKET}"
+GCS_LOG_PREFIX = "logs"
 DOCTOR_JOB_NAMES = {
     "microshift": "microshift-ci-doctor",
     "lvm-operator": "lvms-ci-doctor",
@@ -120,41 +121,47 @@ def strip_frontmatter(text):
 
 
 def _find_predecessor_url():
-    """Return the latest successful earlier URL for this exact Prow job."""
+    """Return the GCS path of the latest successful earlier run for this Prow job.
+
+    Reads latest-build.txt from GCS (written only when a job finishes) to
+    find the most recent completed build, then verifies it succeeded.
+    Rehearsal jobs strip their ``rehearse-NNNNN-`` prefix so they reuse
+    predecessors from the periodic job's history.
+    """
     current_job_name = os.environ.get("JOB_NAME")
-    current_build = os.environ.get("BUILD_ID")
-    if not current_job_name or not current_build:
-        missing = [
-            name for name, value in (("JOB_NAME", current_job_name), ("BUILD_ID", current_build))
-            if not value
-        ]
-        log.debug("Predecessor discovery skipped; missing %s", ", ".join(missing))
-        return None
-    try:
-        req = request.Request(PROW_DATA_URL, headers={"Accept-Encoding": "gzip"})
-        with request.urlopen(req, timeout=30) as response:
-            data = response.read()
-            if response.headers.get("Content-Encoding") == "gzip":
-                data = gzip.decompress(data)
-        jobs = json.loads(data)
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        log.debug("Predecessor discovery failed for %s: %s", PROW_DATA_URL, exc)
+    if not current_job_name:
+        log.info("Predecessor discovery skipped: JOB_NAME not set")
         return None
 
-    if not isinstance(jobs, list):
-        log.debug("Predecessor discovery returned %s instead of a job list", type(jobs).__name__)
+    lookup_job = re.sub(r"^rehearse-\d+-", "", current_job_name)
+    job_base = f"{GCS_PUBLIC_BASE}/{GCS_LOG_PREFIX}/{lookup_job}"
+
+    try:
+        with request.urlopen(f"{job_base}/latest-build.txt", timeout=15) as resp:
+            latest_bid = resp.read().decode().strip()
+    except (OSError, ValueError) as exc:
+        log.info("Predecessor discovery failed reading latest-build.txt: %s", exc)
         return None
-    candidates = [
-        (str(job.get("started", "")), job["url"])
-        for job in jobs
-        if isinstance(job, dict)
-        and job.get("job") == current_job_name
-        and job.get("state") == "success"
-        and str(job.get("build_id", "")) != str(current_build)
-        and isinstance(job.get("url"), str)
-        and job["url"]
-    ]
-    return max(candidates, default=(None, None))[1]
+
+    if not latest_bid.isdigit():
+        log.info("Predecessor discovery got non-numeric latest-build.txt: %r", latest_bid)
+        return None
+
+    try:
+        with request.urlopen(f"{job_base}/{latest_bid}/finished.json", timeout=15) as resp:
+            finished = json.loads(resp.read())
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        log.info("Predecessor discovery failed reading finished.json for %s: %s", latest_bid, exc)
+        return None
+
+    if finished.get("result") != "SUCCESS":
+        log.info("Predecessor build %s did not succeed (result=%s), skipping",
+                 latest_bid, finished.get("result"))
+        return None
+
+    gcs_path = f"gs://{GCS_BUCKET}/{GCS_LOG_PREFIX}/{lookup_job}/{latest_bid}"
+    log.info("Predecessor discovered via GCS: %s", gcs_path)
+    return gcs_path
 
 
 def _rebase_evidence_path(original_path, current_root):
@@ -191,24 +198,33 @@ def _materialize_predecessor_report(downloaded_report, current_output):
     try:
         report = json.loads(downloaded_report.read_text())
         for entry_index, entry in enumerate(report):
+            kept = []
             for link_index, link in enumerate(entry.get("causal_chain", [])):
                 evidence = link["evidence"]
                 match = re.fullmatch(r"(.+):(\d+)", evidence)
                 if not match:
                     log.debug(
-                        "Predecessor report rejected for %s: entry %d causal link %d has invalid evidence",
-                        downloaded_report, entry_index, link_index,
+                        "Dropping causal link %d in entry %d of %s: invalid evidence format",
+                        link_index, entry_index, downloaded_report,
                     )
-                    return False
+                    continue
                 original_path = Path(match.group(1))
                 rebased_path = _rebase_evidence_path(original_path, current_output.parent.parent)
                 if rebased_path is None:
                     log.debug(
-                        "Predecessor report rejected for %s: entry %d causal link %d could not rebase evidence",
-                        downloaded_report, entry_index, link_index,
+                        "Dropping causal link %d in entry %d of %s: could not rebase evidence",
+                        link_index, entry_index, downloaded_report,
                     )
-                    return False
+                    continue
                 link["evidence"] = f"{rebased_path}:{match.group(2)}"
+                kept.append(link)
+            if not kept:
+                log.debug(
+                    "Predecessor report rejected for %s: entry %d has no rebaseable evidence",
+                    downloaded_report, entry_index,
+                )
+                return False
+            entry["causal_chain"] = kept
 
         text = json.dumps(report, indent=2)
         validation_errors = _run_validation(text)
