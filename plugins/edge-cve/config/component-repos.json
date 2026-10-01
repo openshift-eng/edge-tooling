@@ -1,0 +1,48 @@
+{
+  "defaults": {
+    "host": "github.com",
+    "org": "openshift"
+  },
+  "components": {
+    "MicroShift": {
+      "repo": "openshift/microshift",
+      "language": "go",
+      "version_ref_template": "release-{version}",
+      "version_ref_fallbacks": []
+    },
+    "Logical Volume Manager Storage": {
+      "repo": "openshift/lvm-operator",
+      "language": "go",
+      "version_ref_template": "release-{version}",
+      "version_ref_fallbacks": []
+    },
+    "Two Node Fencing": {
+      "repo": "openshift-eng/two-node-toolbox",
+      "language": "go",
+      "version_ref_template": "main",
+      "version_ref_fallbacks": []
+    },
+    "Two Node Arbiter": {
+      "repo": "openshift-eng/two-node-toolbox",
+      "language": "go",
+      "version_ref_template": "main",
+      "version_ref_fallbacks": []
+    },
+    "Cluster Node Tuning Operator": {
+      "repo": "openshift/cluster-node-tuning-operator",
+      "language": "go",
+      "version_ref_template": "release-{version}",
+      "version_ref_fallbacks": []
+    },
+    "Machine Config Operator": {
+      "repo": "openshift/machine-config-operator",
+      "language": "go",
+      "version_ref_template": "release-{version}",
+      "version_ref_fallbacks": []
+    }
+  },
+  "repo_url_patterns": [
+    "github\\.com/(?P<org>[^/\\s]+)/(?P<repo>[^/\\s#?]+)",
+    "git@github\\.com:(?P<org>[^/\\s]+)/(?P<repo>[^/\\s#?.]+)"
+  ]
+}
