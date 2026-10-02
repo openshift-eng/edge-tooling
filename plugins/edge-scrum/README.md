@@ -71,7 +71,7 @@ See [`skills/release-health/README.md`](skills/release-health/README.md) for ful
 
 #### `release-planning`
 
-Assesses whether the team can deliver planned scope within remaining time. Runs a data-quality gate followed by six planning risk checks — capacity, timeline, assignment, bug load, sizing, and composite progress — to surface risks per person and per feature before they become execution problems.
+Assesses whether the team can deliver planned scope within remaining time. Classifies targeted features as active or dormant on evidence, filters out-of-release work, then runs a data-quality gate and deterministic checks — capacity, timeline, assignment, bug load, sizing, composite — and draws a cut line through the PM-ranked feature list. The report leads with decisions and shows the formula behind every figure.
 
 **Usage:**
 
@@ -88,15 +88,17 @@ Assesses whether the team can deliver planned scope within remaining time. Runs 
 
 **Pencils down** is when all feature code must be merged. **Branch cut** is when the release branch is created. Feature timeline risk is measured against pencils down. If `pd:` is omitted, it defaults to the branch cut sprint.
 
-**What it produces:**
+**What it produces** (`.reports/release_planning_{version}_{date}.md`, `.docx` and `.html`; the `.html` opens automatically in your browser):
 
-1. **Data Quality** — validates story-level breakdown before running checks
-2. **Capacity** — per-person assigned SP vs remaining capacity
-3. **Timeline** — per-feature remaining work vs time left
-4. **Assignment** — unassigned work and single points of failure
-5. **Bug Load** — unassigned Blocker/Critical bugs
-6. **Sizing** — T-shirt size vs actual scope mismatches
-7. **Composite Risk** — multi-signal risk assessment per feature (LOW/MEDIUM/HIGH)
-8. **Recommendations** — actionable per-person, per-feature, and team-level actions
+1. **Verdict** — overall risk, pointed scope vs capacity, hidden (unpointed) scope as a range, gap
+2. **Decisions needed this week** — up to five rows with what it frees, an owner role and a deadline
+3. **Where the cut line falls** — active features in PM rank order with cumulative SP against capacity
+4. **People over target** — assigned vs capacity, unpointed work shown separately, roster drift flagged
+5. **Scope nobody has started** — features still in New with no evidence of work, with the reason
+6. **Process gaps** — roster drift, just-in-time pointing, missing SMEs, sizing, excluded epics
+7. **How the numbers are computed** — formula, inputs and result for every headline figure
+8. **Appendix** (collapsible) — full composite, timeline, capacity, data-quality, assignment, bug-load and sizing tables
 
-Output is saved to `.reports/release_planning_{version}_{YYYY-MM-DD}.md` and `.reports/release_planning_{version}_{YYYY-MM-DD}.docx`.
+The method, thresholds and known limitations are documented in [`references/release-planning-method.md`](references/release-planning-method.md).
+
+Output is saved to `.reports/release_planning_{version}_{YYYY-MM-DD}.md`, `.docx` and `.html` — a self-contained page that opens formatted in any browser. The skill runs with `--open`, so the `.html` opens automatically in your default browser when assembly finishes (drop `--open` when running headless).

@@ -164,6 +164,51 @@ def extract_tshirt_size(issue, field="customfield_10795"):
     return "Unsized"
 
 
+def extract_version_names(raw):
+    """Normalize a version-like field (fixVersions, Target Version) to a list of names."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [raw] if raw else []
+    if isinstance(raw, dict):
+        val = raw.get("name") or raw.get("value")
+        if isinstance(val, list):
+            return extract_version_names(val)
+        return [val] if val else []
+    if isinstance(raw, list):
+        out = []
+        for item in raw:
+            out.extend(extract_version_names(item))
+        return out
+    return []
+
+
+_SPRINT_STR_RE = re.compile(r"id=(\d+).*?name=([^,\]]+)")
+
+
+def extract_sprints(raw):
+    """Normalize the Sprint field (customfield_10020) to [{id, name}]."""
+    if raw is None:
+        return []
+    if isinstance(raw, dict):
+        raw = [raw]
+    if isinstance(raw, str):
+        raw = [raw]
+    out = []
+    for item in raw:
+        if isinstance(item, dict):
+            sid = item.get("id")
+            name = item.get("name") or ""
+            out.append({"id": int(sid) if str(sid).isdigit() else sid, "name": name})
+        elif isinstance(item, str):
+            m = _SPRINT_STR_RE.search(item)
+            if m:
+                out.append({"id": int(m.group(1)), "name": m.group(2).strip()})
+            elif item:
+                out.append({"id": None, "name": item})
+    return out
+
+
 # --- Date Helpers ---
 
 

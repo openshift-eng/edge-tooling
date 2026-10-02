@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from _jira_transforms import (
     extract_display_name,
     extract_tshirt_size,
+    extract_version_names,
     has_acceptance_criteria,
     get_nested,
     load_issues,
@@ -16,7 +17,7 @@ from _jira_transforms import (
 )
 
 
-def transform_feature(raw):
+def transform_feature(raw, rank=None):
     # Extract spike candidates from issuelinks
     spike_candidates = []
     for link in raw.get("issuelinks", []):
@@ -53,6 +54,10 @@ def transform_feature(raw):
         "has_ac": has_acceptance_criteria(raw.get("description")),
         "size": extract_tshirt_size(raw),
         "spike_candidates": spike_candidates,
+        "rank": rank,
+        "labels": raw.get("labels", []),
+        "target_versions": extract_version_names(raw.get("customfield_10855")),
+        "fix_versions": extract_version_names(raw.get("fixVersions") or raw.get("fix_versions")),
     }
 
 
@@ -68,7 +73,8 @@ def main():
     args = parser.parse_args()
 
     raw_issues = load_issues(args.input)
-    features = [transform_feature(raw) for raw in raw_issues]
+    # Rank = position in the fetched order (JQL sorts by Rank ASC), 1-based.
+    features = [transform_feature(raw, rank=i + 1) for i, raw in enumerate(raw_issues)]
     feature_keys = [f["key"] for f in features]
 
     output = {

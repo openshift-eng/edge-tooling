@@ -20,6 +20,7 @@ from _jira_transforms import (
     load_issues,
     write_output,
     IN_PROGRESS_STATUSES,
+    extract_sprints,
 )
 
 DONE_STATUSES_STORIES = {"Closed"}
@@ -47,6 +48,10 @@ def transform_story(raw, today):
         "stale": status in IN_PROGRESS_STATUSES and is_stale(updated, today),
         "labels": raw.get("labels", []),
         "priority": priority,
+        # Raw updated date (None if Jira omitted it) — used as activity evidence.
+        # `updated` above falls back to today for the staleness test only.
+        "updated": safe_format_date(raw.get("updated"), None),
+        "sprints": extract_sprints(raw.get("customfield_10020")),
     }
 
 

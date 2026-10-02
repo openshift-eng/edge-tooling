@@ -118,7 +118,12 @@ class TestCapacityCheck(unittest.TestCase):
         gate = [{"feature_key": f["key"], "status": "FAIL"}]
         roster = _roster(("alice@x.com", "Alice", 8))
         result = run_capacity_check([f], gate, roster, 2)
-        assert len(result) == 0
+        # Roster members always appear so capacity covers the whole team; the
+        # FAIL feature's stories must not count.
+        assert len(result) == 1
+        assert result[0]["person"] == "alice@x.com"
+        assert result[0]["assigned_sp"] == 0
+        assert result[0]["remaining_capacity"] == 16
 
     def test_excludes_bugs_from_sp(self):
         stories = [
@@ -223,15 +228,16 @@ class TestAssignmentCheck(unittest.TestCase):
 
 class TestCompositeCheck(unittest.TestCase):
     def _run(self, features, gate_status="PASS", timeline_risk="OK", capacity_over=False,
-             has_spof=False, has_unassigned=False, has_sizing=False):
+             has_spof=False, has_unassigned=False, has_sizing=False, count_sizing=False):
         gate = [{"feature_key": f["key"], "status": gate_status} for f in features]
-        capacity = [{"person": "alice@x.com", "status": "OVER" if capacity_over else "OK"}] if capacity_over else []
+        capacity = [{"person": "alice@redhat.com", "status": "OVER"}] if capacity_over else []
         timeline = [{"feature_key": f["key"], "risk": timeline_risk} for f in features]
         spof = [{"feature_key": feat["key"], "sole_contributor": "alice"} for feat in features] if has_spof else []
         unassigned_list = [{"feature_key": feat["key"], "count": 1, "sp": 5} for feat in features] if has_unassigned else []
         assignment = {"spof": spof, "unassigned": unassigned_list}
-        sizing = [{"feature_key": feat["key"]} for feat in features] if has_sizing else []
-        return run_composite_check(features, gate, capacity, timeline, assignment, sizing)
+        sizing = [{"feature_key": feat["key"], "assessment": "Undersized"} for feat in features] if has_sizing else []
+        return run_composite_check(features, gate, capacity, timeline, assignment, sizing,
+                                   count_sizing=count_sizing)
 
     def test_low_no_signals(self):
         f = _feature(all_stories=[_story()])
@@ -240,13 +246,25 @@ class TestCompositeCheck(unittest.TestCase):
 
     def test_medium_two_signals(self):
         f = _feature(all_stories=[_story()])
-        result = self._run([f], has_spof=True, has_sizing=True)
+        result = self._run([f], has_spof=True, capacity_over=True)
         assert result[0]["composite_risk"] == "MEDIUM"
 
     def test_high_three_signals(self):
         f = _feature(all_stories=[_story()])
-        result = self._run([f], timeline_risk="HIGH", has_spof=True, has_sizing=True)
+        result = self._run([f], timeline_risk="HIGH", has_spof=True, capacity_over=True)
         assert result[0]["composite_risk"] == "HIGH"
+
+    def test_sizing_shown_but_not_counted_by_default(self):
+        f = _feature(all_stories=[_story()])
+        result = self._run([f], has_spof=True, has_sizing=True)
+        assert result[0]["sizing"] == "Undersized"
+        assert result[0]["signal_count"] == 1
+        assert result[0]["composite_risk"] == "LOW"
+
+    def test_sizing_counted_when_opted_in(self):
+        f = _feature(all_stories=[_story()])
+        result = self._run([f], has_spof=True, has_sizing=True, count_sizing=True)
+        assert result[0]["signal_count"] == 2
 
     def test_spof_and_unassigned_merged_as_one_signal(self):
         f = _feature(all_stories=[_story()])
@@ -256,7 +274,7 @@ class TestCompositeCheck(unittest.TestCase):
 
     def test_data_quality_fail_counts_as_signal(self):
         f = _feature(all_stories=[_story()])
-        result = self._run([f], gate_status="FAIL", has_sizing=True)
+        result = self._run([f], gate_status="FAIL", has_spof=True)
         assert result[0]["signal_count"] == 2
         assert result[0]["composite_risk"] == "MEDIUM"
 
@@ -266,8 +284,10 @@ class TestCompositeCheck(unittest.TestCase):
         gate = [{"feature_key": "F-1", "status": "PASS"}, {"feature_key": "F-2", "status": "PASS"}]
         capacity = []
         timeline = [{"feature_key": "F-1", "risk": "OK"}, {"feature_key": "F-2", "risk": "HIGH"}]
-        assignment = {"spof": [{"feature_key": "F-2", "sole_contributor": "a"}], "unassigned": []}
-        sizing = [{"feature_key": "F-2"}]
+        assignment = {"spof": [{"feature_key": "F-2", "sole_contributor": "a"}],
+                      "unassigned": [{"feature_key": "F-2", "count": 1, "sp": 0}]}
+        capacity = [{"person": "alice@redhat.com", "status": "OVER"}]
+        sizing = [{"feature_key": "F-2", "assessment": "Undersized"}]
         result = run_composite_check([f1, f2], gate, capacity, timeline, assignment, sizing)
         assert result[0]["feature_key"] == "F-2"
         assert result[0]["composite_risk"] == "HIGH"

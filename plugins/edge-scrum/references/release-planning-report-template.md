@@ -1,48 +1,36 @@
-# Release Planning Risk Assessment: OCP {VERSION}
+<!-- markdownlint-disable MD033 MD036 -->
+# OCP {VERSION} Planning Risk
 
-| | |
-|---|---|
-| **Analysis Date** | {TODAY} |
-| **Release Window** | Sprint {FIRST} -- Sprint {LAST} |
-| **Pencils Down** | Sprint {PENCILS_DOWN} |
-| **Sprints Remaining** | {remaining_sprint_count} of {total_dev_sprints} dev sprints (to pencils down) |
-| **Component Filter** | {component_filter} |
-| **Features Assessed** | {assessed_features} / {total_features} |
-| **Data Quality Failures** | {data_quality_failures} |
-| **Overall Risk** | {overall_risk} |
+{VERDICT}
 
-## Executive Summary
+{SUMMARY_STRIP}
 
-{executive_recommendation}
+{STATS_LINE}
 
----
+## Decisions needed this week
 
-{DATA_QUALITY}
+{DECISIONS}
 
----
+## Where the cut line falls
 
-{CAPACITY}
+{CUT_LINE}
 
----
+## People over target
 
-{TIMELINE}
+{PEOPLE}
 
----
+## Scope nobody has started
 
-{ASSIGNMENT}
+{DORMANT}
 
----
+## Process gaps
 
-{BUG_LOAD}
+{GAPS}
 
----
+## How the numbers are computed
 
-{SIZING}
+{METHOD}
 
----
+{APPENDIX}
 
-{PROGRESS}
-
----
-
-{RECOMMENDATIONS}
+{FOOTER}
