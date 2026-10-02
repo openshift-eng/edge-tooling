@@ -195,7 +195,7 @@ def _check_s3_rpms(v):
     }
 
 
-_GCSWEB_BASE = "https://gcsweb-ci.apps.ci.l2s4.p1.openshiftapps.com/gcs/test-platform-results"
+_GCSWEB_BASE = "https://gcsweb-ci.apps.ci.l2s4.p1.openshiftapps.com/gcs/test-platform-results-public"
 _SCENARIO_ROW_RE = re.compile(
     r'<tr class="(status-pass|status-fail|status-skip)">'
 )
@@ -744,7 +744,7 @@ def cmd_download(args):
     results = []
     for s in completed:
         gcs_path = (
-            f"gs://test-platform-results/{prow.GCS_PR_PREFIX}/"
+            f"gs://test-platform-results-public/{prow.GCS_PR_PREFIX}/"
             f"{pr['number']}/{s['job']}/{s['build_id']}/"
         )
         job_dir = os.path.join(download_dir, s["short_name"])

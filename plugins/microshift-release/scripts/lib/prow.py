@@ -15,10 +15,10 @@ import requests
 logger = logging.getLogger(__name__)
 
 GH_REPO = "openshift/microshift"
-GCS_API = "https://storage.googleapis.com/storage/v1/b/test-platform-results/o"
-GCS_BASE = "https://storage.googleapis.com/test-platform-results"
+GCS_API = "https://storage.googleapis.com/storage/v1/b/test-platform-results-public/o"
+GCS_BASE = "https://storage.googleapis.com/test-platform-results-public"
 GCS_PR_PREFIX = "pr-logs/pull/openshift_microshift"
-PROW_VIEW = "https://prow.ci.openshift.org/view/gs/test-platform-results"
+PROW_VIEW = "https://prow.ci.openshift.org/view/gs/test-platform-results-public"
 S3_BUCKET = "s3://release-testing-results/microshift"
 S3_BUILD_CACHE = "s3://microshift-build-cache-us-west-2"
 
