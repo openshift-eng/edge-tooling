@@ -14,15 +14,15 @@ Output files (under ${WORKDIR}/jobs/):
     jobs/prs-summary.json
 """
 
+import glob as glob_mod
 import json
-import sys
 import os
 import re
-import glob as glob_mod
+import sys
 from datetime import datetime, timezone
 
 from classify import classify_breakdown
-from parse import parse_structured_summary, group_by_signature
+from parse import group_by_signature, issue_title, parse_structured_summary
 
 
 def classify_severity(group):
@@ -54,12 +54,12 @@ def build_release_json(release, jobs, timestamp):
 
 
 def _build_issues_from_jobs(jobs):
-    """Group jobs by error signature and return (issues list, breakdown dict).
+    """Group jobs by causal identity and return (issues list, breakdown dict).
 
     Shared by both release and PR builders.
     """
     groups = group_by_signature(jobs)
-    groups.sort(key=lambda g: (-max(j["severity"] for j in g), -len(g), g[0].get("error_signature", "")))
+    groups.sort(key=lambda g: (-max(j["severity"] for j in g), -len(g), issue_title(g[0])))
 
     breakdown = {"build": 0, "test": 0, "infrastructure": 0}
     for job in jobs:
@@ -81,11 +81,21 @@ def _build_issues_from_jobs(jobs):
         )
         issues.append({
             "number": i,
-            "title": rep["error_signature"],
+            "title": issue_title(rep),
             "job_count": len(group),
             "severity": classify_severity(group),
             "failure_type": failure_type,
             "root_cause": rep.get("root_cause", ""),
+            "cause_identity": rep.get("cause_identity", ""),
+            "failure_signals": sorted({
+                j.get("failure_signal", "") or j.get("raw_error", "")
+                for j in group
+                if j.get("failure_signal", "") or j.get("raw_error", "")
+            }),
+            "impacts": sorted({impact for j in group for impact in j.get("impacts", [])}),
+            "trigger_context": sorted({
+                context for j in group for context in j.get("trigger_context", [])
+            }),
             "next_steps": rep.get("remediation", ""),
             "confidence": rep.get("confidence", ""),
             "causal_chain": rep.get("causal_chain", []),
