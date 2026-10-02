@@ -1,0 +1,12 @@
+# Development + CI gate for the edge-contribution plugin.
+# Runtime needs only the Python stdlib plus `requests` (already present system-wide)
+# and the `gh` CLI. These are the tools that gate a merge:
+#   python -m pytest bin/tests
+#   black --check bin
+#   ruff check bin
+#   mypy bin
+pytest>=7
+black>=24
+ruff>=0.4
+mypy>=1.8
+requests>=2.25
