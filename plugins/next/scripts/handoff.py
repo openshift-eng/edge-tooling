@@ -6,7 +6,7 @@ and `arm` stamps its expiry into a small frontmatter block; the SessionStart
 hook bound to `startup|clear` injects that note into the next session and
 retires it. The note is the only state that crosses a /clear.
 
-Notes live outside the repository, under ~/.claude/handoffs/, keyed by the
+Notes live outside the repository, under ~/.claude/next/, keyed by the
 project directory. Nothing is ever written to the repo or its CLAUDE.md, so a
 handoff never shows up in `git status` and never leaks into a teammate's
 context.

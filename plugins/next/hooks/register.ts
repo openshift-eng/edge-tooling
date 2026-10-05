@@ -12,7 +12,17 @@ const RESUME =
 
 // `python3 ".../handoff.py" arm --project-dir ...`
 const ARM = /handoff\.py["']?\s+arm\b/
-const OK = /"status"\s*:\s*"ok"/
+
+// Parses the whole trimmed output as JSON rather than substring-matching
+// `"status": "ok"`, so a Bash command whose output merely contains that
+// text (accidentally, or via a spoofed echo) cannot arm a note.
+function armStatus(text: string | undefined): unknown {
+  try {
+    return JSON.parse((text ?? '').trim()).status
+  } catch {
+    return undefined
+  }
+}
 
 const phase = atom({ plugin: 'next', key: 'phase' } as const, 'idle' as Phase)
 
@@ -26,7 +36,7 @@ export const register: Register = on => {
     const ran = await next(e)
     if (!ARM.test(e.command) || (await read($, phase)) !== 'running') return ran
 
-    const isArmed = ran.deny === undefined && ran.isError !== true && OK.test(ran.text ?? '')
+    const isArmed = ran.deny === undefined && ran.isError !== true && armStatus(ran.text) === 'ok'
     if (isArmed) await update($, phase, () => 'armed')
 
     return ran
@@ -49,10 +59,17 @@ export const register: Register = on => {
     // Queued: both run once the session is idle, after this turn ends.
     void $.command
       .run({ command: 'clear' })
-      .then(() => $.prompt.submit({ text: RESUME }))
-      .catch((err: unknown) => {
-        $.ui.toast(`next: clear or resume failed: ${String(err)}. Run /clear by hand.`)
-      })
+      .then(
+        () =>
+          $.prompt.submit({ text: RESUME }).catch((err: unknown) => {
+            $.ui.toast(
+              `next: clear ran but resume failed: ${String(err)}. The note is retired to its .consumed.md file — paste it in by hand.`,
+            )
+          }),
+        (err: unknown) => {
+          $.ui.toast(`next: clear failed: ${String(err)}. Run /clear by hand.`)
+        },
+      )
 
     return done
   })

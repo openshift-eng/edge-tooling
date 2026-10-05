@@ -77,7 +77,11 @@ at most five; never CLAUDE.md, which loads by itself.
 
 ### Step 4: Write and Arm
 
-Write the note to `path` from Step 1 with the Write tool, then run:
+Write the note to `path` from Step 1 with the Write tool. If the write
+fails, stop and report it — do not run `arm`, which would arm whatever
+note already happens to be on disk at that path.
+
+Once the write succeeds, run:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/handoff.py" arm --project-dir "${CLAUDE_PROJECT_DIR}"
