@@ -13,3 +13,4 @@ markdownlint-cli2-results.json
 plugins/edge-ocp-rc/jobs/*.txt
 node_modules/
 .work
+plugins/*/.claude-plugin/types/
