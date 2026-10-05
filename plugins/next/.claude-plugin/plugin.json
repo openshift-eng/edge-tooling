@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "next",
+  "displayName": "Next Session",
+  "version": "0.1.0",
+  "description": "Write a curated handoff note at a breaking point, then automatically clear the context and resume in a fresh session from the note, in any repo, with no workspace setup.",
+  "author": {
+    "name": "fonta-rh"
+  },
+  "homepage": "https://github.com/openshift-eng/edge-tooling",
+  "license": "Apache-2.0",
+  "types": "./types/index.d.ts"
+}
