@@ -57,229 +57,86 @@ If no notes were provided in the arguments, ask the user:
 > "Any closing notes for this project? (outcome, resolution, links to
 > PRs, etc.) Say 'no' to skip."
 
-## Step 2.5: Worktree & Skill Cleanup
+## Step 3: Inspect Worktrees and Skills
 
-Substeps 2.5a-2.5d apply if `P.worktree_status` (from Step 1's
-resume-project.py output) is non-empty (multi-repo worktrees).
-Substep 2.5s applies if `P.frontmatter.worktree_path` is present
-(self-repo worktree). Substep 2.5e applies if
-`P.frontmatter.skills` is non-empty. Substep 2.5f always runs.
+Run via Bash:
 
-**2.5a. Display worktree status**
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/close-project.py" check "<P.name>"
+```
 
-Show a status summary from `P.worktree_status`:
+If `status` is not `ok`, show `error_message` and stop. Otherwise
+`worktrees` lists every worktree of the project (multi-repo `worktrees:`
+and the self-repo `worktree_path:` alike; self-repo entries have
+`repo: "(self)"`), each with absolute `path`, `branch`, `exists`, `dirty`,
+`dirty_files`, `ahead` and `no_upstream`. `skills` lists linked repo skills
+with `shared` (another active project still uses it).
+
+If `worktrees` is non-empty, show a summary table:
 
 ```
 | Repo | Branch | Status |
 |------|--------|--------|
 ```
 
-Where status is derived from each entry in `P.worktree_status`:
-- `exists=false` → `MISSING` (already gone, skip cleanup)
-- `error` is non-null → `ERROR: <message>`
-- `dirty=true` and `ahead > 0` → `dirty (N files), ahead by N`
-- `dirty=true` → `dirty (N files)`
-- `no_upstream=true` → `no upstream (local-only commits)`
+Status per entry:
+- `exists=false` → `MISSING` (already gone, nothing to clean up)
+- `dirty` and `ahead > 0` → `dirty (N files), ahead by N`
+- `dirty` → `dirty (N files)`
+- `no_upstream` → `no upstream (local-only commits)`
 - `ahead > 0` → `ahead by N`
 - otherwise → `clean`
 
-**2.5b. Handle worktrees needing attention**
+(A `pr/<number>` branch with no upstream and nothing else wrong is
+reported as `no upstream` but is treated as clean — those are throwaway
+local refs.)
 
-If any worktree is dirty, has unpushed commits (`ahead > 0`), or has
-no upstream (`no_upstream=true`), warn the user:
+## Step 4: Decide What to Do With Worktrees
 
-> "The following worktrees need attention before removal:
->   - `<repo>` (`<branch>`): <status detail>
->
-> What would you like to do?"
+Pick the `--worktrees` mode for Step 5:
 
-Use AskUserQuestion with options:
-- "Commit and push changes before closing"
-- "Discard changes and remove worktrees"
-- "Keep worktrees (close project but leave them in place)"
+- No worktrees, or all are `MISSING` or clean → `remove`.
+- Otherwise (any dirty, ahead, or no upstream) warn the user:
 
-If "commit and push": help the user commit and push in each worktree.
-For `no_upstream` branches, push with `-u` to set the upstream:
-`git -C <worktree-path> push -u fork <branch>`
-(each worktree's `path` in `P.worktree_status` is absolute).
+  > "The following worktrees need attention before removal:
+  >   - `<repo>` (`<branch>`): <status detail>
+  >
+  > What would you like to do?"
 
-**2.5c. Remove worktrees**
+  Use AskUserQuestion with options:
+  - "Commit and push changes before closing"
+  - "Discard changes and remove worktrees" → mode `discard`
+  - "Keep worktrees (close project but leave them in place)" → mode `keep`
 
-Unless the user chose to keep worktrees, remove each existing worktree.
-The worktree `path` and the repo checkout are derivable from
-`P.worktree_status` (paths are absolute). For a repo at
-`<workspace>/repos/<repo>`:
+  If "commit and push": help the user commit and push in each worktree
+  (`path` is absolute). For `no_upstream` branches push with `-u`:
+  `git -C <path> push -u fork <branch>`. If a commit or push fails, report
+  it and do not remove that worktree. Re-run the `check` command, then
+  continue with mode `remove` — the script itself refuses to remove
+  anything still dirty or unpushed, so a failed push is safe.
 
-```bash
-# If user chose "Discard changes" (worktree may be dirty):
-git -C <workspace>/repos/<repo> worktree remove --force .worktrees/<branch>
-# If worktree is clean (user chose "Commit and push" or was already clean):
-git -C <workspace>/repos/<repo> worktree remove .worktrees/<branch>
-```
+## Step 5: Close the Project
 
-For non-PR branches (those NOT starting with `pr/`), also offer to
-delete the local branch:
-```bash
-git -C <workspace>/repos/<repo> branch -d <branch>
-```
-
-For PR checkout branches (`pr/<number>`), just delete the local branch
-— these are local refs created from the remote PR, not remote branches:
-```bash
-git -C <workspace>/repos/<repo> branch -D pr/<number>
-```
-
-**2.5d. Update frontmatter**
-
-If worktrees were removed, the `worktrees:` field will be cleared
-in Step 3b (set to `worktrees: []`).
-
-If worktrees were kept, leave the field as-is and add a note to the
-closing summary: "Worktrees preserved — branches still active in repos."
-
-**2.5s. Self-repo worktree cleanup**
-
-This substep applies only when `P.frontmatter.worktree_path` is present
-and `P.worktree_status` is empty (self-repo project, not multi-repo).
-
-1. Check dirty state inside the worktree:
-
-   ```bash
-   git -C <P.frontmatter.worktree_path> status --porcelain
-   git -C <P.frontmatter.worktree_path> rev-parse --abbrev-ref @{upstream} 2>/dev/null
-   # If the above fails → no_upstream. Otherwise:
-   git -C <P.frontmatter.worktree_path> rev-list --count @{upstream}..HEAD
-   ```
-
-   Derive status using the same logic as 2.5a (dirty/ahead/no-upstream).
-
-2. If the worktree needs attention (dirty, ahead, or no upstream),
-   present the same AskUserQuestion as 2.5b:
-   - "Commit and push changes before closing"
-   - "Discard changes and remove worktree"
-   - "Keep worktree (close project but leave it in place)"
-
-   If "commit and push": help the user commit and push. For
-   `no_upstream` branches: `git -C <worktree_path> push -u fork <branch>`.
-   If either the commit or push fails, keep the worktree and report the
-   error — do not proceed to removal.
-
-   If the worktree is clean (or commit and push succeeded), proceed
-   to removal. If the user chose to keep the worktree, skip to step 5.
-
-3. Remove the worktree using git:
-
-   ```bash
-   # Clean worktree:
-   git worktree remove <P.frontmatter.worktree_path>
-   # Dirty worktree (user chose "Discard"):
-   git worktree remove --force <P.frontmatter.worktree_path>
-   ```
-
-   Then delete the local branch:
-   ```bash
-   git branch -d <P.frontmatter.branch>
-   ```
-
-4. If the worktree path does not exist on disk (already removed
-   externally), skip removal silently but treat it as removed for
-   frontmatter purposes (clear `worktree_path` in Step 3b).
-
-5. If the user chose to keep the worktree, leave it in place and add a
-   note to the closing summary: "Worktree preserved at
-   `<worktree_path>` — branch `<branch>` still active."
-
-**2.5e. Remove skill symlinks**
-
-If `P.frontmatter.skills` is non-empty, check which linked skills are
-still needed by other active projects:
+Run via Bash (omit `--notes` when there are none):
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/skills.py" unlink-check <P.name>
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/close-project.py" apply "<P.name>" \
+  --worktrees <remove|keep|discard> --notes "<closing notes>"
 ```
 
-If the output has `status: "error"`, mention it and continue to Step 3.
-Otherwise, for each entry in `skills`:
+The script removes worktrees and their local branches according to the
+mode, unlinks repo skills no other active project uses, marks the project
+`status: done` with `closed:` and `last-active:`, clears `worktrees:` /
+`worktree_path:` / `skills:` for what was removed, writes (or replaces) the
+`## Closing Notes` section, and clears a pending handoff marker. Skills are
+unlinked even when worktrees are kept.
 
-- `removable: true` → remove the symlink (plain `rm` — the target is a
-  symlink, never use `rm -r`):
+Parse the JSON: `removed` and `kept` list what was done per item (`kind`
+is `worktree`, `branch` or `skill`; `kept` entries carry a `reason`), and
+`errors` lists anything that failed. Failures never abort the close —
+report them. If `status` is not `ok`, show `error_message` and stop.
 
-  ```bash
-  rm "<workspace>/.claude/skills/<name>"
-  ```
-
-- `removable: false` with non-empty `used_by` → keep it; report:
-  "Skill `<name>` kept — still used by `<used_by>`."
-- `missing: true` → nothing to remove; skip silently.
-- `removable: false` with `is_symlink: false` → not ours to delete;
-  report: "`.claude/skills/<name>` is not a symlink — left in place."
-
-Skills are unlinked even when the user chose to keep worktrees in 2.5b —
-symlinks surface autocomplete entries and have nothing to do with
-branches. The `skills:` frontmatter is cleared in Step 3b regardless of
-what was removable.
-
-**2.5f. Clean up handoff marker**
-
-If a checkpoint was armed for this project, remove it so a subsequent
-`/clear` doesn't attempt to resume a closed project:
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/handoff.py" clear \
-  --project "<P.name>"
-```
-
-No output handling needed — the marker is silently removed only if it
-references this project.
-
-## Step 3: Update Project CLAUDE.md
-
-**3a. Read the current CLAUDE.md**
-
-Read the full `project.context_file` (absolute path from Step 1).
-
-**3b. Update frontmatter fields**
-
-Using the Edit tool, update the YAML frontmatter:
-
-1. Change `status: active` (or whatever the current status is) to
-   `status: done`
-2. Add a `closed: <YYYY-MM-DD>` field (today's date) after the
-   `status` line. If a `closed:` field already exists, update it.
-3. Update `last-active: <YYYY-MM-DDTHH:MM>` to the current time (or add it after
-   `closed:` if it doesn't exist).
-4. If worktrees were removed in Step 2.5, change the `worktrees:`
-   list to `worktrees: []`. Leave `branch:` as-is for historical
-   reference.
-   For self-repo projects: if the worktree was removed (or already
-   absent) in Step 2.5s, remove the `worktree_path:` line from
-   frontmatter (or set to empty string). Leave `branch:` as-is for
-   historical reference.
-   If the worktree was kept, leave `worktree_path:` as-is.
-5. If the project had a `skills:` list, change it to `skills: []`
-   (the symlinks were handled in Step 2.5e; the cleared list records
-   that this project no longer holds any skill references).
-
-**3c. Add closing notes section**
-
-If the user provided closing notes (non-empty, not "no"):
-
-Closing Notes always go in CLAUDE.md (the index), not in detail files.
-
-1. Check if a `## Closing Notes` section already exists in the file.
-2. If it exists, replace its content with the new notes.
-3. If it doesn't exist, add a `## Closing Notes` section at the end
-   of the file with the notes and today's date:
-
-```markdown
-## Closing Notes
-
-_Closed YYYY-MM-DD_
-
-<user's closing notes>
-```
-
-## Step 4: Confirm Closure
+## Step 6: Confirm Closure
 
 Display a brief confirmation:
 
@@ -287,7 +144,12 @@ Display a brief confirmation:
 Project `<name>` marked as done.
 ```
 
-If closing notes were added, include them in the confirmation.
+- If closing notes were added, include them.
+- Report `kept` entries: skills still used by other projects ("Skill
+  `<name>` kept — still used by `<users>`."), and preserved worktrees
+  ("Worktrees preserved — branches still active in repos.").
+- Report any `errors`.
+
 Remind the user that closed projects won't appear in the SessionStart
 summary, but can still be resumed with `/workspace:resume-project <name>`.
 
@@ -298,8 +160,10 @@ If the project produced domain-worthy lessons, suggest
 
 ## Important Notes
 
-- Always use the Read tool before editing, and Edit tool for changes
-- Never delete the project directory — closing just updates metadata
-- Use today's date for the `closed` field
+- All deterministic work lives in `scripts/close-project.py` (also used by
+  the Claude Code mod UI) — do not hand-edit the frontmatter or run
+  `git worktree remove` yourself
+- The script never deletes the project directory — closing just updates
+  metadata, and re-running it is safe
 - The project will be filtered from the SessionStart "Recent projects"
   table but remains fully accessible via `/workspace:resume-project`

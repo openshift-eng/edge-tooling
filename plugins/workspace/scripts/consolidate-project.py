@@ -29,10 +29,10 @@ FILE_LINE_THRESHOLD = 100
 NARRATIVE_SECTION = "Progress"
 
 RE_HEADING = re.compile(r"^## (.+)$")
-RE_CHECKED = re.compile(r"^\s*- \[x\] .+$")
+RE_CHECKED = re.compile(r"^\s*- \[[xX]\] .+$")
 RE_UNCHECKED = re.compile(r"^\s*- \[ \] .+$")
 RE_STRIKETHROUGH = re.compile(r"^\s*- ~~?.+~~?\s*$")
-RE_PLAIN_BULLET = re.compile(r"^\s*-\s+(?!\[[ x]\])(?!~).+$")
+RE_PLAIN_BULLET = re.compile(r"^\s*-\s+(?!\[[ xX]\])(?!~).+$")
 
 
 @dataclass

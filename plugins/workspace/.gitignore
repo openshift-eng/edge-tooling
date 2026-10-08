@@ -19,3 +19,6 @@ Thumbs.db
 # Scratch / working files
 .work/
 auth.json
+
+# Types the engine lays down for editors (regenerated on load)
+.claude-plugin/types/
