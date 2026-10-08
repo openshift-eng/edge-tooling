@@ -1,36 +1,7 @@
 #!/usr/bin/env python3
-"""
-Prepare bug candidates from per-job analysis reports.
+"""Prepare bug candidates from per-job analysis reports."""
 
-Parses per-job JSON report files, groups by ERROR_SIGNATURE similarity,
-extracts Jira search keywords, and writes a candidates JSON file for
-the create-bugs skill to search Jira against.
-
-Usage:
-    search-bugs.py <source> --workdir DIR
-    search-bugs.py --merge <bugs-file1.json> <bugs-file2.json> ... --output FILE --workdir DIR
-    search-bugs.py --report <results.json> --candidates <merged.json> --workdir DIR
-
-    <source> is one of:
-      - Release version: 4.22, main
-      - PR number: pr-6396, pr6396
-      - Rebase shorthand: rebase-release-4.22
-
-    --merge mode reads multiple bug-candidates-<source>.json
-    files and merges candidates across sources using fuzzy signature
-    matching for cross-release dedup.
-
-    --report mode reads a results JSON and merged candidates JSON,
-    validates 1:1 match by error_signature, and writes a deterministic
-    text report.
-
-Output:
-    ${WORKDIR}/bugs/bug-candidates-<source>.json  (default mode)
-    <output>                                                   (--merge mode, via --output)
-    ${WORKDIR}/bugs/create-bugs-<source>.txt   (--report mode, per-source)
-    ${WORKDIR}/report-create-bugs.txt                       (--report mode, merged)
-"""
-
+import argparse
 import json
 import sys
 import os
@@ -38,11 +9,13 @@ import re
 import glob as glob_mod
 from datetime import datetime, timezone
 
+import jira_search
 from classify import classify_breakdown
 from parse import (
     STOP_WORDS, normalize_step_name, cluster_by_similarity,
     group_by_signature, grouping_text, parse_structured_summary, tokenize,
 )
+
 
 # Additional stop words filtered only during keyword extraction for Jira search,
 # not during signature grouping (which uses the shared STOP_WORDS).
@@ -82,6 +55,160 @@ def extract_keywords(error_signature):
 def extract_test_ids(error_signature):
     """Extract numeric test case IDs (4-6 digits) from error signature."""
     return re.findall(r"\b(\d{4,6})\b", error_signature)
+
+
+# ---------------------------------------------------------------------------
+# Jira search (JQL query builders and search logic)
+# ---------------------------------------------------------------------------
+
+_JIRA_SCOPE = "((project = OCPBUGS AND component = MicroShift) OR project = USHIFT) AND issuetype = Bug"
+
+
+def build_search_jql_open_match_keyword(keyword):
+    """Build JQL for open bugs matching keyword (for duplicate detection)."""
+    return f'{_JIRA_SCOPE} AND text ~ "{keyword}" AND status not in (Closed, Verified)'
+
+
+def build_search_jql_open_match_test_id(test_id, ocp_prefixed=False):
+    """Build JQL for open bugs matching test ID (bare or OCP-prefixed, for duplicate detection)."""
+    if ocp_prefixed:
+        term = f"OCP-{test_id}"
+    else:
+        term = test_id
+    return f'{_JIRA_SCOPE} AND text ~ "{term}" AND status not in (Closed, Verified)'
+
+
+def build_search_jql_closed_match_keyword(keyword):
+    """Build JQL for closed/verified bugs matching keyword (for regression detection)."""
+    return f'{_JIRA_SCOPE} AND text ~ "{keyword}" AND status in (Closed, Verified) ORDER BY updated DESC'
+
+
+def build_search_jql_open_all():
+    """Build JQL for broad open-bugs query (all open bugs in scope)."""
+    return f'{_JIRA_SCOPE} AND status not in (Closed, Verified) ORDER BY updated DESC'
+
+
+def _convert_jira_issue_to_entry(issue, include_priority_created=False):
+    """Convert a Jira API issue dict to the bug-matches entry format.
+
+    Truncates 'updated' and 'created' to YYYY-MM-DD so categorize_candidate's
+    lexicographic date compare works correctly.
+    """
+    fields = issue.get("fields", {})
+    assignee_obj = fields.get("assignee")
+    assignee = assignee_obj.get("displayName", "") if assignee_obj else ""
+
+    entry = {
+        "key": issue.get("key", ""),
+        "summary": fields.get("summary", ""),
+        "status": fields.get("status", {}).get("name", ""),
+        "assignee": assignee,
+        "updated": (fields.get("updated") or "")[:10],
+    }
+
+    if include_priority_created:
+        priority_obj = fields.get("priority")
+        priority = priority_obj.get("name", "") if priority_obj else ""
+        entry["priority"] = priority
+        entry["created"] = (fields.get("created") or "")[:10]
+
+    return entry
+
+
+def find_jira_bugs_for_candidate(cand, search_fn=None):
+    """Search Jira for bugs matching one candidate's keywords and test IDs.
+
+    Returns {duplicates: [...], regressions: [...]}.
+    Uses injectable search_fn for testability (defaults to jira_search.search).
+    """
+    if search_fn is None:
+        search_fn = jira_search.search
+
+    error_signature = cand.get("error_signature", "")
+    keywords = extract_keywords(error_signature)
+    test_ids = extract_test_ids(error_signature)
+
+    # Find open bugs by keyword (top 3 keywords) → potential duplicates
+    duplicates_dict = {}
+    for kw in keywords[:3]:
+        jql = build_search_jql_open_match_keyword(kw)
+        issues = search_fn(jql, fields="summary,status,assignee,updated", max_results=5)
+        if issues:
+            for iss in issues:
+                key = iss.get("key")
+                if key and key not in duplicates_dict:
+                    duplicates_dict[key] = _convert_jira_issue_to_entry(iss)
+
+    # Find open bugs by test ID (both bare and OCP-prefixed forms) → potential duplicates
+    for tid in test_ids:
+        for ocp_prefixed in [False, True]:
+            jql = build_search_jql_open_match_test_id(tid, ocp_prefixed=ocp_prefixed)
+            issues = search_fn(jql, fields="summary,status,assignee,updated", max_results=5)
+            if issues:
+                for iss in issues:
+                    key = iss.get("key")
+                    if key and key not in duplicates_dict:
+                        duplicates_dict[key] = _convert_jira_issue_to_entry(iss)
+
+    # Find closed bugs by keyword (top 2 keywords) → potential regressions
+    regressions_dict = {}
+    for kw in keywords[:2]:
+        jql = build_search_jql_closed_match_keyword(kw)
+        issues = search_fn(jql, fields="summary,status,assignee,updated", max_results=5)
+        if issues:
+            for iss in issues:
+                key = iss.get("key")
+                if key and key not in regressions_dict:
+                    regressions_dict[key] = _convert_jira_issue_to_entry(iss)
+
+    return {
+        "duplicates": list(duplicates_dict.values()),
+        "regressions": list(regressions_dict.values()),
+    }
+
+
+def find_jira_bugs_for_source(candidates_data, search_fn=None, include_open_bugs=False):
+    """Search Jira for all candidates in a source.
+
+    Returns bug-matches dict: {source, date, candidates, open_bugs}.
+    Each candidate gets {error_signature, severity, failure_type, step_name,
+    affected_jobs, duplicates, regressions}.
+    """
+    if search_fn is None:
+        search_fn = jira_search.search
+
+    source = candidates_data.get("source", "")
+    candidates = candidates_data.get("candidates", [])
+
+    result_candidates = []
+    for cand in candidates:
+        search_result = find_jira_bugs_for_candidate(cand, search_fn=search_fn)
+        result_candidates.append({
+            "error_signature": cand.get("error_signature", ""),
+            "severity": cand.get("severity"),
+            "failure_type": cand.get("failure_type", "test"),
+            "step_name": cand.get("step_name", ""),
+            "affected_jobs": cand.get("affected_jobs", 0),
+            "duplicates": search_result["duplicates"],
+            "regressions": search_result["regressions"],
+        })
+
+    result = {
+        "source": source,
+        "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "candidates": result_candidates,
+    }
+
+    # Optional broad open-bugs query (only for first source to avoid redundant queries)
+    if include_open_bugs:
+        jql = build_search_jql_open_all()
+        issues = search_fn(jql, fields="summary,status,assignee,updated,priority,created", max_results=50)
+        if issues:
+            result["open_bugs"] = [_convert_jira_issue_to_entry(iss, include_priority_created=True) for iss in issues]
+        else:
+            result["open_bugs"] = []
+
+    return result
 
 
 _CONFIDENCE_RANK = {"high": 3, "medium": 2, "low": 1, "": 0}
@@ -449,7 +576,7 @@ def merge_candidate_files(filepaths, workdir=None):
         if other_sigs:
             entry["merged_signatures"] = other_sigs
         if all_duplicates:
-            entry["duplicates"] = list(all_duplicates.values())
+            entry["duplicates"] = sorted(all_duplicates.values(), key=lambda d: d.get("key", ""))
         if all_regressions:
             entry["regressions"] = list(all_regressions.values())
 
@@ -469,8 +596,8 @@ def merge_candidate_files(filepaths, workdir=None):
 # Report generation
 # ---------------------------------------------------------------------------
 
-VALID_ACTIONS = {"create", "skip", "update", "failed"}
-VALID_SKIP_CATEGORIES = {"infrastructure", "stale_regression", "up_to_date"}
+VALID_ACTIONS = {"suggest", "skip", "linked"}
+VALID_SKIP_CATEGORIES = {"infrastructure", "stale_regression"}
 JIRA_URL_BASE = "https://redhat.atlassian.net/browse"
 SEPARATOR = "=" * 63
 
@@ -482,7 +609,7 @@ def _validate_results(results_data, candidates_data):
     mode = results_data.get("mode", "")
     if not mode:
         errors.append("results JSON missing 'mode' field")
-    elif mode not in ("dry-run", "create"):
+    elif mode != "search":
         errors.append(f"invalid mode: {mode}")
 
     if "date" not in results_data:
@@ -514,8 +641,10 @@ def _validate_results(results_data, candidates_data):
 
         if "jira_key" not in r:
             errors.append(f"{prefix}: missing jira_key field")
-        elif mode == "create" and action in ("create", "update") and not r["jira_key"]:
-            errors.append(f"{prefix}: {action} action requires non-empty jira_key")
+        elif action == "linked" and not r["jira_key"]:
+            errors.append(f"{prefix}: linked action requires non-empty jira_key")
+        elif action != "linked" and r["jira_key"] != "":
+            errors.append(f"{prefix}: jira_key must be empty for action '{action}'")
 
         if "skip_category" not in r:
             errors.append(f"{prefix}: missing skip_category field")
@@ -588,31 +717,29 @@ def _format_jobs(jobs):
 def _compute_summary_counters(results):
     """Compute summary counters from results list."""
     counters = {
-        "create": 0,
+        "suggest": 0,
+        "linked": 0,
         "skip_infrastructure": 0,
         "skip_stale_regression": 0,
-        "skip_up_to_date": 0,
-        "update": 0,
-        "failed": 0,
     }
     for r in results:
         action = r["action"]
         if action == "skip":
             cat = r["skip_category"]
-            counters[f"skip_{cat}"] += 1
+            key = f"skip_{cat}"
+            if key in counters:
+                counters[key] += 1
         elif action in counters:
             counters[action] += 1
     return counters
 
 
 def format_report(candidates_data, results_data):
-    """Produce deterministic report for both dry-run and create modes."""
+    """Produce deterministic bug search report."""
     candidates = candidates_data["candidates"]
     results = results_data["results"]
     sources = candidates_data["sources"]
     date = results_data["date"]
-    mode = results_data["mode"]
-    is_dry_run = mode == "dry-run"
 
     result_lookup = {r["error_signature"]: r for r in results}
     counters = _compute_summary_counters(results)
@@ -620,17 +747,14 @@ def format_report(candidates_data, results_data):
     n_total = candidates_data["total_candidates"]
     n_sources = len(sources)
 
-    title = "DRY-RUN REPORT" if is_dry_run else "CREATION REPORT"
-    section = "CANDIDATES" if is_dry_run else "RESULTS"
-
     lines = [
         SEPARATOR,
-        f"ANALYZE-CI CREATE BUGS - {title}",
+        "BUG SEARCH REPORT",
         f"Sources: {', '.join(sources)}",
         f"Date: {date}",
         SEPARATOR,
         "",
-        f"{section} ({n_unique} unique failures from {n_total} total across {n_sources} {'source' if n_sources == 1 else 'sources'})",
+        f"CANDIDATES ({n_unique} unique failures from {n_total} total across {n_sources} {'source' if n_sources == 1 else 'sources'})",
     ]
 
     for i, cand in enumerate(candidates, 1):
@@ -638,17 +762,12 @@ def format_report(candidates_data, results_data):
         action = r["action"]
         jira_key = r.get("jira_key", "")
 
-        if is_dry_run:
-            tag_map = {"skip": "WOULD SKIP", "create": "WOULD CREATE", "update": "WOULD UPDATE"}
-            tag = f"[{tag_map.get(action, f'WOULD {action.upper()}')}]"
-        else:
-            action_labels = {
-                "create": f"{jira_key} (CREATED)",
-                "skip": "SKIPPED",
-                "update": f"{jira_key} (UPDATED)",
-                "failed": "FAILED",
-            }
-            tag = action_labels.get(action, action.upper())
+        tag_map = {
+            "skip": "[SKIP]",
+            "suggest": "[SUGGEST]",
+            "linked": f"[LINKED \u2192 {jira_key}]" if jira_key else "[LINKED]",
+        }
+        tag = tag_map.get(action, f"[{action.upper()}]")
 
         lines.append("")
         lines.append(f"  {i}. {tag}")
@@ -667,7 +786,7 @@ def format_report(candidates_data, results_data):
         if jobs_block:
             lines.append(jobs_block)
 
-        if not is_dry_run and jira_key and action in ("create", "update"):
+        if jira_key and action == "linked":
             lines.append(f"     URL: {JIRA_URL_BASE}/{jira_key}")
 
         lines.append(f"     Decision: {r['reason']}")
@@ -677,26 +796,11 @@ def format_report(candidates_data, results_data):
         "SUMMARY",
         f"  Sources processed: {n_sources}",
         f"  Unique failures: {n_unique} (from {n_total} total candidates)",
+        f"  Suggest filing: {counters['suggest']}",
+        f"  Linked to existing: {counters['linked']}",
+        f"  Skipped (infrastructure): {counters['skip_infrastructure']}",
+        f"  Skipped (stale regression): {counters['skip_stale_regression']}",
     ])
-    if is_dry_run:
-        sources_str = ",".join(sources)
-        lines.extend([
-            f"  Would create: {counters['create']}",
-            f"  Would update: {counters['update']}",
-            f"  Would skip (already up-to-date): {counters['skip_up_to_date']}",
-            f"  Would skip (infrastructure): {counters['skip_infrastructure']}",
-            f"  Would skip (stale regression): {counters['skip_stale_regression']}",
-            "",
-            "To create these bugs, run:",
-            f"  /microshift-ci:create-bugs {sources_str} --create",
-        ])
-    else:
-        lines.extend([
-            f"  Created: {counters['create']}",
-            f"  Updated: {counters['update']}",
-            f"  Skipped: {counters['skip_infrastructure'] + counters['skip_stale_regression'] + counters['skip_up_to_date']}",
-            f"  Failed: {counters['failed']}",
-        ])
 
     return "\n".join(lines)
 
@@ -725,10 +829,10 @@ def main_report(report_file, candidates_file, workdir):
     else:
         tag = "merged" if len(sources) > 1 else sources[0]
     if tag == "merged":
-        filename = "report-create-bugs.txt"
+        filename = "report-bug-search.txt"
         output_path = os.path.join(workdir, filename)
     else:
-        filename = f"create-bugs-{tag}.txt"
+        filename = f"bug-search-{tag}.txt"
         bugs_dir = os.path.join(workdir, "bugs")
         os.makedirs(bugs_dir, exist_ok=True)
         output_path = os.path.join(bugs_dir, filename)
@@ -742,84 +846,197 @@ def main_report(report_file, candidates_file, workdir):
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Categorization (deterministic decision policy)
+# ---------------------------------------------------------------------------
+#
+# The suggest/linked/skip decision — including whether a failure is a
+# regression of a closed Jira bug — is made here in code, NOT by the model.
+# Keep the rules and reason strings in sync with the documented policy in
+# skills/find-regressions/SKILL.md (Step 3 Decision Policy).
+
+REASON_INFRASTRUCTURE = "Infrastructure failure — not a product bug"
+REASON_NO_BUGS = "No existing bugs found — suggest filing a new bug"
+
+
+def _most_recent_regression(regressions):
+    """Return the regression with the most recent 'updated' date.
+
+    'updated' values are ISO 'YYYY-MM-DD' strings, so a lexicographic max is
+    chronological. A missing/empty 'updated' sorts lowest, so a regression
+    carrying a real date is always preferred when one exists. Returns None
+    for an empty list.
+    """
+    if not regressions:
+        return None
+    return max(regressions, key=lambda r: r.get("updated") or "")
+
+
+def categorize_candidate(candidate):
+    """Apply the deterministic decision policy to one merged candidate.
+
+    Rules are applied in order (see SKILL.md Step 3):
+
+      1. infrastructure failure                 -> skip / infrastructure
+      2. open duplicates                        -> linked (first duplicate)
+      3. closed regressions, no open duplicates -> compare job finish dates
+         against the most recently fixed regression:
+           - any job finished after that fix    -> suggest
+           - all jobs on/before that fix        -> skip / stale_regression
+           - indeterminate dates                -> suggest (never hide a regression)
+      4. no duplicates, no regressions          -> suggest
+
+    Returns {action, jira_key, skip_category, reason}. Missing
+    duplicates/regressions keys are treated as empty (they are omitted from
+    a merged candidate when empty).
+    """
+    failure_type = candidate.get("failure_type", "test")
+    duplicates = candidate.get("duplicates") or []
+    regressions = candidate.get("regressions") or []
+    finished = [
+        j.get("finished") for j in (candidate.get("jobs") or []) if j.get("finished")
+    ]
+
+    # Rule 1: infrastructure failures are transient CI/cloud issues, not bugs.
+    if failure_type == "infrastructure":
+        return {
+            "action": "skip",
+            "jira_key": "",
+            "skip_category": "infrastructure",
+            "reason": REASON_INFRASTRUCTURE,
+        }
+
+    # Rule 2: an open bug already tracks this failure.
+    if duplicates:
+        key = duplicates[0].get("key", "")
+        return {
+            "action": "linked",
+            "jira_key": key,
+            "skip_category": "",
+            "reason": f"Linked to existing bug {key}",
+        }
+
+    # Rule 3: a previously-closed bug covered this signature.
+    if regressions:
+        ref = _most_recent_regression(regressions)
+        ref_updated = ref.get("updated") or ""
+        ref_key = ref.get("key", "")
+        # If we cannot establish that every failure predates the fix, treat it
+        # as a potential regression rather than silently skipping.
+        indeterminate = not ref_updated or not finished
+        if indeterminate or any(f > ref_updated for f in finished):
+            return {
+                "action": "suggest",
+                "jira_key": "",
+                "skip_category": "",
+                "reason": f"Potential regression of {ref_key} — suggest filing a new bug",
+            }
+        return {
+            "action": "skip",
+            "jira_key": "",
+            "skip_category": "stale_regression",
+            "reason": f"Stale failure predating fix for {ref_key} (updated {ref_updated})",
+        }
+
+    # Rule 4: nothing found — draft a new-bug suggestion.
+    return {
+        "action": "suggest",
+        "jira_key": "",
+        "skip_category": "",
+        "reason": REASON_NO_BUGS,
+    }
+
+
+def categorize_candidates(merged_data):
+    """Build a results-JSON dict from merged candidates using the decision policy.
+
+    Deterministic: no model involvement. The output matches the schema
+    enforced by _validate_results (exactly one result per candidate, keyed by
+    error_signature).
+    """
+    results = []
+    for cand in merged_data.get("candidates", []):
+        decision = categorize_candidate(cand)
+        results.append({
+            "error_signature": cand["error_signature"],
+            "action": decision["action"],
+            "jira_key": decision["jira_key"],
+            "skip_category": decision["skip_category"],
+            "reason": decision["reason"],
+        })
+    return {
+        "mode": "search",
+        "date": merged_data.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "results": results,
+    }
+
+
+def _derive_results_path(candidates_file, workdir):
+    """Default bug-results output path derived from the merged candidates path.
+
+    Substitutes 'bug-candidates-merged-' -> 'bug-results-' in the basename so
+    the results tag matches the merged file with no recomputation. Returns
+    None when that prefix is absent (caller falls back to tag logic).
+    """
+    basename = os.path.basename(candidates_file)
+    if "bug-candidates-merged-" in basename:
+        out_name = basename.replace("bug-candidates-merged-", "bug-results-", 1)
+        return os.path.join(workdir, "bugs", out_name)
+    return None
+
+
+def main_categorize(candidates_file, output_file, workdir):
+    """Entry point for --categorize mode (deterministic decision policy)."""
+    if not os.path.isdir(workdir):
+        print(f"Error: work directory does not exist: {workdir}", file=sys.stderr)
+        sys.exit(1)
+    if not os.path.isfile(candidates_file):
+        print(f"Error: file not found: {candidates_file}", file=sys.stderr)
+        sys.exit(1)
+
+    with open(candidates_file, "r") as f:
+        merged_data = json.load(f)
+
+    results_data = categorize_candidates(merged_data)
+
+    # Self-check: the deterministic output must satisfy the same contract the
+    # --report step enforces. Exits non-zero on any mismatch.
+    _validate_results(results_data, merged_data)
+
+    output_path = output_file or _derive_results_path(candidates_file, workdir)
+    if not output_path:
+        # Fallback: derive a tag the same way main_report does.
+        sources = merged_data.get("sources", [])
+        release_sources = [s for s in sources if not s.startswith("rebase-")]
+        if len(release_sources) >= 1:
+            tag = "merged" if len(release_sources) > 1 else release_sources[0]
+        elif sources:
+            tag = "merged" if len(sources) > 1 else sources[0]
+        else:
+            tag = "merged"
+        output_path = os.path.join(workdir, "bugs", f"bug-results-{tag}.json")
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, "w") as f:
+        json.dump(results_data, f, indent=2)
+
+    counters = _compute_summary_counters(results_data["results"])
+    n = len(results_data["results"])
+    print(f"Written: {output_path}", file=sys.stderr)
+    print(
+        f"Categorized {n} candidates: {counters['suggest']} suggest, "
+        f"{counters['linked']} linked, {counters['skip_infrastructure']} skip(infra), "
+        f"{counters['skip_stale_regression']} skip(stale)",
+        file=sys.stderr,
+    )
+    print(json.dumps(results_data, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Main entry points (prepare, search, pipeline, and orchestration)
 # ---------------------------------------------------------------------------
 
-def main():
-    workdir = None
-    source = None
-    merge_mode = False
-    merge_files = []
-    report_file = None
-    candidates_file = None
-    output_file = None
-
-    args = sys.argv[1:]
-    i = 0
-    while i < len(args):
-        if args[i] == "--merge":
-            merge_mode = True
-            i += 1
-        elif args[i] == "--report":
-            if i + 1 >= len(args):
-                print("Error: --report requires an argument", file=sys.stderr)
-                sys.exit(1)
-            report_file = args[i + 1]
-            i += 2
-        elif args[i] == "--candidates":
-            if i + 1 >= len(args):
-                print("Error: --candidates requires an argument", file=sys.stderr)
-                sys.exit(1)
-            candidates_file = args[i + 1]
-            i += 2
-        elif args[i] == "--workdir":
-            if i + 1 >= len(args):
-                print("Error: --workdir requires an argument", file=sys.stderr)
-                sys.exit(1)
-            workdir = args[i + 1]
-            i += 2
-        elif args[i] == "--output":
-            if i + 1 >= len(args):
-                print("Error: --output requires an argument", file=sys.stderr)
-                sys.exit(1)
-            output_file = args[i + 1]
-            i += 2
-        elif args[i].startswith("-"):
-            print(f"Unknown option: {args[i]}", file=sys.stderr)
-            sys.exit(1)
-        else:
-            if merge_mode:
-                merge_files.append(args[i])
-            else:
-                source = args[i]
-            i += 1
-
-    if report_file:
-        if not candidates_file:
-            print("Error: --report requires --candidates", file=sys.stderr)
-            sys.exit(1)
-        if not workdir:
-            print("Error: --report requires --workdir", file=sys.stderr)
-            sys.exit(1)
-        return main_report(report_file, candidates_file, workdir)
-
-    if merge_mode:
-        return main_merge(merge_files, output_file, workdir)
-
-    if not source:
-        print(
-            "Usage: search-bugs.py <source> --workdir DIR\n"
-            "       search-bugs.py --merge <bugs-file1.json> ... --output FILE --workdir DIR\n"
-            "       search-bugs.py --report <results.json> --candidates <merged.json> --workdir DIR\n"
-            "  <source>: release version (4.22), PR (pr-6396), or rebase (rebase-release-4.22)",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    if workdir is None:
-        print("Error: --workdir DIR is required", file=sys.stderr)
-        sys.exit(1)
-
+def main_prepare(source, workdir):
+    """Entry point for prepare mode: build bug candidates from job files."""
     if not os.path.isdir(workdir):
         print(f"Error: work directory does not exist: {workdir}", file=sys.stderr)
         sys.exit(1)
@@ -875,23 +1092,277 @@ def main():
     print(json.dumps(result, indent=2))
 
 
+def main_search(source, workdir):
+    """Entry point for --search mode: search Jira for bugs matching candidates."""
+    if not os.path.isdir(workdir):
+        print(f"Error: work directory does not exist: {workdir}", file=sys.stderr)
+        sys.exit(1)
+
+    bugs_dir = os.path.join(workdir, "bugs")
+    candidates_path = os.path.join(bugs_dir, f"bug-candidates-{source}.json")
+
+    if not os.path.isfile(candidates_path):
+        print(f"Error: candidates file not found: {candidates_path}", file=sys.stderr)
+        sys.exit(1)
+
+    with open(candidates_path) as f:
+        candidates_data = json.load(f)
+
+    # Check credentials
+    if not jira_search.credentials_available():
+        print(
+            "WARNING: JIRA_USERNAME and/or JIRA_API_TOKEN not set.\n"
+            "Writing bug-matches file with empty duplicates/regressions.\n"
+            "Set credentials to enable Jira bug search.",
+            file=sys.stderr,
+        )
+        # Write empty results
+        result = find_jira_bugs_for_source(candidates_data, search_fn=lambda *a, **k: None, include_open_bugs=False)
+        # Override to ensure all arrays are empty
+        for cand in result["candidates"]:
+            cand["duplicates"] = []
+            cand["regressions"] = []
+        result["open_bugs"] = []
+    else:
+        # Run actual searches (include_open_bugs=True for first source)
+        result = find_jira_bugs_for_source(candidates_data, include_open_bugs=True)
+
+    output_path = os.path.join(bugs_dir, f"bug-matches-{source}.json")
+    with open(output_path, "w") as f:
+        json.dump(result, f, indent=2)
+
+    print(f"Written: {output_path}", file=sys.stderr)
+    print(json.dumps(result, indent=2))
+
+
+def main_pipeline(sources_str, workdir):
+    """Entry point for --pipeline mode: prepare→search→merge→categorize→report."""
+    if not os.path.isdir(workdir):
+        print(f"Error: work directory does not exist: {workdir}", file=sys.stderr)
+        sys.exit(1)
+
+    # Parse sources
+    sources = [s.strip() for s in sources_str.split(",") if s.strip()]
+    if not sources:
+        print("Error: --pipeline requires at least one source", file=sys.stderr)
+        sys.exit(1)
+
+    # Auto-append rebase sources by scanning prs-status.json
+    prs_status_path = os.path.join(workdir, "jobs", "prs-status.json")
+    if os.path.isfile(prs_status_path):
+        with open(prs_status_path) as f:
+            prs_data = json.load(f)
+        for pr_entry in prs_data:
+            title = pr_entry.get("title", "")
+            if "rebase-release-" in title:
+                # Extract rebase source from title
+                match = re.search(r"rebase-release-([\w\.]+)", title)
+                if match:
+                    rebase_source = f"rebase-release-{match.group(1)}"
+                    if rebase_source not in sources:
+                        sources.append(rebase_source)
+                        print(f"Auto-appended rebase source: {rebase_source}", file=sys.stderr)
+
+    print(f"Pipeline sources: {', '.join(sources)}", file=sys.stderr)
+
+    # Step 1: Prepare candidates for each source
+    candidate_files = []
+    for source in sources:
+        print(f"\n=== Preparing candidates for {source} ===", file=sys.stderr)
+        bugs_dir = os.path.join(workdir, "bugs")
+        candidate_path = os.path.join(bugs_dir, f"bug-candidates-{source}.json")
+
+        # Check if already exists (skip prepare if so)
+        if os.path.isfile(candidate_path):
+            print(f"Using existing candidates: {candidate_path}", file=sys.stderr)
+            candidate_files.append(candidate_path)
+            continue
+
+        # Run prepare
+        try:
+            main_prepare(source, workdir)
+            candidate_files.append(candidate_path)
+        except SystemExit as e:
+            if e.code != 0:
+                print(f"WARNING: Failed to prepare candidates for {source}, skipping", file=sys.stderr)
+                continue
+            candidate_files.append(candidate_path)
+
+    if not candidate_files:
+        print("Error: No candidates prepared", file=sys.stderr)
+        sys.exit(1)
+
+    # Step 2: Search Jira for each source (open_bugs only for first)
+    for i, source in enumerate(sources):
+        bugs_dir = os.path.join(workdir, "bugs")
+        candidate_path = os.path.join(bugs_dir, f"bug-candidates-{source}.json")
+        if not os.path.isfile(candidate_path):
+            continue
+
+        print(f"\n=== Searching Jira for {source} ===", file=sys.stderr)
+
+        # Read candidates
+        with open(candidate_path) as f:
+            candidates_data = json.load(f)
+
+        # Search (with credentials check)
+        if not jira_search.credentials_available():
+            print(
+                "WARNING: JIRA_USERNAME and/or JIRA_API_TOKEN not set.\n"
+                "Writing bug-matches with empty duplicates/regressions.\n"
+                "Set credentials to enable Jira bug search.",
+                file=sys.stderr,
+            )
+            result = find_jira_bugs_for_source(candidates_data, search_fn=lambda *a, **k: None, include_open_bugs=False)
+            for cand in result["candidates"]:
+                cand["duplicates"] = []
+                cand["regressions"] = []
+            result["open_bugs"] = []
+        else:
+            # Only include open_bugs for first source
+            result = find_jira_bugs_for_source(candidates_data, include_open_bugs=(i == 0))
+
+        # Write bug-matches
+        output_path = os.path.join(bugs_dir, f"bug-matches-{source}.json")
+        with open(output_path, "w") as f:
+            json.dump(result, f, indent=2)
+        print(f"Written: {output_path}", file=sys.stderr)
+
+    # Step 3: Merge candidates
+    print(f"\n=== Merging candidates ===", file=sys.stderr)
+    bugs_dir = os.path.join(workdir, "bugs")
+    merge_files = [os.path.join(bugs_dir, f"bug-candidates-{s}.json") for s in sources]
+    merge_files = [f for f in merge_files if os.path.isfile(f)]
+
+    # Determine tag for merged file
+    release_sources = [s for s in sources if not s.startswith("rebase-")]
+    if len(release_sources) == 1:
+        tag = release_sources[0]
+    elif len(release_sources) > 1:
+        tag = "merged"
+    else:
+        tag = sources[0] if len(sources) == 1 else "merged"
+
+    merged_output = os.path.join(bugs_dir, f"bug-candidates-merged-{tag}.json")
+    main_merge(merge_files, merged_output, workdir)
+
+    # Step 4: Categorize
+    print(f"\n=== Categorizing candidates ===", file=sys.stderr)
+    results_output = os.path.join(bugs_dir, f"bug-results-{tag}.json")
+    main_categorize(merged_output, results_output, workdir)
+
+    # Step 5: Generate report
+    print(f"\n=== Generating report ===", file=sys.stderr)
+    main_report(results_output, merged_output, workdir)
+
+    print(f"\n=== Pipeline complete ===", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Prepare bug candidates from per-job analysis reports.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    # Mutually exclusive group for modes
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--search",
+        metavar="SOURCE",
+        help="search Jira for bugs matching candidates (reads bug-candidates-<source>.json, writes bug-matches-<source>.json)",
+    )
+    mode_group.add_argument(
+        "--pipeline",
+        metavar="SOURCES",
+        help="full pipeline: prepare→search→merge→categorize→report for comma-separated sources; auto-appends rebase sources",
+    )
+    mode_group.add_argument(
+        "--merge",
+        action="store_true",
+        help="merge multiple candidate files with fuzzy dedup",
+    )
+    mode_group.add_argument(
+        "--categorize",
+        metavar="FILE",
+        help="merged candidates JSON to categorize with the deterministic decision policy (writes bug-results-*.json)",
+    )
+    mode_group.add_argument(
+        "--report",
+        metavar="FILE",
+        help="results JSON to generate a report from",
+    )
+
+    # Common options
+    parser.add_argument(
+        "--workdir",
+        metavar="DIR",
+        required=True,
+        help="working directory (required)",
+    )
+    parser.add_argument(
+        "--output",
+        metavar="FILE",
+        help="output path for merged candidates (--merge mode) or results (--categorize mode)",
+    )
+    parser.add_argument(
+        "--candidates",
+        metavar="FILE",
+        help="merged candidates JSON (required with --report)",
+    )
+
+    # Positional arguments (source or files)
+    parser.add_argument(
+        "sources",
+        nargs="*",
+        metavar="SOURCE|FILE",
+        help="release version (4.22, main), PR number (pr-6396), rebase shorthand (rebase-release-4.22), or candidate files to merge (--merge mode)",
+    )
+
+    args = parser.parse_args()
+
+    # --search mode
+    if args.search:
+        return main_search(args.search, args.workdir)
+
+    # --pipeline mode
+    if args.pipeline:
+        return main_pipeline(args.pipeline, args.workdir)
+
+    # --categorize mode
+    if args.categorize:
+        return main_categorize(args.categorize, args.output, args.workdir)
+
+    # --report mode
+    if args.report:
+        if not args.candidates:
+            parser.error("--report requires --candidates")
+        return main_report(args.report, args.candidates, args.workdir)
+
+    # --merge mode
+    if args.merge:
+        return main_merge(args.sources, args.output, args.workdir)
+
+    # Default: prepare mode
+    if not args.sources or len(args.sources) != 1:
+        parser.error("prepare mode requires exactly one SOURCE argument")
+
+    return main_prepare(args.sources[0], args.workdir)
+
+
 def main_merge(merge_files, output_file, workdir):
     """Entry point for --merge mode."""
     if not merge_files:
-        print(
-            "Usage: search-bugs.py --merge <candidates1.json> <candidates2.json> ... --output FILE --workdir DIR",
-            file=sys.stderr,
-        )
+        print("Error: --merge requires at least one candidate file", file=sys.stderr)
         sys.exit(1)
 
     for filepath in merge_files:
         if not os.path.isfile(filepath):
             print(f"Error: file not found: {filepath}", file=sys.stderr)
             sys.exit(1)
-
-    if workdir is None:
-        print("Error: --workdir DIR is required", file=sys.stderr)
-        sys.exit(1)
 
     if not output_file:
         print("Error: --output FILE is required for --merge", file=sys.stderr)

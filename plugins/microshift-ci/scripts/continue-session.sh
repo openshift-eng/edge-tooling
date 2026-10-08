@@ -5,7 +5,7 @@ set -euo pipefail
 #
 # Fetches the doctor's analysis files (per-job reports, summaries, bug
 # mappings, HTML report) into a local workdir so the user can continue
-# working with them — re-run finalize, create bugs, inspect reports, etc.
+# working with them — re-run finalize, search for regressions, inspect reports, etc.
 #
 # The workdir date is derived from the prow job's start timestamp
 # (started.json). If a local workdir for that date already exists the

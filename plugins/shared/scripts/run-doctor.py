@@ -922,37 +922,59 @@ class DoctorPipeline:
             return True
 
         sources = list(self.releases)
-        prs_status_path = self.workdir / "jobs" / "prs-status.json"
-        if prs_status_path.exists():
-            try:
-                prs_status = json.loads(prs_status_path.read_text())
-                for pr in prs_status:
-                    m = re.search(r"rebase-release-([\d.]+)", pr.get("title", ""))
-                    if m:
-                        rebase_src = f"rebase-release-{m.group(1)}"
-                        if rebase_src not in sources:
-                            sources.append(rebase_src)
-            except (json.JSONDecodeError, OSError):
-                pass
-
         sources_str = ",".join(sources)
-        prompt = f"/microshift-ci:create-bugs {sources_str}"
-        log_path = self.logs_dir / "create-bugs.log"
+        log_path = self.logs_dir / "bugs.log"
         limits = STAGE_LIMITS["bugs"]
 
-        ok, _ = self.run_claude_session(
-            prompt=prompt,
-            system_prompt="",
-            log_path=log_path,
-            max_turns=limits["max_turns"],
-            timeout=limits["timeout"],
-            allowed_tools=["Skill", "Bash", "Read", "Write", "Glob", "Grep",
-                           "mcp__jira__jira_search", "mcp__jira__jira_get_issue"],
-            add_dirs=[str(self.workdir)],
-        )
-        if not ok:
-            self.message("WARNING: Bug correlation session failed (non-fatal)")
-        return True
+        # Run search-bugs.py --pipeline (deterministic Jira search + categorization)
+        search_bugs_py = Path(self.plugin_dir) / "scripts" / "search-bugs.py"
+        cmd = [
+            "python3", str(search_bugs_py),
+            "--pipeline", sources_str,
+            "--workdir", str(self.workdir),
+        ]
+
+        log.info("Running: search-bugs.py --pipeline %s", sources_str)
+        try:
+            with open(log_path, "w") as log_f:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    start_new_session=True,
+                )
+                _register_child(proc)
+                timed_out = False
+                def _kill():
+                    nonlocal timed_out
+                    timed_out = True
+                    try:
+                        os.killpg(proc.pid, signal.SIGTERM)
+                    except OSError:
+                        pass
+                timer = threading.Timer(limits["timeout"], _kill)
+                timer.start()
+                try:
+                    for line in proc.stdout:
+                        log_f.write(line)
+                        log.info("[search-bugs.py] %s", line.rstrip())
+                    proc.wait()
+                finally:
+                    timer.cancel()
+
+                if timed_out:
+                    self.message(f"WARNING: Bug search timed out after {limits['timeout']}s (non-fatal)")
+                    return True
+                if proc.returncode != 0:
+                    self.message(f"WARNING: Bug search failed with exit code {proc.returncode} (non-fatal)")
+                    return True
+
+            log.info("Bug search completed successfully")
+            return True
+        except Exception as e:
+            self.message(f"WARNING: Bug search raised exception: {e} (non-fatal)")
+            return True
 
     def finalize(self):
         log.info("=== Stage: finalize ===")
@@ -999,8 +1021,7 @@ class DoctorPipeline:
                         release = "PRs"
                     else:
                         release = rest.split("-")[0] if "-" in rest else rest
-                elif name.startswith("create-bugs"):
-                    stage = "bugs"
+                # bugs.log is deterministic (search-bugs.py subprocess), no cost tracking needed
 
                 if stage not in costs["stages"]:
                     costs["stages"][stage] = {
