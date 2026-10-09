@@ -8,6 +8,7 @@ Automation, AI skills, and deployment tools for OpenShift edge engineering. This
 |----------|-----------|
 | Two-node HA cluster (arbiter or fencing) | [two-node-toolbox/](two-node-toolbox/) |
 | EC2 dev host or hypervisor | [ec2-deploy/](ec2-deploy/) |
+| Automatic EC2 shutdown and weekly Slack report | [watchman/](watchman/) |
 | Single Node OpenShift with DU config | [sno-deploy/](sno-deploy/) |
 | LVM Operator development workspace | [environments/lvm-operator/](environments/lvm-operator/) |
 | Nightly payload health monitoring | [payload-monitor/](payload-monitor/) |
@@ -69,6 +70,7 @@ Then enable whichever plugins you need. See the [plugin README](plugins/README.m
 |-----------|-------------|
 | [two-node-toolbox/](two-node-toolbox/) | Deploy two-node OpenShift clusters (arbiter/fencing topologies) |
 | [ec2-deploy/](ec2-deploy/) | Spin up EC2 instances for development and hypervisor use |
+| [watchman/](watchman/) | Stop stale EC2 instances and send weekly Slack reports |
 | [sno-deploy/](sno-deploy/) | Deploy Single Node OpenShift with DU configuration |
 | [payload-monitor/](payload-monitor/) | Nightly payload health monitoring for edge topologies |
 | [environments/lvm-operator/](environments/lvm-operator/) | Development workspace for the LVM Storage operator |

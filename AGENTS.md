@@ -10,6 +10,7 @@ Edge Tooling is a multi-tool deployment and development toolkit for OpenShift an
 |-----------|------|---------|
 | Two-Node Toolbox | `two-node-toolbox/` | OpenShift two-node cluster deployment (arbiter/fencing topologies) |
 | EC2 Deploy | `ec2-deploy/` | Standalone EC2 instance setup for development |
+| EC2 Watchman | `watchman/` | Automatic EC2 shutdown and weekly Slack reporting |
 | SNO Deploy | `sno-deploy/` | Single Node OpenShift with DU configuration |
 | Payload Monitor | `payload-monitor/` | Nightly payload health monitoring for edge topologies (SNO/TNA/TNF) |
 | CI Tooling | `ci-tooling/` | Sippy Component Readiness and related CI helper CLIs |
@@ -20,6 +21,7 @@ Edge Tooling is a multi-tool deployment and development toolkit for OpenShift an
 
 - Two-node HA cluster → Two-Node Toolbox
 - EC2 dev host → EC2 Deploy (often used as hypervisor for Two-Node Toolbox)
+- Automatic EC2 shutdown and weekly report → EC2 Watchman
 - Single-node OpenShift → SNO Deploy
 - LVM Operator development → LVM Operator Environment
 - Monitor nightly payload health for edge topologies → Use Payload Monitor

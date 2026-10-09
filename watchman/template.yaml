@@ -1,4 +1,4 @@
-AWSTemplateFormatVersion: '2010-09-09'
+AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: EC2 Watchman - Automated EC2 instance lifecycle management
 
@@ -10,23 +10,55 @@ Parameters:
     Type: String
     Default: rate(1 hour)
     Description: CloudWatch Events schedule expression (e.g., rate(1 hour) or cron(0 * * * ? *))
-  
+  ReportScheduleExpression:
+    Type: String
+    Default: cron(0 10 ? * FRI *)
+    Description: Weekly shutdown report schedule in UTC
+  ShutdownRetentionDays:
+    Type: Number
+    Default: 35
+    MinValue: 7
+    Description: Days to retain shutdown events for missed report recovery
+
   LambdaMemorySize:
     Type: Number
     Default: 256
     Description: Lambda function memory size in MB
-  
+
   LambdaTimeout:
     Type: Number
     Default: 300
     Description: Lambda function timeout in seconds
-  
+
   SlackWebhookURL:
     Type: String
     Default: ""
+    NoEcho: true
     Description: Slack webhook URL for notifications (optional, leave empty to disable)
 
 Resources:
+  ShutdownEventsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+
   EC2WatchmanFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -40,8 +72,10 @@ Resources:
         Variables:
           LOG_LEVEL: INFO
           SLACK_WEBHOOK_URL: !If [HasSlackWebhook, !Ref SlackWebhookURL, ""]
+          SHUTDOWN_TABLE_NAME: !Ref ShutdownEventsTable
+          SHUTDOWN_RETENTION_DAYS: !Ref ShutdownRetentionDays
       Policies:
-        - Version: '2012-10-17'
+        - Version: "2012-10-17"
           Statement:
             - Effect: Allow
               Action:
@@ -51,7 +85,14 @@ Resources:
                 - ec2:StopInstances
                 - ec2:DescribeTags
                 - ec2:CreateTags
-              Resource: '*'
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:Query
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ShutdownEventsTable.Arn
       Events:
         ScheduledEvent:
           Type: Schedule
@@ -59,11 +100,19 @@ Resources:
             Schedule: !Ref ScheduleExpression
             Enabled: true
             Description: Run EC2 watchman on schedule
+            Input: '{"mode":"sweep"}'
+        WeeklyReport:
+          Type: Schedule
+          Properties:
+            Schedule: !Ref ReportScheduleExpression
+            Enabled: true
+            Description: Post the weekly EC2 Watchman shutdown report
+            Input: '{"mode":"report"}'
 
   EC2WatchmanLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub '/aws/lambda/${EC2WatchmanFunction}'
+      LogGroupName: !Sub "/aws/lambda/${EC2WatchmanFunction}"
       RetentionInDays: 14
 
 Outputs:
@@ -71,11 +120,16 @@ Outputs:
     Description: ARN of the EC2 Watchman Lambda function
     Value: !GetAtt EC2WatchmanFunction.Arn
     Export:
-      Name: !Sub '${AWS::StackName}-LambdaFunctionArn'
-  
+      Name: !Sub "${AWS::StackName}-LambdaFunctionArn"
+
   ScheduleExpression:
     Description: Schedule expression for the Lambda function
     Value: !Ref ScheduleExpression
     Export:
-      Name: !Sub '${AWS::StackName}-ScheduleExpression'
-
+      Name: !Sub "${AWS::StackName}-ScheduleExpression"
+  ReportScheduleExpression:
+    Description: Weekly report schedule expression
+    Value: !Ref ReportScheduleExpression
+  ShutdownEventsTableName:
+    Description: DynamoDB table holding shutdown events and report watermark
+    Value: !Ref ShutdownEventsTable
