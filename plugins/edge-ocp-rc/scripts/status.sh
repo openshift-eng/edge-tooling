@@ -164,6 +164,7 @@ job_num_lookup() {
     local topo="$1" target="$2"
     local n=0
     for f in "$SCRIPT_DIR/jobs/${topo}.txt" \
+             "$SCRIPT_DIR/jobs/${topo}-lvms.txt" \
              "$SCRIPT_DIR/jobs/${topo}-z-stream.txt" \
              "$SCRIPT_DIR/jobs/${topo}-y-stream.txt"; do
         [[ ! -f "$f" ]] && continue
@@ -182,12 +183,20 @@ job_num_lookup() {
 # TSV columns: num, status, job_name, url, failure_reason, classification, pass_pct
 
 fetch_failure_reason() {
-    local url="$1"
+    local url="$1" job_name="$2"
     local gcs_base="${url/prow.ci.openshift.org\/view\/gs\//${GCSWEB_BASE}/}"
     local junit_url="${gcs_base}/artifacts/junit_operator.xml"
+    local is_lvms=false
 
     local xml
-    xml=$(curl -sL --max-time 15 "$junit_url" 2>/dev/null) || true
+    if [[ "$job_name" == *"-tnf-lvms-mno-qe-integration-tests" ]]; then
+        is_lvms=true
+        xml=$(curl -fsSL --max-time 15 \
+            "${gcs_base}/artifacts/lvms-tnf-mno-integration-test/junit_results.xml" 2>/dev/null) || true
+    fi
+    if [[ -z "${xml:-}" ]]; then
+        xml=$(curl -fsSL --max-time 15 "$junit_url" 2>/dev/null) || true
+    fi
 
     if [[ -z "$xml" ]]; then
         echo "unable to fetch logs"
@@ -199,8 +208,11 @@ fetch_failure_reason() {
 import sys, xml.etree.ElementTree as ET
 try:
     tree = ET.parse(sys.stdin)
-    for tc in tree.iter('testcase'):
+    cases = [tc for tc in tree.iter('testcase') if tc.get('name')]
+    for tc in cases:
         fail = tc.find('failure')
+        if fail is None:
+            fail = tc.find('error')
         if fail is None:
             continue
         name = tc.get('name', 'unknown')
@@ -218,9 +230,18 @@ try:
             reason = reason[:147] + '...'
         print(f'{step}: {reason}')
         break
+    else:
+        if sys.argv[1] == 'true':
+            for tc in cases:
+                skip = tc.find('skipped')
+                if skip is not None:
+                    msg = (skip.get('message') or skip.text or '').strip()
+                    name = tc.get('name', 'unknown')
+                    print(f'Unexpected skip: {name}: {msg}'[:150])
+                    break
 except Exception:
     print('unable to parse junit')
-" 2>/dev/null) || true
+" "$is_lvms" 2>/dev/null) || true
 
     echo "${reason:-unable to fetch logs}"
 }
@@ -299,13 +320,17 @@ collect_topology() {
         fi
 
         if $FETCH_LOGS && [[ "$status" == "FAIL" || "$status" == "ABORT" ]]; then
-            reason=$(fetch_failure_reason "$url")
+            reason=$(fetch_failure_reason "$url" "$job_name")
         fi
 
         local classification="" pass_pct=""
         if $CLASSIFY && [[ "$status" == "FAIL" || "$status" == "ABORT" ]]; then
             local release
-            release=$(echo "$job_name" | awk -F'nightly-' '/nightly-/{split($2,a,"[^0-9.]"); print a[1]}')
+            if [[ "$job_name" =~ -release-([0-9]+\.[0-9]+)-nightly- ]]; then
+                release="${BASH_REMATCH[1]}"
+            else
+                release=$(echo "$job_name" | awk -F'nightly-' '/nightly-/{split($2,a,"[^0-9.]"); print a[1]}')
+            fi
             if [[ -n "$release" ]]; then
                 local classify_result
                 classify_result=$(classify_job "$job_name" "$release")
