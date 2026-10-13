@@ -409,7 +409,20 @@ def compute_recommendation(evaluation):
         needs_review_bugs = ocpbugs_data.get("needs_review", 0)
 
         if release_required > 0:
-            bug_summary = f"{release_required} OCPBUGS labeled release-required"
+            # Count status-inferred explicitly so anything lacking the marker
+            # falls back to the labeled wording.
+            inferred = sum(
+                1 for b in ocpbugs_data.get("bugs", [])
+                if b.get("release_action") == "release_required"
+                and b.get("release_action_source") == "status"
+            )
+            labeled = release_required - inferred
+            parts = []
+            if labeled:
+                parts.append(f"{labeled} OCPBUGS labeled release-required")
+            if inferred:
+                parts.append(f"{inferred} OCPBUGS verified (unlabeled)")
+            bug_summary = ", ".join(parts)
             if not ocp_available:
                 return "BLOCKED", f"{bug_summary}{cve_suffix} — waiting for OCP payload"
             return "ASK ART TO CREATE ARTIFACTS", f"{bug_summary}{cve_suffix}"
@@ -420,10 +433,17 @@ def compute_recommendation(evaluation):
                     continue
                 key = bug.get("key", "?")
                 status = bug.get("status", "unknown")
-                review_details.append(
-                    f"{key} is {status} (no release label)"
-                    f" — must be Verified before releasing"
-                )
+                resolution = bug.get("resolution", "")
+                if resolution:
+                    review_details.append(
+                        f"{key} is {status} (resolution: {resolution}) — "
+                        "review release requirements before releasing"
+                    )
+                else:
+                    review_details.append(
+                        f"{key} is {status} — not yet verified, "
+                        "resolve or label it before releasing"
+                    )
             reason = "; ".join(review_details) if review_details else (
                 f"{needs_review_bugs} OCPBUGS need review"
             )

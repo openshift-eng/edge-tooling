@@ -62,12 +62,49 @@ class TestEnrichOcpbugs(unittest.TestCase):
 
     @patch("lib.jira_client._jira_search")
     @patch.dict(os.environ, {"JIRA_API_TOKEN": "tok", "JIRA_USERNAME": "user"})
-    def test_no_release_label_needs_review(self, mock_search):
+    def test_unlabeled_verified_infers_release_required(self, mock_search):
         mock_search.return_value = [
             _mock_issue("OCPBUGS-300", "unlabeled bug", "Verified"),
         ]
         result = enrich_ocpbugs(["OCPBUGS-300"])
-        self.assertEqual(result["OCPBUGS-300"]["release_action"], "needs_review")
+        self.assertEqual(result["OCPBUGS-300"]["release_action"],
+                         "release_required")
+        self.assertEqual(result["OCPBUGS-300"]["release_action_source"],
+                         "status")
+
+    @patch("lib.jira_client._jira_search")
+    @patch.dict(os.environ, {"JIRA_API_TOKEN": "tok", "JIRA_USERNAME": "user"})
+    def test_unlabeled_unresolved_needs_review(self, mock_search):
+        mock_search.return_value = [
+            _mock_issue("OCPBUGS-301", "still open", "ON_QA"),
+        ]
+        result = enrich_ocpbugs(["OCPBUGS-301"])
+        self.assertEqual(result["OCPBUGS-301"]["release_action"],
+                         "needs_review")
+
+    @patch("lib.jira_client._jira_search")
+    @patch.dict(os.environ, {"JIRA_API_TOKEN": "tok", "JIRA_USERNAME": "user"})
+    def test_unlabeled_closed_without_fix_needs_review(self, mock_search):
+        mock_search.return_value = [
+            _mock_issue("OCPBUGS-302", "not actually broken", "Closed",
+                        resolution="Not a Bug"),
+        ]
+        result = enrich_ocpbugs(["OCPBUGS-302"])
+        self.assertEqual(result["OCPBUGS-302"]["release_action"],
+                         "needs_review")
+
+    @patch("lib.jira_client._jira_search")
+    @patch.dict(os.environ, {"JIRA_API_TOKEN": "tok", "JIRA_USERNAME": "user"})
+    def test_label_overrides_status_inference(self, mock_search):
+        mock_search.return_value = [
+            _mock_issue("OCPBUGS-303", "verified but not worth shipping",
+                        "Verified", labels=["release-not-required"]),
+        ]
+        result = enrich_ocpbugs(["OCPBUGS-303"])
+        self.assertEqual(result["OCPBUGS-303"]["release_action"],
+                         "release_not_required")
+        self.assertEqual(result["OCPBUGS-303"]["release_action_source"],
+                         "label")
 
     @patch("lib.jira_client._jira_search")
     @patch.dict(os.environ, {"JIRA_API_TOKEN": "tok", "JIRA_USERNAME": "user"})

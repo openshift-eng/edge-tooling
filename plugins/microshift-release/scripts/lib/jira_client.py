@@ -19,6 +19,17 @@ _JIRA_API = f"{_JIRA_BASE}/rest/api/3"
 _CVE_LABEL_RE = re.compile(r"^CVE-\d{4}-\d+$")
 _PSCOMP_MICROSHIFT_RE = re.compile(r"pscomponent:.*microshift", re.IGNORECASE)
 
+# Statuses meaning the fix landed and was validated. Bugs are discovered from
+# commit messages in the release range, so provenance already proves a fix
+# exists; status only confirms it has been checked.
+_FIX_VALIDATED_STATUSES = {"Verified", "Closed", "Release Pending"}
+
+# Resolutions meaning the ticket closed without shipping a fix.
+_NON_FIX_RESOLUTIONS = {
+    "Won't Do", "Won't Fix", "Cannot Reproduce", "Not a Bug",
+    "Duplicate", "Obsolete", "Incomplete",
+}
+
 
 def _get_auth():
     """Return (email, token) tuple or None if not configured."""
@@ -95,19 +106,29 @@ def enrich_ocpbugs(keys):
         labels = [lbl for lbl in fields.get("labels", [])
                   if isinstance(lbl, str)]
 
+        status = fields.get("status", {}).get("name", "")
+        resolution = (fields.get("resolution") or {}).get("name", "")
+
+        # An explicit label always wins. Absent one, fall back to status:
+        # the release-required/release-not-required convention is not widely
+        # practised, so label-only gating left every version in needs_review.
         if "release-required" in labels:
-            release_action = "release_required"
+            release_action, release_action_source = "release_required", "label"
         elif "release-not-required" in labels:
-            release_action = "release_not_required"
+            release_action, release_action_source = "release_not_required", "label"
+        elif (status in _FIX_VALIDATED_STATUSES
+                and resolution not in _NON_FIX_RESOLUTIONS):
+            release_action, release_action_source = "release_required", "status"
         else:
-            release_action = "needs_review"
+            release_action, release_action_source = "needs_review", "status"
 
         result[key] = {
             "summary": fields.get("summary", ""),
-            "status": fields.get("status", {}).get("name", ""),
-            "resolution": (fields.get("resolution") or {}).get("name", ""),
+            "status": status,
+            "resolution": resolution,
             "labels": labels,
             "release_action": release_action,
+            "release_action_source": release_action_source,
         }
     return result
 

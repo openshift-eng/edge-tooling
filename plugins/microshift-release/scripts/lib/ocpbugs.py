@@ -84,12 +84,14 @@ def query_resolved_bugs(version, branch=None, since_version=None,
                 "key": key,
                 "summary": data["summary"],
                 "status": data["status"],
+                "resolution": data.get("resolution", ""),
                 "source": "commit",
                 "release_note": "",
                 "release_note_type": "",
                 "release_note_status": "",
                 "labels": data["labels"],
                 "release_action": data["release_action"],
+                "release_action_source": data.get("release_action_source", "label"),
             })
         else:
             all_bugs.append({
