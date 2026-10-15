@@ -2,7 +2,8 @@
 """
 Prepare bug candidates from per-job analysis reports.
 
-Parses per-job JSON report files, groups by ERROR_SIGNATURE similarity,
+Parses per-job JSON report files, groups by canonical causal identity (with
+legacy error-signature similarity fallback),
 extracts Jira search keywords, and writes a candidates JSON file for
 the create-bugs skill to search Jira against.
 
@@ -17,11 +18,11 @@ Usage:
       - Rebase shorthand: rebase-release-4.22
 
     --merge mode reads multiple bug-candidates-<source>.json
-    files and merges candidates across sources using fuzzy signature
-    matching for cross-release dedup.
+    files and merges candidates across sources using canonical causal identity
+    (or fuzzy signature matching for legacy reports) for cross-release dedup.
 
     --report mode reads a results JSON and merged candidates JSON,
-    validates 1:1 match by error_signature, and writes a deterministic
+    validates 1:1 match by canonical candidate key, and writes a deterministic
     text report.
 
 Output:
@@ -31,17 +32,20 @@ Output:
     ${WORKDIR}/report-create-bugs.txt                       (--report mode, merged)
 """
 
+import glob as glob_mod
 import json
-import sys
 import os
 import re
-import glob as glob_mod
+import sys
 from datetime import datetime, timezone
 
 from classify import classify_breakdown
 from parse import (
-    STOP_WORDS, normalize_step_name, cluster_by_similarity,
-    group_by_signature, grouping_text, parse_structured_summary, tokenize,
+    STOP_WORDS,
+    group_by_signature,
+    issue_title,
+    parse_structured_summary,
+    tokenize,
 )
 
 # Additional stop words filtered only during keyword extraction for Jira search,
@@ -87,6 +91,11 @@ def extract_test_ids(error_signature):
 _CONFIDENCE_RANK = {"high": 3, "medium": 2, "low": 1, "": 0}
 
 
+def candidate_key(candidate):
+    """Return the canonical dedup/cache key with a legacy fallback."""
+    return issue_title(candidate)
+
+
 def _best_confidence(group):
     """Return the highest confidence value from any item in the group."""
     return max(
@@ -123,8 +132,15 @@ def build_candidates(groups):
 
     for group in groups:
         rep = max(group, key=lambda j: (j["severity"], j.get("job_name", "")))
-        keywords = extract_keywords(rep["error_signature"])
-        test_ids = extract_test_ids(rep["error_signature"])
+        identity = candidate_key(rep)
+        failure_signals = sorted({
+            j.get("failure_signal", "") or j.get("raw_error", "")
+            for j in group
+            if j.get("failure_signal", "") or j.get("raw_error", "")
+        })
+        search_text = " ".join([identity, *failure_signals])
+        keywords = extract_keywords(search_text)
+        test_ids = extract_test_ids(search_text)
 
         step_names = sorted({j["step_name"] for j in group if j["step_name"]})
 
@@ -132,6 +148,12 @@ def build_candidates(groups):
             "error_signature": rep["error_signature"],
             "root_cause": rep.get("root_cause", ""),
             "raw_error": rep.get("raw_error", ""),
+            "cause_identity": rep.get("cause_identity", ""),
+            "failure_signals": failure_signals,
+            "impacts": sorted({impact for j in group for impact in j.get("impacts", [])}),
+            "trigger_context": sorted({
+                context for j in group for context in j.get("trigger_context", [])
+            }),
             "remediation": rep.get("remediation", ""),
             "severity": max(j["severity"] for j in group),
             "failure_type": classify_breakdown(
@@ -165,7 +187,7 @@ def build_candidates(groups):
         candidates.append(entry)
 
     # Sort by severity desc, then job count desc
-    candidates.sort(key=lambda c: (-c["severity"], -c["affected_jobs"], c["error_signature"]))
+    candidates.sort(key=lambda c: (-c["severity"], -c["affected_jobs"], candidate_key(c)))
     return candidates
 
 
@@ -299,7 +321,8 @@ def _merge_groups_by_jira(groups):
 def _load_jira_lookup(workdir):
     """Load Jira duplicates/regressions from bug mapping files.
 
-    Returns a dict mapping error_signature to {duplicates, regressions}.
+    Returns a dict mapping canonical candidate keys to Jira matches.  Older
+    mapping files fall back to their error signatures.
     Bug mapping files live under ${workdir}/bugs/.
     """
     lookup = {}
@@ -308,20 +331,20 @@ def _load_jira_lookup(workdir):
         with open(filepath, "r") as f:
             data = json.load(f)
         for cand in data.get("candidates", []):
-            sig = cand.get("error_signature", "")
-            if not sig:
+            key = candidate_key(cand)
+            if not key:
                 continue
-            if sig not in lookup:
-                lookup[sig] = {"duplicates": [], "regressions": []}
-            existing_dkeys = {d["key"] for d in lookup[sig]["duplicates"]}
+            if key not in lookup:
+                lookup[key] = {"duplicates": [], "regressions": []}
+            existing_dkeys = {d["key"] for d in lookup[key]["duplicates"]}
             for d in cand.get("duplicates", []):
                 if d.get("key") and d["key"] not in existing_dkeys:
-                    lookup[sig]["duplicates"].append(d)
+                    lookup[key]["duplicates"].append(d)
                     existing_dkeys.add(d["key"])
-            existing_rkeys = {r["key"] for r in lookup[sig]["regressions"]}
+            existing_rkeys = {r["key"] for r in lookup[key]["regressions"]}
             for r in cand.get("regressions", []):
                 if r.get("key") and r["key"] not in existing_rkeys:
-                    lookup[sig]["regressions"].append(r)
+                    lookup[key]["regressions"].append(r)
                     existing_rkeys.add(r["key"])
     return lookup
 
@@ -359,24 +382,18 @@ def merge_candidate_files(filepaths, workdir=None):
     if workdir:
         jira_lookup = _load_jira_lookup(workdir)
         for cand in all_candidates:
-            sig = cand.get("error_signature", "")
-            if sig in jira_lookup:
-                jira_data = jira_lookup[sig]
+            key = candidate_key(cand)
+            if key in jira_lookup:
+                jira_data = jira_lookup[key]
                 cand["duplicates"] = jira_data["duplicates"]
                 cand["regressions"] = jira_data["regressions"]
                 jira_injected += 1
         if jira_injected:
             print(f"Injected Jira data into {jira_injected}/{total_candidates} candidates from bug mapping files", file=sys.stderr)
 
-    # Pass 1: bucket by normalized step_name, then fuzzy-match within each bucket
-    by_step = {}
-    for cand in all_candidates:
-        step = normalize_step_name(cand.get("step_name", ""))
-        by_step.setdefault(step, []).append(cand)
-
-    merged_groups = []
-    for step_cands in by_step.values():
-        merged_groups.extend(cluster_by_similarity(step_cands, grouping_text))
+    # Pass 1: canonical causal identity when available, otherwise the
+    # shared legacy step-bucketed fuzzy grouping.
+    merged_groups = group_by_signature(all_candidates)
 
     n_groups_before_jira = len(merged_groups)
 
@@ -389,7 +406,7 @@ def merge_candidate_files(filepaths, workdir=None):
     # Build merged candidates from groups
     merged_candidates = []
     for group in merged_groups:
-        rep = max(group, key=lambda c: (c["severity"], c["affected_jobs"], c["error_signature"]))
+        rep = max(group, key=lambda c: (c["severity"], c["affected_jobs"], candidate_key(c)))
 
         # Build releases list (aggregate affected_jobs per source)
         releases_map = {}
@@ -405,9 +422,15 @@ def merge_candidate_files(filepaths, workdir=None):
         all_test_ids = set()
         all_duplicates = {}
         all_regressions = {}
+        all_failure_signals = set()
+        all_impacts = set()
+        all_trigger_context = set()
         for cand in group:
             all_keywords.update(cand.get("keywords", []))
             all_test_ids.update(cand.get("test_ids", []))
+            all_failure_signals.update(cand.get("failure_signals", []))
+            all_impacts.update(cand.get("impacts", []))
+            all_trigger_context.update(cand.get("trigger_context", []))
             for d in cand.get("duplicates", []):
                 if d.get("key"):
                     all_duplicates[d["key"]] = d
@@ -432,6 +455,10 @@ def merge_candidate_files(filepaths, workdir=None):
             "error_signature": rep["error_signature"],
             "root_cause": rep.get("root_cause", ""),
             "raw_error": rep.get("raw_error", ""),
+            "cause_identity": rep.get("cause_identity", ""),
+            "failure_signals": sorted(all_failure_signals),
+            "impacts": sorted(all_impacts),
+            "trigger_context": sorted(all_trigger_context),
             "remediation": rep.get("remediation", ""),
             "severity": max(c["severity"] for c in group),
             "failure_type": rep.get("failure_type", "test"),
@@ -455,7 +482,7 @@ def merge_candidate_files(filepaths, workdir=None):
 
         merged_candidates.append(entry)
 
-    merged_candidates.sort(key=lambda c: (-c["severity"], -c["affected_jobs"], c["error_signature"]))
+    merged_candidates.sort(key=lambda c: (-c["severity"], -c["affected_jobs"], candidate_key(c)))
 
     return {
         "sources": sources,
@@ -495,18 +522,18 @@ def _validate_results(results_data, candidates_data):
     results = results_data["results"]
     candidates = candidates_data["candidates"]
 
-    cand_sigs = {c["error_signature"] for c in candidates}
-    result_sigs = set()
+    candidate_keys = {candidate_key(c) for c in candidates}
+    result_keys = set()
 
     for i, r in enumerate(results):
         prefix = f"results[{i}]"
-        sig = r.get("error_signature", "")
-        if not sig:
-            errors.append(f"{prefix}: missing error_signature")
+        key = candidate_key(r)
+        if not key:
+            errors.append(f"{prefix}: missing cause_identity or error_signature")
         else:
-            if sig in result_sigs:
-                errors.append(f"{prefix}: duplicate error_signature '{sig}'")
-            result_sigs.add(sig)
+            if key in result_keys:
+                errors.append(f"{prefix}: duplicate candidate key '{key}'")
+            result_keys.add(key)
 
         action = r.get("action", "")
         if action not in VALID_ACTIONS:
@@ -528,8 +555,8 @@ def _validate_results(results_data, candidates_data):
         if not reason:
             errors.append(f"{prefix}: missing or empty reason")
 
-    missing = cand_sigs - result_sigs
-    extra = result_sigs - cand_sigs
+    missing = candidate_keys - result_keys
+    extra = result_keys - candidate_keys
 
     if missing:
         errors.append(f"candidates without results: {sorted(missing)}")
@@ -614,7 +641,7 @@ def format_report(candidates_data, results_data):
     mode = results_data["mode"]
     is_dry_run = mode == "dry-run"
 
-    result_lookup = {r["error_signature"]: r for r in results}
+    result_lookup = {candidate_key(r): r for r in results}
     counters = _compute_summary_counters(results)
     n_unique = len(candidates)
     n_total = candidates_data["total_candidates"]
@@ -634,7 +661,7 @@ def format_report(candidates_data, results_data):
     ]
 
     for i, cand in enumerate(candidates, 1):
-        r = result_lookup[cand["error_signature"]]
+        r = result_lookup[candidate_key(cand)]
         action = r["action"]
         jira_key = r.get("jira_key", "")
 
@@ -652,9 +679,15 @@ def format_report(candidates_data, results_data):
 
         lines.append("")
         lines.append(f"  {i}. {tag}")
-        lines.append(f"     MicroShift CI: {cand['error_signature']}")
+        lines.append(f"     MicroShift CI: {candidate_key(cand)}")
         lines.append(f"     Severity: {cand['severity']} | Total Jobs: {cand['affected_jobs']} | Step: {cand['step_name']}")
         lines.append(f"     Releases: {_format_releases(cand.get('releases', []))}")
+        if cand.get("failure_signals"):
+            lines.append(f"     Failure signals: {'; '.join(cand['failure_signals'])}")
+        if cand.get("impacts"):
+            lines.append(f"     Impacts: {'; '.join(cand['impacts'])}")
+        if cand.get("trigger_context"):
+            lines.append(f"     Trigger context: {'; '.join(cand['trigger_context'])}")
 
         grouped = _format_grouped_with(cand.get("merged_signatures", []))
         if grouped:

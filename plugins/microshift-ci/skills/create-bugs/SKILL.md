@@ -19,7 +19,7 @@ allowed-tools: Bash, Read, Write, Glob, Grep, Agent, mcp__jira__jira_search, mcp
 
 Reads individual job analysis reports produced by the `prow-job-analyzer` agent and creates JIRA bugs in USHIFT for CI test failures. Operates in **dry-run mode by default** - it shows what bugs would be created without actually creating them. Use `--create` to perform actual issue creation.
 
-Candidates are always **fuzzy-matched across sources** using token-based overlap similarity (50% threshold) with step-name bucketing — the same root cause appearing in multiple releases becomes a single candidate and a single Jira bug referencing all affected releases.
+Candidates with `cause_identity` are deduplicated across sources by that canonical mechanism, even when different steps expose different terminal canaries. Older reports without it retain the existing fuzzy matching and step-name bucketing fallback.
 
 This command does NOT re-analyze CI jobs. It consumes existing job analysis files from `<WORKDIR>`.
 
@@ -54,6 +54,10 @@ Each job analysis file produced by the `microshift-ci:prow-job-analyzer` agent i
     "error_signature": "concise, unique description of the root cause error",
     "root_cause": "one-line description of WHY the failure happened",
     "raw_error": "verbatim primary error message from logs",
+    "cause_identity": "stable dependency or mechanism that caused the failure",
+    "failure_signal": "observed terminal canary or check failure",
+    "impacts": ["downstream failure caused by the canonical identity"],
+    "trigger_context": ["scenario or phase that made the failure observable"],
     "infrastructure_failure": false,
     "job_url": "full prow job URL",
     "job_name": "full periodic job name",
@@ -106,8 +110,8 @@ After loading per-source candidates (Step 1), check whether bug mapping files al
 
 1. For each source in `SOURCES`, check if `<WORKDIR>/bugs/bug-matches-<source>.json` exists
 2. If **ALL** files exist:
-   a. Read each file and build a lookup map: `error_signature` → `{duplicates, regressions}` (aggregate across all source files)
-   b. For each per-source candidate across all sources, look up its `error_signature` in the map
+   a. Read each file and build a lookup map: `cause_identity` (or legacy `error_signature`) → `{duplicates, regressions}` (aggregate across all source files)
+   b. For each per-source candidate across all sources, look up its canonical candidate key in the map
    c. If **ALL** candidates have a match: display a notice and **skip Step 2**, proceed directly to Step 2a:
 
       ```text
@@ -201,7 +205,8 @@ If more than 50 results, paginate with `start_at` until all issues are fetched. 
   "date": "YYYY-MM-DD",
   "candidates": [
     {
-      "error_signature": "<error_signature>",
+      "cause_identity": "<canonical cause_identity>",
+      "error_signature": "<legacy/display error_signature>",
       "severity": <N>,
       "failure_type": "<build|test|infrastructure>",
       "step_name": "<step_name>",
@@ -284,21 +289,21 @@ As you process each candidate (applying auto-decision policy), build a results a
   "date": "YYYY-MM-DD",
   "results": [
     {
-      "error_signature": "<matches candidate's error_signature exactly>",
+      "cause_identity": "<matches candidate's cause_identity exactly>",
       "action": "create",
       "jira_key": "USHIFT-1234",
       "skip_category": "",
       "reason": "No existing duplicates"
     },
     {
-      "error_signature": "<matches candidate's error_signature exactly>",
+      "cause_identity": "<matches candidate's cause_identity exactly>",
       "action": "update",
       "jira_key": "USHIFT-6938",
       "skip_category": "",
       "reason": "Will update USHIFT-6938 with new CI occurrences"
     },
     {
-      "error_signature": "<matches candidate's error_signature exactly>",
+      "cause_identity": "<matches candidate's cause_identity exactly>",
       "action": "skip",
       "jira_key": "",
       "skip_category": "infrastructure",
@@ -310,7 +315,7 @@ As you process each candidate (applying auto-decision policy), build a results a
 
 All fields are required on every entry:
 
-- `error_signature`: must match the candidate's `error_signature` exactly
+- `cause_identity`: must match the candidate's `cause_identity` exactly; legacy candidates without one continue to use `error_signature`
 - `action`: one of `create`, `skip`, `update`, `failed`
 - `jira_key`: the JIRA key for `create`/`update`; empty string `""` for `skip`/`failed`
 - `skip_category`: one of `infrastructure`, `stale_regression`, `up_to_date` for `skip`; empty string `""` for other actions. `up_to_date` occurs when an `update` action is demoted to `skip` during comment deduplication in Step 4b
@@ -324,7 +329,7 @@ Set `mode` to `"dry-run"` or `"create"` matching the current run mode. Set `date
 For each candidate where the auto-decision is "create":
 
 1. **Construct the bug summary**:
-   - Format: `"MicroShift CI: <error_signature>"` (truncate to 100 chars if needed)
+   - Format: `"MicroShift CI: <cause_identity>"` (truncate to 100 chars if needed). Do not use the terminal canary, `cleanup-data`, or another scenario name as the summary.
 
 2. **Construct the bug description** using **Markdown** format (the MCP Jira tool accepts Markdown and automatically converts it to Jira wiki markup — do NOT write Jira wiki markup directly):
 
@@ -333,7 +338,7 @@ For each candidate where the auto-decision is "create":
 
    CI job failures detected across MicroShift releases: <release1>, <release2>, ...
 
-   <concise description derived from the error signature, root cause, and remediation>
+   <concise description derived from the cause identity, root cause, and remediation>
 
    ## Version-Release number of selected component (if applicable)
 
@@ -364,6 +369,9 @@ For each candidate where the auto-decision is "create":
 
    **Stack Layer:** <stack_layer>
    **CI Step:** <step_name>
+   **Observed failure signals:** <failure_signals>
+   **Downstream impacts:** <impacts>
+   **Trigger context:** <trigger_context>
    **Error Severity:** <severity>/5
    **Analysis confidence:** <confidence>
    **Affected scenarios:** <comma-separated scenarios>
@@ -394,7 +402,7 @@ For each candidate where the auto-decision is "create":
    ```python
    mcp__jira__jira_create_issue(
        project_key="USHIFT",
-       summary="MicroShift CI: <error_signature>",
+       summary="MicroShift CI: <cause_identity>",
        issue_type="Bug",
        description="<constructed description>",
        components="MicroShift",
@@ -442,7 +450,9 @@ For each candidate where action is "update":
 
    This failure continues to be observed in CI.
 
-   **Error Signature:** <error_signature>
+   **Cause Identity:** <cause_identity>
+   **Observed failure signals:** <failure_signals>
+   **Downstream impacts:** <impacts>
    **Error Severity:** <severity>/5
    **Number of affected jobs:** <count>
    **Last observed:** <latest finished date>
@@ -481,7 +491,7 @@ After all bugs are created, update the per-source bug mapping files (`<WORKDIR>/
 
 **Actions**:
 
-1. **Collect new bugs**: Gather all candidates where action was `create`. For each, record the `jira_key`, `error_signature`, and the summary used in creation.
+1. **Collect new bugs**: Gather all candidates where action was `create`. For each, record the `jira_key`, canonical candidate key, and the summary used in creation.
 
 2. **Update each mapping file**: For every `<WORKDIR>/bugs/bug-matches-<source>.json` file (all sources, not just the current one):
 
@@ -490,7 +500,7 @@ After all bugs are created, update the per-source bug mapping files (`<WORKDIR>/
       ```json
       {
         "key": "USHIFT-XXXX",
-        "summary": "MicroShift CI: <error_signature>",
+        "summary": "MicroShift CI: <cause_identity>",
         "status": "To Do",
         "priority": "Undefined",
         "assignee": "Unassigned",
@@ -499,10 +509,10 @@ After all bugs are created, update the per-source bug mapping files (`<WORKDIR>/
       }
       ```
 
-   b. **Add to `duplicates`**: Find the candidate entry in the file's `candidates` array whose `error_signature` matches. If found, append the new bug to its `duplicates` array (skip if the key already exists):
+   b. **Add to `duplicates`**: Find the candidate entry in the file's `candidates` array whose `cause_identity` matches (falling back to `error_signature` for legacy data). If found, append the new bug to its `duplicates` array (skip if the key already exists):
 
       ```json
-      {"key": "USHIFT-XXXX", "summary": "MicroShift CI: <error_signature>", "status": "To Do", "assignee": "Unassigned", "updated": "<today YYYY-MM-DD>"}
+      {"key": "USHIFT-XXXX", "summary": "MicroShift CI: <cause_identity>", "status": "To Do", "assignee": "Unassigned", "updated": "<today YYYY-MM-DD>"}
       ```
 
    c. **Write the updated file** back to disk.
@@ -585,7 +595,7 @@ No job files found for 4.19 in <WORKDIR>
   - PR jobs: `jobs/prs-job-*-pr<number>-*.json` (from the `prow-job-analyzer` agent)
 - Dry-run is the default to prevent accidental bug creation
 - The `--create` flag enables actual bug creation and updating
-- Candidates are always merged via `search-bugs.py --merge` (even for a single source) to produce a unified output with Jira data injected. Cross-release deduplication uses fuzzy signature matching (token-based overlap similarity, 50% threshold)
+- Candidates are always merged via `search-bugs.py --merge` (even for a single source) to produce a unified output with Jira data injected. New reports deduplicate by canonical causal identity; legacy reports use fuzzy signature matching (token-based overlap similarity, 50% threshold)
 - Infrastructure failures (`failure_type: "infrastructure"`) are automatically skipped — these are transient CI/cloud issues, not product bugs. Classification uses the same step-name-based logic as the HTML report (`classify_breakdown` in `classify.py`)
 - Bugs are created in USHIFT with component "MicroShift"; duplicate search covers both USHIFT and OCPBUGS
 - All created bugs are labeled with `microshift-ci-ai-generated` for tracking
