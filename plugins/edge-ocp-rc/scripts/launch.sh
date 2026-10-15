@@ -43,6 +43,15 @@ to_image() {
     fi
 }
 
+release_from_job_name() {
+    local name="$1"
+    # Bash's regex match uses the first occurrence in the name. This preserves
+    # the release of a nightly job even if a later segment mentions a version.
+    if [[ "$name" =~ (nightly-|release-)([0-9]+\.[0-9]+) ]]; then
+        echo "${BASH_REMATCH[2]}"
+    fi
+}
+
 detect_release() {
     local version_tag="${1:-}"
 
@@ -51,14 +60,18 @@ detect_release() {
         return
     fi
 
+    # The committed LVMS entry is a seed, not evidence of the user's current
+    # release. In particular it must not choose a release for --refresh.
     for f in "$JOB_FILE" "$JOB_FILE_Z" "$JOB_FILE_Y"; do
         if [[ -f "$f" ]]; then
-            local from_jobs
-            from_jobs=$(awk -F'nightly-' '/nightly-/{split($2,a,"[^0-9.]"); print a[1]; exit}' "$f")
-            if [[ -n "$from_jobs" ]]; then
-                echo "$from_jobs"
-                return
-            fi
+            local job from_jobs
+            while IFS= read -r job; do
+                from_jobs=$(release_from_job_name "$job")
+                if [[ -n "$from_jobs" ]]; then
+                    echo "$from_jobs"
+                    return
+                fi
+            done < "$f"
         fi
     done
 
@@ -73,8 +86,8 @@ usage() {
     echo ""
     echo "Options:"
     echo "  --list              List available jobs (numbered) and exit (version not required)"
-    echo "  --refresh           Update job files from Sippy and exit (auto-detects release from existing jobs)"
-    echo "  --job <selector>    Launch specific jobs: all, number (3), list (3,7,12), or pattern (recovery)"
+    echo "  --refresh           Update job files from Sippy (infer release from existing regular/upgrade jobs)"
+    echo "  --job <selector>    Launch specific jobs: all, number (3), list (3,7,12), or pattern (lvms)"
     echo "  --relaunch-failed   Re-launch failed jobs from the latest run"
     echo "  --stagger <secs>    Delay between each job launch (default: 10s API throttle only)"
     echo "  --wave-size <N>     Group into waves of N jobs, pause between waves"
@@ -87,12 +100,13 @@ usage() {
     echo ""
     echo "Examples:"
     echo "  $0 tna --list                                # list TNA jobs"
-    echo "  $0 tna --refresh                             # update TNA job lists (release from existing jobs)"
+    echo "  $0 tna --refresh                             # update TNA lists using existing jobs' release"
     echo "  $0 tna 4.23.0-rc.0 --refresh                 # update TNA job lists for a new release"
     echo "  $0 tnf 4.22.0-rc.0 --job all                 # launch regular jobs only"
     echo "  $0 tnf 4.22.0-rc.0 --job 3                   # launch job #3 only"
     echo "  $0 tnf 4.22.0-rc.0 --job 3,7,12              # launch jobs 3, 7, and 12"
     echo "  $0 tnf 4.22.0-rc.0 --job recovery            # launch all jobs matching 'recovery'"
+    echo "  $0 tnf 5.0.0-rc.5 --job lvms                # launch the TNF LVMS lane"
     echo "  $0 tna 4.22.0-rc.0 --initial 4.21.0 --job all  # launch all jobs including upgrades"
     echo "  $0 tnf 4.22.0-rc.1 --relaunch-failed         # re-launch failures from latest run"
     # Spread jobs 10 minutes apart (like a mini-Prow cron stagger):
@@ -213,8 +227,9 @@ if [[ -n "$RELEASE_IMAGE" ]] && ! $REFRESH; then
     fi
 fi
 
-# Three job files per topology: regular, z-stream upgrades, y-stream upgrades
+# Sippy-managed topology lists plus a TNF LVMS entry seeded for new lanes.
 JOB_FILE="$SCRIPT_DIR/jobs/${TOPOLOGY}.txt"
+JOB_FILE_LVMS="$SCRIPT_DIR/jobs/${TOPOLOGY}-lvms.txt"
 JOB_FILE_Z="$SCRIPT_DIR/jobs/${TOPOLOGY}-z-stream.txt"
 JOB_FILE_Y="$SCRIPT_DIR/jobs/${TOPOLOGY}-y-stream.txt"
 
@@ -239,6 +254,26 @@ if $REFRESH; then
     echo "Fetching $TOPOLOGY jobs from Sippy (release $OCP_RELEASE, filter: $SEARCH_TERM)..."
     SIPPY_RESPONSE=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 30 \
          "${SIPPY_API}?release=${OCP_RELEASE}&filter=${ENCODED_FILTER}&period=default&sortField=name&sort=asc")
+
+    if [[ "$TOPOLOGY" == "tnf" ]]; then
+        # The regular TNF query excludes lvm-operator jobs. Refresh the LVMS
+        # entry separately, including registered jobs without run history.
+        LVMS_FILTER_JSON='{"items":[{"columnField":"name","operatorValue":"contains","value":"tnf-lvms-mno-qe-integration-tests"}],"linkOperator":"and"}'
+        LVMS_ENCODED_FILTER=$(printf '%s' "$LVMS_FILTER_JSON" | jq -sRr '@uri')
+        if LVMS_RESPONSE=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 30 \
+             "${SIPPY_API}?release=${OCP_RELEASE}&filter=${LVMS_ENCODED_FILTER}&period=default&sortField=name&sort=asc"); then
+            LVMS_JOBS=$(printf '%s' "$LVMS_RESPONSE" | jq -r --arg release "$OCP_RELEASE" \
+                '.[] | select(.name | startswith("periodic-ci-openshift-lvm-operator-release-" + $release + "-nightly-") and endswith("-tnf-lvms-mno-qe-integration-tests")) | .name' | sort -u)
+            if [[ -n "$LVMS_JOBS" ]]; then
+                printf '%s\n' "$LVMS_JOBS" > "$JOB_FILE_LVMS"
+                echo "Updated TNF LVMS jobs from Sippy for release $OCP_RELEASE"
+            else
+                echo "No TNF LVMS job found in Sippy for release $OCP_RELEASE; keeping the tracked entry"
+            fi
+        else
+            echo "Warning: could not refresh TNF LVMS jobs from Sippy; keeping the tracked entry" >&2
+        fi
+    fi
 
     # Clear existing files before writing
     rm -f "$JOB_FILE" "$JOB_FILE_Z" "$JOB_FILE_Y"
@@ -285,6 +320,7 @@ fi
 
 has_job_files() {
     [[ -f "$JOB_FILE" && -s "$JOB_FILE" ]] && return 0
+    [[ -f "$JOB_FILE_LVMS" && -s "$JOB_FILE_LVMS" ]] && return 0
     [[ -f "$JOB_FILE_Z" && -s "$JOB_FILE_Z" ]] && return 0
     [[ -f "$JOB_FILE_Y" && -s "$JOB_FILE_Y" ]] && return 0
     return 1
@@ -292,7 +328,7 @@ has_job_files() {
 
 if ! has_job_files; then
     echo "Error: no job files for topology '$TOPOLOGY'"
-    echo "Expected: ${TOPOLOGY}.txt, ${TOPOLOGY}-z-stream.txt, or ${TOPOLOGY}-y-stream.txt in jobs/"
+    echo "Expected: ${TOPOLOGY}.txt, ${TOPOLOGY}-lvms.txt, ${TOPOLOGY}-z-stream.txt, or ${TOPOLOGY}-y-stream.txt in jobs/"
     echo ""
     echo "Run './launch.sh $TOPOLOGY --refresh' to fetch from Sippy"
     exit 1
@@ -309,15 +345,100 @@ if ! $LIST_ONLY && ! $REFRESH && ! $RELAUNCH_FAILED && [[ -n "$RELEASE_IMAGE" ]]
     exit 1
 fi
 
+check_job_release() {
 if ! $LIST_ONLY && [[ -n "$RELEASE_IMAGE" ]]; then
     REQUESTED_RELEASE=$(echo "${RELEASE_IMAGE#*:}" | grep -oE '^[0-9]+\.[0-9]+' || true)
-    JOBS_RELEASE=$(detect_release "")
+    if [[ "$TOPOLOGY" == "tnf" && "$JOB_FILTER" == "lvms" && -z "$REQUESTED_RELEASE" ]]; then
+        echo "Error: cannot determine the payload release for the TNF LVMS lane"
+        exit 1
+    fi
+    if [[ "$JOB_FILTER" =~ ^[0-9,]+$ ]]; then
+        # Numbering must match --list, including the tracked LVMS file.
+        JOB_NUMBER=0
+        for file in "$JOB_FILE" "$JOB_FILE_LVMS" "$JOB_FILE_Z" "$JOB_FILE_Y"; do
+            [[ ! -f "$file" ]] && continue
+            skip_upgrade_validation=false
+            if [[ -z "${INITIAL_IMAGE:-}" && ( "$file" == "$JOB_FILE_Z" || "$file" == "$JOB_FILE_Y" ) ]]; then
+                skip_upgrade_validation=true
+            fi
+            while IFS= read -r job; do
+                [[ -z "$job" ]] && continue
+                JOB_NUMBER=$((JOB_NUMBER + 1))
+                [[ ",$JOB_FILTER," != *",$JOB_NUMBER,"* ]] && continue
+                if $skip_upgrade_validation; then
+                    continue
+                fi
+                job_release=$(release_from_job_name "$job")
+                if [[ "$job" == *"-tnf-lvms-mno-qe-integration-tests" && -z "$REQUESTED_RELEASE" ]]; then
+                    echo "Error: cannot determine the payload release for TNF LVMS job #$JOB_NUMBER"
+                    exit 1
+                fi
+                if [[ "$job" == *"-tnf-lvms-mno-qe-integration-tests" && -z "$job_release" ]]; then
+                    echo "Error: cannot determine the release of TNF LVMS job #$JOB_NUMBER"
+                    exit 1
+                fi
+                if [[ -n "$job_release" && -n "$REQUESTED_RELEASE" && "$job_release" != "$REQUESTED_RELEASE" ]]; then
+                    echo "Error: selected job #$JOB_NUMBER targets $job_release, but you requested $REQUESTED_RELEASE"
+                    exit 1
+                fi
+            done < "$file"
+        done
+        JOBS_RELEASE="$REQUESTED_RELEASE"
+    elif [[ "$TOPOLOGY" == "tnf" && "$JOB_FILTER" == "lvms" ]]; then
+        if [[ ! -s "$JOB_FILE_LVMS" ]]; then
+            echo "Error: no TNF LVMS job is available; run './launch.sh tnf $REQUESTED_RELEASE --refresh'"
+            exit 1
+        fi
+        JOBS_RELEASE=$(release_from_job_name "$(head -1 "$JOB_FILE_LVMS")")
+        if [[ -z "$JOBS_RELEASE" ]]; then
+            echo "Error: cannot determine the release of the TNF LVMS job; run --refresh"
+            exit 1
+        fi
+    elif [[ -n "$JOB_FILTER" && "$JOB_FILTER" != "all" ]]; then
+        # A text selector may match a job in a different file than the first
+        # Sippy list, so validate the matching jobs rather than that list.
+        for file in "$JOB_FILE" "$JOB_FILE_LVMS" "$JOB_FILE_Z" "$JOB_FILE_Y"; do
+            [[ ! -f "$file" ]] && continue
+            if [[ -z "${INITIAL_IMAGE:-}" && ( "$file" == "$JOB_FILE_Z" || "$file" == "$JOB_FILE_Y" ) ]]; then
+                continue
+            fi
+            while IFS= read -r job; do
+                [[ -z "$job" || "$job" != *"$JOB_FILTER"* ]] && continue
+                job_release=$(release_from_job_name "$job")
+                if [[ "$job" == *"-tnf-lvms-mno-qe-integration-tests" && -z "$REQUESTED_RELEASE" ]]; then
+                    echo "Error: cannot determine the payload release for the TNF LVMS lane"
+                    exit 1
+                fi
+                if [[ "$job" == *"-tnf-lvms-mno-qe-integration-tests" && -z "$job_release" ]]; then
+                    echo "Error: cannot determine the release of the TNF LVMS job; run --refresh"
+                    exit 1
+                fi
+                if [[ -n "$job_release" && -n "$REQUESTED_RELEASE" && "$job_release" != "$REQUESTED_RELEASE" ]]; then
+                    # Broad patterns can match a stale LVMS seed alongside
+                    # compatible jobs. Let job_selected report that lane as skipped.
+                    if [[ "$job" == *"-tnf-lvms-mno-qe-integration-tests" ]]; then
+                        continue
+                    fi
+                    echo "Error: selected job '$job' targets $job_release, but you requested $REQUESTED_RELEASE"
+                    exit 1
+                fi
+            done < "$file"
+        done
+        JOBS_RELEASE="$REQUESTED_RELEASE"
+    else
+        JOBS_RELEASE=$(detect_release "")
+    fi
     if [[ -n "$REQUESTED_RELEASE" && -n "$JOBS_RELEASE" && "$REQUESTED_RELEASE" != "$JOBS_RELEASE" ]]; then
-        echo "Error: job files are for $JOBS_RELEASE but you requested $REQUESTED_RELEASE"
-        echo "Run './launch.sh $TOPOLOGY $REQUESTED_RELEASE --refresh' to update job files."
+        if [[ "$TOPOLOGY" == "tnf" && "$JOB_FILTER" == "lvms" ]]; then
+            echo "Error: the TNF LVMS lane targets $JOBS_RELEASE, but you requested $REQUESTED_RELEASE"
+        else
+            echo "Error: job files are for $JOBS_RELEASE but you requested $REQUESTED_RELEASE"
+            echo "Run './launch.sh $TOPOLOGY $REQUESTED_RELEASE --refresh' to update job files."
+        fi
         exit 1
     fi
 fi
+}
 
 # List jobs from a file with continuous numbering
 # Args: file, section_label, counter_var_name (LINE_NUM is global)
@@ -339,6 +460,7 @@ if $LIST_ONLY; then
     LINE_NUM=0
     echo "=== $TOPOLOGY jobs ==="
     list_file "$JOB_FILE" "$TOPOLOGY"
+    list_file "$JOB_FILE_LVMS" "$TOPOLOGY LVMS"
     list_file "$JOB_FILE_Z" "$TOPOLOGY z-stream upgrades (--initial required)"
     list_file "$JOB_FILE_Y" "$TOPOLOGY y-stream upgrades (--initial required)"
     echo ""
@@ -360,7 +482,7 @@ if $RELAUNCH_FAILED; then
     # Build combined job list with continuous numbering (same order as --list and launch)
     COMBINED_JOBS=$(mktemp)
     trap 'rm -f "$COMBINED_JOBS"' EXIT
-    for f in "$JOB_FILE" "$JOB_FILE_Z" "$JOB_FILE_Y"; do
+    for f in "$JOB_FILE" "$JOB_FILE_LVMS" "$JOB_FILE_Z" "$JOB_FILE_Y"; do
         [[ -f "$f" && -s "$f" ]] && cat "$f" >> "$COMBINED_JOBS"
     done
 
@@ -399,6 +521,8 @@ if $RELAUNCH_FAILED; then
     echo "Re-launching failed jobs: $FAILED_NUMS"
     JOB_FILTER="$FAILED_NUMS"
 fi
+
+check_job_release
 
 RUN_DIR="$SCRIPT_DIR/runs/${RUN_NAME}/${TOPOLOGY}"
 mkdir -p "$RUN_DIR"
@@ -458,6 +582,11 @@ job_selected() {
     if [[ -n "$JOB_PATTERN" ]] && [[ "$job" != *"$JOB_PATTERN"* ]]; then
         return 1
     fi
+    if [[ "$job" == *"-tnf-lvms-mno-qe-integration-tests" ]]; then
+        local job_release
+        job_release=$(release_from_job_name "$job")
+        [[ -n "$REQUESTED_RELEASE" && "$job_release" == "$REQUESTED_RELEASE" ]] || return 2
+    fi
     return 0
 }
 
@@ -477,12 +606,15 @@ count_selected_jobs() {
 
 TOTAL_SELECTED=0
 count_selected_jobs "$JOB_FILE"
+count_selected_jobs "$JOB_FILE_LVMS"
 if [[ -n "${INITIAL_IMAGE:-}" ]]; then
     count_selected_jobs "$JOB_FILE_Z"
     count_selected_jobs "$JOB_FILE_Y"
 fi
 LINE_NUM=0
 LAUNCHED_COUNT=0
+LVMS_SKIP_TOTAL=0
+LVMS_SKIP_TARGETS=""
 
 echo "=== Launching $TOPOLOGY jobs against $RELEASE_IMAGE ==="
 echo "    Run directory: $RUN_DIR"
@@ -510,7 +642,15 @@ launch_from_file() {
         [[ -z "$JOB" ]] && continue
         LINE_NUM=$((LINE_NUM + 1))
 
-        job_selected "$JOB" "$LINE_NUM" || continue
+        selection_status=0
+        job_selected "$JOB" "$LINE_NUM" || selection_status=$?
+        if (( selection_status != 0 )); then
+            if (( selection_status == 2 )); then
+                LVMS_SKIP_TOTAL=$((LVMS_SKIP_TOTAL + 1))
+                LVMS_SKIP_TARGETS="${LVMS_SKIP_TARGETS:+$LVMS_SKIP_TARGETS, }$(release_from_job_name "$JOB")"
+            fi
+            continue
+        fi
 
         COUNT=$((COUNT + 1))
         echo "[$COUNT] $JOB"
@@ -556,18 +696,25 @@ launch_from_file() {
 
 # Regular jobs
 launch_from_file "$JOB_FILE" "$RELEASE_IMAGE"
+launch_from_file "$JOB_FILE_LVMS" "$RELEASE_IMAGE"
 
 # Upgrade jobs — only when --initial is provided
 if [[ -n "${INITIAL_IMAGE:-}" ]]; then
     launch_from_file "$JOB_FILE_Z" "$INITIAL_IMAGE"
     launch_from_file "$JOB_FILE_Y" "$INITIAL_IMAGE"
 else
-    Z_COUNT=$(wc -l < "$JOB_FILE_Z" 2>/dev/null || echo 0)
-    Y_COUNT=$(wc -l < "$JOB_FILE_Y" 2>/dev/null || echo 0)
+    Z_COUNT=0
+    Y_COUNT=0
+    if [[ -f "$JOB_FILE_Z" ]]; then Z_COUNT=$(wc -l < "$JOB_FILE_Z"); fi
+    if [[ -f "$JOB_FILE_Y" ]]; then Y_COUNT=$(wc -l < "$JOB_FILE_Y"); fi
     SKIP_TOTAL=$((Z_COUNT + Y_COUNT))
     if [[ "$SKIP_TOTAL" -gt 0 ]]; then
         echo "Skipped $SKIP_TOTAL upgrade jobs (no --initial provided)"
     fi
+fi
+
+if (( LVMS_SKIP_TOTAL > 0 )); then
+    echo "Skipped $LVMS_SKIP_TOTAL TNF LVMS lane(s) (targets ${LVMS_SKIP_TARGETS:-unknown}, payload ${REQUESTED_RELEASE:-unknown}) — run --refresh once a matching lane exists"
 fi
 
 echo ""
@@ -575,6 +722,11 @@ echo ""
 if [[ "$COUNT" -eq 0 && -n "$JOB_FILTER" && "$JOB_FILTER" != "all" ]]; then
     echo "Error: no jobs matched selector '$JOB_FILTER'"
     echo "Run './launch.sh $TOPOLOGY --list' to see available jobs."
+    exit 1
+fi
+
+if [[ "$COUNT" -eq 0 && "$LVMS_SKIP_TOTAL" -gt 0 ]]; then
+    echo "Error: no jobs launched because no TNF LVMS lane matches the payload release"
     exit 1
 fi
 
