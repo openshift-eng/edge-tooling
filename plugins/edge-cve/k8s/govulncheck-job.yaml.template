@@ -1,0 +1,92 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: govulncheck-__TARGET_ID__
+  namespace: edge-cve-scans
+  labels:
+    app.kubernetes.io/name: edge-cve-govulncheck
+    edge-cve/target-id: "__TARGET_ID__"
+    edge-cve/repo: "__REPO_LABEL__"
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: edge-cve-govulncheck
+        edge-cve/target-id: "__TARGET_ID__"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: edge-cve-scanner
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: govulncheck
+          image: registry.redhat.io/ubi9/go-toolset:1.23
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: REPO_URL
+              value: "__REPO_URL__"
+            - name: REPO_SLUG
+              value: "__REPO_SLUG__"
+            - name: REPO_LABEL
+              value: "__REPO_LABEL__"
+            - name: GIT_REF
+              value: "__GIT_REF__"
+            - name: TARGET_ID
+              value: "__TARGET_ID__"
+            - name: CVE_IDS
+              value: "__CVE_IDS__"
+            - name: TICKET_KEYS
+              value: "__TICKET_KEYS__"
+            - name: HOME
+              value: "/tmp"
+            - name: GOPATH
+              value: "/tmp/go"
+            - name: GOCACHE
+              value: "/tmp/go/cache"
+            - name: GOMODCACHE
+              value: "/tmp/go/pkg/mod"
+            - name: GOTOOLCHAIN
+              value: "auto"
+          resources:
+            requests:
+              cpu: "1"
+              memory: "4Gi"
+              ephemeral-storage: "4Gi"
+            limits:
+              cpu: "3"
+              memory: "6Gi"
+              ephemeral-storage: "6Gi"
+          volumeMounts:
+            # Writable /tmp for HOME/GOPATH/GOCACHE/GOMODCACHE and
+            # govulncheck stdout/stderr files (required with readOnlyRootFilesystem).
+            - name: tmp
+              mountPath: /tmp
+            - name: workspace
+              mountPath: /tmp/workspace
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+          command:
+            - /bin/bash
+            - /scripts/scan_target.sh
+      activeDeadlineSeconds: 1800
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 3Gi
+        - name: workspace
+          emptyDir:
+            sizeLimit: 3Gi
+        - name: scripts
+          configMap:
+            name: edge-cve-govulncheck-scripts
+            defaultMode: 0444
