@@ -19,30 +19,7 @@ from pathlib import Path
 import workspace_lib
 
 
-def parse_frontmatter(claude_md: Path) -> dict[str, str]:
-    """Extract YAML frontmatter as a flat key-value dict.
-
-    Only parses if line 1 is exactly '---' and a closing '---' exists.
-    """
-    try:
-        lines = claude_md.read_text().splitlines()
-    except OSError:
-        return {}
-
-    if not lines or lines[0].strip() != "---":
-        return {}
-
-    result = {}
-    for line in lines[1:]:
-        if line.strip() == "---":
-            break
-        if ":" in line:
-            key, _, value = line.partition(":")
-            result[key.strip()] = value.strip()
-    else:
-        return {}
-
-    return result
+parse_frontmatter = workspace_lib.parse_frontmatter
 
 
 def newest_mtime(directory: Path) -> float | None:
@@ -59,7 +36,7 @@ def newest_mtime(directory: Path) -> float | None:
     return newest
 
 
-TERMINAL_STATUSES = {"done", "complete", "closed"}
+TERMINAL_STATUSES = workspace_lib.TERMINAL_STATUSES
 
 
 def _parse_last_active(value: str) -> float | None:

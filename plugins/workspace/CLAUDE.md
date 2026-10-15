@@ -27,16 +27,21 @@ Two roots are kept strictly separate:
 .claude-plugin/{plugin.json, marketplace.json}   Plugin + marketplace manifests
 skills/<name>/SKILL.md                            10 skills (workspace: prefix)
 skills/create-domain/context-template.md          Context-file template
-hooks/hooks.json                                  SessionStart → recent-projects.py / handoff.py
+hooks/hooks.json                                  SessionStart → recent-projects.py / handoff.py, plus the pane's "modules"
+hooks/*.ts|tsx, hooks/*.test.ts                   The pane mod (TypeScript): discovery, projects, ui.tsx + projects-view.tsx
+types/index.d.ts                                  The mod's state contract (named by plugin.json "types")
 scripts/setup.sh                                  Clone/update/init CLI (self-derives plugin root)
 scripts/workspace_lib.py                          Shared, yaml-free: resolve_workspace_root(), PLUGIN_ROOT
 scripts/{resume,consolidate,recent}-project*.py   Project tooling
 scripts/domain-info.py                            Project→domain resolution, writability, copy-on-write
 scripts/skills.py                                 Repo-skill symlink manager (scan/link/verify/unlink-check)
 scripts/handoff.py                                Handoff marker: write (skill) / read (hook)
+scripts/projects.py                               Read-only project listing (never stamps last-active) — used by the pane
+scripts/project-tasks.py                          Checklist list/toggle/add/remove, matched by section+text — pane
+scripts/close-project.py, new-project.py          Deterministic halves of the close/new skills — skills AND pane
 domains/{example,tnf,lvm-operator}/               Bundled domains (read-only)
 templates/{dev-env.yaml.template, dev-env-self.yaml.template, settings.local.json.tpl}
-tests/{test_setup.sh, test_skills.py, test_domain_info.py, test_handoff.py}  Test suites
+tests/test_*.py, tests/test_setup.sh              Script test suites (run each: python3 tests/test_X.py)
 ```
 
 ## Skills
@@ -82,6 +87,22 @@ tests/{test_setup.sh, test_skills.py, test_domain_info.py, test_handoff.py}  Tes
   in bash is grep-based (`has_self_block`). The plugin never touches the
   wrapped repo's CLAUDE.md.
 
+## The pane mod
+
+`hooks/` holds a Claude Code *mod* (function hooks, registered by `hooks/hooks.json` `modules`) that draws
+the `/workspace` pane. Rules to keep when editing it:
+
+- **Scripts own project files.** The pane shells out to `scripts/projects.py`, `project-tasks.py`,
+  `consolidate-project.py`, `close-project.py`, `new-project.py` through `$.process.run` and only parses
+  their JSON (`hooks/project-actions.ts`). Never re-implement a file edit in TypeScript; change the script,
+  which the skills share. The scripts' JSON is the contract: change it with `project-actions.ts` and its tests.
+- **Listing is read-only.** `resume-project.py` rewrites `last-active`, so the pane must not call it.
+- `$` is never passed to a helper function (the engine's static check): `projects-view.tsx` takes plain
+  data and callbacks, and every `$` call sits at its own call site in `ui.tsx`.
+- Plugin name is `workspace`: state atoms are `{ plugin: 'workspace', ... }`, the worktree tool is
+  `mcp__workspace__workspace_worktree`. The doc markers stay `<!-- workspaces:begin/end -->` on purpose
+  (on-disk format in users' files).
+
 ## Dev Loop
 
 ```bash
@@ -90,8 +111,10 @@ claude --plugin-dir .
 # After editing skills/hooks/manifests, reload without restarting
 /reload-plugins
 
-# Run the test suite
+# Run the test suites
 bash tests/test_setup.sh
+for t in tests/test_*.py; do python3 "$t"; done
+claude plugin test .          # the pane mod (hooks/*.test.ts)
 
 # Validate the plugin + marketplace manifests
 claude plugin validate . --strict

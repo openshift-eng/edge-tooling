@@ -217,34 +217,7 @@ def find_unregistered_files(
     return [f for f in all_files if f not in known and not f.startswith(".")]
 
 
-def extract_checklist(text: str) -> dict:
-    """Extract checked/unchecked items with their section headings."""
-    current_section = ""
-    checked_items = []
-    unchecked_items = []
-
-    for line in text.splitlines():
-        heading_match = re.match(r"^#{2,3}\s+(.+)", line)
-        if heading_match:
-            current_section = heading_match.group(1).strip()
-            continue
-
-        item_match = re.match(r"^\s*- \[([ x])\] (.+)$", line)
-        if item_match:
-            done = item_match.group(1) == "x"
-            entry = {"text": item_match.group(2).strip(), "section": current_section}
-            if done:
-                checked_items.append(entry)
-            else:
-                unchecked_items.append(entry)
-
-    return {
-        "checked": len(checked_items),
-        "unchecked": len(unchecked_items),
-        "total": len(checked_items) + len(unchecked_items),
-        "unchecked_items": unchecked_items,
-        "checked_items": checked_items,
-    }
+extract_checklist = workspace_lib.extract_checklist
 
 
 def domain_search_roots(root: Path) -> list[Path]:
