@@ -244,6 +244,41 @@ simultaneously, CPU/memory/disk contention can cause:
 Report these as infrastructure failures attributed to
 shared-hypervisor contention.
 
+## PCP performance metrics
+
+When `graphs_dir` is provided, it contains JSON files produced by
+`plugins/microshift-ci/scripts/pcp-graphs/generate-graphs.sh`:
+
+| File | Contents |
+| ---- | ------- |
+| `cpu.json` | Per-second CPU utilization samples |
+| `mem.json` | Memory usage samples (RSS, cache, swap) |
+| `io.json` | Disk I/O samples (throughput, IOPS, await latency) |
+| `disk.json` | Filesystem usage samples (used, available, percent) |
+
+Each file is a JSON object with metric names as keys and arrays of
+timestamped samples as values. Correlate timestamps with the failure
+window from `rf-debug.log` or journal entries. Look for sustained
+patterns (4+ consecutive samples above threshold), not isolated spikes —
+a single high `await` value is noise; six consecutive minutes of
+`await > 500ms` is I/O contention.
+
+## Source correlation
+
+When a MicroShift source checkout is available, use `repo-log.sh` to
+list potentially related commits:
+
+```text
+bash plugins/microshift-ci/scripts/repo-log.sh <SOURCE_DIR> \
+    --since <1_MONTH_BEFORE_FINISHED> \
+    --until <FINISHED_DATE> \
+    --paths test/
+```
+
+Derive `FINISHED_DATE` from `finished.json`. Drop `--paths` to see all
+changes. Name candidate commits in the causal chain when timing and
+touched paths match.
+
 ## Search/index coverage of external tools
 
 - Sippy tracks these jobs at **job level only** — scenario junits and RF
