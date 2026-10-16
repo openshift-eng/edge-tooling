@@ -1,0 +1,152 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+method="GET"
+out=""
+data=""
+url=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -X)
+      method="$2"
+      shift 2
+      ;;
+    -o)
+      out="$2"
+      shift 2
+      ;;
+    --data)
+      data="$2"
+      shift 2
+      ;;
+    -w|-u|-H|--connect-timeout|--max-time)
+      shift 2
+      ;;
+    -sS|--fail)
+      shift
+      ;;
+    *)
+      url="$1"
+      shift
+      ;;
+  esac
+done
+
+jq -cn --arg method "${method}" --arg url "${url}" --arg data "${data}" \
+  '{method: $method, url: $url, data: $data}' >> "${MOCK_REQUEST_LOG}"
+
+if [[ "${url}" == "${MOCK_SLACK_URL}" ]]; then
+  printf '%s\n' "${data}" >> "${MOCK_SLACK_LOG}"
+  exit 0
+fi
+
+path="${url#"${JIRA_BASE_URL}"}"
+
+# Return a mocked HTTP body and status through curl's output contract.
+respond() {
+  local body="$1" status="${2:-200}"
+  printf '%s' "${body}" > "${out}"
+  printf '%s' "${status}"
+}
+
+# Build the minimum Jira template fixture used by the coordinator.
+template() {
+  local project="$1" issue_type="$2"
+  jq -cn --arg project "${project}" --arg issue_type "${issue_type}" '{
+    fields: {
+      project: {key: $project},
+      issuetype: {id: $issue_type},
+      components: [{id: "300"}],
+      priority: {id: "400"},
+      description: {
+        type: "doc",
+        version: 1,
+        content: [{
+          type: "paragraph",
+          content: [{type: "text", text: "Build X.Y.Z TEMPLATE-DESCRIPTION-SENTINEL"}]
+        }]
+      }
+    }
+  }'
+}
+
+# Represent ART blocking the QE issue in a QE issue response.
+desired_links() {
+  local art="${MOCK_ART_KEY}"
+  [[ -f "${MOCK_STATE_DIR}/art-key" ]] && art="$(< "${MOCK_STATE_DIR}/art-key")"
+  jq -cn --arg art "${art}" '{fields: {issuelinks: [{
+    type: {name: "Blocks", inward: "is blocked by", outward: "blocks"},
+    outwardIssue: {key: $art}
+  }]}}'
+}
+
+# Represent the conflicting case where QE blocks ART.
+reverse_links() {
+  jq -cn --arg art "${MOCK_ART_KEY}" '{fields: {issuelinks: [{
+    type: {name: "Blocks", inward: "is blocked by", outward: "blocks"},
+    inwardIssue: {key: $art}
+  }]}}'
+}
+
+case "${path}" in
+  /rest/api/3/issueLinkType)
+    respond '{"issueLinkTypes":[{"id":"500","name":"Blocks","inward":"is blocked by","outward":"blocks"}]}'
+    ;;
+  /rest/api/3/issue/ART-11857\?*)
+    respond "$(template ART 100)"
+    ;;
+  /rest/api/3/issue/USHIFT-6945\?*)
+    respond "$(template USHIFT 200)"
+    ;;
+  /rest/api/3/issue/USHIFT-4531\?*)
+    respond '{"fields":{"project":{"key":"USHIFT"},"issuetype":{"name":"Epic"}}}'
+    ;;
+  /rest/api/3/search/jql\?*)
+    if [[ "${MOCK_SCENARIO}" == "search_failure" ]]; then
+      respond 'RAW-ERROR-BODY-SENTINEL' 500
+    elif [[ "${path}" == *labels* && "${path}" == *ART* ]]; then
+      if [[ "${MOCK_SCENARIO}" == "new_success" && "${path}" != *nextPageToken* ]]; then
+        respond '{"issues":[],"isLast":false,"nextPageToken":"page-2"}'
+      elif [[ "${MOCK_SCENARIO}" == "reuse_desired" || "${MOCK_SCENARIO}" == "reverse_link" || "${MOCK_SCENARIO}" == "partial" ]]; then
+        respond "$(jq -cn --arg key "${MOCK_ART_KEY}" '{issues: [{key: $key, fields: {issuetype: {id: "100"}, summary: "Create MicroShift zstream for 4.20.7"}}], isLast: true}')"
+      else
+        respond '{"issues":[],"isLast":true}'
+      fi
+    elif [[ "${path}" == *labels* && "${path}" == *USHIFT* ]]; then
+      if [[ "${MOCK_SCENARIO}" == "reuse_desired" || "${MOCK_SCENARIO}" == "reverse_link" ]]; then
+        respond "$(jq -cn --arg key "${MOCK_QE_KEY}" '{issues: [{key: $key, fields: {issuetype: {id: "200"}, parent: {key: "USHIFT-4531"}, summary: "[QE] 4.20.7 MicroShift Release Testing (Nov 20)"}}], isLast: true}')"
+      else
+        respond '{"issues":[],"isLast":true}'
+      fi
+    else
+      respond '{"issues":[],"isLast":true}'
+    fi
+    ;;
+  /rest/api/3/issue)
+    project="$(printf '%s' "${data}" | jq -r '.fields.project.key')"
+    if [[ "${project}" == "ART" ]]; then
+      printf '%s' 'ART-101' > "${MOCK_STATE_DIR}/art-key"
+      respond '{"key":"ART-101"}' 201
+    else
+      respond '{"key":"USHIFT-202"}' 201
+    fi
+    ;;
+  /rest/api/3/issueLink)
+    : > "${MOCK_STATE_DIR}/link-created"
+    respond '{}' 201
+    ;;
+  /rest/api/3/issue/*\?fields=issuelinks)
+    if [[ "${MOCK_SCENARIO}" == "reverse_link" ]]; then
+      respond "$(reverse_links)"
+    elif [[ "${MOCK_SCENARIO}" == "reuse_desired" || -f "${MOCK_STATE_DIR}/link-created" ]]; then
+      respond "$(desired_links)"
+    else
+      respond '{"fields":{"issuelinks":[]}}'
+    fi
+    ;;
+  *)
+    respond '{"error":"unexpected mock request"}' 500
+    ;;
+esac
