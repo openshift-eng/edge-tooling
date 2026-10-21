@@ -29,6 +29,21 @@ def _parse_bool(value):
     return bool(value)
 
 
+def canonical_causal_identity(item):
+    """Return the stable causal identity when an RCA report provides one.
+
+    New MicroShift reports use this value for grouping and Jira titles.  An
+    empty value deliberately leaves older reports on the legacy grouping path.
+    """
+    value = item.get("cause_identity", "")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def issue_title(item):
+    """Return the Jira-facing title, preserving legacy report compatibility."""
+    return canonical_causal_identity(item) or item.get("error_signature", "")
+
+
 def parse_structured_summary(filepath):
     """Parse a per-job report file as JSON.
 
@@ -76,6 +91,16 @@ def parse_structured_summary(filepath):
             "error_signature": data.get("error_signature") or "",
             "raw_error": data.get("raw_error") or "",
             "root_cause": data.get("root_cause") or "",
+            "cause_identity": canonical_causal_identity(data),
+            "failure_signal": data.get("failure_signal") or "",
+            "impacts": [
+                impact for impact in (data.get("impacts") or [])
+                if isinstance(impact, str)
+            ],
+            "trigger_context": [
+                context for context in (data.get("trigger_context") or [])
+                if isinstance(context, str)
+            ],
             "infrastructure_failure": _parse_bool(data.get("infrastructure_failure", False)),
             "job_url": data.get("job_url") or "",
             "job_name": data.get("job_name") or "",
@@ -137,11 +162,14 @@ def signature_similarity(sig_a, sig_b):
 def grouping_text(job):
     """Return the text used for similarity grouping.
 
-    Prefers RAW_ERROR (verbatim log text, deterministic) over
-    ERROR_SIGNATURE (LLM-paraphrased, variable across runs).
-    Appends ROOT_CAUSE when present to improve cross-release matching
-    for failures that share the same underlying mechanism.
+    New reports group on the canonical causal identity alone.  This prevents
+    health checks, terminal canaries, and scenario names from becoming the
+    deduplication key.  Older reports retain the previous deterministic
+    RAW_ERROR plus ROOT_CAUSE fallback.
     """
+    identity = canonical_causal_identity(job)
+    if identity:
+        return identity
     base = job.get("raw_error") or job.get("error_signature", "")
     root_cause = job.get("root_cause", "")
     if root_cause:
@@ -173,19 +201,23 @@ def cluster_by_similarity(items, key_fn):
 
 
 def group_by_signature(jobs):
-    """Two-pass grouping: first by step_name, then by signature similarity.
+    """Group reports by canonical identity, with legacy step bucketing.
 
-    Grouping by step_name first prevents jobs from different CI steps
-    (e.g. conformance vs metal-tests) from being merged together even
-    when their error signatures share enough tokens to exceed the
-    similarity threshold.
+    Canonical identities intentionally cross CI-step boundaries: one missing
+    dependency can surface as different health checks or terminal failures.
+    Reports without the new field retain the old step-name bucketing before
+    fuzzy signature matching.
     """
-    by_step = {}
+    buckets = {}
     for job in jobs:
-        step = normalize_step_name(job.get("step_name", ""))
-        by_step.setdefault(step, []).append(job)
+        identity = canonical_causal_identity(job)
+        if identity:
+            key = ("identity", " ".join(identity.lower().split()))
+        else:
+            key = ("step", normalize_step_name(job.get("step_name", "")))
+        buckets.setdefault(key, []).append(job)
 
     all_groups = []
-    for step_jobs in by_step.values():
-        all_groups.extend(cluster_by_similarity(step_jobs, grouping_text))
+    for bucket_jobs in buckets.values():
+        all_groups.extend(cluster_by_similarity(bucket_jobs, grouping_text))
     return all_groups

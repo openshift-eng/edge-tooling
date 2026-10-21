@@ -34,7 +34,7 @@ Respond with a valid JSON array only — no prose, no markdown fences. One objec
 
 Read `plugins/microshift-ci/agents/references/microshift-ci-primer.md` first for artifact layout, scenario naming, and common failure patterns. Check the step diagram URL at the end of `build-log.txt` when identifying which step failed — not all fatal errors cause the current step to fail but may cause the next one to fail.
 
-The first error found is the anchor for deduplication, not the conclusion of the investigation. Drill from symptom → mechanism → actionable cause. Recording an evidence gap in `analysis_gaps` is a last resort, valid only after exhausting every available evidence source — journal logs, sosreport pod/container logs, performance metrics, and source code. A `deprioritized` gap when investigation turns remain is a bug in the analysis, not an acceptable outcome. A timeout is not a root cause — explain what was slow or absent. A crash is not a root cause — explain what triggered it.
+The first error found is an observation, not the conclusion of the investigation. Drill from symptom → mechanism → actionable cause. Record the stable mechanism in `cause_identity`; record the terminal check or canary separately in `failure_signal`; record later breakage in `impacts`. Scenario names, cleanup steps, and trigger conditions belong in `scenarios` or `trigger_context`, never in `cause_identity`. Recording an evidence gap in `analysis_gaps` is a last resort, valid only after exhausting every available evidence source — journal logs, sosreport pod/container logs, performance metrics, and source code. A `deprioritized` gap when investigation turns remain is a bug in the analysis, not an acceptable outcome. A timeout is not a root cause — explain what was slow or absent. A crash is not a root cause — explain what triggered it.
 
 The purpose of this analysis is to surface product defects. When a product component was unavailable, crashed, or flapped (readiness flips, liveness probe refused, container exits and restarts), reconstruct its timeline from the journal and pod logs before attributing fault. If the component became ready and later failed, that is a product defect even if a test-side wait would mask the symptom. A test defect is when the component was still starting up normally and the test ran too early.
 
@@ -68,8 +68,12 @@ Each entry in the output array has exactly these fields:
   "stack_layer": "test",
   "step_name": "openshift-microshift-e2e-metal-tests",
   "error_signature": "cert-manager not ready within greenboot 10m timeout on ARM",
-  "root_cause": "greenboot health check timeout during slow ARM service deployment",
+  "root_cause": "disk I/O contention delayed cert-manager webhook startup",
   "raw_error": "cert-manager webhook not ready after 600s",
+  "cause_identity": "image-pull disk contention delayed cert-manager webhook startup",
+  "failure_signal": "pre_test_greenboot_check FAILED: cert-manager webhook not ready after 600s",
+  "impacts": ["cert-manager webhook never became Ready before the boot deadline"],
+  "trigger_context": ["ARM64 scenario", "greenboot pre-test check"],
   "infrastructure_failure": false,
   "job_url": "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/periodic-ci-openshift-microshift-release-4.22-periodics-e2e-aws-tests-arm-nightly/123456",
   "job_name": "periodic-ci-openshift-microshift-release-4.22-periodics-e2e-aws-tests-arm-nightly",
@@ -97,9 +101,13 @@ Each entry in the output array has exactly these fields:
 - `severity`: 1-5 per the severity rubric below
 - `stack_layer`: one of `AWS Infra`, `External Infrastructure`, `build phase`, `deploy phase`, `test setup phase`, `Test Configuration`, `test`, `teardown`
 - `step_name`: the CI step where the error occurred
-- `error_signature`: concise one-line failure signature — used as bug titles for deduplication
-- `root_cause`: one-line (~80 chars) WHY it failed (the mechanism, not the symptom) — used for cross-release dedup, so use stable terms without version numbers or timestamps
-- `raw_error`: primary error message copied verbatim from the log (timestamps stripped, ~150 chars max) — used for deterministic grouping
+- `error_signature`: concise human-readable failure summary; retained for legacy reports and display, not used as the identity for new reports
+- `root_cause`: one-line explanation of WHY it failed for readers; it may elaborate on the canonical identity
+- `raw_error`: primary error message copied verbatim from the log (timestamps stripped, ~150 chars max); retained for legacy report compatibility
+- `cause_identity`: required stable mechanism that caused the failure; this is the only Jira title and deduplication key for new reports. State the failing dependency or mechanism, not a health check, timeout, scenario, cleanup step, release, or timestamp. Do not use generic phrases such as `greenboot health check failed` and do not include `cleanup-data`.
+- `failure_signal`: required observed terminal check, canary, or error that exposed the cause. Keep it separate from `cause_identity`; it may be `pre_test_greenboot_check FAILED`, a readiness timeout, or another literal log signal.
+- `impacts`: required array of non-empty strings describing downstream failures caused by the identity. Include cascaded cleanup or test failures here rather than making separate root causes.
+- `trigger_context`: required array of non-empty strings describing scenario, architecture, test phase, or other conditions that made the failure observable. It is context only, never cause identity.
 - `infrastructure_failure`: `true` when the failure is AWS/CI infrastructure rather than product code
 - `job_url`, `job_name`: use from the prompt when provided
 - `release`: extract from job_name (e.g. `4.22` from `release-4.22`), default `main`
@@ -130,15 +138,22 @@ Good examples:
 - `Process did not finish before 4h0m0s timeout`
 - `error: the server doesn't have a resource type "clusterversion"`
 
-### ROOT_CAUSE rules
+### CAUSE_IDENTITY rules
 
-One line, ~80 chars. Focus on the mechanism. Use stable terms — the same underlying problem across releases produces the same `root_cause`.
+One line, ~100 chars. Focus on the mechanism. Use stable terms — the same underlying problem across releases produces the same `cause_identity`.
 
-| ERROR_SIGNATURE | ROOT_CAUSE |
-|---|---|
-| MonitorTest failures (SCC annotations, disruption pollers) on ARM64 | OCP MonitorTest framework incompatible with MicroShift single-node topology |
-| cert-manager not ready within greenboot 10m timeout on ARM | greenboot health check timeout during slow ARM service deployment |
-| InvalidClientTokenId when calling CreateStack | expired or invalid AWS credentials in CI environment |
+| CAUSE_IDENTITY | FAILURE_SIGNAL | CONTEXT / IMPACT |
+|---|---|---|
+| OCP MonitorTest framework incompatible with MicroShift single-node topology | MonitorTest assertion failed | ARM64 scenario context |
+| CNI dependency unavailable before cert-manager webhook startup | pre_test_greenboot_check FAILED | `cleanup-data` skipped after the startup failure |
+| expired or invalid AWS credentials in CI environment | InvalidClientTokenId when calling CreateStack | AWS CI trigger context |
+
+For example, when CNI never becomes ready and the webhook then fails its
+readiness probe, use `CNI dependency unavailable before cert-manager webhook
+startup` as `cause_identity`. Keep `pre_test_greenboot_check FAILED` in
+`failure_signal`, `cleanup-data` in scenario/trigger context, and any skipped
+webhook or cleanup work in `impacts`. If CNI is ready and the webhook later
+fails for an independent reason, report a separate webhook-specific identity.
 
 ### CONFIDENCE rules
 
@@ -150,7 +165,7 @@ Downstream automation uses confidence to decide whether to act — do not inflat
 
 ### Multiple independent failures
 
-- One entry per independent failure — same root cause = one entry with all affected scenarios
+- One entry per independent causal identity — same cause identity = one entry with all affected scenarios and downstream impacts
 - At most 10 entries per job, report the most severe
 - Cascading failures are not independent — report only the root failure
 - Single failures are still wrapped in an array
