@@ -34,6 +34,9 @@ plugin's *session-time* behavior onto a mod.
 4. **Notes stay current without manual commands.** Findings, decisions and
    progress from the conversation are saved automatically at the moments
    context is at risk.
+5. **Claude always knows the project too.** While attached, every prompt
+   carries a short project section, so a fresh context (including after a
+   manual `/clear`) is not blind to the project the mod still shows.
 
 ## Non-goals
 
@@ -47,6 +50,9 @@ plugin's *session-time* behavior onto a mod.
   `handoff.py read` hook. Untouched in this round.
 - Recall-by-shape search ("do we have a doc about X?"). The user covers this
   with `/btw`.
+- Multi-repo awareness (repo map, remotes, worktree discovery, git
+  guardrails). A separate proposed change to this plugin covers it; keep the
+  status line and pane code easy to extend for it.
 
 ## Anti-goals (failure even if it technically works)
 
@@ -102,6 +108,19 @@ plugin's *session-time* behavior onto a mod.
   the no-silent-auto-attach anti-goal.)*
 - **Fresh launch** (startup, `--resume`, `--continue`): never attaches.
   The existing `recent-projects.py` SessionStart listing remains the hint.
+
+### Context injection
+
+While attached, a `prompt.compose` hook appends one session-scoped section:
+project name, path, type/status, branch or worktree when present, current
+task, and the Reference Files table as one line per file. Terse by design;
+detail stays in the files and the pane. Rebuilt when attachment, current
+task, or the file set changes, not on every turn, so the cached prompt
+prefix stays stable between those events. No section when detached.
+
+This closes the gap where the mod restores attachment after a `/clear` but
+the model's context holds nothing about the project. It also makes the
+`next:go` note's project line unnecessary (see `next` integration).
 
 ### Status line
 
@@ -207,8 +226,9 @@ command is the builder's call. Its `--auto` handling and all cron steps are
 removed.
 
 **Configuration:** expose the idle threshold (minutes) as a plugin
-`userConfig` option, default 50. An option to disable auto-save is
-acceptable but not required.
+`userConfig` option, default 50, and an `autoSave` boolean option, default
+on. With `autoSave` off, no trigger fires; `/workspace:update-project`
+still works as the manual save.
 
 **Cache verification:** the 50-minute default assumes the 1-hour prompt
 cache (the user's understanding). It was not verified in-session: a Claude
@@ -220,12 +240,9 @@ reads zero, revisit the default.
 
 ### `next` integration
 
-Optional, small, and safe when the workspace plugin is absent:
-
-- `next:go`'s note should record the attached project name and current task
-  when a project is attached, so the resumed context states them.
-- Attachment across the clear and the pre-handoff save are both handled by
-  the workspace mod (above), not by `next`.
+None required. Attachment across the clear, the pre-handoff save, and
+telling the fresh context which project and task are active (Context
+injection) are all handled by the workspace mod, not by `next`.
 
 ### Removals
 
@@ -250,6 +267,20 @@ Optional, small, and safe when the workspace plugin is absent:
 - Version bump in `plugin.json` and the marketplace manifest (minor:
   0.3.0 → 0.4.0, since a skill is removed and behavior changes by default).
 
+## Error handling
+
+The mod fails open everywhere: an error in its own code never blocks a
+turn, a tool call, compaction, a `/clear`, or exit.
+
+- `tool.check` auto-allow: on error, fall through to normal permission
+  handling (`next(e)`); never deny.
+- `prompt.compose`: on error, send the prompt without the project section.
+- Attachment restore after `/clear`: on error, stay detached and toast once.
+- Auto-save: on error, toast the failure and continue the chain; no retry
+  loop.
+- Pane and status line: on render error, the engine's default fallback is
+  acceptable.
+
 ## Left to the builder
 
 - Mod module structure, state shape, and file split.
@@ -269,9 +300,12 @@ Optional, small, and safe when the workspace plugin is absent:
   before `next:go` proceeds, the edit auto-allow covering only `*.md` under
   the project folder, idle timer firing only after a
   new turn, "nothing" producing no toast or write, toast on a save,
-  current-task tool updating state and frontmatter.
+  current-task tool updating state and frontmatter, the `prompt.compose`
+  section present only while attached, `autoSave: false` suppressing every
+  trigger, and each hook falling through when its own code throws.
 - Existing `plugins/workspace/tests/` Python suites pass.
 - Manual check: resume a project, confirm the status line; open the pane,
   insert an `@path`; have a multi-turn discussion, `/compact`, confirm a
   toast and the finding in a detail file; `/next:go`, confirm the project is
-  still attached in the fresh context.
+  still attached in the fresh context; manual `/clear`, ask "which project
+  are we on?" and confirm Claude answers from the injected section.
