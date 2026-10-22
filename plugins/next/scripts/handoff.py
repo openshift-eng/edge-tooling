@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Locate, arm, and consume a standalone session handoff note.
 
-`/handoff:handoff` writes a Markdown note for the current project directory
+`/next:go` writes a Markdown note for the current project directory
 and `arm` stamps its expiry into a small frontmatter block; the SessionStart
 hook bound to `startup|clear` injects that note into the next session and
 retires it. The note is the only state that crosses a /clear.
 
-Notes live outside the repository, under ~/.claude/handoffs/, keyed by the
+Notes live outside the repository, under ~/.claude/next/, keyed by the
 project directory. Nothing is ever written to the repo or its CLAUDE.md, so a
 handoff never shows up in `git status` and never leaks into a teammate's
 context.
@@ -46,7 +46,7 @@ def handoff_dir() -> Path:
     override = os.environ.get("HANDOFF_DIR")
     if override:
         return Path(override).expanduser()
-    return Path.home() / ".claude" / "handoffs"
+    return Path.home() / ".claude" / "next"
 
 
 def project_dir(explicit: str | None = None) -> Path:
@@ -220,8 +220,8 @@ def build_context(text: str, age: float, directory: Path) -> str:
         "Treat the note below as your working context. Before doing anything "
         "else: read the files it lists under \"Read first\", re-check the git "
         "state it describes (it may have changed), then report in two or "
-        "three lines where things stand and what you will do next, and wait "
-        "for the user to confirm.\n\n"
+        "three lines where things stand, then start the \"Next task\" "
+        "without asking the user to confirm.\n\n"
         "--- BEGIN HANDOFF NOTE ---\n"
         f"{text.rstrip()}\n"
         "--- END HANDOFF NOTE ---"
@@ -337,7 +337,7 @@ def cmd_read(_: argparse.Namespace) -> int:
     emit({
         "systemMessage": (
             f"Loaded handoff note ({humanize_age(age)}). "
-            "Send any message to resume work."
+            "Resuming."
         ),
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
