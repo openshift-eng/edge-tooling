@@ -397,6 +397,7 @@ After creating the project, provide a summary:
 5. Suggest concrete next steps for starting the work
 6. Remind the user they can resume this project later with
    `/workspace:resume-project`
+7. If the `mcp__workspace__attach` tool is available, call it with `dir` = the absolute project directory. If it is not available (Claude Code without plugin hooks), skip this.
 
 ---
 

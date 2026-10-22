@@ -39,6 +39,10 @@ no path joining is needed.
 3. **Do NOT read `P.repo_context_files` or `P.domain_docs` yet.** Store
    both lists for on-demand loading (see Step 5).
 
+## Step 2.1: Attach the Project
+
+If the `mcp__workspace__attach` tool is available, call it with `dir` = `P.dir`. If it is not available (Claude Code without plugin hooks), skip this.
+
 ## Step 2.5: Verify Self-Repo Worktree
 
 If `P.frontmatter.worktree_path` is present (self-repo project with
@@ -101,6 +105,13 @@ Display a structured summary:
 | **Status** | <P.frontmatter.status or "Unknown"> |
 | **JIRA** | <P.frontmatter.jira or "None"> |
 | **Repos** | <comma-separated P.frontmatter.repos, or "None specified"> |
+```
+
+When `P.frontmatter["current-task"]` is set, add this line under the
+project header:
+
+```
+**Current task:** <P.frontmatter["current-task"]>
 ```
 
 **If `P.worktree_status` is non-empty:**
@@ -235,7 +246,8 @@ Skip file annotations if `P.has_reference_files` is false (monolithic
 project — all content is already in context from Step 2).
 
 **4c.** After the user picks, read the mapped detail files using Read.
-Confirm what was loaded.
+Confirm what was loaded, and call `mcp__workspace__set_task` with the
+chosen task when the tool is available.
 
 **4d.** If `P.worktree_status` is non-empty and the selected task
 involves a repo with a worktree, remind which path to use (from the
@@ -263,17 +275,6 @@ reactively:
 
 This keeps the context window lean for multi-repo projects where you
 typically work in one repo at a time.
-
-## Step 6: Suggest Auto-Update Loop
-
-After presenting the project summary and task selection, suggest the
-auto-update loop so the user can keep project docs current during idle
-periods:
-
-> Run `/workspace:auto-update` to keep project docs updated during idle
-> periods.
-
----
 
 ## Notes
 

@@ -232,6 +232,8 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/handoff.py" clear \
 No output handling needed — the marker is silently removed only if it
 references this project.
 
+If `mcp__workspace__detach` is available, call it.
+
 ## Step 3: Update Project CLAUDE.md
 
 **3a. Read the current CLAUDE.md**
