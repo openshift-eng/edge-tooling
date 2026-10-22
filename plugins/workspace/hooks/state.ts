@@ -77,3 +77,19 @@ export async function setSelection($: Api, path: string | null, text: string) {
   await update($, selected, () => path)
   await update($, preview, () => text)
 }
+
+export function getTurnsSinceSave($: Api) {
+  return read($, turnsSinceSave)
+}
+
+export async function resetTurns($: Api) {
+  await update($, turnsSinceSave, () => 0)
+}
+
+export async function setSavedAt($: Api, at: number) {
+  await update($, savedAt, () => at)
+}
+
+export async function addMarks($: Api, added: Record<string, 'new' | 'updated'>) {
+  await update($, marks, m => ({ ...m, ...added }))
+}

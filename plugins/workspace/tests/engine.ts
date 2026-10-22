@@ -8,6 +8,8 @@ export type Seen = {
   spawns: string[]
   opened: unknown[]
   filled: string[]
+  logs: { text: string; to: string }[]
+  agents: { id: string; description: string; type: string; status: string }[]
 }
 
 export type Entry = { name: string; kind: 'file' | 'dir' | 'other'; size: number; mtimeMs: number; isLink: boolean }
@@ -17,7 +19,7 @@ const SKILL = '# update-project\n\n## Lean Index Rules\n\n- one line per file\n\
 // The hooks beneath the plugin stand for the engine. `files` is live: a test
 // deletes a key to make `fs.read` throw.
 export function stubEngine(on: On, files: Record<string, string>, tree: Record<string, Entry[]> = {}): Seen {
-  const seen: Seen = { toasts: [], writes: [], status: [], forks: [], spawns: [], opened: [], filled: [] }
+  const seen: Seen = { toasts: [], writes: [], status: [], forks: [], spawns: [], opened: [], filled: [], logs: [], agents: [] }
   on('fs.read', (_$, e) => {
     if (e.path.endsWith('skills/update-project/SKILL.md')) return { value: SKILL }
     const text = files[e.path]
@@ -42,7 +44,10 @@ export function stubEngine(on: On, files: Record<string, string>, tree: Record<s
     seen.status.push(e.text)
     return { value: undefined }
   })
-  on('ui.log', () => ({ value: undefined }))
+  on('ui.log', (_$, e) => {
+    seen.logs.push({ text: e.text, to: e.to })
+    return { value: undefined }
+  })
   on('ui.open', (_$, e) => {
     seen.opened.push(e)
     return { value: { isPlaced: true } }
@@ -60,6 +65,8 @@ export function stubEngine(on: On, files: Record<string, string>, tree: Record<s
   on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
   on('prompt.submit', (_$, e) => ({ text: e.text }))
   on('prompt.context', (_$, e) => ({ blocks: e.blocks }))
+  on('agent.list', () => ({ value: seen.agents as never }))
   on('tool.check', () => ({ decision: 'ask' }))
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
   return seen
 }

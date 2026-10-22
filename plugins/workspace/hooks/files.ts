@@ -43,7 +43,11 @@ export async function refreshFiles($: Api): Promise<void> {
   const list = await listProjectFiles($, a.dir, doc.refFiles)
   await setFiles($, list)
   const current = await getSelected($)
-  if (current !== null && list.some(f => f.path === current)) return
+  // A save often rewrites the selected file, so its preview is reloaded too.
+  if (current !== null && list.some(f => f.path === current)) {
+    await setSelection($, current, await readPreview($, a.dir, current))
+    return
+  }
   const first = list[0]?.path ?? null
   await setSelection($, first, first === null ? '' : await readPreview($, a.dir, first))
 }

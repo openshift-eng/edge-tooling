@@ -2,7 +2,8 @@ import type { Register } from 'claude-code'
 
 import { attach, contextBlock, detach, markerKey, restoreFromMarker } from './attach'
 import { PANE, openPane } from './files'
-import { parseProjectDoc } from './project'
+import { leanIndexRules, parseProjectDoc } from './project'
+import { SAVER, consolidatePath, finishSave, isAllowedForSaver, isSaverAgent, startSave } from './save'
 import { projectPane, setTask } from './ui'
 import { getAttached, getTask } from './state'
 
@@ -27,10 +28,41 @@ const TOOLS = {
       required: ['task'],
     },
   },
+  save: {
+    name: 'save',
+    description: 'Save findings, decisions and progress from this conversation to the attached workspace project now.',
+  },
   detach: { name: 'detach', description: 'Detach the current workspace project from this session.' },
 } as const
 
 const PREFIX = 'mcp__workspace__'
+
+const SAVER_ROLE =
+  'You save notes for a workspace project. You are given a project directory and a list of items; write each into the named project file, then end with the one-line report you are asked for.'
+
+async function saverPrompt($: Parameters<typeof startSave>[0]): Promise<string> {
+  const skill = `${$.plugin.root}/skills/update-project/SKILL.md`
+  try {
+    const rules = leanIndexRules(String(await $.fs.read(skill)))
+    if (rules.trim()) return `${SAVER_ROLE}\n\n## Lean Index Rules\n${rules}`
+  } catch {
+    // fall through to the pointer
+  }
+  return `${SAVER_ROLE}\n\nBefore editing, Read the \`## Lean Index Rules\` section of ${skill} and follow it.`
+}
+
+function saveText(o: Awaited<ReturnType<typeof startSave>>, name: string): string {
+  switch (o.kind) {
+    case 'dispatched':
+      return `Saving ${o.items.length} items to ${name} in the background; a toast reports the result.`
+    case 'nothing':
+      return 'Nothing new to save.'
+    case 'failed':
+      return `Save failed: ${o.error}`
+    case 'skipped':
+      return o.why === 'detached' ? 'No workspace project is attached.' : 'A save is already running.'
+  }
+}
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -38,6 +70,15 @@ export const register: Register = on => {
       await $.tool.register(TOOLS.attach)
       await $.tool.register(TOOLS.detach)
       await $.tool.register(TOOLS.set_task)
+      await $.tool.register(TOOLS.save)
+      await $.agent.register({
+        name: 'saver',
+        description: 'Saves workspace project notes (internal)',
+        prompt: await saverPrompt($),
+        tools: ['Read', 'Edit', 'Write', 'Bash'],
+        maxTurns: 12,
+        omitClaudeMd: true,
+      })
       await $.command.register({ name: 'project', description: 'Show the attached workspace project' })
       // A fresh process never attaches.
       await $.store.delete(markerKey(await $.session.root()))
@@ -63,6 +104,35 @@ export const register: Register = on => {
     const r = await setTask($, String(e.task ?? ''))
     return r.ok ? { result: { ok: true }, text: 'Task recorded.' } : { deny: `workspace: ${r.reason}` }
   }).catch(() => ({ deny: 'workspace: set_task failed' }))
+
+  on('tool.call', { tool: `${PREFIX}save` }, async $ => {
+    const name = (await getAttached($))?.name ?? ''
+    const out = await startSave($, 'manual', { autoSave: true })
+    return { result: out, text: saveText(out, name) }
+  }).catch(() => ({ deny: 'workspace: save failed' }))
+
+  on('agent.offer', { agent: SAVER }, () => ({ isOffered: false }))
+
+  on('tool.check', async ($, e, next) => {
+    try {
+      const a = await getAttached($)
+      if (a && (await isSaverAgent($, e.agentId)) && isAllowedForSaver(a, e.tool, e.input, consolidatePath($))) {
+        return { decision: 'allow' }
+      }
+    } catch {
+      // fall through
+    }
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    try {
+      if (await isSaverAgent($, e.agentId)) await finishSave($, e.answer)
+    } catch {
+      // fail open
+    }
+    return next(e)
+  })
 
   on('command.run', { command: 'project' }, $ => openPane($)).catch(() => ({ text: 'workspace: could not open the project pane' }))
 
