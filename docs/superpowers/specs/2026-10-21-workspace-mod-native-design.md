@@ -18,7 +18,7 @@ hooks Claude Code did not have.
 
 Mods (plugin function hooks) now provide those hooks natively: turn and idle
 detection, a cache-served side question over the session transcript,
-pre-compaction and session-end hooks, panes with rendered markdown, status
+pre-compaction hooks, panes with rendered markdown, status
 line entries, and model-callable tools. This rework moves the workspace
 plugin's *session-time* behavior onto a mod.
 
@@ -193,14 +193,12 @@ main-thread turn completed since the last save):
    notes current. This needs no change to `next` and is inert when `next`
    is not installed. (After the clear, `$.model.fork` returns
    `nothing-to-fork`, so the save must happen before.)
-3. `session.end` (exit, manual `/clear`): **best-effort only**. The chain
-   shares a 1.5 s wall-clock budget, so the mod starts the save without
-   awaiting it and returns at once; if the fork reports `nothing-to-fork`
-   or the process exits first, nothing is saved, silently. It must never
-   block exit. The user
-   explicitly accepted that a manual `/clear` does not get a thorough save.
-4. Idle: no new turn for the configured threshold (default 50 minutes),
+3. Idle: no new turn for the configured threshold (default 50 minutes),
    timed by the mod with `$.clock` from each main-thread `turn.complete`.
+
+There is no `session.end` trigger. The chain's 1.5 s budget cannot hold a
+model call, and by then the attachment is cleared, so a save could not
+complete. Exit and `/clear` rely on the compaction, `/next:go` and idle saves.
 
 **Pipeline** *(Claude's recommendation; the builder may adjust)*:
 
@@ -299,7 +297,6 @@ turn, a tool call, compaction, a `/clear`, or exit.
 - Exact command and tool names.
 - Whether the pane reads project data via `resume-project.py` or `$.fs`.
 - How attachment is signaled from the skills.
-- The `session.end` save strategy within its time budget.
 - Pane layout details, markers, and narrow-terminal behavior.
 - Test design (mod tests with `claude plugin test`; existing Python tests
   stay green).

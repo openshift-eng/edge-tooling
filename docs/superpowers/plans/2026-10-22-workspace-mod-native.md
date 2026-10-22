@@ -158,7 +158,7 @@ test('extracts the lean index rules section', async () => {
 ```
 
 - [ ] **Step 2: Scaffold so the test runner loads the plugin**
-  - `plugin.json`: add `"types": "./types/index.d.ts"` and `"userConfig": { "autoSave": {"type": "boolean", "title": "Auto-save project notes", "description": "Save findings and progress to the attached project automatically before compaction, before /next:go, when idle, and at session end.", "default": true}, "idleMinutes": {"type": "number", "title": "Idle save after (minutes)", "description": "Minutes without a new turn before an idle save. Chosen to fit the 1-hour prompt cache.", "default": 50} }`; version `0.4.0`.
+  - `plugin.json`: add `"types": "./types/index.d.ts"` and `"userConfig": { "autoSave": {"type": "boolean", "title": "Auto-save project notes", "description": "Save findings and progress to the attached project automatically before compaction, before /next:go, or when idle.", "default": true}, "idleMinutes": {"type": "number", "title": "Idle save after (minutes)", "description": "Minutes without a new turn before an idle save. Chosen to fit the 1-hour prompt cache.", "default": 50} }`; version `0.4.0`.
   - `hooks/hooks.json`: add `"modules": ["./register.ts"]` beside the existing `SessionStart` entries.
   - `tsconfig.json`: same as `plugins/next/tsconfig.json`.
   - `types/index.d.ts`: `declare module 'claude-code' { interface PluginState { workspace: { … one field per atom in state.ts … } } }`, exporting `Attached` and `ProjectFile`.
@@ -387,17 +387,17 @@ git commit -m "feat(workspace): fork-detect and subagent-apply save pipeline"
   - `turn.complete`: `turnsSinceSave += 1`; cancel and re-arm `idleTimer = $.clock.after(idleMinutes * 60_000, () => void startSave($, 'idle', opts))`. Push `() => idleTimer?.cancel()` onto `onDetach` once.
   - `session.compact`: if attached and `e.trigger !== 'precompute'`: `await startSave($, 'compact', opts)`, then `return next(e)`.
   - `command.run` `{command: 'next:go'}`: `await startSave($, 'handoff', opts)`, then `return next(e)`.
-  - `session.end`: before the marker/detach logic, `void startSave($, 'end', opts)` (never awaited).
+  - `session.end` has no save trigger (Ruling 6: the 1.5 s chain budget and cleared state make it unachievable); the hook stays as Task 2 wrote it.
 
 - [ ] **Step 1: Write the failing tests** in `tests/triggers.test.ts` (attach first; one main `turn.complete` unless stated):
   - `compaction waits for detection before proceeding` — record order in `model.fork` and `session.compact` engine stubs → `['fork', 'compact']`.
   - `precompute compaction does not save` — `trigger: 'precompute'` → no fork.
   - `handoff save dispatches before next:go proceeds` — order `['fork', 'spawn', 'command:next:go']`.
   - `idle fires after the threshold and only after a new turn` — `test(…, {options: {idleMinutes: 50}})`; `clock.advance(49 * 60_000)` → no fork; `advance(60_000)` → one fork; `advance(50 * 60_000)` with no new turn → still one.
-  - `autoSave false suppresses every trigger` — `options: {autoSave: false}`: compact, `next:go`, idle and end produce no fork; the `save` tool still forks.
+  - `autoSave false suppresses every trigger` — `options: {autoSave: false}`: compact, `next:go` and idle produce no fork; the `save` tool still forks.
   - `detach cancels the idle timer` — turn, detach, advance 60 min → no fork.
   - `compaction proceeds when the save throws` — `model.fork` stub throws → `session.compact` still reaches the engine stub.
-  - `session end starts a save without waiting` — `model.fork` stub never resolves; `$.session.end({reason: 'clear', …})` resolves; marker written.
+  - `session end never forks and never blocks` — `model.fork` stub records calls and never resolves; `$.session.end({reason: 'clear', …})` resolves; marker written; zero forks.
 
 - [ ] **Step 2: Run to verify they fail** — Expected: 8 new FAIL.
 
@@ -409,7 +409,7 @@ git commit -m "feat(workspace): fork-detect and subagent-apply save pipeline"
 
 ```bash
 git add plugins/workspace/hooks plugins/workspace/tests
-git commit -m "feat(workspace): auto-save on compaction, /next:go, idle and session end"
+git commit -m "feat(workspace): auto-save on compaction, /next:go and idle"
 ```
 
 ---

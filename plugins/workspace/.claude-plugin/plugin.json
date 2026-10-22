@@ -14,7 +14,7 @@
     "autoSave": {
       "type": "boolean",
       "title": "Auto-save project notes",
-      "description": "Save findings and progress to the attached project automatically before compaction, before /next:go, when idle, and at session end.",
+      "description": "Save findings and progress to the attached project automatically before compaction, before /next:go, or when idle.",
       "default": true
     },
     "idleMinutes": {

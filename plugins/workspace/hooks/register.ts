@@ -181,7 +181,6 @@ export const register: Register = (on, options) => {
 
   on('session.end', async ($, e, next) => {
     try {
-      void startSave($, 'end', opts).catch(() => {})
       const root = await $.session.root()
       const a = await getAttached($)
       if (e.reason === 'clear' && a) await $.store.set(markerKey(root), a)

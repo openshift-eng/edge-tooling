@@ -85,20 +85,12 @@ test('autoSave false suppresses every trigger', { options: { autoSave: false } }
   await compact($)
   await $.command.run({ command: 'next:go', args: '' } as never)
   await clock.advance(60 * 60_000)
-  await $.session.end(END('clear'))
   expect(seen.forks.length).toBe(0)
 })
 
 test('the save tool still forks with autoSave false', { options: { autoSave: false } }, async ($, on) => {
   const { seen } = await session($, on)
   await $.tool.call({ tool: 'mcp__workspace__save', tool_use_id: 'u' })
-  expect(seen.forks.length).toBe(1)
-})
-
-test('session end starts a save for a clean exit', async ($, on) => {
-  const { seen } = await session($, on)
-  await turn($)
-  await $.session.end(END('prompt_input_exit'))
   expect(seen.forks.length).toBe(1)
 })
 
@@ -117,10 +109,10 @@ test('compaction proceeds when the save throws', async ($, on) => {
   expect(c.order).toContain('compact')
 })
 
-test('session end starts a save without waiting', async ($, on) => {
+test('session end never forks and never blocks', async ($, on) => {
   const { seen, m } = await session($, on, { fork: 'hang' })
   await turn($)
   await $.session.end(END('clear'))
-  expect(seen.forks.length).toBe(1)
+  expect(seen.forks.length).toBe(0)
   expect(m.store['attached:/ws']).toEqual({ name: 'demo', dir: DIR })
 })
