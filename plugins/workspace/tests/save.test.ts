@@ -308,3 +308,28 @@ test('the saver is not auto-allowed to write through a symlink', async ($, on) =
   expect(await check($, 'Edit', { file_path: `${DIR}/design.md` }, 'a1')).toBe('allow')
   expect(await check($, 'Write', { file_path: `${DIR}/new.md` }, 'a1')).toBe('allow')
 })
+
+test('a missing target is not auto-allowed when its folder is a link out of the project', async ($, on) => {
+  const { seen } = setup(on)
+  stubModel(on, seen, { detect: '- design.md: x' })
+  await $.session.start(START)
+  await attach($, DIR)
+  await save($)
+  seen.statErrors[`${DIR}/out/new.md`] = 'ENOENT'
+  seen.links[`${DIR}/out`] = '/etc'
+  expect(await check($, 'Write', { file_path: `${DIR}/out/new.md` }, 'a1')).toBe('ask')
+})
+
+test('a missing target is not auto-allowed when stat fails for another reason or the name is a dangling link', async ($, on) => {
+  const { seen } = setup(on, {}, {}, { [`${DIR}/sub`]: [ENTRY('dangling.md')] })
+  stubModel(on, seen, { detect: '- design.md: x' })
+  await $.session.start(START)
+  await attach($, DIR)
+  await save($)
+  seen.statErrors[`${DIR}/sub/denied.md`] = 'EACCES'
+  seen.statErrors[`${DIR}/sub/dangling.md`] = 'ENOENT'
+  seen.statErrors[`${DIR}/sub/fresh.md`] = 'ENOENT'
+  expect(await check($, 'Write', { file_path: `${DIR}/sub/denied.md` }, 'a1')).toBe('ask')
+  expect(await check($, 'Write', { file_path: `${DIR}/sub/dangling.md` }, 'a1')).toBe('ask')
+  expect(await check($, 'Write', { file_path: `${DIR}/sub/fresh.md` }, 'a1')).toBe('allow')
+})

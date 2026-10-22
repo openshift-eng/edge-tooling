@@ -11,6 +11,8 @@ export type Seen = {
   logs: { text: string; to: string }[]
   agents: { id: string; description: string; type: string; status: string }[]
   links: Record<string, string>
+  // Paths whose stat rejects with the given message, like a missing or unreadable one.
+  statErrors: Record<string, string>
 }
 
 export type Entry = { name: string; kind: 'file' | 'dir' | 'other'; size: number; mtimeMs: number; isLink: boolean }
@@ -20,7 +22,7 @@ const SKILL = '# update-project\n\n## Lean Index Rules\n\n- one line per file\n\
 // The hooks beneath the plugin stand for the engine. `files` is live: a test
 // deletes a key to make `fs.read` throw.
 export function stubEngine(on: On, files: Record<string, string>, tree: Record<string, Entry[]> = {}): Seen {
-  const seen: Seen = { toasts: [], writes: [], status: [], forks: [], spawns: [], opened: [], filled: [], logs: [], agents: [], links: {} }
+  const seen: Seen = { toasts: [], writes: [], status: [], forks: [], spawns: [], opened: [], filled: [], logs: [], agents: [], links: {}, statErrors: {} }
   on('fs.read', (_$, e) => {
     if (e.path.endsWith('skills/update-project/SKILL.md')) return { value: SKILL }
     const text = files[e.path]
@@ -29,6 +31,7 @@ export function stubEngine(on: On, files: Record<string, string>, tree: Record<s
   })
   on('fs.exists', (_$, e) => ({ value: e.path in files }))
   on('fs.stat', (_$, e) => {
+    if (e.path in seen.statErrors) return { deny: seen.statErrors[e.path] }
     const target = seen.links[e.path]
     return {
       value: { kind: 'file', size: (files[e.path] ?? '').length, mtimeMs: 0, isLink: target !== undefined, realPath: target ?? e.path },

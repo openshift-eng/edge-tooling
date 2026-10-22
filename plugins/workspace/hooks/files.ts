@@ -68,7 +68,10 @@ export async function insertSelected($: Api): Promise<void> {
 async function openerArgv($: Api, file: string): Promise<string[]> {
   if ((await $.env.get('OS')) === 'Windows_NT') return ['cmd', '/c', 'start', '', file]
   const { stdout } = await $.process.run(['uname', '-s'])
-  return [stdout.trim() === 'Darwin' ? 'open' : 'xdg-open', file]
+  // Backgrounded with its output dropped: `process.run` waits on every open pipe, and a
+  // freshly launched browser keeps xdg-open attached until the run times out. A launch that
+  // fails therefore goes unreported on these platforms.
+  return ['sh', '-c', '"$1" "$2" >/dev/null 2>&1 &', 'sh', stdout.trim() === 'Darwin' ? 'open' : 'xdg-open', file]
 }
 
 export async function openSelected($: Api): Promise<void> {

@@ -138,18 +138,26 @@ export function gate(
   return null
 }
 
-// A symlink (or a path that resolves outside the project) is never auto-allowed;
-// a missing file is a new file and is fine. Fails closed: the caller then asks.
+// A symlink (or a path that resolves outside the project) is never auto-allowed.
+// `stat` rejects ENOENT for a missing path and for a dangling link alike, so a
+// missing path counts as new only when its folder is a real folder inside the
+// project and lists no entry by that name. Fails closed: the caller then asks.
 export async function isPlainTarget($: Api, a: Attached, path: string): Promise<boolean> {
   try {
     const root = (await $.fs.stat(a.dir, { resolve: true })).realPath ?? a.dir
-    let st
+    const isInside = (real: string | undefined) => real !== undefined && (real === root || real.startsWith(`${root}/`))
     try {
-      st = await $.fs.stat(path, { resolve: true })
-    } catch {
-      return true
+      const st = await $.fs.stat(path, { resolve: true })
+      return !st.isLink && isInside(st.realPath)
+    } catch (e) {
+      if (!String(e).includes('ENOENT')) return false
     }
-    return !st.isLink && (st.realPath ?? path).startsWith(`${root}/`)
+    const cut = path.lastIndexOf('/')
+    const folder = path.slice(0, cut) || '/'
+    const dir = await $.fs.stat(folder, { resolve: true })
+    if (dir.isLink || !isInside(dir.realPath)) return false
+    const entries = await $.fs.list(folder)
+    return !entries.some((entry) => entry.name === path.slice(cut + 1))
   } catch {
     return false
   }

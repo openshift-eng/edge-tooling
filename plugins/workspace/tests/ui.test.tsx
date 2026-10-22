@@ -145,7 +145,7 @@ function stubProcess(on: On, ctl: { exit: number; argvs: (readonly string[])[] }
   })
 }
 
-test('open runs the platform opener on the absolute path', async ($, on) => {
+test('open runs the platform opener detached on the absolute path', async ($, on) => {
   const { seen } = setup(on, EXTRA, {}, TREE)
   const ctl = { exit: 0, argvs: [] as (readonly string[])[] }
   stubProcess(on, ctl)
@@ -153,12 +153,12 @@ test('open runs the platform opener on the absolute path', async ($, on) => {
   await attach($, DIR)
   const ui = await $.ui.mount(PANE)
   await ui.press({ key: 'open' })
-  expect(ctl.argvs).toEqual([['xdg-open', `${DIR}/scratch.md`]])
+  expect(ctl.argvs).toEqual([['sh', '-c', '"$1" "$2" >/dev/null 2>&1 &', 'sh', 'xdg-open', `${DIR}/scratch.md`]])
   expect(seen.toasts).toEqual([])
   await ui.unmount()
 })
 
-test('open toasts when the opener fails and the pane keeps working', async ($, on) => {
+test('open toasts when the launcher fails and the pane keeps working', async ($, on) => {
   const { seen } = setup(on, EXTRA, {}, TREE)
   const ctl = { exit: 3, argvs: [] as (readonly string[])[] }
   stubProcess(on, ctl)
