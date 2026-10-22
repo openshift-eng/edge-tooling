@@ -82,6 +82,10 @@ export function getTurnsSinceSave($: Api) {
   return read($, turnsSinceSave)
 }
 
+export async function bumpTurns($: Api) {
+  await update($, turnsSinceSave, n => n + 1)
+}
+
 export async function resetTurns($: Api) {
   await update($, turnsSinceSave, () => 0)
 }

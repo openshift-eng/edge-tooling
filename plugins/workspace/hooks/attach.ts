@@ -10,7 +10,7 @@ export const markerKey = (root: string) => `${MARKER}:${root}`
 
 type AttachResult = { ok: true; name: string } | { ok: false; reason: string }
 
-// Task 6 registers the idle-timer cancel here.
+// Cleanups that run on detach (the idle-timer cancel, the save slot reset).
 export const onDetach: Array<() => void> = []
 
 const basename = (p: string) => p.replace(/\/+$/, '').split('/').pop() ?? ''

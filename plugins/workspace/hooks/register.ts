@@ -1,11 +1,11 @@
 import type { Register } from 'claude-code'
 
-import { attach, contextBlock, detach, markerKey, restoreFromMarker } from './attach'
+import { attach, contextBlock, detach, markerKey, onDetach, restoreFromMarker } from './attach'
 import { PANE, openPane } from './files'
 import { leanIndexRules, parseProjectDoc } from './project'
 import { SAVER, consolidatePath, finishSave, isAllowedForSaver, isSaverAgent, startSave } from './save'
 import { projectPane, setTask } from './ui'
-import { getAttached, getTask } from './state'
+import { bumpTurns, getAttached, getTask } from './state'
 
 const TOOLS = {
   attach: {
@@ -64,7 +64,13 @@ function saveText(o: Awaited<ReturnType<typeof startSave>>, name: string): strin
   }
 }
 
-export const register: Register = on => {
+let idleTimer: { cancel: () => void } | undefined
+let idleHooked = false
+
+export const register: Register = (on, options) => {
+  const opts = { autoSave: options.autoSave !== false }
+  const idleMs = (typeof options.idleMinutes === 'number' && options.idleMinutes > 0 ? options.idleMinutes : 50) * 60_000
+
   on('session.start', async ($, e, next) => {
     try {
       await $.tool.register(TOOLS.attach)
@@ -127,7 +133,37 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     try {
-      if (await isSaverAgent($, e.agentId)) await finishSave($, e.answer)
+      if (e.agentId === undefined) {
+        await bumpTurns($)
+        idleTimer?.cancel()
+        idleTimer = $.clock.after(idleMs, () => void startSave($, 'idle', opts))
+        if (!idleHooked) {
+          idleHooked = true
+          onDetach.push(() => idleTimer?.cancel())
+        }
+      } else if (await isSaverAgent($, e.agentId)) {
+        await finishSave($, e.answer)
+      }
+    } catch {
+      // fail open
+    }
+    return next(e)
+  })
+
+  on('session.compact', async ($, e, next) => {
+    try {
+      if (e.agentId === undefined && e.trigger !== 'precompute' && (await getAttached($))) {
+        await startSave($, 'compact', opts)
+      }
+    } catch {
+      // fail open
+    }
+    return next(e)
+  })
+
+  on('command.run', { command: 'next:go' }, async ($, e, next) => {
+    try {
+      await startSave($, 'handoff', opts)
     } catch {
       // fail open
     }
@@ -145,6 +181,7 @@ export const register: Register = on => {
 
   on('session.end', async ($, e, next) => {
     try {
+      void startSave($, 'end', opts).catch(() => {})
       const root = await $.session.root()
       const a = await getAttached($)
       if (e.reason === 'clear' && a) await $.store.set(markerKey(root), a)
