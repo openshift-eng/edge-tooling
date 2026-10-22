@@ -49,8 +49,9 @@ makes:
 ## Step 1: Save
 
 If the `mcp__workspace__save` tool is available, call it and relay its
-result text to the user; stop. Otherwise apply Steps 2-4 yourself in this
-session (no fork).
+result text to the user; stop. If it returns `No workspace project is
+attached.`, or the tool is not available, apply Steps 2-4 yourself in
+this session (no fork).
 
 ## Step 2: Resolve Project
 

@@ -39,9 +39,9 @@ handoff is still worth arming.
 
 ## Step 3: Decide the Handoff
 
-Read the project's current CLAUDE.md (Read tool). `update-project` runs
-its edits in a fork and only returns a one-line summary to this session —
-the actual edits, including any new detail files or Reference Files
+Read the project's current CLAUDE.md (Read tool). `update-project` saves
+through the mod's save tool (in the background, reported by a toast) or
+inline when the tool is absent — the actual edits, including any new detail files or Reference Files
 table rows, are not otherwise visible here. The file on disk is the only
 reliable source for what changed.
 

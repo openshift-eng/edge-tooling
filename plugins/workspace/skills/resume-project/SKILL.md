@@ -41,7 +41,9 @@ no path joining is needed.
 
 ## Step 2.1: Attach the Project
 
-If the `mcp__workspace__attach` tool is available, call it with `dir` = `P.dir`. If it is not available (Claude Code without plugin hooks), skip this.
+If the `mcp__workspace__attach` tool is available, call it with
+`dir` = `P.dir`. If it is not available (Claude Code without plugin
+hooks), skip this.
 
 ## Step 2.5: Verify Self-Repo Worktree
 
@@ -228,6 +230,8 @@ task, and detail files — then the task decision has already been made:
 - Read the named detail files with the Read tool, joining them to `P.dir`.
 - Report readiness: the loaded files, the checklist progress, and the next
   task from the directive.
+- Call `mcp__workspace__set_task` with the directive's next task when
+  the tool is available.
 - Continue with **4d**, **4e**, and **4f** as normal.
 
 Otherwise, proceed with 4a onward.
