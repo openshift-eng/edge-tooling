@@ -116,3 +116,23 @@ test('session end never forks and never blocks', async ($, on) => {
   expect(seen.forks.length).toBe(0)
   expect(m.store['attached:/ws']).toEqual({ name: 'demo', dir: DIR })
 })
+
+test('a hung detection never blocks compaction or next:go', async ($, on) => {
+  const { c, clock } = await session($, on, { fork: 'hang' })
+  await turn($)
+  const pc = compact($)
+  await clock.advance(8_000)
+  await pc
+  expect(c.order).toEqual(['fork', 'compact'])
+  await $.tool.call({ tool: 'mcp__workspace__detach', tool_use_id: 'd' })
+})
+
+test('a hung detection never blocks the handoff', async ($, on) => {
+  const { c, clock } = await session($, on, { fork: 'hang' })
+  await turn($)
+  const p = $.command.run({ command: 'next:go', args: '' } as never)
+  await clock.advance(8_000)
+  await p
+  expect(c.order).toEqual(['fork', 'command:next:go'])
+  await $.tool.call({ tool: 'mcp__workspace__detach', tool_use_id: 'd' })
+})

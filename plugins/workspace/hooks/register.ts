@@ -3,7 +3,7 @@ import type { Register } from 'claude-code'
 import { attach, contextBlock, detach, markerKey, onDetach, restoreFromMarker } from './attach'
 import { PANE, openPane } from './files'
 import { leanIndexRules, parseProjectDoc } from './project'
-import { SAVER, consolidatePath, finishSave, isAllowedForSaver, isSaverAgent, startSave } from './save'
+import { SAVER, consolidatePath, finishSave, boundedSave, isAllowedForSaver, isPlainTarget, isSaverAgent, startSave } from './save'
 import { projectPane, setTask } from './ui'
 import { bumpTurns, getAttached, getTask } from './state'
 
@@ -123,7 +123,10 @@ export const register: Register = (on, options) => {
     try {
       const a = await getAttached($)
       if (a && (await isSaverAgent($, e.agentId)) && isAllowedForSaver(a, e.tool, e.input, consolidatePath($))) {
-        return { decision: 'allow' }
+        const target = (e.input as { file_path?: unknown }).file_path
+        if (e.tool === 'Bash' || (typeof target === 'string' && (await isPlainTarget($, a, target)))) {
+          return { decision: 'allow' }
+        }
       }
     } catch {
       // fall through
@@ -153,7 +156,7 @@ export const register: Register = (on, options) => {
   on('session.compact', async ($, e, next) => {
     try {
       if (e.agentId === undefined && e.trigger !== 'precompute' && (await getAttached($))) {
-        await startSave($, 'compact', opts)
+        await boundedSave($, 'compact', opts)
       }
     } catch {
       // fail open
@@ -163,7 +166,7 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'next:go' }, async ($, e, next) => {
     try {
-      await startSave($, 'handoff', opts)
+      await boundedSave($, 'handoff', opts)
     } catch {
       // fail open
     }

@@ -252,7 +252,6 @@ test('gate order: detached, disabled, in-flight, no-new-turns; manual skips the 
   expect(gate('manual', true, { ...s, inFlight: true })).toBe('in-flight')
   expect(gate('idle', true, { ...s, turnsSinceSave: 0 })).toBe('no-new-turns')
   expect(gate('manual', true, { ...s, turnsSinceSave: 0 })).toBeNull()
-  expect(gate('end', true, s)).toBeNull()
 })
 
 test('detect answers parse to items or null', () => {
@@ -270,4 +269,42 @@ test('prompts carry the project context and the apply constraints', () => {
   expect(q).toContain(`Edit only \`*.md\` files under \`${DIR}\`. Never change \`status:\`. Update \`last-active:\` to now`)
   expect(q).toContain(`run exactly \`python3 "${CONSOLIDATE}" demo\` first`)
   expect(q).toContain('`updated: <summary>`, `nothing`, or `failed: <error>`')
+})
+
+test('a saver that never reports frees the in-flight slot after 5 minutes', async ($, on) => {
+  const { seen, clock } = setup(on)
+  stubModel(on, seen, { detect: '- design.md: x' })
+  await $.session.start(START)
+  await attach($, DIR)
+  expect((await save($)).result).toHaveProperty('kind', 'dispatched')
+  expect((await save($)).result).toEqual({ kind: 'skipped', why: 'in-flight' })
+  await clock.advance(5 * 60_000)
+  expect(((await save($)).result as { kind: string; why?: string }).why).not.toBe('in-flight')
+})
+
+test('a stale saver completion does not clear a newer save', async ($, on) => {
+  const { seen } = setup(on)
+  stubModel(on, seen, { detect: '- design.md: x' })
+  await $.session.start(START)
+  await attach($, DIR)
+  await $.turn.complete({ answer: 'a', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await save($)
+  await saverAnswer($, 'updated: x')
+  await $.turn.complete({ answer: 'a', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await save($)
+  await saverAnswer($, 'nothing')
+  await saverAnswer($, 'updated: late')
+  expect(seen.toasts).toEqual(['workspace: saved — x'])
+})
+
+test('the saver is not auto-allowed to write through a symlink', async ($, on) => {
+  const { seen } = setup(on)
+  stubModel(on, seen, { detect: '- design.md: x' })
+  await $.session.start(START)
+  await attach($, DIR)
+  await save($)
+  seen.links[`${DIR}/evil.md`] = '/etc/passwd'
+  expect(await check($, 'Edit', { file_path: `${DIR}/evil.md` }, 'a1')).toBe('ask')
+  expect(await check($, 'Edit', { file_path: `${DIR}/design.md` }, 'a1')).toBe('allow')
+  expect(await check($, 'Write', { file_path: `${DIR}/new.md` }, 'a1')).toBe('allow')
 })

@@ -6,7 +6,7 @@ import type { Api, Attached } from './state'
 import { onDetach } from './attach'
 import { refreshStatus } from './ui'
 
-export type Trigger = 'compact' | 'handoff' | 'idle' | 'end' | 'manual'
+export type Trigger = 'compact' | 'handoff' | 'idle' | 'manual'
 export type SaveOutcome =
   | { kind: 'skipped'; why: 'detached' | 'no-new-turns' | 'disabled' | 'in-flight' }
   | { kind: 'nothing' }
@@ -15,13 +15,36 @@ export type SaveOutcome =
 
 export const SAVER = 'workspace:saver'
 
+const STALE_MS = 5 * 60_000
+const BOUND_MS = 8_000
+
 let alreadySaved: string[] = []
 let inFlight = false
+let staleTimer: { cancel: () => void } | undefined
+
+function release() {
+  staleTimer?.cancel()
+  staleTimer = undefined
+  inFlight = false
+}
 
 onDetach.push(() => {
   alreadySaved = []
-  inFlight = false
+  release()
 })
+
+// A hook that waits on a save must never be held by a hung model call.
+export async function boundedSave($: Api, trigger: Trigger, opts: { autoSave: boolean }, ms = BOUND_MS): Promise<void> {
+  let timer: { cancel: () => void } | undefined
+  const expired = new Promise<void>(resolve => {
+    timer = $.clock.after(ms, resolve)
+  })
+  try {
+    await Promise.race([startSave($, trigger, opts), expired])
+  } finally {
+    timer?.cancel()
+  }
+}
 
 export async function isSaverAgent($: Api, agentId: string | undefined): Promise<boolean> {
   if (agentId === undefined) return false
@@ -115,6 +138,23 @@ export function gate(
   return null
 }
 
+// A symlink (or a path that resolves outside the project) is never auto-allowed;
+// a missing file is a new file and is fine. Fails closed: the caller then asks.
+export async function isPlainTarget($: Api, a: Attached, path: string): Promise<boolean> {
+  try {
+    const root = (await $.fs.stat(a.dir, { resolve: true })).realPath ?? a.dir
+    let st
+    try {
+      st = await $.fs.stat(path, { resolve: true })
+    } catch {
+      return true
+    }
+    return !st.isLink && (st.realPath ?? path).startsWith(`${root}/`)
+  } catch {
+    return false
+  }
+}
+
 export async function startSave($: Api, trigger: Trigger, opts: { autoSave: boolean }): Promise<SaveOutcome> {
   const a = await getAttached($)
   const turns = await getTurnsSinceSave($)
@@ -122,6 +162,8 @@ export async function startSave($: Api, trigger: Trigger, opts: { autoSave: bool
   const why = gate(trigger, opts.autoSave, { isAttached: a !== null, inFlight, turnsSinceSave: turns })
   if (why !== null || !a) return { kind: 'skipped', why: why ?? 'detached' }
   inFlight = true
+  // If no saver ever reports (or the fork hangs), the slot frees itself.
+  staleTimer = $.clock.after(STALE_MS, release)
   let dispatched = false
   try {
     const claudeMd = String(await $.fs.read(`${a.dir}/CLAUDE.md`))
@@ -151,7 +193,7 @@ export async function startSave($: Api, trigger: Trigger, opts: { autoSave: bool
   } catch (err) {
     return { kind: 'failed', error: err instanceof Error ? err.message : String(err) }
   } finally {
-    if (!dispatched) inFlight = false
+    if (!dispatched) release()
   }
 }
 
@@ -160,7 +202,9 @@ function lastLine(answer: string): string {
 }
 
 export async function finishSave($: Api, answer: string): Promise<void> {
-  inFlight = false
+  // A completion with nothing in flight is a stale saver; it must not free a newer save.
+  if (!inFlight) return
+  release()
   const last = lastLine(answer)
   const updated = last.match(/^updated:\s*(.*)$/i)
   if (updated) {

@@ -21,6 +21,9 @@ export async function attach($: Api, dir: string): Promise<AttachResult> {
   if (basename(dirname(clean)) !== 'projects') {
     return { ok: false, reason: `${dir} is not a workspace project (parent directory must be "projects")` }
   }
+  if (!/^[A-Za-z0-9._-]+$/.test(basename(clean))) {
+    return { ok: false, reason: 'Project directory name contains unsafe characters' }
+  }
   if (!(await $.fs.exists(`${clean}/CLAUDE.md`))) {
     return { ok: false, reason: `${clean}/CLAUDE.md not found` }
   }

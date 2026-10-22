@@ -104,7 +104,7 @@ bash tests/test_setup.sh
 claude plugin test .
 
 # Type-check the mod
-npx tsc -p . --noEmit
+npx -p typescript tsc -p . --noEmit
 
 # Validate the plugin + marketplace manifests
 claude plugin validate . --strict

@@ -84,3 +84,13 @@ test('a failed restore toasts once and stays detached', async ($, on) => {
   expect(seen.toasts).toEqual(['workspace: could not restore demo after /clear'])
   expect(await attachedNow(m)).toBeNull()
 })
+
+test('attach rejects a project directory name with shell metacharacters', async ($, on) => {
+  const { m, files } = setup(on)
+  for (const name of ['demo$(id)', 'demo;x', 'de mo', 'demo`x`']) {
+    files[`/ws/projects/${name}/CLAUDE.md`] = DOC
+    const r = await attach($, `/ws/projects/${name}`)
+    expect(r.deny).toMatch(/unsafe characters/)
+  }
+  expect(await attachedNow(m)).toBeNull()
+})
