@@ -1,7 +1,7 @@
 import type { Hook } from 'claude-code'
 
 import { onDetach } from './attach'
-import { insertSelected, selectFile } from './files'
+import { insertSelected, openSelected, selectFile } from './files'
 import { parseProjectDoc, setFrontmatterField } from './project'
 import { getAttached, getFiles, getMarks, getPreview, getSavedAt, getSelected, getTask, setTask as storeTask } from './state'
 import type { Api } from './state'
@@ -132,6 +132,11 @@ export async function projectPane($: Api, e: Parameters<Hook<'ui.render'>>[1]) {
       {path !== null && (
         <Button key="insert" hotkey="i" onPress={() => void insertSelected($)}>
           Insert @path
+        </Button>
+      )}
+      {path !== null && (
+        <Button key="open" hotkey="o" onPress={() => void openSelected($)}>
+          Open (OS)
         </Button>
       )}
       {path !== null && <Link href={`file://${a.dir}/${path}`} label="Open in editor" />}

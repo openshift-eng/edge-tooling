@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
+import type { On } from 'claude-code'
 
 import { statusText } from '../hooks/ui'
 import { DIR, START, attach, setup } from './harness'
@@ -135,10 +136,58 @@ test('insert puts the @path in the prompt', async ($, on) => {
   await ui.unmount()
 })
 
+function stubProcess(on: On, ctl: { exit: number; argvs: (readonly string[])[] }, env: Record<string, string> = {}) {
+  mock.env(on, env)
+  on('process.run', (_$, e) => {
+    if (e.argv[0] === 'uname') return { value: { exitCode: 0, stdout: 'Linux\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    ctl.argvs.push(e.argv)
+    return { value: { exitCode: ctl.exit, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+}
+
+test('open runs the platform opener on the absolute path', async ($, on) => {
+  const { seen } = setup(on, EXTRA, {}, TREE)
+  const ctl = { exit: 0, argvs: [] as (readonly string[])[] }
+  stubProcess(on, ctl)
+  await $.session.start(START)
+  await attach($, DIR)
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'open' })
+  expect(ctl.argvs).toEqual([['xdg-open', `${DIR}/scratch.md`]])
+  expect(seen.toasts).toEqual([])
+  await ui.unmount()
+})
+
+test('open toasts when the opener fails and the pane keeps working', async ($, on) => {
+  const { seen } = setup(on, EXTRA, {}, TREE)
+  const ctl = { exit: 3, argvs: [] as (readonly string[])[] }
+  stubProcess(on, ctl)
+  await $.session.start(START)
+  await attach($, DIR)
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'open' })
+  expect(seen.toasts).toEqual(['workspace: could not open scratch.md'])
+  await ui.press({ key: 'insert' })
+  expect(seen.filled.length).toBe(1)
+  await ui.unmount()
+})
+
 test('project command without attachment explains', async ($, on) => {
   const { seen } = setup(on)
   await $.session.start(START)
   const r = await $.command.run({ command: 'project', origin: ORIGIN, presentation: PRESENTATION, args: '' })
   expect(r.text).toMatch(/No workspace project is attached/)
   expect(seen.opened).toEqual([])
+})
+
+test('open uses cmd start on Windows', async ($, on) => {
+  setup(on, EXTRA, {}, TREE)
+  const ctl = { exit: 0, argvs: [] as (readonly string[])[] }
+  stubProcess(on, ctl, { OS: 'Windows_NT' })
+  await $.session.start(START)
+  await attach($, DIR)
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'open' })
+  expect(ctl.argvs).toEqual([['cmd', '/c', 'start', '', `${DIR}/scratch.md`]])
+  await ui.unmount()
 })

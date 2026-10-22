@@ -113,7 +113,9 @@ With a project attached, the plugin keeps it visible and its notes current.
   the attached project, checklist progress, time since the last save, and
   the current task.
 - **`/project` pane** — a side pane showing the project's checklist and
-  notes.
+  notes. With a file selected, `i` inserts its `@path` into the prompt and
+  `o` opens it with the operating system's default app (for example an HTML
+  file in your browser).
 - **Attach** — Claude attaches, detaches, sets the current task, and saves
   through four model tools. Attachment survives `/clear` but is never
   applied automatically on launch.

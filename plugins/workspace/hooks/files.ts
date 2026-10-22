@@ -64,6 +64,25 @@ export async function insertSelected($: Api): Promise<void> {
   await $.prompt.fill({ text: `${atPath(`${a.dir}/${path}`, await $.session.cwd())} `, mode: 'insert' })
 }
 
+// The engine names no platform: Windows sets OS, elsewhere `uname` tells macOS from the rest.
+async function openerArgv($: Api, file: string): Promise<string[]> {
+  if ((await $.env.get('OS')) === 'Windows_NT') return ['cmd', '/c', 'start', '', file]
+  const { stdout } = await $.process.run(['uname', '-s'])
+  return [stdout.trim() === 'Darwin' ? 'open' : 'xdg-open', file]
+}
+
+export async function openSelected($: Api): Promise<void> {
+  const a = await getAttached($)
+  const path = await getSelected($)
+  if (!a || path === null) return
+  try {
+    const r = await $.process.run(await openerArgv($, `${a.dir}/${path}`))
+    if (r.exitCode !== 0) throw new Error(`exit ${r.exitCode}`)
+  } catch {
+    $.ui.toast(`workspace: could not open ${path}`)
+  }
+}
+
 export async function openPane($: Api): Promise<{ text: string }> {
   const a = await getAttached($)
   if (!a) return { text: 'No workspace project is attached. Run /workspace:resume-project.' }
