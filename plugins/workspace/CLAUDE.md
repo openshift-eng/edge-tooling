@@ -25,9 +25,11 @@ Two roots are kept strictly separate:
 
 ```text
 .claude-plugin/{plugin.json, marketplace.json}   Plugin + marketplace manifests
-skills/<name>/SKILL.md                            10 skills (workspace: prefix)
+skills/<name>/SKILL.md                            9 skills (workspace: prefix)
 skills/create-domain/context-template.md          Context-file template
-hooks/hooks.json                                  SessionStart → recent-projects.py / handoff.py
+hooks/hooks.json                                  SessionStart → recent-projects.py / handoff.py; mod module
+hooks/register.ts + hooks/*.ts(x)                 Session mod: status line, /project pane, attach/detach/set_task/save tools, auto-save triggers
+types/                                            Mod type declarations (plugin.json "types")
 scripts/setup.sh                                  Clone/update/init CLI (self-derives plugin root)
 scripts/workspace_lib.py                          Shared, yaml-free: resolve_workspace_root(), PLUGIN_ROOT
 scripts/{resume,consolidate,recent}-project*.py   Project tooling
@@ -36,7 +38,8 @@ scripts/skills.py                                 Repo-skill symlink manager (sc
 scripts/handoff.py                                Handoff marker: write (skill) / read (hook)
 domains/{example,tnf,lvm-operator}/               Bundled domains (read-only)
 templates/{dev-env.yaml.template, dev-env-self.yaml.template, settings.local.json.tpl}
-tests/{test_setup.sh, test_skills.py, test_domain_info.py, test_handoff.py}  Test suites
+tests/{test_setup.sh, test_*.py}                  Script test suites
+tests/*.test.ts(x)                                Mod tests (harness.ts, engine.ts)
 ```
 
 ## Skills
@@ -52,7 +55,6 @@ tests/{test_setup.sh, test_skills.py, test_domain_info.py, test_handoff.py}  Tes
 | `/workspace:update-project` | Update project documentation from this session |
 | `/workspace:consolidate-project` | Consolidate a bloated project CLAUDE.md by archiving completed items |
 | `/workspace:update-domain` | Feed lessons learned from a project back into its domain |
-| `/workspace:auto-update` | Automatically save project notes within 50 minutes of any work, during idle |
 
 ## Key Conventions
 
@@ -73,6 +75,13 @@ tests/{test_setup.sh, test_skills.py, test_domain_info.py, test_handoff.py}  Tes
   the same reason `recent-projects.py` is. `/clear` itself can never be
   issued by Claude — it is not among the built-ins reachable through the
   Skill tool — so the marker is how state crosses that boundary.
+- **Session mod**: `hooks/register.ts` registers the status line, the
+  `/project` pane (id `workspace-project`), and four model tools (attach,
+  detach, set_task, save). Attachment is kept in a store marker so it
+  survives `/clear`; it never auto-attaches on launch. Auto-save fires
+  before compaction, before `/next:go`, and when idle (`idleMinutes`,
+  toggle `autoSave`; both `userConfig`). There is no session-end trigger.
+  Without plugin-hook support the plugin degrades to skills only.
 - Python scripts target **python3.9+** (macOS system python); they use
   `from __future__ import annotations` so `X | None` hints don't break there.
 - **Single-repo self-workspaces**: a top-level `self:` block (`name`,
@@ -90,8 +99,12 @@ claude --plugin-dir .
 # After editing skills/hooks/manifests, reload without restarting
 /reload-plugins
 
-# Run the test suite
+# Run the test suites
 bash tests/test_setup.sh
+claude plugin test .
+
+# Type-check the mod
+npx tsc -p . --noEmit
 
 # Validate the plugin + marketplace manifests
 claude plugin validate . --strict

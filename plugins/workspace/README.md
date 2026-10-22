@@ -91,7 +91,6 @@ shouldn't live in the repos you contribute to.
 | `/workspace:close-project` | Mark a project done and clean up worktrees |
 | `/workspace:handoff` | Arm a handoff so the next `/clear` auto-resumes |
 | `/workspace:consolidate-project` | Archive completed checklist items from a large project |
-| `/workspace:auto-update` | Automatically save project notes within 50 minutes of any work, during idle |
 
 **Workspace setup** — usually one-time:
 
@@ -105,6 +104,29 @@ A SessionStart hook surfaces your recent projects whenever you launch Claude
 Code inside a workspace (it stays silent elsewhere). After
 `/workspace:handoff`, that same hook instead resumes the handed-off
 project on your next `/clear`.
+
+## Session UI and auto-save
+
+With a project attached, the plugin keeps it visible and its notes current.
+
+- **Status line** — `⌂ <name> · <done>/<total> · saved <age> · <task>`:
+  the attached project, checklist progress, time since the last save, and
+  the current task.
+- **`/project` pane** — a side pane showing the project's checklist and
+  notes.
+- **Attach** — Claude attaches, detaches, sets the current task, and saves
+  through four model tools. Attachment survives `/clear` but is never
+  applied automatically on launch.
+- **Auto-save** — notes are saved before compaction, before `/next:go`, and
+  when idle.
+
+| Option | Default | Purpose |
+|--------|---------|---------|
+| `autoSave` | `true` | Toggle auto-save |
+| `idleMinutes` | `50` | Idle time before a save (fits the 1-hour prompt cache) |
+
+Change both via `/config`. This needs a Claude Code version with plugin
+hooks; without it the plugin degrades to the skills alone.
 
 ## Concepts
 
@@ -191,5 +213,5 @@ The old `/dev-env-setup` and `/project:*` commands are replaced by the
 ## Developing the plugin
 
 See [CLAUDE.md](CLAUDE.md) for the layout, dev loop
-(`claude --plugin-dir .` + `/reload-plugins`), and test command
-(`bash tests/test_setup.sh`).
+(`claude --plugin-dir .` + `/reload-plugins`), and test commands
+(`bash tests/test_setup.sh`, `claude plugin test .`).
