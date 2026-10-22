@@ -103,9 +103,9 @@ plugins/workspace/
   - `type Frontmatter = Record<string, string>` (scalar `key: value` lines only; list values ignored)
   - `type RefFile = { path: string; description: string }` (first cell: `` `x` ``, `[t](x)` or `x` → `x`)
   - `type ProjectDoc = { frontmatter: Frontmatter; progress: { done: number; total: number }; refFiles: RefFile[] }`
-  - `parseProjectDoc(text: string): ProjectDoc` — `progress` counts `- [x]`/`- [ ]` items under `## Progress` only, up to the next `## `.
+  - `parseProjectDoc(text: string): ProjectDoc` — `progress` counts `- [x]`/`- [ ]` items under `## Progress` only, up to the next level-2 heading.
   - `setFrontmatterField(text: string, key: string, value: string): string` — replace the line if present, else insert after `status:` (else before the closing `---`); text without frontmatter returned unchanged.
-  - `leanIndexRules(skillText: string): string` — body of the `## Lean Index Rules` section up to the next `## `.
+  - `leanIndexRules(skillText: string): string` — body of the `## Lean Index Rules` section up to the next level-2 heading.
 - Produces (`hooks/state.ts`):
   - `type Api = Parameters<Hook<'session.start'>>[0]` (use the d.ts's own name for `$` if one exists)
   - `type Attached = { name: string; dir: string }`
@@ -206,6 +206,7 @@ git commit -m "feat(workspace): scaffold hooks module and project doc parsing"
 - Produces (`tests/engine.ts`): `stubEngine(on, files: Record<string,string>): Seen` with `Seen = {toasts: string[]; writes: {path: string; text: string}[]; status: (string|undefined)[]; forks: string[]; spawns: string[]}`; stubs `fs.read/exists/stat/list/write`, `ui.toast/status/log/open`, `tool.register` (returns `{value: {tool: 'mcp__workspace__' + e.name}}`), `agent.register`, `command.register`, `session.start`, `session.root` (`'/ws'`), `session.cwd` (`'/ws'`). `fs.read` of any path ending `skills/update-project/SKILL.md` returns a minimal skill with a `## Lean Index Rules` section. Later tasks add `model.fork`/`agent.spawn` stubs per test.
 
 Wiring in `register.ts`:
+
 - `session.start`: register tools `attach` (`{dir: string}` "Attach a workspace project to this session. Call as the last step of /workspace:new-project and /workspace:resume-project with the project's absolute directory.") and `detach` (`{}`); then `$.store.delete` the marker for this root (fresh process never attaches).
 - `tool.call` for each tool → `attach`/`detach`; `{deny: reason}` on failure.
 - `tool.check` `{tool: /^mcp__workspace__/}` → `{decision: 'allow'}` (main loop only).
@@ -254,7 +255,7 @@ git commit -m "feat(workspace): attach projects to the session across /clear"
 
 - Consumes: `setFrontmatterField`, `parseProjectDoc`, atoms.
 - Produces:
-  - `statusText(v: {name: string; done: number; total: number; savedAt: number | null; lastActive?: string; task: string; now: number}): string` → `⌂ <name> · <done>/<total> · saved <age>`; `<age>` from `savedAt`, else from `lastActive` (`YYYY-MM-DDTHH:MM`, local), formatted `now`/`<n>m`/`<n>h`/`<n>d`; omit the `saved` part when neither is known; append ` · <task>` truncated to 40 chars with `…` when `task` is set.
+  - `statusText(v: {name: string; done: number; total: number; savedAt: number | null; lastActive?: string; task: string; now: number}): string` → `⌂ <name> · <done>/<total> · saved <age>`; `<age>` from `savedAt`, else from `lastActive` (`YYYY-MM-DDTHH:MM`, local), formatted `now`/`<n>m`/`<n>h`/`<n>d`; omit the `saved` part when neither is known; append `· <task>` truncated to 40 chars with `…` when `task` is set.
   - `refreshStatus($: Api): Promise<void>` — reads atoms + CLAUDE.md, calls `$.ui.status(statusText(...))`, or `$.ui.status(undefined)` when detached. A 60 s `$.clock.every` started on attach (cancelled via `onDetach`) keeps the age current.
   - `setTask($: Api, task: string): Promise<{ok: boolean; reason?: string}>` — trims, caps at 120 chars, sets `task`, writes `current-task:` into `<dir>/CLAUDE.md` via `setFrontmatterField`, refreshes status. Not attached → `{ok: false, reason: 'No workspace project is attached.'}`.
 - Tool `set_task` (`{task: string}`), registered in `session.start`, description: "Record what is being worked on right now in the attached workspace project. Call whenever the focus of the work shifts; one short phrase."
@@ -296,7 +297,7 @@ git commit -m "feat(workspace): current-task tool and project status line"
   - `refreshFiles($: Api): Promise<void>` — fills `files`; if `selected` is null or gone, selects the first file and loads `preview`. Called on attach, on pane open, and after a save completes (Task 5).
   - `PANE = 'workspace:project'`; command `project` ("Show the attached workspace project") → if detached `{text: 'No workspace project is attached. Run /workspace:resume-project.'}`; else `refreshFiles`, `$.ui.open({id: PANE, title: <name>, focus: true, closeOnEscape: true})`, `{text: 'Project pane opened.'}`.
   - `atPath(fileAbs: string, cwd: string): string` — `@` + path relative to `cwd` when inside it, else absolute.
-- Render (`ui.render` `{component: 'Pane', requestId: PANE}`), top to bottom: `Text` `<name> · <type> · <status>` (+ `branch`/`worktree_path`); `Text` progress bar of 20 cells (`█`/`░`) + ` <done>/<total>`; `Text` `Current task: <task>` (or dim `No current task`); `Select` key `files`, one option per file, label `<path>  <age>` + ` [unregistered]` when `!isRegistered` + ` [new]`/` [updated]` from `marks`; `onSelect` sets `selected`, reads the file into `preview`; `Markdown` of `preview` for `*.md`, `Code` otherwise; `Button` key `insert` hotkey `i` "Insert @path" → `$.prompt.fill({text: atPath(...) + ' ', mode: 'insert'})`; `Link` "Open in editor" to `file://<abs path>`.
+- Render (`ui.render` `{component: 'Pane', requestId: PANE}`), top to bottom: `Text` `<name> · <type> · <status>` (+ `branch`/`worktree_path`); `Text` progress bar of 20 cells (`█`/`░`) + `<done>/<total>`; `Text` `Current task: <task>` (or dim `No current task`); `Select` key `files`, one option per file, label `<path>  <age>` + `[unregistered]` when `!isRegistered` + `[new]`/`[updated]` from `marks`; `onSelect` sets `selected`, reads the file into `preview`; `Markdown` of `preview` for `*.md`, `Code` otherwise; `Button` key `insert` hotkey `i` "Insert @path" → `$.prompt.fill({text: atPath(...) + ' ', mode: 'insert'})`; `Link` "Open in editor" to `file://<abs path>`.
 
 - [ ] **Step 1: Write the failing tests** (mount with `$.ui.mount({plugin: 'workspace', surface: 'terminal', component: 'Pane', requestId: 'workspace:project', props: {...}})` as in the bundled `examples/pane.test.tsx`):
   - `files list newest first and flags unregistered` — stub `fs.list` for `/ws/projects/demo` with `design.md` (mtime 1), `scratch.md` (mtime 3), `CLAUDE.md` (mtime 2), `.gitignore` → `listProjectFiles` paths `['scratch.md', 'CLAUDE.md', 'design.md']`, `scratch.md` `isRegistered: false`.
@@ -334,7 +335,7 @@ git commit -m "feat(workspace): project pane with file browser and @path insert"
   - `type SaveOutcome = {kind: 'skipped'; why: 'detached' | 'no-new-turns' | 'disabled' | 'in-flight'} | {kind: 'nothing'} | {kind: 'dispatched'; items: string[]; agentId: string} | {kind: 'failed'; error: string}`
   - `startSave($: Api, trigger: Trigger, opts: {autoSave: boolean}): Promise<SaveOutcome>` — gates in order: detached → `detached`; `trigger !== 'manual' && !opts.autoSave` → `disabled`; in-flight → `in-flight`; `trigger !== 'manual' && turnsSinceSave === 0` → `no-new-turns`. Then detect, then spawn. On dispatch: `turnsSinceSave = 0`, append items to a module-level `alreadySaved: string[]` (cleared on detach). Resolves at dispatch, not at completion.
   - `detectPrompt(doc: ProjectDoc, claudeMd: string, alreadySaved: string[]): string` — asks: "What findings, decisions or progress from this conversation are not yet in the project files below? Answer exactly `NOTHING`, or one line per item: `- <target file>: <item>`." Includes the project CLAUDE.md text (it holds the Reference Files table and progress) and an `Already saved this session:` list.
-  - `parseDetected(text: string): string[] | null` — `null` for `NOTHING` (trimmed, case-insensitive) or no `- ` lines; else the `- ` lines without the dash.
+  - `parseDetected(text: string): string[] | null` — `null` for `NOTHING` (trimmed, case-insensitive) or no lines starting with a dash; else those lines with the leading dash and space removed.
   - `applyPrompt(a: Attached, items: string[], consolidate: string): string` — project dir, the items, "Edit only `*.md` files under `<dir>`. Never change `status:`. Update `last-active:` to now. If CLAUDE.md would exceed 100 lines, run exactly `python3 "<consolidate>" <name>` first. End with one line: `updated: <summary>`, `nothing`, or `failed: <error>`."
   - `isAllowedForSaver(a: Attached, tool: string, input: unknown, consolidate: string): boolean` — `Edit`/`Write`: `input.file_path` normalized (resolve `.`/`..` segments) starts with `<dir>/` and ends with `.md`. `Bash`: `input.command` equals `python3 "<consolidate>" <name>` exactly. Anything else false.
   - `consolidate = <$.plugin.root>/scripts/consolidate-project.py`.
