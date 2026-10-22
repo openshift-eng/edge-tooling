@@ -1,8 +1,9 @@
 import type { Register } from 'claude-code'
 
 import { attach, contextBlock, detach, markerKey, restoreFromMarker } from './attach'
+import { PANE, openPane } from './files'
 import { parseProjectDoc } from './project'
-import { setTask } from './ui'
+import { projectPane, setTask } from './ui'
 import { getAttached, getTask } from './state'
 
 const TOOLS = {
@@ -37,6 +38,7 @@ export const register: Register = on => {
       await $.tool.register(TOOLS.attach)
       await $.tool.register(TOOLS.detach)
       await $.tool.register(TOOLS.set_task)
+      await $.command.register({ name: 'project', description: 'Show the attached workspace project' })
       // A fresh process never attaches.
       await $.store.delete(markerKey(await $.session.root()))
     } catch {
@@ -61,6 +63,10 @@ export const register: Register = on => {
     const r = await setTask($, String(e.task ?? ''))
     return r.ok ? { result: { ok: true }, text: 'Task recorded.' } : { deny: `workspace: ${r.reason}` }
   }).catch(() => ({ deny: 'workspace: set_task failed' }))
+
+  on('command.run', { command: 'project' }, $ => openPane($)).catch(() => ({ text: 'workspace: could not open the project pane' }))
+
+  on('ui.render', { component: 'Pane', requestId: PANE }, ($, e) => projectPane($, e)).catch(($, e, next) => next(e))
 
   on('tool.check', { tool: /^mcp__workspace__/ }, async ($, e, next) => {
     const r = await next(e)

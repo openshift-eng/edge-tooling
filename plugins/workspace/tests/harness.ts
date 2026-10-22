@@ -3,6 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { stubEngine } from './engine'
+import type { Entry } from './engine'
 
 export const DIR = '/ws/projects/demo'
 export const DOC = `---
@@ -33,7 +34,7 @@ export type Mirror = { state: Record<string, unknown>; store: Record<string, unk
 export const attachedNow = (m: Mirror) => (m.state.attached ?? null) as { name: string; dir: string } | null
 export const marker = (m: Mirror) => m.store['attached:/ws']
 
-export function setup(on: On, extra: Record<string, string> = {}, store: Record<string, unknown> = {}) {
+export function setup(on: On, extra: Record<string, string> = {}, store: Record<string, unknown> = {}, tree: Record<string, Entry[]> = {}) {
   const mirror: Mirror = { state: {}, store: { ...store } }
   on('state.set', (_$, e, next) => {
     mirror.state[e.key] = e.value
@@ -51,6 +52,6 @@ export function setup(on: On, extra: Record<string, string> = {}, store: Record<
   on('store.keys', () => ({ value: Object.keys(mirror.store) }))
   const clock = mock.clock(on)
   const files: Record<string, string> = { [`${DIR}/CLAUDE.md`]: DOC, ...extra }
-  return { files, seen: stubEngine(on, files), m: mirror, clock }
+  return { files, seen: stubEngine(on, files, tree), m: mirror, clock }
 }
 

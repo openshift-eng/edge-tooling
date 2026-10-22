@@ -1,6 +1,9 @@
+import type { Hook } from 'claude-code'
+
 import { onDetach } from './attach'
+import { insertSelected, selectFile } from './files'
 import { parseProjectDoc, setFrontmatterField } from './project'
-import { getAttached, getSavedAt, getTask, setTask as storeTask } from './state'
+import { getAttached, getFiles, getMarks, getPreview, getSavedAt, getSelected, getTask, setTask as storeTask } from './state'
 import type { Api } from './state'
 
 const TASK_CAP = 120
@@ -83,4 +86,55 @@ export async function setTask($: Api, task: string): Promise<{ ok: boolean; reas
   await $.fs.write(path, setFrontmatterField(String(await $.fs.read(path)), 'current-task', clean))
   await refreshStatus($)
   return { ok: true }
+}
+
+const BAR_CELLS = 20
+
+export function progressBar(done: number, total: number): string {
+  const filled = total > 0 ? Math.round((done / total) * BAR_CELLS) : 0
+  return `${'█'.repeat(filled)}${'░'.repeat(BAR_CELLS - filled)} ${done}/${total}`
+}
+
+export async function projectPane($: Api, e: Parameters<Hook<'ui.render'>>[1]) {
+  if (e.surface === 'mobile') {
+    const { Text } = $.ui.resolve(e)
+    return <Text dimColor>The project pane needs a surface with a file picker.</Text>
+  }
+  const { Box, Text, Select, Markdown, Code, Button, Link } = $.ui.resolve(e)
+  const a = await getAttached($)
+  if (!a) return <Text dimColor>No workspace project is attached.</Text>
+  const doc = parseProjectDoc(String(await $.fs.read(`${a.dir}/CLAUDE.md`)))
+  const fm = doc.frontmatter
+  const header = [a.name, fm.type ?? 'unknown', fm.status ?? 'unknown', fm.branch, fm.worktree_path]
+    .filter(Boolean)
+    .join(' · ')
+  const currentTask = await getTask($)
+  const list = await getFiles($)
+  const marks = await getMarks($)
+  const path = await getSelected($)
+  const now = await $.clock.now()
+  const options = list.map(f => ({
+    value: f.path,
+    label: [`${f.path}  ${age(now - f.mtimeMs)}`, f.isRegistered ? '' : '[unregistered]', marks[f.path] ? `[${marks[f.path]}]` : '']
+      .filter(Boolean)
+      .join(' '),
+  }))
+  const text = await getPreview($)
+  return (
+    <Box flexDirection="column">
+      <Text bold>{header}</Text>
+      <Text>{progressBar(doc.progress.done, doc.progress.total)}</Text>
+      {currentTask ? <Text>Current task: {currentTask}</Text> : <Text dimColor>No current task</Text>}
+      {options.length > 0 && (
+        <Select key="files" options={options} value={path ?? undefined} onSelect={value => void selectFile($, value)} />
+      )}
+      {path !== null && (path.endsWith('.md') ? <Markdown text={text} /> : <Code source={text} path={path} />)}
+      {path !== null && (
+        <Button key="insert" hotkey="i" onPress={() => void insertSelected($)}>
+          Insert @path
+        </Button>
+      )}
+      {path !== null && <Link href={`file://${a.dir}/${path}`} label="Open in editor" />}
+    </Box>
+  )
 }

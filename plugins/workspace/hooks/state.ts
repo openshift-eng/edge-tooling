@@ -52,3 +52,28 @@ export async function clearAttached($: Api) {
   await update($, files, () => [])
   await update($, marks, () => ({}))
 }
+
+export function getFiles($: Api) {
+  return read($, files)
+}
+
+export function getSelected($: Api) {
+  return read($, selected)
+}
+
+export function getPreview($: Api) {
+  return read($, preview)
+}
+
+export function getMarks($: Api) {
+  return read($, marks)
+}
+
+export async function setFiles($: Api, list: ProjectFile[]) {
+  await update($, files, () => list)
+}
+
+export async function setSelection($: Api, path: string | null, text: string) {
+  await update($, selected, () => path)
+  await update($, preview, () => text)
+}

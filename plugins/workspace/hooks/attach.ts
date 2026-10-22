@@ -1,3 +1,4 @@
+import { refreshFiles } from './files'
 import type { ProjectDoc } from './project'
 import { parseProjectDoc } from './project'
 import { clearAttached, getAttached, getTask, setAttached } from './state'
@@ -26,6 +27,7 @@ export async function attach($: Api, dir: string): Promise<AttachResult> {
   const doc = parseProjectDoc(String(await $.fs.read(`${clean}/CLAUDE.md`)))
   const name = basename(clean)
   await setAttached($, { name, dir: clean }, doc.frontmatter['current-task'] ?? '')
+  await refreshFiles($).catch(() => {})
   await refreshStatus($)
   startStatusTimer($)
   return { ok: true, name }

@@ -76,3 +76,69 @@ test('set_task without a project is denied', async ($, on) => {
   expect(r.deny).toBeDefined()
   expect(seen.writes).toEqual([])
 })
+
+const ORIGIN = { kind: 'composer' } as const
+const PRESENTATION = { isFullscreen: false, columns: 120 }
+const PANE = {
+  plugin: 'workspace',
+  surface: 'terminal',
+  component: 'Pane',
+  requestId: 'workspace-project',
+  props: {
+    title: 'demo',
+    isFocused: true,
+    bodyColumns: 80,
+    placement: 'dock',
+    scroll: { offset: 0, bodyRows: 20 },
+    view: {},
+  },
+} as const
+
+const entry = (name: string, mtimeMs: number, kind: 'file' | 'dir' = 'file') => ({ name, kind, size: 1, mtimeMs, isLink: false })
+
+const TREE = {
+  [DIR]: [entry('design.md', 1), entry('scratch.md', 3), entry('CLAUDE.md', 2), entry('.gitignore', 9)],
+}
+const EXTRA = { [`${DIR}/scratch.md`]: '# Scratch\nnotes', [`${DIR}/design.md`]: 'design' }
+
+test('files list newest first and flags unregistered', async ($, on) => {
+  const { m } = setup(on, EXTRA, {}, TREE)
+  await $.session.start(START)
+  await attach($, DIR)
+  const list = m.state.files as { path: string; isRegistered: boolean }[]
+  expect(list.map(f => f.path)).toEqual(['scratch.md', 'CLAUDE.md', 'design.md'])
+  expect(list.map(f => f.isRegistered)).toEqual([false, true, true])
+})
+
+test('pane shows header, progress, current task and the selected file', async ($, on) => {
+  setup(on, EXTRA, {}, TREE)
+  await $.session.start(START)
+  await attach($, DIR)
+  await $.tool.call({ tool: 'mcp__workspace__set_task', tool_use_id: 'u3', task: 'Review proposal' })
+  const r = await $.command.run({ command: 'project', origin: ORIGIN, presentation: PRESENTATION, args: '' })
+  expect(r.text).toBe('Project pane opened.')
+  const ui = await $.ui.mount(PANE)
+  expect(await ui.find({ type: 'Text', text: /demo · feature · active/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /2\/3/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Current task: Review/ })).toBeDefined()
+  expect((await ui.find({ type: 'Markdown' }))?.text).toBe('# Scratch\nnotes')
+  await ui.unmount()
+})
+
+test('insert puts the @path in the prompt', async ($, on) => {
+  const { seen } = setup(on, EXTRA, {}, TREE)
+  await $.session.start(START)
+  await attach($, DIR)
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'insert' })
+  expect(seen.filled).toEqual(['@projects/demo/scratch.md '])
+  await ui.unmount()
+})
+
+test('project command without attachment explains', async ($, on) => {
+  const { seen } = setup(on)
+  await $.session.start(START)
+  const r = await $.command.run({ command: 'project', origin: ORIGIN, presentation: PRESENTATION, args: '' })
+  expect(r.text).toMatch(/No workspace project is attached/)
+  expect(seen.opened).toEqual([])
+})
