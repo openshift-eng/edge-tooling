@@ -26,6 +26,14 @@ export function getTask($: Api) {
   return read($, task)
 }
 
+export function getSavedAt($: Api) {
+  return read($, savedAt)
+}
+
+export async function setTask($: Api, value: string) {
+  await update($, task, () => value)
+}
+
 export async function setAttached($: Api, a: Attached, currentTask: string) {
   await update($, attached, () => a)
   await update($, task, () => currentTask)

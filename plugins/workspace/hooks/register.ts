@@ -2,6 +2,7 @@ import type { Register } from 'claude-code'
 
 import { attach, contextBlock, detach, markerKey, restoreFromMarker } from './attach'
 import { parseProjectDoc } from './project'
+import { setTask } from './ui'
 import { getAttached, getTask } from './state'
 
 const TOOLS = {
@@ -15,6 +16,16 @@ const TOOLS = {
       required: ['dir'],
     },
   },
+  set_task: {
+    name: 'set_task',
+    description:
+      'Record what is being worked on right now in the attached workspace project. Call whenever the focus of the work shifts; one short phrase.',
+    inputSchema: {
+      type: 'object',
+      properties: { task: { type: 'string' } },
+      required: ['task'],
+    },
+  },
   detach: { name: 'detach', description: 'Detach the current workspace project from this session.' },
 } as const
 
@@ -25,6 +36,7 @@ export const register: Register = on => {
     try {
       await $.tool.register(TOOLS.attach)
       await $.tool.register(TOOLS.detach)
+      await $.tool.register(TOOLS.set_task)
       // A fresh process never attaches.
       await $.store.delete(markerKey(await $.session.root()))
     } catch {
@@ -44,6 +56,11 @@ export const register: Register = on => {
     await detach($)
     return { result: { ok: true }, text: 'Detached.' }
   }).catch(() => ({ deny: 'workspace: detach failed' }))
+
+  on('tool.call', { tool: `${PREFIX}set_task` }, async ($, e) => {
+    const r = await setTask($, String(e.task ?? ''))
+    return r.ok ? { result: { ok: true }, text: 'Task recorded.' } : { deny: `workspace: ${r.reason}` }
+  }).catch(() => ({ deny: 'workspace: set_task failed' }))
 
   on('tool.check', { tool: /^mcp__workspace__/ }, async ($, e, next) => {
     const r = await next(e)

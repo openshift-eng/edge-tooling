@@ -2,6 +2,7 @@ import type { ProjectDoc } from './project'
 import { parseProjectDoc } from './project'
 import { clearAttached, getAttached, getTask, setAttached } from './state'
 import type { Api, Attached } from './state'
+import { refreshStatus, startStatusTimer } from './ui'
 
 export const MARKER = 'attached'
 export const markerKey = (root: string) => `${MARKER}:${root}`
@@ -10,9 +11,6 @@ type AttachResult = { ok: true; name: string } | { ok: false; reason: string }
 
 // Task 6 registers the idle-timer cancel here.
 export const onDetach: Array<() => void> = []
-
-// Task 3 replaces this with the real status line.
-async function refreshStatus(_$: Api): Promise<void> {}
 
 const basename = (p: string) => p.replace(/\/+$/, '').split('/').pop() ?? ''
 const dirname = (p: string) => p.replace(/\/+$/, '').split('/').slice(0, -1).join('/')
@@ -29,6 +27,7 @@ export async function attach($: Api, dir: string): Promise<AttachResult> {
   const name = basename(clean)
   await setAttached($, { name, dir: clean }, doc.frontmatter['current-task'] ?? '')
   await refreshStatus($)
+  startStatusTimer($)
   return { ok: true, name }
 }
 
