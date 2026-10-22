@@ -111,12 +111,20 @@ plugin's *session-time* behavior onto a mod.
 
 ### Context injection
 
-While attached, a `prompt.compose` hook appends one session-scoped section:
-project name, path, type/status, branch or worktree when present, current
-task, and the Reference Files table as one line per file. Terse by design;
-detail stays in the files and the pane. Rebuilt when attachment, current
-task, or the file set changes, not on every turn, so the cached prompt
-prefix stays stable between those events. No section when detached.
+While attached, a `prompt.context` hook adds one block to the context the
+conversation's first message carries: project name, path, type/status,
+branch or worktree when present, current task, and the Reference Files
+table as one line per file. Terse by design; detail stays in the files and
+the pane. No block when detached.
+
+The engine sends this block once per conversation and re-reads it after a
+compaction or `/clear`, exactly the moments the model loses the project. It
+never touches the system prompt, so it costs no cache invalidation. (A
+`prompt.compose` section was considered: it renders on every request, and
+any change to its text, such as a new current task, invalidates the cached
+message history.) Mid-conversation changes need no re-send: the model set
+the current task itself, and attaching runs inside a skill that already
+loaded the project.
 
 This closes the gap where the mod restores attachment after a `/clear` but
 the model's context holds nothing about the project. It also makes the
@@ -176,16 +184,20 @@ Replaces the `auto-update` cron loop and the fork-dispatch machinery inside
 **Triggers** (only while a project is attached, and only if at least one
 main-thread turn completed since the last save):
 
-1. `session.compact`: before compaction proceeds (await the save, then
-   `next(e)`).
+1. `session.compact`: before compaction proceeds, await detection (step 1
+   of the pipeline, which needs the full transcript), then `next(e)`. The
+   apply step runs in the background: it works from the detected items, not
+   the transcript, and a hook's own waits count against its 10 s budget.
 2. **`/next:go`:** the workspace mod hooks `command.run` for `next:go` and
    runs a full save *before* calling `next(e)`, so the handoff happens with
    notes current. This needs no change to `next` and is inert when `next`
    is not installed. (After the clear, `$.model.fork` returns
    `nothing-to-fork`, so the save must happen before.)
-3. `session.end` (exit, manual `/clear`): **best-effort only**, within the
-   chain's short wall-clock budget (`next.budget`, `next.signal`). A reduced
-   or skipped save is acceptable; it must never block exit. The user
+3. `session.end` (exit, manual `/clear`): **best-effort only**. The chain
+   shares a 1.5 s wall-clock budget, so the mod starts the save without
+   awaiting it and returns at once; if the fork reports `nothing-to-fork`
+   or the process exits first, nothing is saved, silently. It must never
+   block exit. The user
    explicitly accepted that a manual `/clear` does not get a thorough save.
 4. Idle: no new turn for the configured threshold (default 50 minutes),
    timed by the mod with `$.clock` from each main-thread `turn.complete`.
@@ -274,7 +286,7 @@ turn, a tool call, compaction, a `/clear`, or exit.
 
 - `tool.check` auto-allow: on error, fall through to normal permission
   handling (`next(e)`); never deny.
-- `prompt.compose`: on error, send the prompt without the project section.
+- `prompt.context`: on error, return the engine's blocks unchanged.
 - Attachment restore after `/clear`: on error, stay detached and toast once.
 - Auto-save: on error, toast the failure and continue the chain; no retry
   loop.
@@ -300,8 +312,8 @@ turn, a tool call, compaction, a `/clear`, or exit.
   before `next:go` proceeds, the edit auto-allow covering only `*.md` under
   the project folder, idle timer firing only after a
   new turn, "nothing" producing no toast or write, toast on a save,
-  current-task tool updating state and frontmatter, the `prompt.compose`
-  section present only while attached, `autoSave: false` suppressing every
+  current-task tool updating state and frontmatter, the `prompt.context`
+  block present only while attached, `autoSave: false` suppressing every
   trigger, and each hook falling through when its own code throws.
 - Existing `plugins/workspace/tests/` Python suites pass.
 - Manual check: resume a project, confirm the status line; open the pane,
