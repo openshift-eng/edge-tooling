@@ -17,7 +17,7 @@ allowed-tools: Bash, Read, Write, Glob, Grep, mcp__jira__jira_get_issue, mcp__ji
 
 ## Description
 
-Identifies and closes stale AI-generated JIRA bugs that are no longer relevant. The CI Doctor workflow creates bugs for CI failures, but some become stale when the underlying failures resolve themselves. This skill cleans up those orphaned bugs.
+Identifies and closes stale AI-generated JIRA bugs that are no longer relevant. The `run-doctor.py` workflow searches for and drafts bug suggestions for CI failures, but some previously filed bugs become stale when the underlying failures resolve themselves. This skill cleans up those orphaned bugs.
 
 A bug is closed when **all** of the following are true:
 
@@ -28,7 +28,7 @@ A bug is closed when **all** of the following are true:
 
 Operates in **dry-run mode by default** — shows which bugs would be closed without taking action. Use `--close` to actually close them.
 
-**Intended run order**: doctor → create-bugs → close-stale-bugs → refresh
+**Intended run order**: run-doctor.py (includes bug search) → close-stale-bugs
 
 ## Arguments
 
@@ -38,7 +38,7 @@ Operates in **dry-run mode by default** — shows which bugs would be closed wit
 ## Prerequisites
 
 - An existing workdir from a prior `run-doctor.py` run (today's date)
-- `bugs/bug-matches-summary.json` must exist in the workdir (produced by the doctor finalize step)
+- `bugs/bug-matches-summary.json` must exist in the workdir (produced by the `run-doctor.py` finalize step)
 - MCP Jira server must be configured and accessible (for `--close` mode)
 
 ## Work Directory
@@ -66,7 +66,7 @@ Compute once at the start by running `date +%y%m%d` and substituting into the pa
 
    ```text
    Warning: JIRA bug data is unavailable (jira_query_available: false)
-   The doctor run could not query JIRA for open bugs. Skipping stale bug cleanup.
+   The run-doctor.py run could not query JIRA for open bugs. Skipping stale bug cleanup.
    ```
 
 5. Extract the `linked` and `unlinked` arrays. Each entry has: `key`, `summary`, `status`, `assignee`, `updated`.
@@ -184,15 +184,9 @@ Shows which stale bugs would be closed without taking any action.
 
 Actually closes all matching bugs in JIRA.
 
-## Related Skills
-
-- **run-doctor.py**: Deterministic pipeline script (produces the bugs summary file consumed by this skill)
-- **microshift-ci:create-bugs**: Bug correlation and creation (should run before this skill)
-- **run-doctor.py --stages finalize**: Regenerate the HTML report (should run after this skill to reflect closures)
-
 ## Notes
 
-- This skill does NOT re-analyze jobs or re-query JIRA for bug lists — it reads the pre-computed `bugs/bug-matches-summary.json` from the doctor finalize step
+- This skill does NOT re-analyze jobs or re-query JIRA for bug lists — it reads the pre-computed `bugs/bug-matches-summary.json` from the `run-doctor.py` finalize step
 - The `unlinked[]` array in the summary file contains bugs that are open, AI-generated, and not matched to any current CI failure signature
 - Bugs with an assignee are never closed — someone has picked up the work
 - The 10-day staleness threshold ensures recently-created or recently-commented bugs are not prematurely closed
