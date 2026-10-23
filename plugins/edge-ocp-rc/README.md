@@ -46,8 +46,8 @@ export MY_APPCI_TOKEN="sha256~..."
 # List available TNF jobs
 scripts/launch.sh tnf --list
 
-# Refresh job lists from Sippy
-scripts/launch.sh tnf --refresh
+# Refresh job lists from Sippy (specify the release on a fresh checkout)
+scripts/launch.sh tnf 5.0.0-rc.5 --refresh
 
 # Launch regular TNF jobs against an RC
 scripts/launch.sh tnf 4.22.0-rc.0 --job all
@@ -59,6 +59,7 @@ scripts/launch.sh tna 4.22.0-rc.0 --initial 4.21.0 --job all
 scripts/launch.sh tnf 4.22.0-rc.0 --job 3
 scripts/launch.sh tnf 4.22.0-rc.0 --job 3,7,12
 scripts/launch.sh tnf 4.22.0-rc.0 --job recovery
+scripts/launch.sh tnf 5.0.0-rc.5 --job lvms
 
 # Preview without launching
 scripts/launch.sh tnf 4.22.0-rc.0 --job all --dry-run
@@ -84,6 +85,7 @@ Version tags are expanded automatically: `4.22.0-rc.0` becomes `quay.io/openshif
 edge-ocp-rc/
 ├── jobs/
 │   ├── tnf.txt              # Regular TNF jobs
+│   ├── tnf-lvms.txt         # TNF LVMS job, updated by Sippy refresh
 │   ├── tnf-z-stream.txt     # TNF z-stream upgrade jobs
 │   ├── tnf-y-stream.txt     # TNF y-stream upgrade jobs
 │   ├── tna.txt              # Regular TNA jobs
@@ -136,20 +138,21 @@ Before launching, the script verifies:
 
 ### Job files and Sippy refresh
 
-Each topology has up to three job files — one per job type:
+Each topology has up to four job files — one per job type:
 
 | File | Type | Description |
 |------|------|-------------|
 | `<topology>.txt` | Regular | Standard CI jobs — no upgrade path |
+| `tnf-lvms.txt` | LVMS | TNF LVMS MNO periodic; seeded for 5.0 and updated by Sippy refresh |
 | `<topology>-z-stream.txt` | z-stream | Within-version upgrades (e.g., 4.22.0-ec.4 → 4.22.0-rc.0) |
 | `<topology>-y-stream.txt` | y-stream | Cross-version upgrades (e.g., 4.21.0 → 4.22.0-rc.0) |
 
 Each file is a plain list of Prow job names, one per line. No prefixes.
 
-Use `--refresh` to update all three from Sippy:
+Use `--refresh` to update regular, upgrade, and TNF LVMS job files from Sippy:
 
 ```bash
-scripts/launch.sh tnf --refresh        # Fetches nightly jobs matching "two-node-fencing"
+scripts/launch.sh tnf 5.0.0-rc.5 --refresh # Fresh checkout: choose the release explicitly
 scripts/launch.sh tna --refresh        # Fetches nightly jobs matching "two-node-arbiter"
 ```
 
@@ -159,11 +162,35 @@ Jobs are sorted into files automatically:
 - Names ending with `-upgrade` go to the z-stream file
 - Everything else goes to the regular file
 
+TNF refresh queries Sippy separately for the `openshift-lvm-operator` LVMS job
+matching the requested minor release. It accepts registered jobs with no run
+history. The committed 5.0 entry stays available until Sippy returns a matching
+job. If no job is found for a newer release, refresh retains the existing entry,
+and `--job lvms` rejects a payload from the wrong minor release. Once a 5.1
+lane exists in `openshift/release` and appears in Sippy, run
+`scripts/launch.sh tnf 5.1.0-rc.0 --refresh` to select it.
+
+The committed TNF LVMS entry is a seed for discovery, not a default release.
+On a fresh checkout, `tnf --refresh` therefore needs an explicit version. Once
+regular or upgrade job files exist, refresh can infer their release. During
+`--job all` or a broad pattern such as `--job baremetalds`, a stale LVMS entry
+is reported as skipped; if no jobs remain to
+launch, the command exits with an error.
+
+Use `--job lvms` to launch only the lane matching the payload's minor release.
+The current 5.0 lane installs LVMS from the 5.0 Konflux catalog through OLM.
+A future release lane needs its own matching catalog in `openshift/release`.
+The payload argument selects OpenShift; the operator comes from the catalog
+configured by that lane.
+Prow artifacts record the installed CSV and catalog/operator image IDs. To test
+a specific catalog image or digest, use Gangway's
+`MULTISTAGE_PARAM_OVERRIDE_LVM_INDEX_IMAGE` environment override.
+
 ### Upgrade jobs and --initial
 
-Without `--initial`, only regular jobs are launched. Upgrade jobs are skipped with a summary message.
+Without `--initial`, regular and applicable LVMS jobs are launched. Upgrade jobs are skipped with a summary message.
 
-With `--initial`, all three files are processed:
+With `--initial`, all available job files are processed:
 
 ```bash
 # Regular jobs only
@@ -186,7 +213,7 @@ Usage: scripts/status.sh [topology] [--run <name>] [--json] [--failed] [--logs] 
 | `[topology]` | `tnf`, `tna`, or `sno` (omit for all topologies) |
 | `--json` | Structured JSON output (for agentic consumption) |
 | `--failed` | Show only failed/aborted jobs |
-| `--logs` | Fetch failure reasons from Prow artifacts (`junit_operator.xml`) |
+| `--logs` | Fetch failure reasons from Prow artifacts; for TNF LVMS, use the suite JUnit with a Prow JUnit fallback |
 | `--classify` | Classify failures using Sippy nightly pass rates (implies `--logs`) |
 | `--report` | Jira-ready markdown output (implies `--logs`) |
 | `--watch [N]` | Poll every N seconds (default 120) until all jobs complete |

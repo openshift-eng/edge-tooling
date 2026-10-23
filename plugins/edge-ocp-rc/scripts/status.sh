@@ -164,6 +164,7 @@ job_num_lookup() {
     local topo="$1" target="$2"
     local n=0
     for f in "$SCRIPT_DIR/jobs/${topo}.txt" \
+             "$SCRIPT_DIR/jobs/${topo}-lvms.txt" \
              "$SCRIPT_DIR/jobs/${topo}-z-stream.txt" \
              "$SCRIPT_DIR/jobs/${topo}-y-stream.txt"; do
         [[ ! -f "$f" ]] && continue
@@ -181,26 +182,17 @@ job_num_lookup() {
 
 # TSV columns: num, status, job_name, url, failure_reason, classification, pass_pct
 
-fetch_failure_reason() {
-    local url="$1"
-    local gcs_base="${url/prow.ci.openshift.org\/view\/gs\//${GCSWEB_BASE}/}"
-    local junit_url="${gcs_base}/artifacts/junit_operator.xml"
-
-    local xml
-    xml=$(curl -sL --max-time 15 "$junit_url" 2>/dev/null) || true
-
-    if [[ -z "$xml" ]]; then
-        echo "unable to fetch logs"
-        return
-    fi
-
-    local reason
-    reason=$(echo "$xml" | python3 -c "
+# Read JUnit from stdin and emit the first failure outside diagnostic steps.
+parse_junit_failure() {
+    python3 -c "
 import sys, xml.etree.ElementTree as ET
 try:
     tree = ET.parse(sys.stdin)
-    for tc in tree.iter('testcase'):
+    cases = [tc for tc in tree.iter('testcase') if tc.get('name')]
+    for tc in cases:
         fail = tc.find('failure')
+        if fail is None:
+            fail = tc.find('error')
         if fail is None:
             continue
         name = tc.get('name', 'unknown')
@@ -220,9 +212,47 @@ try:
         break
 except Exception:
     print('unable to parse junit')
-" 2>/dev/null) || true
+" 2>/dev/null || true
+}
 
-    echo "${reason:-unable to fetch logs}"
+fetch_failure_reason() {
+    local url="$1" job_name="$2"
+    local gcs_base="${url/prow.ci.openshift.org\/view\/gs\//${GCSWEB_BASE}/}"
+    local junit_url="${gcs_base}/artifacts/junit_operator.xml"
+    local lvms_artifacts="${gcs_base}/artifacts/e2e-baremetalds-tnf-lvms-mno-qe-integration-tests"
+    local is_lvms=false
+    local xml="" reason=""
+
+    if [[ "$job_name" == *"-tnf-lvms-mno-qe-integration-tests" ]]; then
+        is_lvms=true
+        xml=$(curl -fsSL --max-time 15 \
+            "${lvms_artifacts}/lvms-tnf-mno-integration-test/artifacts/junit_results.xml" 2>/dev/null) || true
+        if [[ -n "$xml" ]]; then
+            reason=$(printf '%s\n' "$xml" | parse_junit_failure)
+        fi
+    fi
+
+    # A passing or malformed suite can accompany a setup or post-step failure.
+    if [[ -z "$reason" || "$reason" == "unable to parse junit" ]]; then
+        local operator_xml operator_reason
+        operator_xml=$(curl -fsSL --max-time 15 "$junit_url" 2>/dev/null) || true
+        if [[ -n "$operator_xml" ]]; then
+            operator_reason=$(printf '%s\n' "$operator_xml" | parse_junit_failure)
+            if [[ -n "$operator_reason" && "$operator_reason" != "unable to parse junit" ]]; then
+                reason="$operator_reason"
+            elif [[ -z "$reason" ]]; then
+                reason="$operator_reason"
+            fi
+        fi
+    fi
+
+    if [[ -n "$reason" ]]; then
+        echo "$reason"
+    elif [[ "$is_lvms" == true ]]; then
+        echo "unable to determine failure from JUnit; inspect Prow steps"
+    else
+        echo "unable to fetch logs"
+    fi
 }
 
 classify_job() {
@@ -299,13 +329,17 @@ collect_topology() {
         fi
 
         if $FETCH_LOGS && [[ "$status" == "FAIL" || "$status" == "ABORT" ]]; then
-            reason=$(fetch_failure_reason "$url")
+            reason=$(fetch_failure_reason "$url" "$job_name")
         fi
 
         local classification="" pass_pct=""
         if $CLASSIFY && [[ "$status" == "FAIL" || "$status" == "ABORT" ]]; then
             local release
-            release=$(echo "$job_name" | awk -F'nightly-' '/nightly-/{split($2,a,"[^0-9.]"); print a[1]}')
+            if [[ "$job_name" =~ -release-([0-9]+\.[0-9]+)-nightly- ]]; then
+                release="${BASH_REMATCH[1]}"
+            else
+                release=$(echo "$job_name" | awk -F'nightly-' '/nightly-/{split($2,a,"[^0-9.]"); print a[1]}')
+            fi
             if [[ -n "$release" ]]; then
                 local classify_result
                 classify_result=$(classify_job "$job_name" "$release")
