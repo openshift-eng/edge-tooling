@@ -1,0 +1,26 @@
+# Tooling config for the edge-contribution plugin's Python code (bin/).
+# The plugin ships no installable package; this file only configures the
+# quality gate (pytest + black + ruff + mypy). Run the tools from this dir.
+
+[tool.pytest.ini_options]
+testpaths = ["bin/tests"]
+python_files = ["test_*.py"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, isort, pep8-naming, flake8-bugbear, comprehensions, pyupgrade.
+select = ["E", "F", "I", "N", "B", "C4", "UP"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_unused_ignores = true
+disallow_untyped_defs = true
+warn_return_any = true
+no_implicit_optional = true
