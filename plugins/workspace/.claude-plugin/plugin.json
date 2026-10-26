@@ -2,11 +2,26 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "workspace",
   "displayName": "Multi-Repo Workspace Manager",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Bootstrap and manage multi-repo dev environments for AI-assisted development: clone repos from a domain, layer per-repo Claude context, and track work in structured project workspaces.",
   "author": {
     "name": "fonta-rh"
   },
   "homepage": "https://github.com/openshift-eng/edge-tooling",
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "autoSave": {
+      "type": "boolean",
+      "title": "Auto-save project notes",
+      "description": "Save findings and progress to the attached project automatically before compaction, before /next:go, or when idle.",
+      "default": true
+    },
+    "idleMinutes": {
+      "type": "number",
+      "title": "Idle save after (minutes)",
+      "description": "Minutes without a new turn before an idle save. Chosen to fit the 1-hour prompt cache.",
+      "default": 50
+    }
+  }
 }

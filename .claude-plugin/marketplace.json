@@ -91,6 +91,12 @@
       "version": "0.1.0"
     },
     {
+      "name": "next",
+      "source": "./plugins/next",
+      "description": "Write a curated handoff note at a breaking point, then automatically clear the context and resume in a fresh session from the note, in any repo, with no workspace setup.",
+      "version": "0.1.0"
+    },
+    {
       "name": "pr-review",
       "source": "./plugins/pr-review",
       "description": "PR lifecycle toolkit — vet findings, triage CodeRabbit reviews, filter noise, and autonomous yolo-agent for CI monitoring and auto-fixes",
@@ -118,7 +124,7 @@
       "name": "workspace",
       "source": "./plugins/workspace",
       "description": "Bootstrap and manage multi-repo dev environments for AI-assisted development: clone repos from a domain, layer per-repo Claude context, and track work in structured project workspaces.",
-      "version": "0.3.0"
+      "version": "0.4.0"
     }
   ]
 }
