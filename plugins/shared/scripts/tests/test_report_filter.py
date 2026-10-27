@@ -35,9 +35,31 @@ class ReportFilterTests(unittest.TestCase):
         self.assertNotIn('literal matching', html)
         self.assertIn('aria-describedby="report-filter-error" aria-invalid="false"', html)
         self.assertIn('id="report-filter-error" class="filter-error" role="alert"', html)
-        payload = html.split("window.REPORT_DATA = ", 1)[1].split(";</script>", 1)[0]
+        payload = html.split('<script id="report-data" type="application/json">', 1)[1].split('</script>', 1)[0]
         data = json.loads(payload)
         self.assertEqual(data["releases_data"]["4.20"]["issues"][0]["causal_chain"], chain)
+
+    def test_generated_payload_corruption_and_escaping(self):
+        text = 'Synthetic </ScRiPt><script>throw "injected"</script><!-- < & > " \\ \n \u2028 \u2029'
+        html = REPORT.generate_html(
+            "Probe", {}, [], None, None, datetime(2026, 10, 19, tzinfo=timezone.utc),
+            diagnostics_text=text, status_data={"synthetic_rate": 0.999999999999999},
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            renderer = Path(temporary) / "renderer.js"
+            renderer.write_text(REPORT.JS)
+            report = Path(temporary) / "report.html"
+            report.write_text(html)
+            for script, args in [
+                ("test_report_payload.js", [str(report)]),
+                ("test_report_filter.js", [str(renderer), "", "--regex-tests", str(report), "--payload-tests"]),
+            ]:
+                result = subprocess.run(
+                    ["node", str(Path(__file__).with_name(script)), *args],
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                print(result.stdout.strip())
 
     def test_embedded_renderer_filters_and_counters(self):
         with tempfile.TemporaryDirectory() as temporary:

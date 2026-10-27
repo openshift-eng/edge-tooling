@@ -215,8 +215,16 @@ CSS = """\
 
 JS = """\
 (function() {
-var D = window.REPORT_DATA;
-if (!D) return;
+var D;
+try {
+    D = JSON.parse(document.getElementById('report-data').textContent);
+} catch (error) {
+    var loading = document.getElementById('loading');
+    loading.setAttribute('role', 'alert');
+    loading.textContent = 'Unable to load report: embedded report data is invalid JSON and may be corrupted. Regenerate the report or contact the report provider.';
+    return;
+}
+window.REPORT_DATA = D;
 var JIRA_BASE = 'https://issues.redhat.com';
 var _gc = 0;
 
@@ -2087,7 +2095,7 @@ def generate_html(component_title, releases_data, all_bug_candidates, pr_data, p
         "has_chartjs": bool(_CHARTJS_SRC),
     }
     report_json_str = json.dumps(report_data, default=str, separators=(",", ":"))
-    safe_report_json = report_json_str.replace("</", "<\\/").replace("<!--", "<\\!--")
+    safe_report_json = report_json_str.replace("<", "\\u003c")
 
     chartjs_tags = f'<script>{_CHARTJS_SRC}</script><script>{_PCP_CHARTS_SRC}</script>' if _CHARTJS_SRC else ''
 
@@ -2100,7 +2108,7 @@ def generate_html(component_title, releases_data, all_bug_candidates, pr_data, p
     <style>
 {CSS}
     </style>
-    <script>window.REPORT_DATA = {safe_report_json};</script>
+    <script id="report-data" type="application/json">{safe_report_json}</script>
 </head>
 <body>
 <div id="loading" style="display:flex;align-items:center;justify-content:center;height:80vh;font-family:sans-serif;color:#6c757d;font-size:1.2em;">Loading report&hellip;</div>

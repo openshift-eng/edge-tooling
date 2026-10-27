@@ -189,6 +189,9 @@ function skeleton(tag, id, cls, parent = body) {
 const container = skeleton('div', 'container', 'container');
 ['report-title', 'report-timestamp', 'diagnostics-slot', 'overview-slot', 'loading', 'filter-count', 'report-filter', 'report-filter-error', 'export-json', 'export-csv'].forEach(id => skeleton('div', id, '', container));
 const reportHTML = fs.readFileSync(process.argv[5], 'utf8');
+const payloadTests = process.argv[6] === '--payload-tests';
+const payload = skeleton('script', 'report-data');
+payload.textContent = payloadTests ? reportHTML.match(/<script id="report-data" type="application\/json">([\s\S]*?)<\/script>/)[1] : JSON.stringify(data);
 assert(!reportHTML.includes('id="filter-regex"'));
 assert.equal(document.getElementById('filter-regex'), null);
 ['periodics', 'pull-requests', 'bugs', 'images'].forEach((tab, index) => {
@@ -200,7 +203,7 @@ const downloads = [];
 const handlers = {};
 const location = {hash: '', href: 'https://example.invalid/report'};
 const context = vm.createContext({
-    document, window: {REPORT_DATA: data, addEventListener: (event, callback) => {handlers[event] = callback;}},
+    document, window: {addEventListener: (event, callback) => {handlers[event] = callback;}},
     location, navigator: {}, setTimeout: (callback, delay) => delay === 1000 ? setTimeout(callback, delay) : (callback(), 1), clearTimeout, requestAnimationFrame: callback => callback(),
     Blob: class {constructor(parts) {this.content = parts.join('');}}, URL: {createObjectURL(blob) {downloads.push(blob); return 'blob:test';}, revokeObjectURL() {}},
     Worker: class {
@@ -220,6 +223,16 @@ const rendererEnd = renderer.lastIndexOf('})();');
 const testExports = 'window.reportTest = {data: D, renderOverview, renderPeriodics, renderPRs, applyReportFilter, get appliedFilter() { return appliedFilter; }, get pendingRegex() { return pendingRegex; }};\n';
 vm.runInContext(renderer.slice(0, rendererEnd) + testExports + renderer.slice(rendererEnd), context);
 const reportTest = context.window.reportTest;
+if (payloadTests) {
+    assert.equal(context.window.REPORT_DATA.status_data.synthetic_rate, 0.999999999999999);
+    assert.equal(document.getElementById('report-title').textContent, 'Probe CI Doctor Report');
+    assert.equal(document.getElementById('loading').style.display, 'none');
+    assert.equal(container.style.display, '');
+    document.getElementById('export-json').click();
+    assert.deepEqual(JSON.parse(downloads.at(-1).content), JSON.parse(payload.textContent));
+    console.log('PASS generated valid payload: full rendering and lossless JSON export');
+    return;
+}
 function assertFailureHeaders(parent) {
     parent.querySelectorAll('.issues-table').forEach(table => {
         assert(!table.classList.contains('data-table'));
