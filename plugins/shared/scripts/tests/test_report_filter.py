@@ -85,6 +85,35 @@ class ReportFilterTests(unittest.TestCase):
         print(result.stdout.strip())
         print(finished.stdout.strip())
 
+    def test_empty_report_payload_shapes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            renderer = Path(temporary) / "renderer.js"
+            renderer.write_text(REPORT.JS)
+            html = REPORT.generate_html(
+                "Probe", {}, [], None, None, datetime(2026, 10, 19, tzinfo=timezone.utc),
+            )
+            prefix, rest = html.split('<script id="report-data" type="application/json">', 1)
+            payload, suffix = rest.split('</script>', 1)
+            original = json.loads(payload)
+            empty = dict(original)
+            for field in ["releases_data", "status_data", "pr_data", "bugs_tab_data",
+                          "images_tab_data", "index_data", "jira_cfg"]:
+                empty[field] = {}
+            empty.update(pr_status=[], diagnostics_text="")
+            minimal = {"component_title": "Probe", "timestamp": original["timestamp"]}
+            for data in [original, empty, minimal, dict(minimal, releases_data=None)]:
+                report = Path(temporary) / "report.html"
+                report.write_text(prefix + '<script id="report-data" type="application/json">'
+                                  + json.dumps(data) + '</script>' + suffix)
+                result = subprocess.run(
+                    ["node", str(Path(__file__).with_name("test_report_filter.js")),
+                     str(renderer), "", "--regex-tests", str(report), "--empty-payload-tests"],
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("full rendering and lossless JSON export", result.stdout)
+            print("PASS empty reports: generated defaults, empty collections, omitted and null optional data")
+
     def test_supplied_finished_timestamp_representations(self):
         values = [
             "2026-10-15T01:21:52Z", 1792027312, "1792027312", 0, "0",

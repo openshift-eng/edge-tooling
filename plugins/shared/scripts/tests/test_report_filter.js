@@ -189,7 +189,8 @@ function skeleton(tag, id, cls, parent = body) {
 const container = skeleton('div', 'container', 'container');
 ['report-title', 'report-timestamp', 'diagnostics-slot', 'overview-slot', 'loading', 'filter-count', 'report-filter', 'report-filter-error', 'export-json', 'export-csv'].forEach(id => skeleton('div', id, '', container));
 const reportHTML = fs.readFileSync(process.argv[5], 'utf8');
-const payloadTests = process.argv[6] === '--payload-tests';
+const emptyPayloadTests = process.argv[6] === '--empty-payload-tests';
+const payloadTests = process.argv[6] === '--payload-tests' || emptyPayloadTests;
 const payload = skeleton('script', 'report-data');
 payload.textContent = payloadTests ? reportHTML.match(/<script id="report-data" type="application\/json">([\s\S]*?)<\/script>/)[1] : JSON.stringify(data);
 assert(!reportHTML.includes('id="filter-regex"'));
@@ -224,7 +225,7 @@ const testExports = 'window.reportTest = {data: D, renderOverview, renderPeriodi
 vm.runInContext(renderer.slice(0, rendererEnd) + testExports + renderer.slice(rendererEnd), context);
 const reportTest = context.window.reportTest;
 if (payloadTests) {
-    assert.equal(context.window.REPORT_DATA.status_data.synthetic_rate, 0.999999999999999);
+    if (!emptyPayloadTests) assert.equal(context.window.REPORT_DATA.status_data.synthetic_rate, 0.999999999999999);
     assert.equal(document.getElementById('report-title').textContent, 'Probe CI Doctor Report');
     assert.equal(document.getElementById('loading').style.display, 'none');
     assert.equal(container.style.display, '');

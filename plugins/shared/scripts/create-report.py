@@ -218,10 +218,25 @@ JS = """\
 var D;
 try {
     D = JSON.parse(document.getElementById('report-data').textContent);
+    if (!D || typeof D !== 'object' || Array.isArray(D) ||
+        typeof D.component_title !== 'string' || typeof D.timestamp !== 'string') {
+        throw new Error('Invalid report shape');
+    }
+    ['releases_data', 'status_data', 'pr_data', 'bugs_tab_data',
+        'images_tab_data', 'index_data', 'jira_cfg'].forEach(function(field) {
+        var value = D[field];
+        if (value != null && (typeof value !== 'object' || Array.isArray(value))) {
+            throw new Error('Invalid report shape');
+        }
+    });
+    if ((D.pr_status != null && !Array.isArray(D.pr_status)) ||
+        (D.diagnostics_text != null && typeof D.diagnostics_text !== 'string')) {
+        throw new Error('Invalid report shape');
+    }
 } catch (error) {
     var loading = document.getElementById('loading');
     loading.setAttribute('role', 'alert');
-    loading.textContent = 'Unable to load report: embedded report data is invalid JSON and may be corrupted. Regenerate the report or contact the report provider.';
+    loading.textContent = 'Unable to load report: embedded report data is invalid JSON or has an invalid report structure and may be corrupted. Regenerate the report or contact the report provider.';
     return;
 }
 window.REPORT_DATA = D;
