@@ -57,7 +57,14 @@ COMPONENT_MAP = {
 
 ALL_STAGES_BY_COMPONENT = {
     "microshift": ["prepare", "graphs", "analyze", "bugs", "finalize"],
-    "lvm-operator": ["prepare", "analyze", "finalize"],
+    "lvm-operator": ["prepare", "analyze", "bugs", "finalize"],
+}
+
+# Component-specific skill invoked by the "bugs" stage to correlate CI failures
+# with JIRA bugs and write the bug-candidates/bug-matches files the report reads.
+CREATE_BUGS_SKILL = {
+    "microshift": "microshift-ci:create-bugs",
+    "lvm-operator": "lvms-ci:create-bugs",
 }
 
 STAGE_LIMITS = {
@@ -340,7 +347,7 @@ def parse_args():
 
             Available stages:
               microshift:    prepare, graphs, analyze, bugs, finalize
-              lvm-operator:  prepare, analyze, finalize
+              lvm-operator:  prepare, analyze, bugs, finalize
 
             Examples:
               python3 plugins/microshift-ci/scripts/run-doctor.py \\
@@ -917,8 +924,9 @@ class DoctorPipeline:
 
     def bugs(self):
         log.info("=== Stage: bugs ===")
-        if self.component != "microshift":
-            log.info("Bug correlation is microshift-only, skipping")
+        skill = CREATE_BUGS_SKILL.get(self.component)
+        if not skill:
+            log.info("Bug correlation not configured for %s, skipping", self.component)
             return True
 
         sources = list(self.releases)
@@ -936,7 +944,7 @@ class DoctorPipeline:
                 pass
 
         sources_str = ",".join(sources)
-        prompt = f"/microshift-ci:create-bugs {sources_str}"
+        prompt = f"/{skill} {sources_str}"
         log_path = self.logs_dir / "create-bugs.log"
         limits = STAGE_LIMITS["bugs"]
 
