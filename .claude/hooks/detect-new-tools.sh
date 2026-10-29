@@ -22,6 +22,7 @@ fi
 # Documented tools in AGENTS.md (update this list when adding new tools)
 DOCUMENTED_TOOLS=(
     "two-node-toolbox"
+    "openshift-tests"
     "ec2-deploy"
     "sno-deploy"
     "payload-monitor"
