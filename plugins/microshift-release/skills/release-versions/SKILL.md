@@ -1,7 +1,7 @@
 ---
 name: microshift-release:release-versions
 argument-hint: <version>
-description: Check if a given MicroShift version is available and where to find it
+description: Optional lookup of MicroShift version availability and artifact locations; not build validation
 user-invocable: true
 allowed-tools: Bash, WebFetch
 ---

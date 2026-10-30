@@ -1,7 +1,7 @@
 ---
 name: microshift-release:advisory-promotion
 argument-hint: <version> [-s | -p | -s -p] [--json] [--errata <advisory_id>]
-description: Validate advisory promotion for QE sign-off — Konflux bootc images (default) or Errata Tool RPM advisory (--errata)
+description: Step 3 — check bootc or RPM advisories for QE sign-off before shipment
 user-invocable: true
 allowed-tools: Bash
 ---
@@ -91,7 +91,7 @@ SCRIPTS_DIR=plugins/microshift-release/scripts
 ### Step 2a: Run Bootc Checks (default)
 
 ```bash
-bash $SCRIPTS_DIR/advisory_promotion.sh <version> <stage/prod flags> [--json]
+bash $SCRIPTS_DIR/validate_bootc_advisory.sh <version> <stage/prod flags> [--json]
 ```
 
 Forward the `-s`/`-p` flags the user provided. If neither was supplied, default to checking both — pass `-s -p`. Display stderr only if the script exits non-zero.
@@ -99,7 +99,7 @@ Forward the `-s`/`-p` flags the user provided. If neither was supplied, default 
 ### Step 2b: Run Errata Tool Checks
 
 ```bash
-bash $SCRIPTS_DIR/errata_promotion.sh <version> <advisory_id> [--verbose]
+bash $SCRIPTS_DIR/validate_rpm_errata.sh <version> <advisory_id> [--verbose]
 ```
 
 Display stderr only if the script exits non-zero.

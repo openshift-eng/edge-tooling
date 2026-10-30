@@ -1,7 +1,7 @@
 ---
 name: microshift-release:post-release
 argument-hint: <version> [--json]
-description: Verify all artifacts and docs are publicly available after shipping — bootc images, RPMs, errata, documentation, and lifecycle page
+description: Step 4 after shipment — verify public artifacts, errata, documentation, and lifecycle information
 user-invocable: true
 allowed-tools: Bash
 ---

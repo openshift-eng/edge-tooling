@@ -1,7 +1,7 @@
 ---
 name: microshift-release:validate-artifacts
 argument-hint: <version> [--verbose]
-description: Validate MicroShift built artifacts (RPMs and bootc images) produced by ART for a release
+description: Step 1 after ART builds — validate RPMs and bootc images before release testing
 user-invocable: true
 allowed-tools: Bash
 ---
@@ -19,6 +19,8 @@ allowed-tools: Bash
 Phase 1 of the MicroShift release process: verify that ART produced correct RPMs and bootc images for a given release. Checks Brew builds, NVR format, commit provenance, RHEL variants, mirror availability, shipment MR, stage catalog, and bootc image SHA consistency.
 
 Supports all release types: X/Y (GA), Z (z-stream), RC, EC, and nightly.
+This is distinct from the automated-testing preflight, which checks the S3 build
+cache and CI authentication.
 
 ## Prerequisites
 
@@ -54,7 +56,7 @@ SCRIPTS_DIR=plugins/microshift-release/scripts
 ### Step 2: Run the Script
 
 ```bash
-bash $SCRIPTS_DIR/validate.sh <version> [--verbose]
+bash $SCRIPTS_DIR/validate_artifacts.sh <version> [--verbose]
 ```
 
 Display stderr only if the script exits non-zero.

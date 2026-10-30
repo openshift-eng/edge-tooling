@@ -1,7 +1,7 @@
 ---
 name: microshift-release:automated-testing
 argument-hint: <version>
-description: Run the full Prow CI release testing workflow — create PR, trigger jobs, check status, merge PR, download and upload artifacts
+description: Step 2 after build validation — check the CI cache, run Prow release tests, and collect results
 user-invocable: true
 allowed-tools: Bash
 ---
@@ -21,7 +21,7 @@ Runs the full Prow CI release testing workflow for MicroShift (Phase 2 of the re
 The skill walks through all steps sequentially, skipping steps that are already complete. For running individual actions manually, use the bash script directly:
 
 ```bash
-bash plugins/microshift-release/scripts/prow_testing.sh <action> <version> [--execute]
+bash plugins/microshift-release/scripts/automated_ci_testing.sh <action> <version> [--execute]
 ```
 
 ## Prerequisites
@@ -47,9 +47,9 @@ SCRIPTS_DIR=plugins/microshift-release/scripts
 
 Execute each step in order. Redirect stderr to `/dev/null` for all commands — stderr only contains progress messages. On non-zero exit, re-run **without** suppressing stderr and display the error.
 
-### Step 0: Validate Build Artifact are in the Cache
+### Step 0: Check CI Build Cache and Authentication
 
-Run `bash ${SCRIPTS_DIR}/prow_testing.sh preflight <version>`. Parse the JSON output:
+Run `bash ${SCRIPTS_DIR}/automated_ci_testing.sh preflight <version>`. Parse the JSON output:
 
 - If `"status": "pass"` — display the message and continue to Step 1.
 - If `"status": "warn"` — display each check's status and reason. Ask the user if they want to proceed.
@@ -65,7 +65,7 @@ Run `bash ${SCRIPTS_DIR}/prow_testing.sh preflight <version>`. Parse the JSON ou
 
 ### Step 1: Create Release Testing Draft PR
 
-The PR is **always** created in draft state. Run `bash ${SCRIPTS_DIR}/prow_testing.sh create-pr <version>` **without** `--execute` first. Parse the JSON output:
+The PR is **always** created in draft state. Run `bash ${SCRIPTS_DIR}/automated_ci_testing.sh create-pr <version>` **without** `--execute` first. Parse the JSON output:
 
 - If `"status": "exists"` — display the message and continue to Step 2.
 - If `"status": "plan"` — display the plan and ask for confirmation.
@@ -74,7 +74,7 @@ The PR is **always** created in draft state. Run `bash ${SCRIPTS_DIR}/prow_testi
 
 ### Step 2: Trigger CI Jobs
 
-Run `bash ${SCRIPTS_DIR}/prow_testing.sh trigger <version>` **without** `--execute` first. Parse the JSON output:
+Run `bash ${SCRIPTS_DIR}/automated_ci_testing.sh trigger <version>` **without** `--execute` first. Parse the JSON output:
 
 - If `"status": "skip"` — no jobs to trigger, display the message and continue to Step 3.
 - If `"status": "plan"` — display the plan and ask for confirmation.
@@ -83,13 +83,13 @@ Run `bash ${SCRIPTS_DIR}/prow_testing.sh trigger <version>` **without** `--execu
 
 ### Step 3: Verify CI Jobs and Scenarios results
 
-Run `bash ${SCRIPTS_DIR}/prow_testing.sh status <version>`.
+Run `bash ${SCRIPTS_DIR}/automated_ci_testing.sh status <version>`.
 
 Display the output **verbatim** — it is a pre-formatted table. Do not reformat it.
 
 If all jobs finished, run scenario validation:
 
-Run `bash ${SCRIPTS_DIR}/prow_testing.sh scenarios <version>`. Parse the JSON output:
+Run `bash ${SCRIPTS_DIR}/automated_ci_testing.sh scenarios <version>`. Parse the JSON output:
 
 - Display the `message` field (summary of jobs, scenarios, pass/fail/skip counts).
 - For each job, display `release_under_test` and scenario counts.
@@ -105,7 +105,7 @@ If not all jobs passed, stop the workflow.
 
 ### Step 4: Download CI Jobs results
 
-Run `bash ${SCRIPTS_DIR}/prow_testing.sh download <version>` **without** `--execute` first. Parse the JSON output:
+Run `bash ${SCRIPTS_DIR}/automated_ci_testing.sh download <version>` **without** `--execute` first. Parse the JSON output:
 
 - If `"status": "plan"` — display the plan (jobs to download, destination directory) and ask for confirmation.
   - If confirmed, re-run with `--execute` and display the result.
@@ -113,7 +113,7 @@ Run `bash ${SCRIPTS_DIR}/prow_testing.sh download <version>` **without** `--exec
 
 ### Step 5: Upload CI Jobs results to S3
 
-Run `bash ${SCRIPTS_DIR}/prow_testing.sh upload <version>` **without** `--execute` first. Parse the JSON output:
+Run `bash ${SCRIPTS_DIR}/automated_ci_testing.sh upload <version>` **without** `--execute` first. Parse the JSON output:
 
 - If `"status": "plan"` — display the plan (tar.gz name, S3 destination) and ask for confirmation.
   - If confirmed, re-run with `--execute` and display the result (public URL).
@@ -121,7 +121,7 @@ Run `bash ${SCRIPTS_DIR}/prow_testing.sh upload <version>` **without** `--execut
 
 ### Step 6: Close PR and Clean Up
 
-Run `bash ${SCRIPTS_DIR}/prow_testing.sh complete <version>` **without** `--execute` first. Parse the JSON output:
+Run `bash ${SCRIPTS_DIR}/automated_ci_testing.sh complete <version>` **without** `--execute` first. Parse the JSON output:
 
 - If `"status": "plan"` — display the plan (post comment, close PR, delete branch) and ask for confirmation.
   - If confirmed, re-run with `--execute` and display the result.

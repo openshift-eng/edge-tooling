@@ -1,4 +1,5 @@
 #!/usr/bin/bash
+# Check bootc advisories for QE sign-off (release step 3).
 
 set -euo pipefail
 
