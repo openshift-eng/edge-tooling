@@ -36,8 +36,9 @@ bash plugins/microshift-release/scripts/prow_testing.sh <action> <version> [--ex
 AWS CLI credentials can come from its standard provider chain, including the
 default credentials file, a named `AWS_PROFILE`, SSO, or environment variables.
 Use `AWS_SHARED_CREDENTIALS_FILE` for an AWS-format credentials file outside the
-default location, and `AWS_CONFIG_FILE` when a named or SSO profile lives outside
-the default `~/.aws/config` (without it the CLI cannot discover that profile).
+default location. Set `AWS_CONFIG_FILE` only when the profile definition itself
+lives in an alternate config file, such as SSO or role settings; a named profile
+defined in the credentials file is discovered without it.
 Run `aws sts get-caller-identity` in the same environment to diagnose
 authentication; do not display credential values.
 

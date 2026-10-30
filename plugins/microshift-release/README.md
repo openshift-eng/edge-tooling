@@ -114,6 +114,10 @@ identity also needs access to the build-cache and results buckets.
 
 Check the same environment that runs the skill or script:
 
+The preflight script is part of the `edge-tooling` repository. If you installed
+the plugin from the marketplace, clone `edge-tooling` and run the command from
+its checkout root.
+
 ```bash
 aws sts get-caller-identity
 bash plugins/microshift-release/scripts/prow_testing.sh preflight 4.21.8
