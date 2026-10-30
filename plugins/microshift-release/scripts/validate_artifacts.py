@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 # Minimum OCP version for bootc image checks (bootc does not run for 4.18)
 _BOOTC_MIN_MINOR = (4, 19)
-# el10 builds required starting in 4.23 / 5.0
+# Default el10 threshold; 5.0 RPMs are el9-only, unlike bootc images.
 _EL10_MIN_MINOR = (4, 23)
 
 # Check IDs in display order
@@ -235,11 +235,11 @@ def check_rpm_commit_id(version_info, build_info, vpn_ok):
 
 
 def check_rpm_rhel_version(version_info, build_info):
-    """rpm_rhel_version: Check el9 and el10 builds are both present (el10 required 4.23+)."""
+    """rpm_rhel_version: Check required RPM variants (5.0 has only el9 RPMs)."""
     if not build_info.get("found"):
         return _skip("rpm_rhel_version", "No Brew build found")
 
-    require_el10 = _minor_tuple(version_info["minor"]) >= _EL10_MIN_MINOR
+    require_el10 = 10 in _rpm_rhel_versions_for(version_info["minor"])
     result = artifacts.validate_rhel_builds(build_info, require_el10=require_el10)
     if result["valid"]:
         return _pass("rpm_rhel_version", result["reason"])
@@ -248,10 +248,17 @@ def check_rpm_rhel_version(version_info, build_info):
 
 
 def _rhel_versions_for(minor):
-    """Return the RHEL versions to check based on the minor version."""
+    """Return bootc RHEL versions based on the minor version."""
     if _minor_tuple(minor) >= _EL10_MIN_MINOR:
         return [9, 10]
     return [9]
+
+
+def _rpm_rhel_versions_for(minor):
+    """RPMs for the 5.0 stream are el9-only, including EC/RC and z-stream."""
+    if _minor_tuple(minor) == (5, 0):
+        return [9]
+    return _rhel_versions_for(minor)
 
 
 def check_rpm_mirror(version_info, release_type_key):
@@ -262,7 +269,7 @@ def check_rpm_mirror(version_info, release_type_key):
     if vtype != release_type_key:
         return _skip(check_id, f"N/A ({vtype}, not {release_type_key})")
 
-    rhel_versions = _rhel_versions_for(version_info["minor"])
+    rhel_versions = _rpm_rhel_versions_for(version_info["minor"])
     result = artifacts.validate_mirror_rpms(
         version_info["version"], release_type_key, rhel_versions
     )

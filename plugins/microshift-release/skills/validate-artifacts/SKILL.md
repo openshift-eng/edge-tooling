@@ -80,7 +80,7 @@ If the script exits non-zero:
 | `rpm_packages_list` | All expected RPM packages present in Brew build |
 | `rpm_filename_format` | NVR matches expected pattern for this release type |
 | `rpm_commit_id` | Commit hash from NVR is on the correct `release-X.Y` branch |
-| `rpm_rhel_version` | Both el9 and el10 builds are present |
+| `rpm_rhel_version` | Required RPM variants are present; 5.0 requires only el9, not el10 RPMs |
 | `rpm_mirror_ec` | EC only: RPMs available at `mirror.openshift.com/ocp-dev-preview/` |
 | `rpm_mirror_rc` | RC only: RPMs available at `mirror.openshift.com/ocp/` |
 | `rpm_xy0_commit_match` | X.Y.0 only: commit matches the latest RC commit |
