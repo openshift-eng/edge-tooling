@@ -23,11 +23,11 @@ CONTAINERFILE_URL_TEMPLATE = (
 _BOOTC_REPO_TEMPLATE = {
     "prod": (
         PYXIS_BASE_URL + "/repositories/registry/registry.access.redhat.com"
-        "/repository/openshift4/microshift-bootc-rhel{rhel}/images"
+        "/repository/openshift{major}/microshift-bootc-rhel{rhel}/images"
     ),
     "stage": (
         PYXIS_STAGE_BASE_URL + "/repositories/registry/registry.access.redhat.com"
-        "/repository/openshift4/microshift-bootc-rhel{rhel}/images"
+        "/repository/openshift{major}/microshift-bootc-rhel{rhel}/images"
     ),
 }
 
@@ -113,18 +113,21 @@ def _catalog_auth(catalog):
     return None
 
 
-def _catalog_url(catalog="prod", rhel=9):
+def _catalog_url(catalog="prod", rhel=9, major=4):
     """Return the Pyxis images URL for the given catalog and RHEL version.
 
     Args:
         catalog: "prod" or "stage".
         rhel: RHEL version (9 or 10). Default 9 for backward compatibility.
+        major: OCP major version, which selects the registry namespace
+            (openshift4, openshift5, ...). Default 4 for backward
+            compatibility.
 
     Returns:
         str: Full API URL for the bootc images endpoint.
     """
     template = _BOOTC_REPO_TEMPLATE.get(catalog, _BOOTC_REPO_TEMPLATE["prod"])
-    return template.format(rhel=rhel)
+    return template.format(rhel=rhel, major=major)
 
 
 def _fetch_page(page, catalog="prod"):
@@ -559,7 +562,7 @@ def check_catalog_image(version, catalog="prod", arch="amd64", rhel=9):
     tag = re.sub(r"-(ec|rc)\.\d+$", "", version)
     assembly_pattern = re.compile(rf"\bassembly\.{re.escape(tag)}\b")
 
-    url = _catalog_url(catalog, rhel=rhel)
+    url = _catalog_url(catalog, rhel=rhel, major=version.split(".")[0])
     for page in range(5):
         params = {
             "filter": f"architecture=={arch}",

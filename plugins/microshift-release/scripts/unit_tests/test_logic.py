@@ -1146,5 +1146,54 @@ class TestBuildRevisionRange(unittest.TestCase):
             self.assertEqual(rev, "origin/release-4.21")
 
 
+class TestCatalogUrlNamespace(unittest.TestCase):
+    """The Pyxis repository namespace follows the OCP major version."""
+
+    def test_default_is_openshift4(self):
+        from lib.pyxis import _catalog_url
+        self.assertIn("/repository/openshift4/microshift-bootc-rhel9/images",
+                      _catalog_url("stage"))
+
+    def test_major_5_stage(self):
+        from lib.pyxis import _catalog_url
+        url = _catalog_url("stage", rhel=10, major=5)
+        self.assertIn("pyxis.stage.engineering.redhat.com", url)
+        self.assertIn("/repository/openshift5/microshift-bootc-rhel10/images",
+                      url)
+
+    def test_major_5_prod(self):
+        from lib.pyxis import _catalog_url
+        self.assertIn("/repository/openshift5/microshift-bootc-rhel9/images",
+                      _catalog_url("prod", rhel=9, major=5))
+
+
+class TestCheckCatalogImageNamespace(unittest.TestCase):
+    """check_catalog_image must query the namespace of the version's major."""
+
+    def _query(self, version, rhel):
+        from unittest.mock import MagicMock, patch
+        resp = MagicMock()
+        resp.json.return_value = {"data": [{"repositories": [
+            {"tags": [{"name": f"assembly.{version}"}]}]}]}
+        with patch("lib.pyxis.requests.get", return_value=resp) as get, \
+                patch("lib.pyxis._catalog_auth", return_value=None), \
+                patch("lib.pyxis._parse_image_metadata", return_value={}):
+            from lib.pyxis import check_catalog_image
+            result = check_catalog_image(version, catalog="stage", rhel=rhel)
+        return result, get.call_args.args[0]
+
+    def test_5x_queries_openshift5(self):
+        result, url = self._query("5.0.0", rhel=10)
+        self.assertTrue(result["valid"])
+        self.assertIn("/repository/openshift5/microshift-bootc-rhel10/images",
+                      url)
+
+    def test_4x_still_queries_openshift4(self):
+        result, url = self._query("4.21.8", rhel=9)
+        self.assertTrue(result["valid"])
+        self.assertIn("/repository/openshift4/microshift-bootc-rhel9/images",
+                      url)
+
+
 if __name__ == "__main__":
     unittest.main()
