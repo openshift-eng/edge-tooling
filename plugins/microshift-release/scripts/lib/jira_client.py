@@ -108,6 +108,10 @@ def enrich_ocpbugs(keys):
 
         status = fields.get("status", {}).get("name", "")
         resolution = (fields.get("resolution") or {}).get("name", "")
+        is_cve = (
+            (fields.get("issuetype") or {}).get("name") == "Vulnerability"
+            or any(_CVE_LABEL_RE.match(label) for label in labels)
+        )
 
         # An explicit label always wins. Absent one, fall back to status:
         # the release-required/release-not-required convention is not widely
@@ -116,6 +120,8 @@ def enrich_ocpbugs(keys):
             release_action, release_action_source = "release_required", "label"
         elif "release-not-required" in labels:
             release_action, release_action_source = "release_not_required", "label"
+        elif is_cve and status == "Verified" and not resolution:
+            release_action, release_action_source = "needs_review", "status"
         elif (status in _FIX_VALIDATED_STATUSES
                 and resolution not in _NON_FIX_RESOLUTIONS):
             release_action, release_action_source = "release_required", "status"
@@ -144,7 +150,7 @@ def search_cve_tickets(cve_ids, minor=None):
 
     Returns:
         dict mapping CVE ID to Jira ticket info, or None if unavailable.
-        Each value is {"key": str, "resolution": str, "status": str}
+        Each value contains key, resolution, status, and labels
         or None if no ticket found for that CVE.
     """
     if not cve_ids:
@@ -194,6 +200,7 @@ def search_cve_tickets(cve_ids, minor=None):
                 "key": match.get("key", ""),
                 "resolution": (fields.get("resolution") or {}).get("name", ""),
                 "status": fields.get("status", {}).get("name", ""),
+                "labels": fields.get("labels", []),
             }
     return result
 
@@ -203,8 +210,9 @@ def find_microshift_component_cves(minor, resolved_after=None):
 
     Searches for Vulnerability issues with SecurityTracking label whose
     labels contain any pscomponent with "microshift" in the name (matched
-    client-side). Returns bugs where the fix has landed (Verified, or
-    Closed+Done) but not yet shipped (not Done-Errata).
+    client-side). Returns unshipped fixes and trackers needing review.
+    Verified CVEs with an empty resolution need review unless an explicit
+    release label supplies the decision.
 
     Args:
         minor: Minor version string, e.g., "4.21".
@@ -283,6 +291,8 @@ def find_microshift_component_cves(minor, resolved_after=None):
             release_action, release_action_source = "release_required", "label"
         elif "release-not-required" in labels:
             release_action, release_action_source = "release_not_required", "label"
+        elif status == "Verified" and not resolution:
+            release_action, release_action_source = "needs_review", "status"
         elif ((status == "Verified" or resolution == "Done")
                 and resolution not in _NON_FIX_RESOLUTIONS):
             release_action, release_action_source = "release_required", "status"

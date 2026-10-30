@@ -165,7 +165,7 @@ class TestInterpretCves(unittest.TestCase):
         result = interpret_cves(report)
         self.assertEqual(result["impact"], "must_release")
 
-    def test_cve_verified_but_unresolved_skipped(self):
+    def test_cve_verified_but_unresolved_needs_review(self):
         report = {
             "RHSA-2026:12345": {
                 "type": "extras",
@@ -181,8 +181,14 @@ class TestInterpretCves(unittest.TestCase):
             }
         }
         result = interpret_cves(report)
-        self.assertEqual(result["impact"], "none")
-        self.assertEqual(result["skipped_not_actionable"], 1)
+        self.assertEqual(result["impact"], "needs_review")
+        self.assertEqual(result["skipped_not_actionable"], 0)
+        self.assertEqual(result["details"], [])
+        self.assertEqual(result["needs_review_cves"], [{
+            "cve": "CVE-2026-8888",
+            "jira": "OCPBUGS-12345",
+            "reason": "Verified but resolution is empty",
+        }])
 
     def test_metadata_skipped(self):
         report = {
@@ -341,7 +347,7 @@ class TestComponentCveRecommendation(unittest.TestCase):
             return query_resolved_bugs("4.22.1", branch="release-4.22")
 
     def test_component_cve_counts_as_status_inferred(self):
-        for status, resolution in (("Verified", ""), ("Closed", "Done"),
+        for status, resolution in (("Verified", "Done"), ("Closed", "Done"),
                                    ("MODIFIED", "Done")):
             for ocp_status, expected in (
                     ("available", "ASK ART TO CREATE ARTIFACTS"),
@@ -371,7 +377,7 @@ class TestComponentCveRecommendation(unittest.TestCase):
                  ("1 OCPBUGS labeled release-required, "
                   "1 OCPBUGS status-derived release-required"))):
             with self.subTest(labels=labels):
-                bugs = self._query_bugs("Verified", commit_labels=labels)
+                bugs = self._query_bugs("Verified", "Done", commit_labels=labels)
                 self.assertEqual(bugs["release_required"], required)
                 self.assertEqual(bugs["release_not_required"], not_required)
                 self.assertEqual(compute_recommendation({
@@ -498,7 +504,7 @@ class TestComputeRecommendation(unittest.TestCase):
         }
         rec, reason = compute_recommendation(evaluation)
         self.assertEqual(rec, "ASK ART TO CREATE ARTIFACTS")
-        self.assertIn("CVE-2026-1 (OCPBUGS-999)", reason)
+        self.assertEqual(reason, "1 CVE fix")
 
     def test_90_day_rule(self):
         evaluation = {
@@ -552,7 +558,7 @@ class TestComputeRecommendation(unittest.TestCase):
         self.assertEqual(rec, "NEEDS REVIEW")
         self.assertIn("advisory CVEs", reason)
 
-    def test_pending_enrichment_skip_no_commits(self):
+    def test_pending_enrichment_needs_review_no_commits(self):
         evaluation = {
             "cve_impact": {
                 "impact": "pending_enrichment",
@@ -561,8 +567,9 @@ class TestComputeRecommendation(unittest.TestCase):
             "commits": 0,
             "days_since": 10,
         }
-        rec, _ = compute_recommendation(evaluation)
-        self.assertEqual(rec, "SKIP")
+        rec, reason = compute_recommendation(evaluation)
+        self.assertEqual(rec, "NEEDS REVIEW")
+        self.assertEqual(reason, "No commits, 1 advisory CVEs pending enrichment")
 
     def test_needs_review_unknown_advisory(self):
         evaluation = {
@@ -573,14 +580,15 @@ class TestComputeRecommendation(unittest.TestCase):
         rec, _ = compute_recommendation(evaluation)
         self.assertEqual(rec, "NEEDS REVIEW")
 
-    def test_skip_unknown_no_commits(self):
+    def test_unknown_needs_review_no_commits(self):
         evaluation = {
             "cve_impact": {"impact": "unknown"},
             "commits": 0,
             "days_since": 10,
         }
-        rec, _ = compute_recommendation(evaluation)
-        self.assertEqual(rec, "SKIP")
+        rec, reason = compute_recommendation(evaluation)
+        self.assertEqual(rec, "NEEDS REVIEW")
+        self.assertEqual(reason, "No commits, advisory report unavailable")
 
     def test_ocpbugs_triggers_needs_review(self):
         evaluation = {
@@ -884,7 +892,7 @@ class TestBuildReason(unittest.TestCase):
                 "details": [{"cve": "CVE-2026-1", "jira": "OCPBUGS-500"}],
             },
         })
-        self.assertIn("CVE-2026-1 (OCPBUGS-500)", result)
+        self.assertEqual(result, "1 CVE fix")
 
     def test_pending_enrichment(self):
         result = _build_reason({
@@ -933,7 +941,18 @@ class TestBuildReason(unittest.TestCase):
 
 
 class TestCommitBugScanning(unittest.TestCase):
-    """Commit-referenced bugs: always unenriched (MCP enriches at skill level)."""
+    """Commit-referenced bugs with and without Jira enrichment."""
+
+    def setUp(self):
+        from unittest.mock import patch
+
+        self.enrich = self.enterContext(patch(
+            "lib.ocpbugs.jira_client.enrich_ocpbugs", return_value=None,
+        ))
+        self.enterContext(patch(
+            "lib.ocpbugs.jira_client.find_microshift_component_cves",
+            return_value=[],
+        ))
 
     def test_bugs_unenriched(self):
         from unittest.mock import patch
@@ -949,6 +968,9 @@ class TestCommitBugScanning(unittest.TestCase):
         self.assertEqual(result["needs_review"], 2)
         self.assertEqual(result["release_required"], 0)
         self.assertEqual(result["release_not_required"], 0)
+        self.assertTrue(result["skipped"])
+        self.assertEqual(result["error"], "Jira enrichment unavailable")
+        self.enrich.assert_called_once_with(["OCPBUGS-12345", "OCPBUGS-80721"])
         keys = {b["key"] for b in result["bugs"]}
         self.assertIn("OCPBUGS-80721", keys)
         self.assertIn("OCPBUGS-12345", keys)
@@ -956,6 +978,32 @@ class TestCommitBugScanning(unittest.TestCase):
             self.assertEqual(bug["summary"], "Pending Jira lookup")
             self.assertEqual(bug["release_action"], "needs_review")
             self.assertEqual(bug["source"], "commit")
+
+    def test_bugs_enriched(self):
+        from unittest.mock import patch
+
+        self.enrich.return_value = {"OCPBUGS-12345": {
+            "summary": "A verified fix",
+            "status": "Verified",
+            "resolution": "",
+            "labels": ["release-required"],
+            "release_action": "release_required",
+        }}
+        with patch("lib.ocpbugs.extract_bugs_from_commits",
+                   return_value={"OCPBUGS-12345"}):
+            result = query_resolved_bugs(
+                "4.21.16", branch="release-4.21",
+                since_version="4.21.11",
+            )
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["release_required"], 1)
+        self.assertEqual(result["needs_review"], 0)
+        self.assertFalse(result["skipped"])
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["bugs"][0]["summary"], "A verified fix")
+        self.assertEqual(result["bugs"][0]["status"], "Verified")
+        self.assertEqual(result["bugs"][0]["source"], "commit")
 
     def test_no_bugs_found(self):
         from unittest.mock import patch
@@ -972,14 +1020,32 @@ class TestCommitBugScanning(unittest.TestCase):
 
 
 class TestExtractCommitFromNvr(unittest.TestCase):
-    """Tests for brew.extract_commit_from_nvr NVR parsing."""
+    """Tests for Brew commit metadata and fallback NVR parsing."""
 
-    def _call_with_mock(self, rpms_result):
-        """Call extract_commit_from_nvr with a mocked find_zstream_rpms."""
+    def _call_with_mock(self, build_result):
+        """Call extract_commit_from_nvr with mocked Brew build metadata."""
         from unittest.mock import patch
-        with patch("lib.brew.find_zstream_rpms", return_value=rpms_result):
+        with patch("lib.brew.get_build_info", return_value=build_result) as get_build:
             from lib.brew import extract_commit_from_nvr
-            return extract_commit_from_nvr("4.21.11")
+            result = extract_commit_from_nvr("4.21.11")
+        get_build.assert_called_once_with("4.21.11", "Z")
+        return result
+
+    def test_commit_field_preferred_over_nvr(self):
+        build = {
+            "found": True,
+            "commit": "abcdef0123456789",
+            "nvr": "microshift-4.21.11-202604201054.p0.g7f7539e.assembly.4.21.11.el9",
+        }
+        self.assertEqual(self._call_with_mock(build), "abcdef0123456789")
+
+    def test_commit_field_without_nvr_suffix(self):
+        build = {
+            "found": True,
+            "commit": "abcdef0123456789",
+            "nvr": "microshift-4.21.11-202604201054.p0.assembly.4.21.11.el9",
+        }
+        self.assertEqual(self._call_with_mock(build), "abcdef0123456789")
 
     def test_valid_nvr_with_commit(self):
         """NVR with g<sha> suffix returns the commit hash."""

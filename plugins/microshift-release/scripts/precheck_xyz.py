@@ -239,6 +239,7 @@ def enrich_advisory_cves(advisory_report, minor=None, shipped_cve_ids=None,
                     "id": ticket["key"],
                     "resolution": ticket["resolution"],
                     "status": ticket["status"],
+                    "labels": ticket.get("labels", []),
                 }}
             else:
                 cves[cve_id] = {"reason": "no MicroShift tracker"}
@@ -258,6 +259,9 @@ def interpret_cves(advisory_report):
     - Empty cves dict -> no CVEs -> no action
     - CVE with ``pending: True`` -> not yet looked up in Jira -> pending enrichment
     - CVE with empty dict (no Jira ticket) -> does NOT affect MicroShift -> no action
+    - Already shipped/non-applicable CVEs are excluded before release labels
+    - Otherwise explicit release-required/release-not-required labels take precedence
+    - Verified CVE with empty resolution -> needs review, not an automatic release
     - CVE with resolution "Done" -> MUST release (fix landed but not yet shipped)
     - CVE with resolution "Done-Errata" -> no action (fix already shipped in a prior errata)
     - CVE with resolution "Not a Bug" -> no action (CVE does not affect MicroShift)
@@ -268,11 +272,12 @@ def interpret_cves(advisory_report):
 
     Returns:
         dict with keys:
-            impact: "none"|"must_release"|"unknown"|"pending_enrichment"
+            impact: "none"|"must_release"|"needs_review"|"unknown"|"pending_enrichment"
             details: list of CVE dicts (for must_release), explanatory strings (for unknown), or empty list
             advisory_types: list of advisory types checked
             skipped_not_actionable: count of CVEs skipped (in-progress or unresolved fix)
             pending_cve_enrichment: list of CVE IDs needing Jira lookup
+            needs_review_cves: CVE dicts whose Verified tracker has no resolution
     """
     if not advisory_report or advisory_report.get("skipped"):
         return {
@@ -281,10 +286,12 @@ def interpret_cves(advisory_report):
             "advisory_types": [],
             "skipped_not_actionable": 0,
             "pending_cve_enrichment": [],
+            "needs_review_cves": [],
         }
 
     must_release_cves = []
     pending_cves = []
+    needs_review_cves = []
     skipped_not_actionable = 0
     advisory_types_checked = []
     seen_cves = set()
@@ -310,18 +317,32 @@ def interpret_cves(advisory_report):
             if not jira_ticket:
                 continue
 
-            resolution = jira_ticket.get("resolution", "")
+            resolution = jira_ticket.get("resolution") or ""
             status = jira_ticket.get("status", "")
+            labels = jira_ticket.get("labels", [])
 
-            if resolution == "Done" or status == "Verified":
+            if resolution in ("Done-Errata", "Not a Bug", "Won't Do", "Duplicate"):
+                continue
+            if "release-required" in labels:
+                must_release_cves.append({
+                    "cve": cve_id,
+                    "jira": jira_ticket.get("id", ""),
+                    "reason": "Labeled release-required",
+                })
+            elif "release-not-required" in labels:
+                continue
+            elif status == "Verified" and not resolution:
+                needs_review_cves.append({
+                    "cve": cve_id,
+                    "jira": jira_ticket.get("id", ""),
+                    "reason": "Verified but resolution is empty",
+                })
+            elif resolution == "Done" or status == "Verified":
                 must_release_cves.append({
                     "cve": cve_id,
                     "jira": jira_ticket.get("id", ""),
                     "reason": "Fix landed, must be released",
                 })
-            elif resolution in ("Done-Errata", "Not a Bug", "Won't Do",
-                                "Duplicate"):
-                continue
             else:
                 skipped_not_actionable += 1
                 logger.debug(
@@ -333,13 +354,33 @@ def interpret_cves(advisory_report):
         "advisory_types": advisory_types_checked,
         "skipped_not_actionable": skipped_not_actionable,
         "pending_cve_enrichment": pending_cves,
+        "needs_review_cves": needs_review_cves,
     }
 
     if must_release_cves:
         return {**base, "impact": "must_release", "details": must_release_cves}
+    if needs_review_cves:
+        return {**base, "impact": "needs_review", "details": []}
     if pending_cves:
         return {**base, "impact": "pending_enrichment", "details": []}
     return {**base, "impact": "none", "details": []}
+
+
+def _empty_resolution_notes(evaluation):
+    """Describe unresolved Verified trackers once across advisory and bug sources."""
+    notes = {}
+    for cve in evaluation.get("cve_impact", {}).get("needs_review_cves", []):
+        cve_id = cve.get("cve", "CVE")
+        key = cve.get("jira")
+        subject = f"{cve_id} ({key})" if key else cve_id
+        notes[key or cve_id] = f"{subject} is Verified but its resolution is empty"
+    for bug in evaluation.get("ocpbugs", {}).get("bugs", []):
+        if (bug.get("release_action") == "needs_review"
+                and bug.get("status") == "Verified"
+                and not bug.get("resolution")):
+            key = bug.get("key", "OCPBUGS")
+            notes.setdefault(key, f"{key} is Verified but its resolution is empty")
+    return list(notes.values())
 
 
 def compute_recommendation(evaluation):
@@ -347,7 +388,9 @@ def compute_recommendation(evaluation):
 
     Decision rules:
     - ASK ART TO CREATE ARTIFACTS: critical CVE fix or 90-day rule, OCP payload available
-    - NEEDS REVIEW: ambiguous cases, or OCP payload not yet available when action would be needed
+    - BLOCKED: a release is required but the OCP payload is not available
+    - NEEDS REVIEW: unresolved Verified CVEs or ambiguous changes needing evaluation
+    - NEEDS REVIEW: unknown/pending advisory data, even without source commits
     - SKIP: no changes, no CVEs, within 90 days
     - SKIP: lifecycle inactive
 
@@ -362,21 +405,23 @@ def compute_recommendation(evaluation):
     days_since = evaluation.get("days_since")
     ocp_status = evaluation.get("ocp_status", "")
     ocp_available = ocp_status == "available"
+    review_notes = _empty_resolution_notes(evaluation)
+    review_suffix = f", {'; '.join(review_notes)}" if review_notes else ""
 
     # Shipped CVE dedup warning (appended to reason when collection failed)
     shipped_warn = ""
     if evaluation.get("shipped_cve_collection_failed"):
         shipped_warn = " (⚠ shipped CVE dedup unavailable — CVEs may be overcounted)"
 
-    # Must release: CVE with resolution Done (fix landed, not yet shipped)
+    # Known release-required CVEs take priority over trackers needing review.
     if cve_impact == "must_release":
         cve_details = evaluation.get("cve_impact", {}).get("details", [])
         count = len(cve_details)
-        label = f"{count} CVE fix{'es' if count != 1 else ''} (resolution Done)"
+        label = f"{count} CVE fix{'es' if count != 1 else ''}"
         pending = evaluation.get("cve_impact", {}).get("pending_cve_enrichment", [])
         if pending:
             label += f", {len(pending)} advisory CVEs pending enrichment"
-        label += shipped_warn
+        label += review_suffix + shipped_warn
         if not ocp_available:
             return "BLOCKED", f"{label} — waiting for OCP payload"
         return "ASK ART TO CREATE ARTIFACTS", label
@@ -387,17 +432,15 @@ def compute_recommendation(evaluation):
         due = evaluation.get("due_date", "")
         gap_label = (f"90-day rule ({days_at_release}d gap at {due})"
                      if due else f"90-day rule ({days_at_release}d)")
+        gap_reason = f"{gap_label}, {commits} commits{review_suffix}"
         if not ocp_available:
-            return ("BLOCKED",
-                    f"{gap_label}, {commits} commits"
-                    " — waiting for OCP payload")
-        return ("ASK ART TO CREATE ARTIFACTS",
-                f"{gap_label}, {commits} commits")
+            return "BLOCKED", f"{gap_reason} — waiting for OCP payload"
+        return "ASK ART TO CREATE ARTIFACTS", gap_reason
 
     # Build pending CVE suffix (appended to any recommendation reason)
     pending_cves = evaluation.get("cve_impact", {}).get("pending_cve_enrichment", [])
     cve_suffix = ""
-    if cve_impact == "pending_enrichment" and pending_cves:
+    if pending_cves:
         cve_suffix = f", {len(pending_cves)} advisory CVEs pending enrichment"
     cve_suffix += shipped_warn
 
@@ -424,16 +467,19 @@ def compute_recommendation(evaluation):
                 parts.append(f"{inferred} OCPBUGS status-derived release-required")
             bug_summary = ", ".join(parts)
             if not ocp_available:
-                return "BLOCKED", f"{bug_summary}{cve_suffix} — waiting for OCP payload"
-            return "ASK ART TO CREATE ARTIFACTS", f"{bug_summary}{cve_suffix}"
+                return "BLOCKED", f"{bug_summary}{review_suffix}{cve_suffix} — waiting for OCP payload"
+            return "ASK ART TO CREATE ARTIFACTS", f"{bug_summary}{review_suffix}{cve_suffix}"
         if needs_review_bugs > 0:
-            review_details = []
+            review_details = list(review_notes)
             for bug in ocpbugs_data.get("bugs", []):
                 if bug.get("release_action") != "needs_review":
                     continue
                 key = bug.get("key", "?")
                 status = bug.get("status", "unknown")
                 resolution = bug.get("resolution", "")
+                if status == "Verified" and not resolution:
+                    # Already included in review_notes, with the correct status.
+                    continue
                 if resolution:
                     review_details.append(
                         f"{key} is {status} (resolution: {resolution}) — "
@@ -449,10 +495,18 @@ def compute_recommendation(evaluation):
             )
             return "NEEDS REVIEW", f"{reason}{cve_suffix}"
         # All bugs are release-not-required
-        if cve_suffix:
-            return "NEEDS REVIEW", f"{ocpbugs_count} OCPBUGS (release-not-required){cve_suffix}"
+        if review_notes or cve_impact == "needs_review":
+            reason = "; ".join(review_notes) or "CVE trackers need review"
+            return "NEEDS REVIEW", f"{reason}{cve_suffix}"
+        if cve_suffix or cve_impact in ("unknown", "pending_enrichment"):
+            uncertainty = cve_suffix or ", advisory report unavailable"
+            return "NEEDS REVIEW", f"{ocpbugs_count} OCPBUGS (release-not-required){uncertainty}"
         bug_summary = f"{ocpbugs_count} OCPBUGS (all labeled release-not-required)"
-        return "SKIP", bug_summary
+        return "SKIP", f"{bug_summary}{cve_suffix}"
+
+    if review_notes or cve_impact == "needs_review":
+        reason = "; ".join(review_notes) or "CVE trackers need review"
+        return "NEEDS REVIEW", f"{reason}{cve_suffix}"
 
     # Needs review: advisory report skipped or CVEs found without Jira lookup
     if cve_impact in ("unknown", "pending_enrichment"):
@@ -782,6 +836,10 @@ def _build_reason(e):
         details = cve_impact.get("details", [])
         count = len(details)
         parts.append(f"{count} CVE fix{'es' if count != 1 else ''}{adv_suffix}")
+    elif impact == "needs_review":
+        count = len(cve_impact.get("needs_review_cves", []))
+        parts.append(f"{count} CVE{'s' if count != 1 else ''} need"
+                     f"{'s' if count == 1 else ''} review{adv_suffix}")
     elif impact == "none":
         skipped = cve_impact.get("skipped_not_actionable", 0)
         if skipped > 0:
@@ -797,6 +855,8 @@ def _build_reason(e):
             parts.append("advisory report unavailable")
         else:
             parts.append("advisory unknown")
+
+    parts.extend(_empty_resolution_notes(e))
 
     # OCPBUGS
     ocpbugs_data = e.get("ocpbugs", {})
@@ -918,7 +978,8 @@ def format_text_full(output):
         days = str(e.get("days_since", "--")) if e.get("days_since") is not None else "--"
         commits = str(e.get("commits", 0))
         impact_raw = e.get("cve_impact", {}).get("impact", "--")
-        impact = {"pending_enrichment": "pending", "must_release": "must release"}.get(
+        impact = {"pending_enrichment": "pending", "must_release": "must release",
+                  "needs_review": "needs review"}.get(
             impact_raw, impact_raw)
         ocpbugs_data = e.get("ocpbugs", {})
         ocpbugs_count = ("skipped" if ocpbugs_data.get("skipped")
@@ -973,14 +1034,21 @@ def format_text_full(output):
                             jid = jt.get('id', '?')
                             jres = jt.get('resolution', '')
                             jstat = jt.get('status', '')
-                            if jres == "Done" or jstat == "Verified":
-                                impact = f"{jid} (**must release**)"
-                            elif jres in ("Not a Bug", "Won't Do"):
+                            labels = jt.get("labels", [])
+                            if jres in ("Not a Bug", "Won't Do"):
                                 impact = f"not affected ({jres})"
                             elif jres == "Done-Errata":
                                 impact = "already shipped"
                             elif jres == "Duplicate":
-                                impact = f"not affected (duplicate)"
+                                impact = "not affected (duplicate)"
+                            elif "release-required" in labels:
+                                impact = f"{jid} (**must release**, release-required)"
+                            elif "release-not-required" in labels:
+                                impact = f"{jid} (release-not-required)"
+                            elif jstat == "Verified" and not jres:
+                                impact = f"{jid} (**needs review**: resolution is empty)"
+                            elif jres == "Done" or jstat == "Verified":
+                                impact = f"{jid} (**must release**)"
                             else:
                                 impact = f"{jid} ({jres or jstat})"
                         elif cve_data.get("reason"):
@@ -1094,6 +1162,11 @@ def format_text_full(output):
             cve_col = f"{len(pending)} pending"
         else:
             cve_col = "—"
+        needs_review = len(cve_impact.get("needs_review_cves", []))
+        if needs_review:
+            review_col = f"{needs_review} need review"
+            cve_col = (f"{cve_col}, {review_col}" if impact == "must_release"
+                       else review_col)
         if versions_checked > 1:
             cve_col += f" ({versions_checked} versions checked)"
 
@@ -1122,21 +1195,23 @@ def format_text_full(output):
         )
 
     # CVEs requiring release (detail table)
-    cve_rows = []
-    for e in evaluations:
-        cve_impact = e.get("cve_impact", {})
-        if cve_impact.get("impact") != "must_release":
-            continue
-        v = e.get("version", "?")
-        for d in cve_impact.get("details", []):
-            cve_rows.append((v, d.get("cve", "?"), d.get("jira", "—"),
-                             d.get("reason", "")))
-    if cve_rows:
-        sections.append("\n## CVEs Requiring Release\n")
-        sections.append("| Version | CVE | Jira Ticket | Detail |")
-        sections.append("|---------|-----|-------------|--------|")
-        for v, cve, jira, reason in cve_rows:
-            sections.append(f"| {v} | {cve} | {jira} | {reason} |")
+    for title, field in (("CVEs Requiring Release", "details"),
+                         ("CVEs Requiring Review", "needs_review_cves")):
+        cve_rows = []
+        for e in evaluations:
+            cve_impact = e.get("cve_impact", {})
+            if field == "details" and cve_impact.get("impact") != "must_release":
+                continue
+            v = e.get("version", "?")
+            for d in cve_impact.get(field, []):
+                cve_rows.append((v, d.get("cve", "?"), d.get("jira", "—"),
+                                 d.get("reason", "")))
+        if cve_rows:
+            sections.append(f"\n## {title}\n")
+            sections.append("| Version | CVE | Jira Ticket | Detail |")
+            sections.append("|---------|-----|-------------|--------|")
+            for v, cve, jira, reason in cve_rows:
+                sections.append(f"| {v} | {cve} | {jira} | {reason} |")
 
     return "\n".join(sections)
 

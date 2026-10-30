@@ -184,7 +184,7 @@ class TestFindMicroshiftComponentCves(unittest.TestCase):
     @patch.dict(os.environ, {"JIRA_API_TOKEN": "tok", "JIRA_USERNAME": "user"})
     def test_status_derived_actions_record_source(self, mock_search):
         for status, resolution, expected in (
-                ("Verified", "", "release_required"),
+                ("Verified", "", "needs_review"),
                 ("Closed", "Done", "release_required"),
                 ("MODIFIED", "Done", "release_required"),
                 ("MODIFIED", "", "needs_review")):
@@ -265,7 +265,7 @@ class TestFindMicroshiftComponentCves(unittest.TestCase):
 
     @patch("lib.jira_client._jira_search")
     @patch.dict(os.environ, {"JIRA_API_TOKEN": "tok", "JIRA_USERNAME": "user"})
-    def test_verified_bug_returns_release_required(self, mock_search):
+    def test_verified_without_resolution_returns_needs_review(self, mock_search):
         mock_search.return_value = [
             _mock_issue("OCPBUGS-840",
                         "CVE-2026-5555 openshift4/microshift: vuln",
@@ -277,7 +277,7 @@ class TestFindMicroshiftComponentCves(unittest.TestCase):
         result = find_microshift_component_cves("4.22")
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["key"], "OCPBUGS-840")
-        self.assertEqual(result[0]["release_action"], "release_required")
+        self.assertEqual(result[0]["release_action"], "needs_review")
         self.assertEqual(result[0]["cve_id"], "CVE-2026-5555")
         self.assertEqual(result[0]["source"], "component-cve")
 
