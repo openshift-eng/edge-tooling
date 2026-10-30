@@ -69,3 +69,27 @@ For every Z-Stream release requested to ART:
 - `gh` CLI (for PR operations in automated testing)
 - `aws` CLI (for S3 build cache and artifact upload)
 - `gsutil` CLI (for GCS artifact download)
+
+### AWS credentials for Prow testing
+
+The automated-testing preflight uses the AWS CLI's normal credential provider
+chain, not just environment variables. The default profile in
+`~/.aws/credentials` works without exporting keys. For a named profile, export
+`AWS_PROFILE`; for an AWS-format credentials file in a different location,
+export `AWS_SHARED_CREDENTIALS_FILE` (and, if needed, `AWS_CONFIG_FILE`). SSO
+profiles may require `aws sso login --profile <profile>` first. The selected
+identity also needs access to the build-cache and results buckets.
+
+Check the same environment that runs the skill or script:
+
+```bash
+aws sts get-caller-identity
+bash plugins/microshift-release/scripts/prow_testing.sh preflight 4.21.8
+```
+
+If your credentials are in a shell environment file rather than an AWS-format
+file, load them into the shell before starting the assistant or script. Only
+source a trusted file; `set -a; source /path/to/trusted-env-file; set +a` exports
+its assignments. Do not paste keys into conversations or commit credential
+files. Environment variables can override profile credentials; check the
+selected profile and environment if authentication still fails.

@@ -229,24 +229,7 @@ def _check_gh_auth():
 
 
 def _check_aws_auth():
-    """Require AWS credentials in the environment before preflight runs.
-
-    s3_rpms here, and `upload` later, shell out to bare `aws`. With nothing
-    exported those fail with a generic "Unable to locate credentials" from
-    deep inside s3_rpms; this fails fast instead.
-    """
-    if not (os.environ.get("AWS_PROFILE") or (
-            os.environ.get("AWS_ACCESS_KEY_ID")
-            and os.environ.get("AWS_SECRET_ACCESS_KEY"))):
-        return {
-            "check": "aws_auth",
-            "status": "FAIL",
-            "reason": (
-                "No AWS credentials set. Export AWS_ACCESS_KEY_ID and "
-                "AWS_SECRET_ACCESS_KEY, or AWS_PROFILE=<profile>."
-            ),
-        }
-
+    """Validate credentials using the AWS CLI's normal provider chain."""
     if not shutil.which("aws"):
         return {
             "check": "aws_auth",
@@ -270,8 +253,9 @@ def _check_aws_auth():
             "check": "aws_auth",
             "status": "FAIL",
             "reason": (
-                "AWS authentication check failed. Verify your AWS profile "
-                "or access keys."
+                "AWS authentication check failed. Check the AWS CLI credential "
+                "configuration, selected profile and network access; run "
+                "'aws sts get-caller-identity' to diagnose."
             ),
         }
 
@@ -528,10 +512,18 @@ def cmd_preflight(args):
     checks.append(_check_gh_auth())
 
     logger.info("Checking AWS credentials...")
-    checks.append(_check_aws_auth())
+    aws_auth = _check_aws_auth()
+    checks.append(aws_auth)
 
     logger.info("Verifying RPMs exist in build cache...")
-    checks.append(_check_s3_rpms(v))
+    if aws_auth["status"] == "PASS":
+        checks.append(_check_s3_rpms(v))
+    else:
+        checks.append({
+            "check": "s3_rpms",
+            "status": "SKIP",
+            "reason": "Build cache check skipped because AWS authentication failed.",
+        })
 
     logger.info("Checking gsutil/gcloud authentication...")
     checks.append(_check_gsutil_auth())
