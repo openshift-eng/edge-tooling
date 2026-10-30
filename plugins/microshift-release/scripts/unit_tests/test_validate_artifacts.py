@@ -67,6 +67,18 @@ class TestRpmRhelVariants(unittest.TestCase):
                 self.assertTrue(any("/x86_64/" in url for url in urls))
                 self.assertTrue(any("/aarch64/" in url for url in urls))
 
+    def test_50_ec_rc_mirrors_missing_el9_fail(self):
+        for release_type in ("EC", "RC"):
+            version = f"5.0.0-{release_type.lower()}.1"
+            with self.subTest(release_type=release_type), \
+                    patch.object(artifacts, "_http_get") as get:
+                get.return_value.status_code = 404
+                result = check_rpm_mirror(classify_version(version), release_type)
+                self.assertEqual(result["status"], "FAIL")
+                urls = [call.args[0] for call in get.call_args_list]
+                self.assertEqual(len(urls), 2)
+                self.assertTrue(all("/el9/" in url for url in urls))
+
     def test_50_bootc_still_checks_el10(self):
         self.assertEqual(_rhel_versions_for("5.0"), [9, 10])
         shipment = {"found": False, "reason": "test shipment unavailable"}
