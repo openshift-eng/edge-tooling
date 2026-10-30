@@ -129,7 +129,7 @@ def validate_rhel_builds(build_info, require_el10=True):
 
     Args:
         build_info: dict returned by brew.get_build_info().
-        require_el10: Whether el10 is required (True for 4.23+).
+        require_el10: Whether el10 RPMs are required for the target stream.
 
     Returns:
         dict: {valid: bool, el9: bool, el10: bool, reason: str}
@@ -139,7 +139,7 @@ def validate_rhel_builds(build_info, require_el10=True):
     if not require_el10:
         if el9:
             return {"valid": True, "el9": True, "el10": el10,
-                    "reason": "el9 build present (el10 N/A before 4.23)"}
+                    "reason": "el9 build present (el10 RPMs not required for this stream)"}
         return {"valid": False, "el9": False, "el10": el10,
                 "reason": "Missing RHEL variant: el9"}
     if el9 and el10:
