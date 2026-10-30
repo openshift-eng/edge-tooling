@@ -33,6 +33,12 @@ bash plugins/microshift-release/scripts/prow_testing.sh <action> <version> [--ex
 | GitHub fork of `openshift/microshift` | Step 1 (create PR) | Yes |
 | `gsutil` CLI | Step 4 (download) | Yes |
 
+AWS CLI credentials can come from its standard provider chain, including the
+default credentials file, a named `AWS_PROFILE`, SSO, or environment variables.
+Use `AWS_SHARED_CREDENTIALS_FILE` for an AWS-format file outside the default
+location. Run `aws sts get-caller-identity` in the same environment to diagnose
+authentication; do not display credential values.
+
 ## Arguments
 
 - `<version>` (required): MicroShift version (`X.Y.Z`, `X.Y.Z-rc.N`, or `X.Y.Z-ec.N`). Must be 4.21+.
@@ -56,6 +62,7 @@ Run `bash ${SCRIPTS_DIR}/prow_testing.sh preflight <version>`. Parse the JSON ou
   - If confirmed, continue to Step 1.
   - If declined, stop the workflow.
 - If `"status": "fail"` — display each check's status, reason, and details. Stop the workflow.
+  - For `aws_auth` failure: diagnose the AWS CLI configuration and network access; do not ask the user to share credentials. The cache check is skipped until authentication succeeds.
   - For `s3_rpms` failure: tell the user to refresh the build cache by posting these comments on the PR (create the PR first if needed):
 
     ```text

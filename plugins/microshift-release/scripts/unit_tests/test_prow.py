@@ -283,7 +283,7 @@ class TestAuthChecks(unittest.TestCase):
              mock.patch.object(prow_testing.subprocess, "run", side_effect=run), \
              mock.patch.object(prow_testing, "_check_s3_rpms", return_value={
                  "check": "s3_rpms", "status": "PASS", "reason": "mock RPMs present",
-             }), \
+             }) as cache_check, \
              mock.patch("sys.stdout", output):
             try:
                 prow_testing.cmd_preflight(argparse.Namespace(version="4.22.1"))
@@ -296,6 +296,11 @@ class TestAuthChecks(unittest.TestCase):
         expected = {f"{name}_auth": "PASS" for name in _AUTH_COMMANDS}
         expected.update(s3_rpms="PASS")
         expected[f"{binary}_auth"] = "WARN" if binary == "gsutil" else "FAIL"
+        if binary == "aws":
+            expected["s3_rpms"] = "SKIP"
+            cache_check.assert_not_called()
+        else:
+            cache_check.assert_called_once()
         self.assertEqual({check["check"]: check["status"] for check in result["checks"]}, expected)
         return output.getvalue()
 
@@ -310,15 +315,20 @@ class TestAuthChecks(unittest.TestCase):
                 lookup.assert_called_once_with(binary)
                 run.assert_called_once()
 
-    def test_aws_missing_credentials(self):
-        for env in ({}, {"AWS_ACCESS_KEY_ID": "mock-access-key"},
-                    {"AWS_SECRET_ACCESS_KEY": "mock-secret-key"}):
-            with self.subTest(credentials=env):
-                result, lookup, run = self._auth("aws", env=env, missing=True)
-                self.assertEqual(result["status"], "FAIL")
-                self.assertIn("No AWS credentials", result["reason"])
-                lookup.assert_not_called()
-                run.assert_not_called()
+    def test_aws_uses_cli_provider_chain_without_environment_credentials(self):
+        for env in ({}, {"AWS_SHARED_CREDENTIALS_FILE": "/example/credentials"},
+                    {"AWS_CONFIG_FILE": "/example/config"}):
+            with self.subTest(environment=env):
+                result, lookup, run = self._auth("aws", env=env)
+                self.assertEqual(result["status"], "PASS")
+                lookup.assert_called_once_with("aws")
+                run.assert_called_once()
+
+    def test_aws_cli_reports_missing_or_invalid_credentials(self):
+        result, _, run = self._auth("aws", env={}, returncode=255)
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("AWS authentication check failed", result["reason"])
+        run.assert_called_once()
 
     def test_missing_binaries(self):
         for binary in _AUTH_COMMANDS:
