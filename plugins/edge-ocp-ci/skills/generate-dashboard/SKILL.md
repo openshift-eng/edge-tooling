@@ -7,16 +7,17 @@ user-invocable: true
 
 # Edge OCP Payload Monitor Skill
 
-You are helping a developer monitor OpenShift nightly payload health for edge topologies (SNO, TNA, TNF). This skill orchestrates the `payload-monitor` Python tool and existing marketplace CI skills to generate an interactive HTML dashboard report with AI-powered root cause analysis for blocking job failures.
+You are helping a developer monitor OpenShift nightly payload health for edge topologies (SNO, TNA, TNF). This skill orchestrates the `payload-monitor` Python tool and existing marketplace CI skills to generate an interactive HTML dashboard report with AI-powered root cause analysis for blocking job failures and the worst five Sippy job-health findings.
 
 ## Existing Skills Reference
 
-This skill composes with the following installed marketplace CI skills from the [ai-helpers](https://github.com/openshift-eng/ai-helpers) repository. These are used automatically for blocking job analysis:
+This skill composes with the following installed marketplace CI skills from the [ai-helpers](https://github.com/openshift-eng/ai-helpers) repository. These are used automatically for blocking and selected Sippy job analysis:
 
 ### Data Fetching Skills
 
 | Skill | When to Use |
 |-------|-------------|
+| `ci:ask-sippy` | Investigate an exact job name and release, its pass-rate history, and recent failed Prow runs |
 | `ci:fetch-payloads` | Fetch recent release payloads from the release controller — use as a cross-check or when the Python tool's data needs supplementation |
 | `ci:fetch-releases` | Fetch available OpenShift releases from Sippy — use to auto-discover active streams |
 | `ci:fetch-test-report` | Fetch test report from Sippy with pass rates, test ID, and Jira component — use for per-test regression detail |
@@ -92,9 +93,10 @@ Use this actual path (not the hardcoded date-based name) in all subsequent steps
 The tool outputs:
 
 - An HTML report (self-contained interactive dashboard)
+- `<actual-report-stem>.ai-targets.json` beside the HTML, containing `sippy_jobs`: the exact (up to five) job/release pairs shown in Findings Summary, their rates, Sippy links, stable `analysis_key` values, and any known failing Prow runs
 - Blocking job summary printed to stdout (pipe-delimited lines between `BLOCKING_JOBS_START` and `BLOCKING_JOBS_END` markers)
 
-### Step 4: Parse Blocking Jobs from Output and Analyze Failures
+### Step 4: Analyze Blocking Failures and Selected Sippy Jobs
 
 Parse the blocking job lines from the tool's stdout. Each line between the markers has the format:
 
@@ -104,9 +106,11 @@ BLOCKING|job_name|prow_url|topology|version|payload_tag|prev_url1;prev_url2
 
 The 7th field contains semicolon-separated Prow URLs for previous failed attempts (empty if no retries). Split on `;` to get individual URLs.
 
-If no `BLOCKING_JOBS_START` marker appears in the output, there are no blocking failures — skip to Step 6.
+Read `<actual-report-stem>.ai-targets.json` from Step 3 as well as the blocking markers. Do not recompute or substitute the top five: analyze every entry in `sippy_jobs`, including flat or improving jobs below 50% and jobs absent from the sampled payloads.
 
-**For informing job failures:** Do NOT run deep analysis. The HTML report already includes a suggestion to use Claude directly with `/ci:prow-job-analysis <prow-url>`.
+If no `BLOCKING_JOBS_START` marker appears, skip only blocking analysis and continue with Sippy analysis below. Skip Step 5 and Step 6 only when both the blocking list and `sippy_jobs` are empty. A missing or malformed targets file is an error to investigate, not an empty list.
+
+**For informing job failures:** Run deep analysis when the job is among the selected Sippy targets. Other informing jobs retain the existing Claude suggestion.
 
 #### Analysis Prompt
 
@@ -185,9 +189,20 @@ When using subagents, launch all in parallel using multiple Agent tool calls in 
 2. Continue with results from other subagents — do NOT discard partial results.
 3. Include a note in the final output indicating which jobs could not be analyzed.
 
+#### Sippy Job Analysis
+
+After collecting blocking analyses, analyze every `sippy_jobs` entry. Reuse existing analysis for any identical Prow URL in `known_failing_runs`; do not run the same Prow investigation twice. Still produce a separate job-health synthesis keyed by `analysis_key`, scoped to that exact release. One Sippy target can be analyzed inline; independent remaining targets can use parallel subagents with the same five-minute timeout and error handling as blocking jobs.
+
+For each target:
+
+1. Use `ci:ask-sippy` with the exact `job_name`, `version`, and `triage_url` to investigate the current and previous periods, failed tests, and recent failed Prow runs. These are job-health findings, not Component Readiness test regressions; do not pass a job identifier to Component Readiness regression APIs.
+2. Start with `known_failing_runs`, reusing blocking analyses for matching URLs. If no runs are listed or they do not explain the historical pass rate, find recent failed runs for this job and release through Sippy. Use `ci:fetch-job-run-summary` and `ci:prow-job-analysis` on representative failures; compare failure patterns and inspect linked JIRA bugs as for blocking jobs.
+3. Return the same deep-analysis fields as the blocking prompt, plus `job_name`, under the target's exact `analysis_key`. Explain the evidence for the poor pass rate or relative drop, affected topology, and a specific next action. Historical poor health alone does not establish payload-blocking impact. For improving low-rate jobs, describe continued instability rather than inventing a new regression.
+4. If evidence cannot be retrieved or analysis times out, return an explicit `Analysis error` entry for that key, state what evidence is missing, and provide a manual investigation recommendation using the target's Sippy link. Never invent a Prow URL or silently omit a target.
+
 ### Step 5: Write Analysis File
 
-Collect the deep analysis results (from subagents or inline analysis) and write a small analysis-only JSON file keyed by `prow_url`. Use the actual report stem from Step 3 (e.g., `reports/analysis-2026-03-25.json` or `reports/analysis-2026-03-25-143027.json`):
+Collect the deep analysis results (from subagents or inline analysis) and write a small analysis-only JSON file with `by_prow_url` for blocking runs and `by_sippy_job` for the selected Sippy job/release keys. Use the actual report stem from Step 3 (e.g., `reports/analysis-2026-03-25.json` or `reports/analysis-2026-03-25-143027.json`):
 
 ```json
 {
@@ -202,9 +217,23 @@ Collect the deep analysis results (from subagents or inline analysis) and write 
       "same_root_cause": true,
       "attempt_analyses": []
     }
+  },
+  "by_sippy_job": {
+    "4.19/periodic-ci-example-sno": {
+      "job_name": "periodic-ci-example-sno",
+      "root_cause": "Evidence-based synthesis of recent failed runs and pass-rate history",
+      "failure_type": "Test regression",
+      "impact": "Historical SNO job instability on 4.19; payload blocking status is reported separately",
+      "suspect_prs": [],
+      "recommendation": "Specific next investigation or fix",
+      "same_root_cause": true,
+      "attempt_analyses": []
+    }
   }
 }
 ```
+
+Copy Sippy keys exactly from the targets file; the example key is illustrative. Before patching, verify that the keys in `by_sippy_job` exactly match all `sippy_jobs[*].analysis_key` values. Fill any missing key with its completed analysis or an explicit analysis-error result. When there are only Sippy targets, `by_prow_url` can be empty. Do not skip the merge in that case.
 
 When `same_root_cause` is false, `attempt_analyses` contains per-attempt breakdown with `prow_url`, `root_cause`, and `failure_type` for each attempt. When true or when there is only one attempt, `attempt_analyses` can be empty.
 
@@ -220,9 +249,9 @@ cd "$TOOL_DIR" && .venv/bin/python -m payload_monitor \
   --output reports/<actual-report>.html
 ```
 
-This finds each job's detail section by its prow URL and injects the "AI Root Cause Analysis" card directly into the HTML. No JSON round-trip needed.
+This finds blocking job details by Prow URL and Sippy Job Health Status rows by their stable job/release key, then injects the same "AI Root Cause Analysis" cards. Both show compact Root Cause/Action cards that open the full analysis inside the matching job row on click or keyboard activation. Sippy jobs without AI analysis remain non-expandable; there is no separate selected-jobs analysis list. No JSON round-trip needed.
 
-If there were no blocking failures (no analysis file), skip this step entirely — the HTML report is already complete.
+Skip this step only if there were neither blocking failures nor selected Sippy targets (no analysis file).
 
 ### Step 6b: Clean Up Analysis File
 
@@ -243,7 +272,7 @@ Do NOT duplicate the report data or findings summary — the HTML dashboard alre
 
 Report: `<actual report path captured from Step 3>`
 
-Analyzed {N} blocking job failure(s) with AI root cause analysis.
+Analyzed {N} blocking job failure(s) and {M} selected Sippy job(s) with AI root cause analysis. Report any analysis errors separately.
 Open the HTML report for the full interactive dashboard with findings summary, suggested actions, and detailed analysis.
 ```
 
@@ -267,7 +296,7 @@ Offer follow-up actions the user can take from this session:
 - Prow artifact fetching requires `gsutil` (Google Cloud SDK)
 - Do NOT modify the Python source code — this skill is an orchestration layer on top
 - Do NOT duplicate report data in your output — the HTML dashboard is the primary output, keep your response brief
-- Deep analysis runs automatically for **blocking jobs only** — informing jobs get a Claude suggestion instead
+- Deep analysis runs automatically for **blocking jobs and every selected Sippy target (up to five)** — other informing jobs get a Claude suggestion instead
 - Prioritize blocking failures over informing failures in all analysis
 - The dashboard automatically detects **recurring** (2+ payloads) and **persistent** (3+ payloads) failures — highlight these in your summary
 - **Unstable** jobs are informing jobs failing in 3+ consecutive payloads — these are consistently failing and need attention

@@ -28,10 +28,10 @@ class TestFetchEdgeJobs:
         sno_job = [j for j in jobs if j["name"] == "periodic-sno-test"][0]
         assert sno_job["_topology"] == "SNO"
 
-    def test_http_error_returns_empty(self, config):
+    def test_http_error_returns_unavailable(self, config):
         mock_session = MagicMock()
         mock_session.get.side_effect = requests.RequestException("timeout")
-        assert sippy.fetch_edge_jobs("4.19", config, session=mock_session) == []
+        assert sippy.fetch_edge_jobs("4.19", config, session=mock_session) is None
 
     def test_unexpected_response_format(self, config):
         mock_session = MagicMock()
@@ -40,7 +40,7 @@ class TestFetchEdgeJobs:
         mock_resp.raise_for_status = MagicMock()
         mock_session.get.return_value = mock_resp
 
-        assert sippy.fetch_edge_jobs("4.19", config, session=mock_session) == []
+        assert sippy.fetch_edge_jobs("4.19", config, session=mock_session) is None
 
 
 class TestIdentifyRegressions:

@@ -142,6 +142,31 @@ class Regression:
     triage_url: str = ""
     jira_bug: str = ""
     current_runs: int = 0
+    deep_analysis: Optional[DeepAnalysis] = None
+
+    @property
+    def analysis_key(self) -> str:
+        """Stable identity independent of whether a payload Prow run exists."""
+        return f"{self.version}/{self.test_name}"
+
+    @property
+    def relative_change(self) -> Optional[float]:
+        """Pass-rate change as a percent of the previous rate, if nonzero."""
+        if self.basis_pass_rate <= 0:
+            return None
+        return (self.sample_pass_rate - self.basis_pass_rate) / self.basis_pass_rate * 100
+
+    @property
+    def severe_drop(self) -> bool:
+        return self.relative_change is not None and self.relative_change < -50
+
+    @property
+    def low_pass_rate(self) -> bool:
+        return self.sample_pass_rate < 50
+
+    @property
+    def needs_attention(self) -> bool:
+        return self.current_runs >= 3 and (self.severe_drop or self.low_pass_rate)
 
 
 @dataclass

@@ -78,7 +78,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const sectionVisibleLimit = { anomalies: 10 };
   const sectionsCollapsed = { details: true, regressions: true, cr: true, anomalies: true };
   const sectionSelectors = { details: '.detail-row', regressions: '.regression-row', cr: '.cr-row', anomalies: '.anomaly-row' };
-  const sectionLabels = { details: ' failure details', regressions: ' regressions', cr: ' component regressions', anomalies: ' anomalies' };
+  const sectionLabels = { details: ' failure details', regressions: ' job findings', cr: ' component regressions', anomalies: ' anomalies' };
 
   // Count rows that pass the current filter (inline style.display is set by filters,
   // collapsed-row class is separate - so style.display !== 'none' means "passes filter")
@@ -238,9 +238,11 @@ document.addEventListener('DOMContentLoaded', function() {
   };
 
   // Click-to-copy on action cell and claude-suggestion code elements
-  document.querySelectorAll('.action-cell code, .claude-suggestion code, .claude-cmd-popup code').forEach(function(code) {
+  document.querySelectorAll('.action-cell code, .sippy-cell-action code, .claude-suggestion code, .claude-cmd-popup code').forEach(function(code) {
     code.style.cursor = 'pointer';
     code.addEventListener('click', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
       var text = code.textContent.trim();
       navigator.clipboard.writeText(text).then(function() {
         var tooltip = document.createElement('span');
@@ -317,9 +319,9 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   });
 
-  // Detail grid sorting (failure analysis section)
-  const gridHeader = document.querySelector('.detail-grid-header');
-  if (gridHeader) {
+  // Shared failure grids sort and resize independently.
+  document.querySelectorAll('.detail-grid-header').forEach(gridHeader => {
+    const grid = gridHeader.parentElement;
     const cellClasses = ['detail-cell-job', 'detail-cell-version', 'detail-cell-payload', 'detail-cell-topology', 'detail-cell-type', 'detail-cell-recurrence', 'detail-cell-date'];
     const sortableCols = gridHeader.querySelectorAll('[data-sort-col]');
 
@@ -331,13 +333,13 @@ document.addEventListener('DOMContentLoaded', function() {
         this.classList.add(isAsc ? 'desc' : 'asc');
         const dir = isAsc ? -1 : 1;
 
-        const rows = Array.from(document.querySelectorAll('details.detail-row'));
-        const cellClass = cellClasses[colIdx];
+        const rows = Array.from(grid.querySelectorAll(':scope > .failure-row'));
+        const cellClass = this.dataset.sortCell || cellClasses[colIdx];
         const numPat = /^[-+]?\d+(\.\d+)?%?$/;
 
         rows.sort((a, b) => {
-          const aCell = a.querySelector('summary .' + cellClass);
-          const bCell = b.querySelector('summary .' + cellClass);
+          const aCell = a.querySelector(':scope > summary .' + cellClass + ', :scope > .sippy-job-summary .' + cellClass);
+          const bCell = b.querySelector(':scope > summary .' + cellClass + ', :scope > .sippy-job-summary .' + cellClass);
           let aText = (aCell?.textContent || '').trim().replace(/\s+/g, ' ').toLowerCase();
           let bText = (bCell?.textContent || '').trim().replace(/\s+/g, ' ').toLowerCase();
           if (numPat.test(aText) && numPat.test(bText)) {
@@ -360,7 +362,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function applyGridWidths() {
       const tpl = gridColWidths.map(w => w + 'px').join(' ');
       gridHeader.style.gridTemplateColumns = tpl;
-      document.querySelectorAll('details.detail-row > summary').forEach(s => {
+      grid.querySelectorAll('.failure-row > summary, .failure-row > .sippy-job-summary').forEach(s => {
         s.style.gridTemplateColumns = tpl;
       });
     }
@@ -399,7 +401,7 @@ document.addEventListener('DOMContentLoaded', function() {
         document.addEventListener('mouseup', onMouseUp);
       });
     });
-  }
+  });
 
   // Jump to failures table with filters pre-applied
   window.jumpToFailures = function(version, jobtype) {
@@ -438,155 +440,165 @@ document.addEventListener('DOMContentLoaded', function() {
     if (heading) heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  // Build AI Analysis Highlights from patched analysis cards
+  // Blocking and Sippy findings share the same AI summary card and interaction.
   (function buildAIHighlights() {
-    var container = document.getElementById('ai-highlights-container');
-    if (!container) return;
-
-    var analysisCards = document.querySelectorAll('.deep-analysis-card');
-    if (analysisCards.length === 0) return;
-
-    var items = [];
-    analysisCards.forEach(function(card) {
-      var detail = card.closest('details');
-      if (!detail) return;
-
-      var detailId = detail.id;
-      var summary = detail.querySelector('summary');
-      if (!summary) return;
-
-      var badges = summary.querySelectorAll('.badge');
-      var topology = '', jobtype = '';
-      badges.forEach(function(b) {
-        if (b.classList.contains('sno') || b.classList.contains('tna') || b.classList.contains('tnf')) {
-          topology = b.textContent.trim();
-        } else if (b.classList.contains('blocking') || b.classList.contains('informing')) {
-          jobtype = b.textContent.trim();
-        }
-      });
-
-      var jobNameEl = card.querySelector('.da-job-name');
-      var jobName = jobNameEl ? jobNameEl.textContent.trim() : '';
-      var summaryText = summary.textContent.trim();
-      var match = summaryText.match(/\((\d+\.\d+)\)/);
-      var version = match ? match[1] : '';
-
-      var fields = card.querySelectorAll('.da-field');
-      var rootCause = '', failureType = '', recommendation = '';
-      fields.forEach(function(f) {
-        var label = f.querySelector('.da-label');
+    function readAnalysis(card, detail) {
+      var item = {
+        detail: detail,
+        topology: detail.dataset.regtopology || detail.dataset.topology || '',
+        jobtype: detail.dataset.jobtype || '',
+        version: detail.dataset.regversion || detail.dataset.version || '',
+        jobName: detail.dataset.jobName || '',
+        rootCause: '', failureType: '', recommendation: ''
+      };
+      var jobName = card.querySelector('.da-job-name');
+      if (jobName) item.jobName = jobName.textContent.trim();
+      card.querySelectorAll('.da-field').forEach(function(field) {
+        var label = field.querySelector('.da-label');
         if (!label) return;
-        var labelText = label.textContent.trim().toLowerCase();
-        var typeEl = f.querySelector('.badge.da-type');
-        if (labelText.indexOf('root cause') === 0) {
-          rootCause = f.textContent.replace(label.textContent, '').trim();
-        } else if (labelText.indexOf('failure type') === 0 && typeEl) {
-          failureType = typeEl.textContent.trim();
-        } else if (labelText.indexOf('recommendation') === 0) {
-          recommendation = f.textContent.replace(label.textContent, '').trim();
+        var text = label.textContent.trim().toLowerCase();
+        var value = field.textContent.replace(label.textContent, '').trim();
+        if (text.indexOf('root cause') === 0) item.rootCause = value;
+        if (text.indexOf('failure type') === 0) item.failureType = value;
+        if (text.indexOf('recommendation') === 0) item.recommendation = value;
+      });
+      return item;
+    }
+
+    function makeHighlight(item) {
+      var card = document.createElement('div');
+      card.className = 'fs-job-card ai-highlight-item';
+      card.title = 'Click to view full analysis';
+      card.setAttribute('role', 'button');
+      card.tabIndex = 0;
+      card.setAttribute('aria-controls', item.detail.id);
+      card.setAttribute('aria-expanded', String(!!item.detail.open));
+      function openAnalysis() {
+        var isSippy = item.detail.classList.contains('regression-row');
+        if (item.detail.classList.contains('detail-row') && item.detail.style.display === 'none') {
+          window.jumpToFailures(item.version, item.jobtype);
+        }
+        if (isSippy && item.detail.style.display === 'none') {
+          ['regtopology', 'regversion'].forEach(function(group) {
+            delete activeFilters[group];
+            document.querySelectorAll('.filter-btn[data-group="' + group + '"]').forEach(function(btn) {
+              btn.classList.toggle('active', btn.dataset.value === 'all');
+            });
+          });
+          applyFilters();
+        }
+        if (item.detail.classList.contains('collapsed-row')) {
+          sectionsCollapsed[isSippy ? 'regressions' : 'details'] = false;
+          applyCollapse();
+          updateExpandButtons();
+        }
+        item.detail.open = true;
+        item.detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+      card.addEventListener('click', function(event) {
+        if (!event.target.closest('a, button')) openAnalysis();
+      });
+      card.addEventListener('keydown', function(event) {
+        if (event.target !== card) return;
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openAnalysis();
         }
       });
-
-      items.push({ detailId: detailId, topology: topology, jobtype: jobtype, failureType: failureType, version: version, jobName: jobName, rootCause: rootCause, recommendation: recommendation });
-    });
-
-    if (items.length === 0) return;
-
-    // Build DOM elements
-    var wrapper = document.createElement('div');
-    wrapper.className = 'finding ai-highlights';
-
-    var title = document.createElement('div');
-    title.className = 'ai-highlights-title';
-    var dot = document.createElement('span');
-    dot.className = 'ai-dot';
-    dot.textContent = '\u25CF';
-    title.appendChild(dot);
-    var strong = document.createElement('strong');
-    strong.textContent = 'AI Root Cause Analysis \u2014 ' + items.length + ' blocking failure' + (items.length !== 1 ? 's' : '') + ' analyzed';
-    title.appendChild(strong);
-    wrapper.appendChild(title);
-
-    items.forEach(function(item) {
-      var card = document.createElement('div');
-      card.className = 'ai-highlight-item';
-      card.title = 'Click to view full analysis';
-      card.addEventListener('click', (function(id) {
-        return function() {
-          var d = document.getElementById(id);
-          if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
-        };
-      })(item.detailId));
+      item.detail.addEventListener('toggle', function() {
+        card.setAttribute('aria-expanded', String(item.detail.open));
+      });
 
       var header = document.createElement('div');
       header.className = 'ai-highlight-header';
-
-      if (item.jobName) {
-        var name = document.createElement('span');
-        name.className = 'job-name';
-        name.textContent = item.jobName;
-        header.appendChild(name);
-      }
-      if (item.topology) {
-        var b1 = document.createElement('span');
-        b1.className = 'badge ' + item.topology.toLowerCase();
-        b1.textContent = item.topology;
-        header.appendChild(b1);
-      }
-      if (item.jobtype) {
-        var b2 = document.createElement('span');
-        b2.className = 'badge ' + item.jobtype.toLowerCase();
-        b2.textContent = item.jobtype;
-        header.appendChild(b2);
-      }
-      if (item.failureType) {
-        var b3 = document.createElement('span');
-        b3.className = 'badge da-type';
-        b3.textContent = item.failureType;
-        header.appendChild(b3);
-      }
+      var name = document.createElement('span');
+      name.className = 'job-name';
+      name.textContent = item.jobName;
+      header.appendChild(name);
+      [[item.topology, item.topology.toLowerCase()],
+       [item.jobtype, item.jobtype.toLowerCase()],
+       [item.failureType, 'da-type']].forEach(function(badge) {
+        if (!badge[0]) return;
+        var span = document.createElement('span');
+        span.className = 'badge ' + badge[1];
+        span.textContent = badge[0];
+        header.appendChild(span);
+      });
       if (item.version) {
-        var ver = document.createElement('span');
-        ver.style.cssText = 'color:#f0f6fc;font-size:13px;font-weight:600';
-        ver.textContent = item.version;
-        header.appendChild(ver);
+        var version = document.createElement('span');
+        version.className = 'fs-job-version';
+        version.textContent = item.version;
+        header.appendChild(version);
       }
       card.appendChild(header);
-
-      if (item.rootCause) {
-        var cause = document.createElement('div');
-        cause.className = 'ai-highlight-cause';
-        var lbl1 = document.createElement('span');
-        lbl1.className = 'da-label da-label-highlight';
-        lbl1.textContent = 'Root Cause:';
-        cause.appendChild(lbl1);
-        cause.appendChild(document.createTextNode(' ' + item.rootCause));
-        card.appendChild(cause);
-      }
-      if (item.recommendation) {
-        var rec = document.createElement('div');
-        rec.className = 'ai-highlight-rec';
-        var lbl2 = document.createElement('span');
-        lbl2.className = 'da-label da-label-highlight';
-        lbl2.textContent = 'Action:';
-        rec.appendChild(lbl2);
-        rec.appendChild(document.createTextNode(' ' + item.recommendation));
-        card.appendChild(rec);
-      }
-
-      wrapper.appendChild(card);
-    });
-
-    container.appendChild(wrapper);
-
-    // Hide the plain inline job list only when ALL blocking jobs have AI analysis
-    var inlineJobs = container.closest('.fs-section-critical')?.querySelector('.fs-inline-jobs');
-    if (inlineJobs) {
-        var inlineCount = inlineJobs.querySelectorAll('.fs-blocking-row').length;
-        if (items.length >= inlineCount) {
-            inlineJobs.style.display = 'none';
-        }
+      if (item.rates) card.appendChild(item.rates);
+      if (item.metadata) card.appendChild(item.metadata);
+      [[item.rootCause, 'ai-highlight-cause', 'Root Cause:'],
+       [item.recommendation, 'ai-highlight-rec', 'Action:']].forEach(function(field) {
+        if (!field[0]) return;
+        var div = document.createElement('div');
+        div.className = field[1];
+        var label = document.createElement('span');
+        label.className = 'da-label da-label-highlight';
+        label.textContent = field[2];
+        div.appendChild(label);
+        div.appendChild(document.createTextNode(' ' + field[0]));
+        card.appendChild(div);
+      });
+      return card;
     }
+
+    var container = document.getElementById('ai-highlights-container');
+    if (container) {
+      var items = [];
+      document.querySelectorAll('details.detail-row[data-jobtype="blocking"] .deep-analysis-card').forEach(function(card) {
+        items.push(readAnalysis(card, card.closest('details.detail-row')));
+      });
+      if (items.length) {
+        var wrapper = document.createElement('div');
+        wrapper.className = 'finding ai-highlights';
+        var title = document.createElement('div');
+        title.className = 'ai-highlights-title';
+        var dot = document.createElement('span');
+        dot.className = 'ai-dot';
+        dot.textContent = '\u25CF';
+        title.appendChild(dot);
+        var strong = document.createElement('strong');
+        strong.textContent = 'AI Root Cause Analysis \u2014 ' + items.length + ' blocking failure' + (items.length !== 1 ? 's' : '') + ' analyzed';
+        title.appendChild(strong);
+        wrapper.appendChild(title);
+        items.forEach(function(item) { wrapper.appendChild(makeHighlight(item)); });
+        container.appendChild(wrapper);
+
+        // A Sippy or informing analysis must never hide an unanalyzed blocker.
+        var inlineJobs = container.closest('.fs-section-critical').querySelector('.fs-inline-jobs');
+        var analyzedNames = new Set(items.map(function(item) { return item.jobName; }));
+        if (inlineJobs && Array.from(inlineJobs.querySelectorAll('.fs-blocking-name')).every(function(name) {
+          return analyzedNames.has(name.textContent.trim());
+        })) inlineJobs.style.display = 'none';
+      }
+    }
+
+    document.querySelectorAll('.fs-sippy-list > li').forEach(function(row) {
+      var detail = document.getElementById(row.dataset.analysisId);
+      var analysis = detail && detail.querySelector('.deep-analysis-card');
+      if (!analysis) return;
+      var name = detail.querySelector('.detail-cell-job');
+      if (name && !name.querySelector('.ai-analyzed')) {
+        var badge = document.createElement('span');
+        badge.className = 'badge ai-analyzed';
+        badge.textContent = 'AI Analyzed';
+        name.appendChild(badge);
+      }
+      var item = readAnalysis(analysis, detail);
+      item.rates = row.querySelector('.fs-sippy-rates').cloneNode(true);
+      item.metadata = row.querySelector('.fs-sippy-details').cloneNode(true);
+      item.metadata.querySelectorAll('.badge, .fs-job-version').forEach(function(el) { el.remove(); });
+      var highlight = makeHighlight(item);
+      row.insertBefore(highlight, row.firstChild);
+      // Preserve the fallback summary for findings with no AI result.
+      row.querySelector('.fs-sippy-summary').hidden = true;
+    });
   })();
 
   // Copy full bug description to clipboard

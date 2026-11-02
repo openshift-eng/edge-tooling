@@ -36,11 +36,11 @@
     <div class="meta"><a href="https://github.com/openshift-eng/edge-tooling" target="_blank" style="color:var(--text-muted)">View source on GitHub ↗</a></div>
     <div class="meta">Generated: {{ report.generated_at }}</div>
     {% set has_ai = [] %}{% set has_blocking = [] %}{% for item in all_failing %}{% if item.job.deep_analysis %}{% if has_ai.append(1) %}{% endif %}{% endif %}{% if item.job.job_type.value == "blocking" %}{% if has_blocking.append(1) %}{% endif %}{% endif %}{% endfor %}
-    {% if has_ai %}
+    {% if has_ai or sippy_analysis_cards %}
     <div class="meta" style="margin-top:4px">
       <span style="color:var(--green)">● AI-enriched via Claude</span>
     </div>
-    {% elif has_blocking %}
+    {% elif has_blocking or priority_sippy %}
     <div class="meta" style="margin-top:4px" data-enrichment-status="data-only">
       <span style="color:var(--text-muted)">○ Data only</span>
       <span style="margin-left:4px">- run <code style="font-size:12px;color:var(--accent)">/edge-ocp-ci:generate-dashboard</code> for AI analysis</span>
@@ -71,7 +71,7 @@
   <span class="skip-flag">--skip-prow</span> Prow artifact fetching was skipped - Error column, Failing Tests, and Failure Details will be empty.
   {% endif %}
   {% if report.skip_sippy %}
-  <span class="skip-flag">--skip-sippy</span> Sippy regression check was skipped - Sippy Job Regressions section is not available.
+  <span class="skip-flag">--skip-sippy</span> Sippy job health check was skipped - Sippy Job Health section is not available.
   {% endif %}
   {% if report.skip_timing %}
   <span class="skip-flag">Insights</span> Timing insights are disabled by default. Use <code>--with-timing</code> to include install/upgrade timing data.
@@ -230,8 +230,7 @@
   rejected_payloads=rejected_payloads,
   total_payloads=total_payloads,
   regression_count=all_regressions|length,
-  component_regression_count=component_regressions|length,
-  bugs_suggested=report.suggested_bugs|length
+  component_regression_count=component_regressions|length
 ) %}
 
 <div class="findings-summary">
@@ -239,7 +238,7 @@
 
   {% if ns.total_failures == 0 and ns.regression_count == 0 and ns.component_regression_count == 0 %}
   <div class="fs-healthy-banner">
-    All edge jobs are passing across all monitored payloads. No regressions detected.
+    All edge jobs are passing across all monitored payloads. No Sippy job health or component findings detected.
   </div>
   {% else %}
 
@@ -263,17 +262,17 @@
       {% endif %}
     </div>
     <div class="fs-situation-sep"></div>
-    <div class="fs-situation-item {% if ns.regression_count + ns.component_regression_count > 0 %}info{% endif %}" onclick="document.getElementById('section-sippy-regressions')?.scrollIntoView({behavior:'smooth'})" title="View regressions">
+    <div class="fs-situation-item {% if ns.regression_count + ns.component_regression_count > 0 %}critical{% endif %}" onclick="document.getElementById('findings-job-health')?.scrollIntoView({behavior:'smooth'})" title="View Sippy job health and component findings">
       <span class="fs-situation-count">{{ ns.regression_count + ns.component_regression_count }}</span>
-      <span class="fs-situation-label">regressions</span>
+      <span class="fs-situation-label">health findings</span>
     </div>
     <div class="fs-situation-sep"></div>
-    <div class="fs-situation-item" onclick="document.getElementById('section-edge-failures')?.scrollIntoView({behavior:'smooth'})" title="View affected topologies">
+    <div class="fs-situation-item" onclick="document.getElementById('{{ 'findings-critical' if all_regressions else 'section-edge-failures' }}')?.scrollIntoView({behavior:'smooth'})" title="View topologies affected by payload failures or Sippy job findings">
       <div class="fs-situation-topos">
-        {% for t in topologies %}
+        {% for t in affected_topologies %}
         <span class="badge {{ t | lower }}">{{ t }}</span>
         {% endfor %}
-        {% if not topologies %}
+        {% if not affected_topologies %}
         <span style="color:var(--text-muted)">&mdash;</span>
         {% endif %}
       </div>
@@ -281,9 +280,11 @@
     </div>
   </div>
 
-  {# CRITICAL: Blocking failures - show the actual jobs inline #}
+  {# One critical block, with separate blocking and Sippy groups. #}
+  {% if ns.blocking_failures > 0 or ns.regression_count > 0 or ns.component_regression_count > 0 %}
+  <div class="fs-section fs-section-critical" id="findings-critical">
   {% if ns.blocking_failures > 0 %}
-  <div class="fs-section fs-section-critical">
+  <section class="fs-critical-group" id="findings-blocking" aria-label="Blocking failures">
     <div class="fs-section-header">
       <div class="fs-severity-icon fs-icon-critical" title="Critical - requires immediate action">!</div>
       <div class="fs-section-content">
@@ -299,7 +300,7 @@
       {% set fc = failure_counts.get(item.job.name, 0) %}
       {% set versions = blocking_job_versions.get(item.job.name, []) %}
       {% set tests = blocking_job_tests.get(item.job.name, []) %}
-      <div class="fs-blocking-row" onclick="scrollToJob({{ item.job.name | js_attr }})">
+      <div class="fs-blocking-row fs-job-card" onclick="scrollToJob({{ item.job.name | js_attr }})">
         <div class="fs-blocking-main">
           <span class="badge {{ item.job.topology | lower }}">{{ item.job.topology }}</span>
           <span class="fs-blocking-name">{{ item.job.name }}</span>
@@ -322,6 +323,65 @@
     </div>
     {# AI analysis sub-items injected here by JS #}
     <div id="ai-highlights-container"></div>
+  </section>
+  {% endif %}
+
+  {# CRITICAL: Job health findings follow current blocking failures. #}
+  {% if ns.regression_count > 0 or ns.component_regression_count > 0 %}
+  <section class="fs-critical-group" id="findings-job-health" aria-label="Sippy Job regression">
+    <div class="fs-section-header">
+      <div class="fs-severity-icon fs-icon-critical" title="Critical - investigate job health findings">!</div>
+      <div class="fs-section-content">
+        <div class="fs-priority-label">Critical - Investigation Required</div>
+        <div class="fs-section-title">Sippy Job regression</div>
+        <div class="fs-section-desc">
+          {% if ns.regression_count > 0 %}{{ ns.regression_count }} Sippy job finding{{ 's' if ns.regression_count != 1 else '' }}{% endif %}
+          {% if ns.regression_count > 0 and ns.component_regression_count > 0 %} &middot; {% endif %}
+          {% if ns.component_regression_count > 0 %}{{ ns.component_regression_count }} component regression{{ 's' if ns.component_regression_count != 1 else '' }} (edge vs HA){% endif %}
+        </div>
+      </div>
+      <div class="fs-section-actions">
+        {% if ns.regression_count > 0 %}
+        <a class="fs-section-action fs-action-critical" href="#section-sippy-regressions">Triage Sippy &#8594;</a>
+        {% endif %}
+        {% if ns.component_regression_count > 0 %}
+        <a class="fs-section-action fs-action-critical" href="#section-component-readiness">Review Components &#8594;</a>
+        {% endif %}
+      </div>
+    </div>
+    {% if priority_sippy %}
+    <div class="fs-sippy-findings">
+      <div class="fs-sippy-heading">Worst {{ priority_sippy|length }} of {{ priority_sippy_count }} Sippy jobs needing attention</div>
+      <p class="fs-section-desc">Historical job pass rates; these findings do not determine payload blocking status.</p>
+      <div class="fs-sippy-legend">
+        <strong>Selection:</strong> relative pass-rate drop &gt;50%, or current pass rate &lt;50%, even if flat or improving.
+        Relative change = (current &minus; previous) / previous &times; 100; unavailable when previous is 0%.
+        Ranked by lowest current rate first, then largest relative drop.
+      </div>
+      <ul class="fs-sippy-list" role="list">
+        {% for r in priority_sippy %}
+        <li data-analysis-id="{{ sippy_analysis_ids[r.analysis_key] }}">
+          <div class="fs-job-card fs-sippy-summary">
+          <div class="fs-sippy-job"><a href="{{ r.triage_url }}" target="_blank">{{ r.test_name }}</a></div>
+          <div class="fs-sippy-rates">
+            <span class="fs-sippy-current">Current pass rate <strong>{{ "%.1f" | format(r.sample_pass_rate) }}%</strong></span>
+          </div>
+          <div class="fs-sippy-details">
+            <span class="badge {{ r.topology | lower }}">{{ r.topology }}</span>
+            <span class="fs-job-version">{{ r.version }}</span>
+            <span>{{ r.current_runs }} runs</span>
+            {% if (r.version, r.test_name) in blocking_job_pairs %}
+            <a class="fs-sippy-blocking" onclick="scrollToJob({{ r.test_name | js_attr }})">Also in blocking failures above</a>
+            {% endif %}
+          </div>
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </section>
+  {% endif %}
   </div>
   {% endif %}
 
@@ -338,7 +398,7 @@
     </div>
     <div class="fs-inline-jobs">
       {% for item in retried_successes %}
-      <div class="fs-blocking-row" onclick="scrollToJob({{ item.job.name | js_attr }})">
+      <div class="fs-blocking-row fs-job-card" onclick="scrollToJob({{ item.job.name | js_attr }})">
         <div class="fs-blocking-main">
           <span class="badge {{ item.job.topology | lower }}">{{ item.job.topology }}</span>
           <a class="fs-blocking-name" href="{{ item.job.prow_url }}" target="_blank" onclick="event.stopPropagation()">{{ item.job.name }}</a>
@@ -378,7 +438,7 @@
     {% if escalation_risks %}
     <div class="fs-escalation-list">
       {% for er in escalation_risks %}
-      <a class="fs-escalation-item" onclick="scrollToJob({{ er.job_name | js_attr }})">
+      <a class="fs-escalation-item fs-job-card" onclick="scrollToJob({{ er.job_name | js_attr }})">
         <span class="fs-escalation-left">
           <span class="fs-escalation-name">{{ er.job_name }}</span>
           <span class="badge escalation-risk">Unstable</span>
@@ -393,31 +453,7 @@
   </div>
   {% endif %}
 
-  {# REGRESSIONS: Sippy + Component Readiness - compact #}
-  {% if ns.regression_count > 0 or ns.component_regression_count > 0 %}
-  <div class="fs-section fs-section-info">
-    <div class="fs-section-header">
-      <div class="fs-severity-icon fs-icon-info" title="Regressions detected - triage recommended">i</div>
-      <div class="fs-section-content">
-        <div class="fs-priority-label">Info - Triage Recommended</div>
-        <div class="fs-section-title">{{ ns.regression_count + ns.component_regression_count }} Regression{{ 's' if (ns.regression_count + ns.component_regression_count) != 1 else '' }}</div>
-        <div class="fs-section-desc">
-          {% if ns.regression_count > 0 %}{{ ns.regression_count }} Sippy job regression{{ 's' if ns.regression_count != 1 else '' }}{% endif %}
-          {% if ns.regression_count > 0 and ns.component_regression_count > 0 %} &middot; {% endif %}
-          {% if ns.component_regression_count > 0 %}{{ ns.component_regression_count }} component regression{{ 's' if ns.component_regression_count != 1 else '' }} (edge vs HA){% endif %}
-        </div>
-      </div>
-      <div class="fs-section-actions">
-        {% if ns.regression_count > 0 %}
-        <a class="fs-section-action" href="#section-sippy-regressions">Triage Sippy &#8594;</a>
-        {% endif %}
-        {% if ns.component_regression_count > 0 %}
-        <a class="fs-section-action" href="#section-component-readiness">Review Components &#8594;</a>
-        {% endif %}
-      </div>
-    </div>
-  </div>
-  {% endif %}
+
 
   {% endif %}
 </div>
@@ -476,9 +512,9 @@
 {% if _fc >= recurring_threshold and _fc < persistent_threshold %}{% if _statuses.append('recurring') %}{% endif %}{% endif %}
 {% if detail.job.name in escalation_risk_jobs %}{% if _statuses.append('unstable') %}{% endif %}{% endif %}
 {% if detail.job.deep_analysis %}{% if _statuses.append('ai-analyzed') %}{% endif %}{% endif %}
-<details id="detail-{{ loop.index }}" class="detail-row" data-topology="{{ detail.job.topology }}" data-jobtype="{{ detail.job.job_type.value }}" data-version="{{ detail.version }}" data-status="{{ _statuses | join(' ') }}" data-row-index="{{ loop.index }}" data-prow-url="{{ detail.job.prow_url }}" data-job-name="{{ detail.job.name }}">
+<details id="detail-{{ loop.index }}" class="detail-row failure-row" data-topology="{{ detail.job.topology }}" data-jobtype="{{ detail.job.job_type.value }}" data-version="{{ detail.version }}" data-status="{{ _statuses | join(' ') }}" data-row-index="{{ loop.index }}" data-prow-url="{{ detail.job.prow_url }}" data-job-name="{{ detail.job.name }}">
   <summary>
-    <span class="detail-cell-job" title="{{ detail.job.name }}">{{ detail.job.name }}{% if detail.job.deep_analysis %}<span class="badge ai-analyzed">AI</span>{% endif %}{% set also_in = cross_topology.get(detail.job.name, []) %}{% if also_in %}<span class="cross-topo-hint" title="Also failing in other topologies">{% for t in also_in %}<span class="badge {{ t|lower }}">{{ t }}</span>{% endfor %}</span>{% endif %}</span>
+    <span class="detail-cell-job" title="{{ detail.job.name }}">{{ detail.job.name }}{% if detail.job.deep_analysis %}<span class="badge ai-analyzed">AI Analyzed</span>{% endif %}{% set also_in = cross_topology.get(detail.job.name, []) %}{% if also_in %}<span class="cross-topo-hint" title="Also failing in other topologies">{% for t in also_in %}<span class="badge {{ t|lower }}">{{ t }}</span>{% endfor %}</span>{% endif %}</span>
     <span class="detail-cell-version">{{ detail.version }}</span>
     <span class="detail-cell-payload"><a href="{{ detail.payload_url }}" target="_blank" title="{{ detail.payload_tag }}" onclick="event.stopPropagation()">{{ detail.payload_tag }}</a></span>
     <span class="detail-cell-topology"><span class="badge {{ detail.job.topology | lower }}">{{ detail.job.topology }}</span></span>
@@ -609,8 +645,8 @@
 
 <!-- Sippy Regressions -->
 {% if all_regressions %}
-<h2 id="section-sippy-regressions">Sippy Job Regressions Status</h2>
-<div class="meta" style="margin-bottom:8px">Source: <a href="https://sippy.dptools.openshift.org" target="_blank">Sippy Jobs</a> - jobs with net improvement drop &gt;10% or pass rate below 80% (≥5 runs). Jobs with fewer than 3 runs are excluded due to insufficient data.</div>
+<h2 id="section-sippy-regressions">Sippy Job Health Status</h2>
+<div class="meta" style="margin-bottom:8px">Source: <a href="https://sippy.dptools.openshift.org" target="_blank">Sippy Jobs</a> - jobs with negative net improvement or current pass rate below 50%, with at least 3 current runs. Investigation actions are available for each job.</div>
 <div class="filters">
   <span class="filter-label">Topology:</span>
   <button class="filter-btn active" data-group="regtopology" data-value="all">All</button>
@@ -624,57 +660,9 @@
   <button class="filter-btn" data-group="regversion" data-value="{{ v }}">{{ v }}</button>
   {% endfor %}
 </div>
-<div class="table-wrapper">
-<table>
-  <thead>
-    <tr>
-      <th class="sortable" data-col="0">Job</th>
-      <th class="sortable" data-col="1">Topology</th>
-      <th class="sortable" data-col="2">Version</th>
-      <th class="sortable" data-col="3">Runs</th>
-      <th class="sortable" data-col="4">Current Pass Rate</th>
-      <th class="sortable" data-col="5">Previous Pass Rate</th>
-      <th class="sortable" data-col="6">Change</th>
-      <th>Action</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for r in all_regressions %}
-    <tr class="regression-row sortable-row" data-row-index="{{ loop.index }}" data-regtopology="{{ r.topology }}" data-regversion="{{ r.version }}">
-      <td><a href="{{ r.triage_url }}" target="_blank">{{ r.test_name }}</a></td>
-      <td><span class="badge {{ r.topology | lower }}">{{ r.topology }}</span></td>
-      <td>{{ r.version }}</td>
-      <td>{{ r.current_runs }}</td>
-      <td>
-        <span class="pass-rate {% if r.sample_pass_rate < 70 %}low{% elif r.sample_pass_rate < 90 %}medium{% else %}high{% endif %}">
-          {{ "%.1f" | format(r.sample_pass_rate) }}%
-        </span>
-      </td>
-      <td>{{ "%.1f" | format(r.basis_pass_rate) }}%</td>
-      <td>
-        {% set change = r.sample_pass_rate - r.basis_pass_rate %}
-        <span class="pass-rate {% if change < -10 %}low{% elif change < 0 %}medium{% else %}high{% endif %}">
-          {{ "%+.1f" | format(change) }}%
-        </span>
-      </td>
-      <td class="action-cell">
-        {% if r.jira_bug %}
-        <a href="https://issues.redhat.com/browse/{{ r.jira_bug }}" target="_blank" class="inline-jira-badge" style="margin:0">
-          <span class="key">{{ r.jira_bug }}</span>
-        </a>
-        {% endif %}
-        <div class="cmd-copy-row" style="margin:0">
-          <code style="font-size:11px">/ci:ask-sippy Why is {{ r.test_name }} regressing on {{ r.version }}? What tests are failing?</code>
-          <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>
-        </div>
-      </td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-</div>
+{% include "_sippy_health_grid.html" %}
 {% if all_regressions|length > 5 %}
-<button class="expand-btn" id="expand-regressions-btn" onclick="expandSection('regressions')">Show all {{ all_regressions|length }} regressions</button>
+<button class="expand-btn" id="expand-regressions-btn" onclick="expandSection('regressions')">Show all {{ all_regressions|length }} job findings</button>
 {% endif %}
 {% endif %}
 

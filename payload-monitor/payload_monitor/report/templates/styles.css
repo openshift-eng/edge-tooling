@@ -423,7 +423,6 @@ a:hover { text-decoration: underline; }
 }
 .fs-situation-item.critical .fs-situation-count { color: var(--red); font-size: 28px; }
 .fs-situation-item.warning .fs-situation-count { color: var(--yellow); }
-.fs-situation-item.info .fs-situation-count { color: var(--accent); }
 .fs-situation-label {
   font-size: 11px;
   text-transform: uppercase;
@@ -458,9 +457,9 @@ a:hover { text-decoration: underline; }
 }
 .fs-section:last-of-type { margin-bottom: 0; }
 .fs-section-critical { border-left: 5px solid var(--red); background: rgba(248,81,73,0.07); margin-bottom: 16px; }
+.fs-critical-group + .fs-critical-group { border-top: 2px solid rgba(248,81,73,0.45); margin-top: 8px; padding-top: 8px; }
 .fs-section-warning  { border-left: 4px solid var(--yellow); background: rgba(210,153,34,0.04); margin-bottom: 12px; }
 .fs-section-retried  { border-left: 4px solid var(--orange); background: rgba(219,109,40,0.04); margin-bottom: 12px; }
-.fs-section-info     { border-left: 3px solid var(--accent); background: rgba(88,166,255,0.03); }
 
 .fs-section-header {
   display: flex;
@@ -483,7 +482,6 @@ a:hover { text-decoration: underline; }
 .fs-icon-critical { background: rgba(248,81,73,0.15); color: var(--red); }
 .fs-icon-warning  { background: rgba(210,153,34,0.15); color: var(--yellow); }
 .fs-icon-retried  { background: rgba(219,109,40,0.15); color: var(--orange); }
-.fs-icon-info     { background: rgba(88,166,255,0.15); color: var(--accent); }
 
 .fs-section-content {
   flex: 1;
@@ -510,10 +508,6 @@ a:hover { text-decoration: underline; }
 .fs-section-retried .fs-priority-label { color: var(--orange); }
 .fs-section-retried .fs-inline-jobs { border-top: 1px solid rgba(219,109,40,0.15); }
 
-.fs-section-info .fs-section-header { padding: 12px 16px; }
-.fs-section-info .fs-severity-icon { width: 28px; height: 28px; font-size: 13px; }
-.fs-section-info .fs-section-title { font-size: 14px; }
-
 /* Priority labels */
 .fs-priority-label {
   font-size: 10px;
@@ -524,21 +518,15 @@ a:hover { text-decoration: underline; }
 }
 .fs-section-critical .fs-priority-label { color: var(--red); }
 .fs-section-warning .fs-priority-label { color: var(--yellow); }
-.fs-section-info .fs-priority-label { color: var(--accent); }
 
 /* Inline blocking job list */
 .fs-inline-jobs {
   border-top: 1px solid rgba(248,81,73,0.15);
-  padding: 4px 0;
+  padding: 4px 16px;
 }
 .fs-blocking-row {
-  padding: 8px 18px 8px 52px;
-  border-bottom: 1px solid rgba(248,81,73,0.08);
   cursor: pointer;
-  transition: background 0.12s;
 }
-.fs-blocking-row:hover { background: rgba(248,81,73,0.06); }
-.fs-blocking-row:last-child { border-bottom: none; }
 .fs-blocking-main {
   display: flex;
   align-items: center;
@@ -591,32 +579,39 @@ a:hover { text-decoration: underline; }
   font-weight: 700;
 }
 
+/* Critical job health findings, with historical rates beneath each job title. */
+.fs-sippy-findings { padding: 0 16px 12px; }
+.fs-sippy-heading { font-weight: 600; font-size: 13px; }
+.fs-sippy-legend { margin: 10px 0; font-size: 12px; color: var(--text-muted); line-height: 1.8; }
+.fs-sippy-list { list-style: none; margin: 0; padding: 0; }
+.fs-sippy-job { font-size: 13px; overflow-wrap: anywhere; }
+.fs-sippy-rates { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 4px; font-size: 12px; font-weight: 700; color: #fff; }
+.fs-sippy-current {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid rgba(248,81,73,0.6);
+  border-radius: 6px;
+  background: rgba(248,81,73,0.16);
+}
+.fs-sippy-current strong { font-size: 13px; font-weight: 700; line-height: 1.3; font-variant-numeric: tabular-nums; }
+:root[data-theme="light"] .fs-sippy-rates { color: var(--text-strong); }
+.fs-sippy-details { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 5px; font-size: 12px; color: var(--text-muted); }
+.fs-sippy-blocking { cursor: pointer; }
+.fs-sippy-analysis-source { font-size: 12px; }
+
 /* Escalation risk list */
 .fs-escalation-list {
   border-top: 1px solid rgba(210,153,34,0.2);
-  padding: 8px 18px 4px 18px;
+  padding: 8px 16px 4px;
 }
 .fs-escalation-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 0 6px 40px;
-  border-bottom: 1px solid rgba(210,153,34,0.08);
   text-decoration: none;
-  transition: background 0.12s;
   cursor: pointer;
-}
-.fs-escalation-item:last-child { border-bottom: none; }
-.fs-escalation-item:hover { background: rgba(210,153,34,0.06); text-decoration: none; }
-.tooltip-run {
-  display: block;
-  padding: 3px 0;
-  border-top: 1px solid var(--border);
-}
-.tooltip-run a {
-  color: var(--accent);
-  font-size: 12px;
-  font-family: monospace;
 }
 .fs-escalation-left {
   display: flex;
@@ -973,32 +968,38 @@ details summary:hover { background: var(--surface-hover); }
   letter-spacing: 0.5px;
   color: var(--text-muted);
 }
-details.detail-row {
+.failure-row {
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 0;
   margin-bottom: 0;
   border-top: none;
 }
-details.detail-row:last-of-type {
+.failure-row:not([hidden]):not(:has(~ .failure-row:not([hidden]))) {
   border-radius: 0 0 8px 8px;
   margin-bottom: 8px;
 }
-details.detail-row > summary {
+.failure-row > summary,
+.failure-row > .sippy-job-summary {
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 500;
   list-style: none;
   display: grid;
   grid-template-columns: var(--detail-grid-cols);
   gap: 0 8px;
   align-items: center;
 }
-details.detail-row > summary::-webkit-details-marker { display: none; }
-details.detail-row > summary::before {
+details.failure-row > summary::-webkit-details-marker { display: none; }
+details.failure-row > summary::before {
   content: "\25B6";
   font-size: 10px;
   color: var(--text-muted);
   transition: transform 0.15s;
   justify-self: center;
 }
-details.detail-row[open] > summary::before { transform: rotate(90deg); }
-details.detail-row[open] {
+details.failure-row[open] > summary::before { transform: rotate(90deg); }
+details.failure-row[open] {
   border: 1px solid var(--accent);
   border-left: 3px solid var(--accent);
   background: rgba(88,166,255,0.04);
@@ -1006,8 +1007,23 @@ details.detail-row[open] {
   position: relative;
 }
 .detail-cell-topology { text-align: center; }
-details.detail-row > summary:hover { border-radius: 0; }
-details.detail-row:last-of-type > summary:hover { border-radius: 0 0 8px 8px; }
+details.failure-row > summary:hover { border-radius: 0; }
+.failure-row:not([hidden]):not(:has(~ .failure-row:not([hidden]))) > summary:hover { border-radius: 0 0 8px 8px; }
+.sippy-health-grid {
+  --detail-grid-cols: 24px minmax(180px, 2fr) 85px 70px 50px 105px 115px 115px minmax(320px, 3fr);
+}
+.sippy-health-grid .detail-grid-header > div { white-space: normal; }
+.sippy-health-grid .detail-cell-job { display: flex; align-items: center; gap: 4px; }
+.sippy-job-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sippy-health-grid .detail-cell-job > .badge { flex-shrink: 0; margin-left: 0; }
+.sippy-job-summary::before { content: ''; }
+.sippy-cell-runs, .sippy-cell-previous, .sippy-cell-change { font-size: inherit; font-variant-numeric: tabular-nums; }
+.sippy-health-grid .pass-rate { font-size: inherit; }
+.sippy-cell-action { display: flex; align-items: flex-start; gap: 8px; min-width: 0; font-size: inherit; }
+.sippy-cell-action > a { flex-shrink: 0; }
+.sippy-cell-action .cmd-copy-row { flex: 1; margin: 0; min-width: 0; }
+.sippy-cell-action code { min-width: 0; white-space: normal; overflow-wrap: anywhere; font-size: inherit; cursor: pointer; }
+.sippy-job-analysis, .da-field, .ai-highlight-cause, .ai-highlight-rec { overflow-wrap: anywhere; }
 .detail-cell-job {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1053,8 +1069,8 @@ details.detail-row:last-of-type > summary:hover { border-radius: 0 0 8px 8px; }
 .detail-grid-header > div { position: relative; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 1024px) {
   .detail-grid-header { display: none; }
-  details.detail-row { border-radius: 8px; margin-bottom: 8px; border-top: 1px solid var(--border); }
-  details.detail-row > summary { display: flex; flex-wrap: wrap; gap: 6px; }
+  .failure-row { border-radius: 8px; margin-bottom: 8px; border-top: 1px solid var(--border); }
+  .failure-row > summary, .failure-row > .sippy-job-summary { display: flex; flex-wrap: wrap; gap: 6px; }
   .detail-cell-job { flex-basis: 100%; white-space: normal; }
   .detail-cell-payload { display: none; }
 }
@@ -1202,9 +1218,11 @@ details pre {
 .claude-suggestion:hover .copy-btn,
 .claude-cmd-popup:hover .copy-btn,
 .action-cell:hover .copy-btn,
+.sippy-cell-action:hover .copy-btn,
 .copy-btn:focus,
 .copy-btn:focus-visible,
-.action-cell:focus-within .copy-btn { opacity: 1; }
+.action-cell:focus-within .copy-btn,
+.sippy-cell-action:focus-within .copy-btn { opacity: 1; }
 .copy-btn:hover, .copy-btn:focus { background: var(--surface-hover); }
 .copy-btn.copied { opacity: 1; color: var(--green); border-color: var(--green); }
 .copy-tooltip {
@@ -1243,17 +1261,19 @@ details pre {
   color: var(--green);
   font-size: 10px;
 }
-.ai-highlight-item {
+.fs-job-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--green);
+  border-left-width: 3px;
   border-radius: 6px;
   padding: 10px 14px;
   margin: 8px 0;
-  cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
 }
-.ai-highlight-item:hover {
+.ai-highlight-item { border-left-color: var(--green); cursor: pointer; }
+.fs-job-card:hover { background: var(--surface-hover); text-decoration: none; }
+.ai-highlight-item:hover,
+.ai-highlight-item:focus-visible {
   border-color: var(--green);
   background: var(--surface-hover);
 }
@@ -1268,6 +1288,8 @@ details pre {
   font-weight: 600;
   font-size: 13px;
   color: var(--text);
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 .ai-highlight-cause,
 .ai-highlight-rec {
@@ -1284,7 +1306,6 @@ details pre {
 }
 
 /* Regressions */
-.regression-row { border-left: 3px solid var(--red); }
 .pass-rate {
   font-weight: 600;
   font-size: 12px;

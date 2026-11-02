@@ -69,7 +69,7 @@ For a focused Component Readiness triage dump (counts, JIRA-linked triages, opti
 
 **Standalone CLI**: Run `python -m payload_monitor` to collect data and generate an HTML dashboard.
 
-**Claude Code skill**: Run `/edge-ocp-ci:generate-dashboard` to also get AI-powered root cause analysis for blocking job failures, using marketplace CI skills from [ai-helpers](https://github.com/openshift-eng/ai-helpers).
+**Claude Code skill**: Run `/edge-ocp-ci:generate-dashboard` to also get AI-powered root cause analysis for blocking job failures and the worst five Sippy job-health findings, using marketplace CI skills from [ai-helpers](https://github.com/openshift-eng/ai-helpers).
 
 ### Performance and Token Efficiency
 
@@ -79,8 +79,8 @@ For a focused Component Readiness triage dump (counts, JIRA-linked triages, opti
   - Prow artifact enrichment (junit XML downloads) runs across failing jobs in parallel (`collectors/prow.py`)
 - **Shared HTTP sessions**: All collectors reuse persistent `requests.Session` instances with automatic retry (3 attempts) and exponential backoff for transient failures (429, 5xx).
 - **No JSON round-trip for AI analysis**: AI analysis is patched directly into the existing HTML report instead of serializing/deserializing the full report data through JSON. The `--json` export preserves all enrichment data (failure counts, escalation risks, cross-topology correlations, thresholds) for external consumption.
-- **Minimal AI input**: Blocking job data is emitted to stdout via structured markers (`BLOCKING_JOBS_START`/`BLOCKING_JOBS_END`) — Claude reads only job names and Prow URLs, never the full report data. Deep analysis runs only on blocking job failures; informing jobs get a lightweight Claude suggestion instead.
-- **Multi-agent parallelism**: When multiple blocking jobs need analysis, each is analyzed by a separate subagent in parallel.
+- **Minimal AI input**: Blocking job data is emitted to stdout via structured markers (`BLOCKING_JOBS_START`/`BLOCKING_JOBS_END`) — Claude reads only job names and Prow URLs, never the full report data. The exact five Sippy findings and known failing runs are exported to `<report-stem>.ai-targets.json`. AI analyzes blocking failures and every selected Sippy job, reusing overlapping Prow investigations; other informing jobs retain a lightweight Claude suggestion.
+- **Multi-agent parallelism**: Blocking investigations run in parallel, followed by independent Sippy job-health analyses that reuse their evidence.
 
 ## Configuration
 
@@ -142,13 +142,21 @@ These patterns are defined in `payload_monitor/config.py`.
 The generated HTML report is a single self-contained file (no external dependencies) with:
 
 - **Health overview**: Per-version status badges, blocking/informing counts, topology badges, trend indicators, and payload acceptance timeline
-- **Findings summary**: Situation bar (blocking, informing, regressions, affected topologies) with severity-tiered sections (Critical/Warning/Regressions), inline blocking job list, unstable job details, and prominent action buttons
+- **Findings summary**: Blocking and informing payload failures stay separate from historical Sippy job health. Shows the worst five qualifying job/release pairs: relative pass-rate drop greater than 50% or current pass rate below 50%, even if flat or improving, with at least three current runs. Ranked by lowest current rate, then largest relative drop. Selection badges, a legend, and cross-references to overlapping blocking jobs explain each finding.
 - **Failing edge jobs**: Blocking and informing job failures across SNO/TNA/TNF topologies with a sortable, filterable grid
-- **Failure analysis**: Error messages, failing tests, and AI root cause analysis (when enriched via Claude skill)
-- **Sippy job regressions**: Edge jobs with significant pass rate drops compared to previous periods, with an **Action** column containing copyable `/ci:ask-sippy` commands
+- **Failure analysis**: Error messages, failing tests, and AI root cause analysis (when enriched via Claude skill), including AI analysis inside the matching Sippy Job Health Status row even when no blocking jobs fail
+- **Sippy job health**: Edge jobs with negative net improvement or current pass rate below 50%, with links and copyable `/ci:ask-sippy` commands. **Relative change** is `(current - previous) / previous * 100`, and is unavailable when the previous rate is zero. Summary cards share the nightly payload failure style; AI-analyzed Sippy jobs expand directly inside their Job Health Status row, using the same layout as nightly payload failures. Jobs without AI analysis remain non-expandable.
 - **Component Readiness**: HA vs edge topology (SNO, TNF) regressions detected by Fisher's exact test, with comparison filter and **Action** column for triage commands
 - **Timing insights** (opt-in): Install/upgrade duration stats, variant breakdowns, and phase duration trends per topology
 - **Suggested bugs**: Pre-filled JIRA bug-creation links for failing edge jobs, deduplicated by job name across payloads and versions
+
+Each collection run also writes `<report-stem>.sippy-summary.json` beside the HTML
+report. The release repository passes this compact file to its Slack step to show
+the count of distinct jobs with a relative pass-rate drop greater than 50% for
+each release (at least three current runs). These counts include all qualifying
+jobs, not just the five displayed in Findings Summary. Zero means no severe drops;
+`null` means Sippy was unavailable or skipped. Flat or improving low-pass-rate jobs
+appear in the dashboard but do not count as severe drops in Slack.
 
 ### Failure Intelligence
 
