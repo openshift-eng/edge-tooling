@@ -209,10 +209,18 @@ def _shipped_advisory_for_nvr(nvr):
     if not data:
         return None
 
-    released = data.get("released_errata") or []
+    # ``released_errata`` is a single advisory object (or null); ``all_errata``
+    # is a list of them. Keep the released advisory whole rather than splitting
+    # its fields, so it can be matched when it is not also in ``all_errata``.
+    candidates = []
+    released = data.get("released_errata")
     if isinstance(released, dict):
-        released = list(released.values())
-    for adv in list(released) + list(data.get("all_errata") or []):
+        candidates.append(released)
+    elif isinstance(released, list):
+        candidates.extend(released)
+    candidates.extend(data.get("all_errata") or [])
+
+    for adv in candidates:
         if not isinstance(adv, dict):
             continue
         name = adv.get("name") or ""
