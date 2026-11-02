@@ -193,7 +193,19 @@ def _find_rpms_errata_via_et(version, release_type):
     if not build.get("found"):
         return None
 
-    data = errata.fetch_build_advisories(build["nvr"])
+    # A version can map to several builds (e.g. separate el9 and el10 NVRs),
+    # and the advisory may be attached to any of them. Inspect every matching
+    # NVR and only give up once none yields a shipped advisory.
+    for nvr in build.get("nvrs") or [build["nvr"]]:
+        found = _shipped_advisory_for_nvr(nvr)
+        if found is not None:
+            return found
+    return None
+
+
+def _shipped_advisory_for_nvr(nvr):
+    """Return the shipped-advisory info for a single Brew NVR, or None."""
+    data = errata.fetch_build_advisories(nvr)
     if not data:
         return None
 
