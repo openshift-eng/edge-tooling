@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import webbrowser
@@ -19,7 +20,7 @@ from .collectors.release_controller import (
     version_from_stream,
 )
 from .config import Config
-from .models import JobResult, JobType, MonitorReport
+from .models import JobResult, JobType, MonitorReport, Regression, sort_versions
 from .report.generator import (
     generate_html,
     generate_json,
@@ -65,6 +66,23 @@ def _collect_jobs_by_type(report: MonitorReport, job_type: JobType) -> list[dict
                         "previous_attempt_urls": [pa.prow_url for pa in j.previous_attempts],
                     })
     return jobs
+
+
+def _write_sippy_summary(
+    html_path: Path, versions: list[str], results: dict[str, list[Regression]],
+) -> None:
+    """Write compact per-release counts for Slack; null means unavailable.
+
+    Count every distinct job with a >50% relative drop and at least 3 runs,
+    independently of the dashboard's five-job limit and payload failures.
+    """
+    counts = {
+        version: len({r.test_name for r in results[version]
+                      if r.current_runs >= 3 and r.severe_drop})
+        if version in results else None
+        for version in sort_versions(set(versions))
+    }
+    html_path.with_suffix(".sippy-summary.json").write_text(json.dumps(counts, indent=2))
 
 
 @click.command()
@@ -160,6 +178,7 @@ def main(
     active_versions = [version_from_stream(s) for s in stream_names]
     logger.info(f"  Versions: {active_versions}")
 
+    sippy_regressions = {}
     # Step 2: Collect data in parallel — RC payloads, Sippy regressions, and
     # Component Readiness are all independent once the version list is known.
     logger.info("Step 2: Collecting data (RC payloads, Sippy, Component Readiness)...")
@@ -192,6 +211,9 @@ def main(
         if not skip_sippy:
             try:
                 sippy_regressions = sippy_future.result()
+                for version in active_versions:
+                    if version not in sippy_regressions:
+                        data_errors.append(f"Sippy: job health unavailable for {version}")
                 for stream in stream_reports:
                     stream.regressions = sippy_regressions.get(stream.version, [])
             except Exception as e:
@@ -252,6 +274,7 @@ def main(
 
     # Generate HTML report
     generate_html(report, html_path)
+    _write_sippy_summary(html_path, active_versions, sippy_regressions)
 
     # Optionally export full JSON
     if export_json:

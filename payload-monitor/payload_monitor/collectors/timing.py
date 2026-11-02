@@ -415,7 +415,7 @@ def fetch_edge_jobs(release: str, config: Config) -> list[dict]:
     """
     from . import sippy as _sippy
 
-    return _sippy.fetch_edge_jobs(release, config, session=_session)
+    return _sippy.fetch_edge_jobs(release, config, session=_session) or []
 
 
 def fetch_job_runs(job_name: str, release: str) -> list[dict]:

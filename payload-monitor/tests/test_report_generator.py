@@ -102,16 +102,43 @@ class TestBuildTemplateContext:
         assert ctx["all_failing"] == []
         assert ctx["versions"] == []
         assert ctx["topologies"] == []
+        assert ctx["affected_topologies"] == []
 
-    def test_regressions_sorted_by_delta(self):
-        r1 = Regression("t1", "id1", "c1", "", basis_pass_rate=90, sample_pass_rate=50, version="4.19")
-        r2 = Regression("t2", "id2", "c2", "", basis_pass_rate=80, sample_pass_rate=70, version="4.19")
+    @pytest.mark.parametrize("payload_topology,sippy_topologies,expected", [
+        ("SNO", ["TNF"], ["SNO", "TNF"]),
+        (None, ["TNF"], ["TNF"]),
+        ("SNO", ["SNO", "", "TNF"], ["SNO", "TNF"]),
+    ])
+    def test_affected_topologies_include_sippy_without_changing_failure_filters(
+        self, payload_topology, sippy_topologies, expected,
+    ):
+        jobs = [JobRun("payload-job", "https://prow/1", JobResult.FAILURE,
+                       JobType.BLOCKING, payload_topology)] if payload_topology else []
+        payload = Payload("t", "s", "5.1", PayloadStatus.REJECTED, jobs=jobs)
+        regressions = [Regression(f"sippy-job-{i}", str(i), "", "", 80, 0,
+                                  topology=topology, current_runs=3)
+                       for i, topology in enumerate(sippy_topologies)]
+        report = MonitorReport(streams=[StreamReport("s", "5.1", payloads=[payload],
+                                                     regressions=regressions)])
+        context = _build_template_context(report)
+        assert context["affected_topologies"] == expected
+        assert context["topologies"] == ([payload_topology] if payload_topology else [])
+        html = generate_html(report)
+        badges = html.split('<div class="fs-situation-topos">')[1].split('</div>')[0]
+        for topology in expected:
+            assert badges.count(f'>{topology}</span>') == 1
+        for topology in set(sippy_topologies) - {payload_topology, ""}:
+            assert f'data-group="topology" data-value="{topology}"' not in html
+
+    def test_regressions_sorted_by_relative_change(self):
+        r1 = Regression("t1", "id1", "c1", "", basis_pass_rate=100, sample_pass_rate=60, version="4.19")
+        r2 = Regression("t2", "id2", "c2", "", basis_pass_rate=40, sample_pass_rate=20, version="4.19")
         stream = StreamReport("s", "4.19", regressions=[r1, r2])
         report = MonitorReport(generated_at="now", streams=[stream])
 
         ctx = _build_template_context(report)
-        # r1 has worse delta (-40) than r2 (-10), should come first
-        assert ctx["all_regressions"][0].test_name == "t1"
+        # r2 has a larger relative drop (50% vs 40%) despite a smaller point drop.
+        assert ctx["all_regressions"][0].test_name == "t2"
 
 
 class TestFailureCountsContext:
@@ -128,15 +155,6 @@ class TestFailureCountsContext:
         assert ctx["failure_counts"] == {"j": 3, "k": 1}
         assert ctx["recurring_threshold"] == 2
         assert ctx["persistent_threshold"] == 3
-
-    def test_persistent_count_calculation(self):
-        report = MonitorReport(
-            generated_at="now",
-            failure_counts={"a": 3, "b": 4, "c": 1},
-        )
-        ctx = _build_template_context(report)
-        assert ctx["persistent_count"] == 2
-
 
 class TestRenderAnalysisCard:
     def test_basic_card(self):

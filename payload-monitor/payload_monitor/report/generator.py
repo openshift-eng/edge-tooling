@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 from jinja2 import Environment, FileSystemLoader
 from markupsafe import escape
 
+from ..job_health import priority_sippy_findings, sippy_findings
 from ..models import (
     AttemptAnalysis,
     ComponentRegression,
@@ -80,7 +81,6 @@ def _build_template_context(report: MonitorReport) -> dict:
     """Build the Jinja2 template context from a MonitorReport."""
     # Collect all failing edge jobs with their context
     all_failing = []
-    failure_details = []
     for stream in report.streams:
         for payload in stream.payloads:
             for job in payload.failing_edge_jobs:
@@ -92,8 +92,6 @@ def _build_template_context(report: MonitorReport) -> dict:
                     "date": _extract_date(payload.tag),
                 }
                 all_failing.append(item)
-                if job.failing_tests:
-                    failure_details.append(item)
 
     # Sort: blocking first, then escalation-risk (unstable), then the rest
     escalation_risk_names = {er.job_name for er in report.escalation_risks}
@@ -157,13 +155,12 @@ def _build_template_context(report: MonitorReport) -> dict:
                         "payload_url": payload.url,
                     })
 
-    # Collect all regressions
-    all_regressions = []
-    for stream in report.streams:
-        for r in stream.regressions:
-            if not r.version:
-                r.version = stream.version
-            all_regressions.append(r)
+    all_regressions = sippy_findings(report)
+    priority_sippy = priority_sippy_findings(all_regressions)
+    all_regressions.sort(
+        key=lambda r: r.relative_change if r.relative_change is not None else float("inf"),
+    )
+    priority_keys = {r.analysis_key for r in priority_sippy[:5]}
 
     # Per-stream views: affected topologies + trend
     stream_views = []
@@ -200,6 +197,9 @@ def _build_template_context(report: MonitorReport) -> dict:
     topologies = sorted(set(
         job["job"].topology for job in all_failing if job["job"].topology
     ))
+    affected_topologies = sorted(set(topologies) | {
+        r.topology for r in all_regressions if r.topology
+    })
     versions = sort_versions(set(stream.version for stream in report.streams))
 
     # Generate timing HTML if available
@@ -212,11 +212,19 @@ def _build_template_context(report: MonitorReport) -> dict:
     return {
         "report": report,
         "all_failing": all_failing,
-        "failure_details": failure_details,
-        "all_regressions": sorted(
-            all_regressions,
-            key=lambda r: r.sample_pass_rate - r.basis_pass_rate,
-        ),
+        "priority_sippy": priority_sippy[:5],
+        "priority_sippy_count": len(priority_sippy),
+        "sippy_analysis_ids": {
+            r.analysis_key: f"sippy-row-{index}"
+            for index, r in enumerate(all_regressions, 1) if r.analysis_key in priority_keys
+        },
+        "sippy_analysis_cards": {
+            r.analysis_key: _render_analysis_card(asdict(r.deep_analysis), job_name=r.test_name)
+            for r in priority_sippy[:5] if r.deep_analysis
+        },
+        "blocking_job_pairs": {(item["version"], item["job"].name) for item in all_failing
+                               if item["job"].job_type == JobType.BLOCKING},
+        "all_regressions": all_regressions,
         "component_regressions": sorted(
             report.component_regressions,
             key=lambda cr: cr.sample_pass_rate - cr.base_pass_rate,
@@ -233,6 +241,7 @@ def _build_template_context(report: MonitorReport) -> dict:
             if cr.comparison
         )),
         "topologies": topologies,
+        "affected_topologies": affected_topologies,
         "versions": versions,
         "reg_topologies": sorted(set(
             r.topology for r in all_regressions if r.topology
@@ -244,7 +253,6 @@ def _build_template_context(report: MonitorReport) -> dict:
         "timing_unavailable": timing_unavailable,
         "timing_errors": timing_errors,
         "failure_counts": report.failure_counts,
-        "persistent_count": sum(1 for c in report.failure_counts.values() if c >= report.persistent_threshold),
         "recurring_threshold": report.recurring_threshold,
         "persistent_threshold": report.persistent_threshold,
         "escalation_risks": report.escalation_risks,
@@ -290,9 +298,41 @@ def generate_html(report: MonitorReport, output_path: Optional[Path] = None) -> 
     if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(rendered_html)
+        _write_ai_targets(report, context["priority_sippy"], output_path)
         logger.info(f"Report written to {output_path}")
 
     return rendered_html
+
+
+def _write_ai_targets(report: MonitorReport, findings: list[Regression], html_path: Path) -> None:
+    """Export exactly the visible Sippy findings, with known runs for evidence reuse."""
+    targets = []
+    for r in findings:
+        runs = {}
+        for stream in report.streams:
+            if stream.version != r.version:
+                continue
+            for payload in stream.payloads:
+                for job in payload.failing_edge_jobs:
+                    if job.name == r.test_name and job.prow_url:
+                        runs[job.prow_url] = {
+                            "prow_url": job.prow_url,
+                            "job_type": job.job_type.value,
+                            "previous_attempt_urls": [p.prow_url for p in job.previous_attempts],
+                        }
+        targets.append({
+            "analysis_key": r.analysis_key,
+            "job_name": r.test_name,
+            "version": r.version,
+            "topology": r.topology,
+            "triage_url": r.triage_url,
+            "current_pass_rate": r.sample_pass_rate,
+            "previous_pass_rate": r.basis_pass_rate,
+            "relative_change": r.relative_change,
+            "current_runs": r.current_runs,
+            "known_failing_runs": list(runs.values()),
+        })
+    html_path.with_suffix(".ai-targets.json").write_text(json.dumps({"sippy_jobs": targets}, indent=2))
 
 
 def generate_json(report: MonitorReport, output_path: Path) -> None:
@@ -393,12 +433,14 @@ def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
     - ``data-prow-url`` on ``.claude-suggestion`` divs marks where cards go
     - ``data-attempt-count`` carries the retry count for scope notes
     - ``data-prow-url`` on ``<details>`` elements identifies where to add badges
+    - ``data-sippy-key`` on ``.sippy-analysis`` divs identifies job/release findings
     - ``data-enrichment-status="data-only"`` marks the header status div
     """
     data = _load_json(analysis_path, "Analysis JSON")
 
     by_url = data.get("by_prow_url", {})
-    if not by_url:
+    by_sippy_job = data.get("by_sippy_job", {})
+    if not by_url and not by_sippy_job:
         logger.info("No analysis entries to patch")
         return
 
@@ -413,13 +455,14 @@ def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
         re.DOTALL,
     )
     _details_re = re.compile(
-        r'(<details [^>]*data-prow-url="([^"]*)"[^>]*>)\s*<summary>'
+        r'(<details [^>]*data-(?:prow-url|sippy-key)="([^"]*)"[^>]*>)\s*<summary>'
         r'(.*?)'
         r'(</summary>)',
         re.DOTALL,
     )
 
     patched_urls: set[str] = set()
+    patched_sippy_keys: set[str] = set()
 
     def _replace_suggestion(m: re.Match) -> str:
         nonlocal patched
@@ -434,12 +477,57 @@ def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
 
     content = _suggestion_re.sub(_replace_suggestion, content)
 
-    def _insert_badge(m: re.Match) -> str:
-        if html_mod.unescape(m.group(2)) not in patched_urls:
+    def _replace_sippy(m: re.Match) -> str:
+        nonlocal patched
+        key = html_mod.unescape(m.group(2))
+        da = by_sippy_job.get(key)
+        if da is None:
             return m.group(0)
+        patched += 1
+        patched_sippy_keys.add(key)
+        card = _render_analysis_card(da, job_name=da.get("job_name", ""))
+        return f'{m.group(1)}{card}</div><!-- /sippy-analysis -->'
+
+    content = re.sub(
+        r'(<div class="sippy-analysis" data-sippy-key="([^"]*)">)'
+        r'.*?</div><!-- /sippy-analysis -->',
+        _replace_sippy, content, flags=re.DOTALL,
+    )
+    def _enable_sippy_row(m: re.Match) -> str:
+        if html_mod.unescape(m.group(2)) not in patched_sippy_keys:
+            return m.group(0)
+        row = m.group(0)
+        row = row.replace('<div ', '<details ', 1)
+        row = row.replace('<div class="sippy-job-summary">', '<summary>', 1)
+        row = row.replace('</div><!-- /sippy-job-summary -->', '</summary><!-- /sippy-job-summary -->', 1)
+        row = row.replace('<div class="content sippy-job-analysis" hidden>', '<div class="content sippy-job-analysis">', 1)
+        return row.removesuffix('</div><!-- /sippy-job -->') + '</details><!-- /sippy-job -->'
+
+    content = re.sub(
+        r'(<div id="sippy-row-\d+"[^>]*data-sippy-key="([^"]*)"[^>]*>)'
+        r'.*?</div><!-- /sippy-job -->',
+        _enable_sippy_row, content, flags=re.DOTALL,
+    )
+
+    def _insert_badge(m: re.Match) -> str:
+        if html_mod.unescape(m.group(2)) not in patched_urls | patched_sippy_keys:
+            return m.group(0)
+
+        def _mark_analyzed(status: re.Match) -> str:
+            values = status.group(1).split()
+            if "ai-analyzed" not in values:
+                values.append("ai-analyzed")
+            return f'data-status="{" ".join(values)}"'
+
+        details_tag = re.sub(r'data-status="([^"]*)"', _mark_analyzed, m.group(1))
+        details_tag = re.sub(r' hidden>$', '>', details_tag)
         summary_content = m.group(3)
         if "ai-analyzed" in summary_content:
-            return m.group(0)
+            return f'{details_tag}\n  <summary>{summary_content}{m.group(4)}'
+        sippy_name_end = '</span><!-- /sippy-job-name -->'
+        if sippy_name_end in summary_content:
+            summary_content = summary_content.replace(sippy_name_end, sippy_name_end + badge_html, 1)
+            return f'{details_tag}\n  <summary>{summary_content}{m.group(4)}'
         # Grid layout: insert badge inside the job cell before its closing </span>
         job_anchor = 'class="detail-cell-job"'
         job_pos = summary_content.find(job_anchor)
@@ -453,7 +541,7 @@ def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
                         + badge_html
                         + summary_content[close_pos:]
                     )
-                    return f'{m.group(1)}\n  <summary>{summary_content}{m.group(4)}'
+                    return f'{details_tag}\n  <summary>{summary_content}{m.group(4)}'
         # Legacy flat layout fallback
         for anchor in ('class="detail-date"', 'class="detail-version"'):
             anchor_pos = summary_content.find(anchor)
@@ -477,7 +565,7 @@ def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
             break
         else:
             summary_content = summary_content + ' ' + badge_html
-        return f'{m.group(1)}\n  <summary>{summary_content}{m.group(4)}'
+        return f'{details_tag}\n  <summary>{summary_content}{m.group(4)}'
 
     content = _details_re.sub(_insert_badge, content)
 
@@ -503,7 +591,8 @@ def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
 def merge_analysis(report: MonitorReport, analysis_path: Path) -> None:
     """Merge a small analysis-only JSON into a MonitorReport.
 
-    The analysis JSON is keyed by prow_url:
+    Blocking results use ``by_prow_url``. Sippy job-health results use
+    ``by_sippy_job`` keyed by Regression.analysis_key, with the same card fields:
     {
       "by_prow_url": {
         "https://prow.ci.../123": {
@@ -519,6 +608,7 @@ def merge_analysis(report: MonitorReport, analysis_path: Path) -> None:
     data = _load_json(analysis_path, "Analysis JSON")
 
     by_url = data.get("by_prow_url", {})
+    by_sippy_job = data.get("by_sippy_job", {})
     merged = 0
     for stream in report.streams:
         for payload in stream.payloads:
@@ -526,6 +616,11 @@ def merge_analysis(report: MonitorReport, analysis_path: Path) -> None:
                 if job.prow_url in by_url:
                     job.deep_analysis = _build_deep_analysis(by_url[job.prow_url])
                     merged += 1
+
+    for regression in sippy_findings(report):
+        if regression.analysis_key in by_sippy_job:
+            regression.deep_analysis = _build_deep_analysis(by_sippy_job[regression.analysis_key])
+            merged += 1
 
     logger.info(f"Merged deep analysis for {merged} job(s)")
 
@@ -623,6 +718,7 @@ def load_json(json_path: Path) -> MonitorReport:
                 triage_url=r.get("triage_url", ""),
                 jira_bug=r.get("jira_bug", ""),
                 current_runs=r.get("current_runs", 0),
+                deep_analysis=_build_deep_analysis(r["deep_analysis"]) if r.get("deep_analysis") else None,
             ))
 
         streams.append(StreamReport(

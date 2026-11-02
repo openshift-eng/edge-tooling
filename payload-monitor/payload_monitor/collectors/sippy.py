@@ -21,8 +21,8 @@ JOBS_URL = f"{BASE_URL}/api/jobs"
 
 def fetch_edge_jobs(
     release: str, config: Config, session: requests.Session | None = None
-) -> list[dict]:
-    """Fetch jobs from Sippy and filter for edge topologies."""
+) -> list[dict] | None:
+    """Fetch edge jobs, returning None when the source is unavailable."""
     logger.info(f"Fetching Sippy jobs for release {release}")
 
     s = session or create_session()
@@ -32,11 +32,11 @@ def fetch_edge_jobs(
         all_jobs = resp.json()
     except requests.RequestException as e:
         logger.error(f"Failed to fetch Sippy jobs for {release}: {e}")
-        return []
+        return None
 
     if not isinstance(all_jobs, list):
         logger.error(f"Unexpected Sippy jobs response format: {type(all_jobs)}")
-        return []
+        return None
 
     edge_jobs = []
     for job in all_jobs:
@@ -63,7 +63,7 @@ def identify_regressions(
     version: str = "",
     min_runs: int = 3,
 ) -> list[Regression]:
-    """Identify jobs that are getting worse over time.
+    """Identify regressing jobs and jobs with a current pass rate below 50%.
 
     Uses Sippy's pre-computed net_improvement field which handles edge cases
     (e.g. zero runs in either period). A negative net_improvement means the
@@ -86,8 +86,8 @@ def identify_regressions(
         if current_runs < min_runs:
             continue
 
-        # Flag as regression if the job is getting worse over time
-        if net_improvement >= 0:
+        # Retain low pass rates even when flat or improving.
+        if net_improvement >= 0 and current_pass >= 50:
             continue
 
         regressions.append(Regression(
@@ -110,6 +110,8 @@ def _collect_version(version: str, config: Config) -> tuple[str, list[Regression
     session = create_session()
     try:
         edge_jobs = fetch_edge_jobs(version, config, session=session)
+        if edge_jobs is None:
+            raise RuntimeError(f"Sippy jobs unavailable for {version}")
         regressions = identify_regressions(edge_jobs, version=version)
         if regressions:
             logger.info(
@@ -123,7 +125,8 @@ def _collect_version(version: str, config: Config) -> tuple[str, list[Regression
 def collect(config: Config, versions: list[str]) -> dict[str, list[Regression]]:
     """Collect Sippy regressions for all configured versions in parallel.
 
-    Returns a dict mapping version -> list of regressions.
+    Returns a dict mapping version -> list of job findings. Failed versions
+    are omitted so consumers can distinguish unavailable data from zero findings.
     """
     results = {}
     with ThreadPoolExecutor(max_workers=min(len(versions) or 1, 10)) as pool:
@@ -138,5 +141,4 @@ def collect(config: Config, versions: list[str]) -> dict[str, list[Regression]]:
                 results[version] = regressions
             except Exception as e:  # broad catch: isolate per-version failures
                 logger.error(f"Sippy collection failed for {v}: {e}")
-                results[v] = []
     return results
