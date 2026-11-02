@@ -138,6 +138,23 @@ def fetch_advisory(advisory_id):
     return advisory
 
 
+def fetch_build_advisories(nvr):
+    """Fetch the advisories associated with a Brew build.
+
+    Used to discover an advisory when Hydra's search index is behind. The
+    response carries ``released_errata`` and ``all_errata`` (entries with
+    ``id``, ``name`` and ``status``).
+
+    Args:
+        nvr: Brew NVR, e.g.
+             ``microshift-4.19.53-202610271823.p0.gb3195dc.assembly.4.19.53.el9``.
+
+    Returns:
+        dict with ``released_errata`` / ``all_errata``, or None.
+    """
+    return _et_get(f"build/{nvr}")
+
+
 def fetch_builds(advisory_id):
     """Fetch builds attached to an advisory.
 
