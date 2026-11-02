@@ -14,7 +14,7 @@
   {% set has_analysis = r.analysis_key in sippy_analysis_cards %}
   {% set row_tag = 'details' if has_analysis else 'div' %}
   {% set summary_tag = 'summary' if has_analysis else 'div' %}
-  <{{ row_tag }} id="sippy-row-{{ loop.index }}" class="regression-row failure-row" data-sippy-key="{{ r.analysis_key }}" data-job-name="{{ r.test_name }}" data-topology="{{ r.topology }}" data-version="{{ r.version }}" data-regtopology="{{ r.topology }}" data-regversion="{{ r.version }}" data-row-index="{{ loop.index }}">
+  <{{ row_tag }} id="sippy-row-{{ loop.index }}" class="regression-row failure-row" data-sippy-key="{{ r.analysis_key }}" data-job-name="{{ r.test_name }}" data-regtopology="{{ r.topology }}" data-regversion="{{ r.version }}" data-row-index="{{ loop.index }}">
     <{{ summary_tag }}{% if not has_analysis %} class="sippy-job-summary"{% endif %}>
       <span class="detail-cell-job" title="{{ r.test_name }}"><span class="sippy-job-name">{{ r.test_name }}</span><!-- /sippy-job-name -->{% if has_analysis %}<span class="badge ai-analyzed">AI Analyzed</span>{% endif %}</span>
       <span class="detail-cell-topology"><span class="badge {{ r.topology | lower }}">{{ r.topology }}</span></span>

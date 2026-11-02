@@ -148,6 +148,8 @@ def main(
             logger.info(f"Merging analysis from {merge_analysis_path}")
             merge_analysis(report, Path(merge_analysis_path))
         generate_html(report, html_path)
+        # Exported report JSON does not preserve Sippy availability per release.
+        html_path.with_suffix(".sippy-summary.json").unlink(missing_ok=True)
         logger.info(f"Report regenerated: {html_path.resolve()}")
         if open_browser:
             webbrowser.open(f"file://{html_path.resolve()}")

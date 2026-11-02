@@ -3,6 +3,7 @@
 import json
 import html as html_lib
 import re
+import pytest
 
 from payload_monitor.models import (
     JobResult, JobRun, JobType, MonitorReport, Payload, PayloadStatus,
@@ -42,6 +43,24 @@ def sippy_rows(html):
             r'.*?</(?:div|details)><!-- /sippy-job -->', html, re.DOTALL,
         )
     }
+
+
+@pytest.mark.parametrize("with_analysis", [False, True])
+def test_sippy_rows_only_expose_their_own_filter_attributes(tmp_path, with_analysis):
+    report = report_with_findings(1)
+    path = tmp_path / "report.html"
+    generate_html(report, path)
+    if with_analysis:
+        patch_analysis_html(path, write_analysis(tmp_path, by_sippy_job={
+            "4.19/job-0": analysis(),
+        }))
+    tag, row = sippy_rows(path.read_text())["4.19/job-0"]
+    assert tag == ("details" if with_analysis else "div")
+    opening = row.split(">", 1)[0]
+    assert ' data-regtopology="SNO"' in opening
+    assert ' data-regversion="4.19"' in opening
+    assert ' data-topology=' not in opening
+    assert ' data-version=' not in opening
 
 
 def test_manifest_matches_exactly_the_five_visible_jobs_without_blockers(tmp_path):

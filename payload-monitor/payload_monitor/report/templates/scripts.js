@@ -445,9 +445,9 @@ document.addEventListener('DOMContentLoaded', function() {
     function readAnalysis(card, detail) {
       var item = {
         detail: detail,
-        topology: detail.dataset.topology || '',
+        topology: detail.dataset.regtopology || detail.dataset.topology || '',
         jobtype: detail.dataset.jobtype || '',
-        version: detail.dataset.version || '',
+        version: detail.dataset.regversion || detail.dataset.version || '',
         jobName: detail.dataset.jobName || '',
         rootCause: '', failureType: '', recommendation: ''
       };

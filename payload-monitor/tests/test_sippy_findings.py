@@ -4,14 +4,15 @@ import json
 from unittest.mock import patch
 
 import pytest
+from click.testing import CliRunner
 
-from payload_monitor.__main__ import _write_sippy_summary
+from payload_monitor.__main__ import _write_sippy_summary, main
 from payload_monitor.collectors import sippy
 from payload_monitor.models import (
     JobResult, JobRun, JobType, MonitorReport, Payload, PayloadStatus,
     Regression, StreamReport,
 )
-from payload_monitor.report.generator import _build_template_context, generate_html
+from payload_monitor.report.generator import _build_template_context, generate_html, generate_json
 
 
 def finding(name, previous, current, runs=3):
@@ -144,3 +145,30 @@ def test_skipped_sippy_has_unavailable_counts(tmp_path):
     assert json.loads(html_path.with_suffix(".sippy-summary.json").read_text()) == {
         "4.19": None, "4.20": None,
     }
+
+
+@pytest.mark.parametrize("has_summary", [True, False])
+def test_from_json_clears_stale_summary_before_opening_report(tmp_path, has_summary):
+    report = MonitorReport(streams=[StreamReport(
+        "s", "4.19", regressions=[finding("replacement-job", 80, 30)],
+    )])
+    source = tmp_path / "source.json"
+    generate_json(report, source)
+    output = tmp_path / "report.html"
+    output.write_text("old HTML")
+    summary = output.with_suffix(".sippy-summary.json")
+    if has_summary:
+        summary.write_text(json.dumps({"4.19": 99, "4.20": 42}))
+
+    def check_open(url):
+        assert url == f"file://{output.resolve()}"
+        assert "replacement-job" in output.read_text()
+        assert not summary.exists()
+
+    with patch("payload_monitor.__main__.webbrowser.open", side_effect=check_open) as opened:
+        result = CliRunner().invoke(main, [
+            "--from-json", str(source), "--output", str(output), "--open",
+        ])
+    assert result.exit_code == 0, result.output
+    opened.assert_called_once()
+    assert not summary.exists()
