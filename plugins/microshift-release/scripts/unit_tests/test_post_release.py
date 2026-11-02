@@ -784,6 +784,29 @@ class TestFindRpmsErrataViaErrataTool(unittest.TestCase):
     @patch("post_release.errata.fetch_build_advisories")
     @patch("post_release.brew.get_build_info")
     @patch("post_release.requests.get")
+    def test_et_fallback_released_errata_only(self, mock_get, mock_build,
+                                              mock_advisories, mock_advisory):
+        # The advisory is present only as the single released_errata object,
+        # not in all_errata. It must still be matched (not split into scalars).
+        mock_get.return_value = _empty_hydra_response()
+        mock_build.return_value = {"found": True, "nvr": self._NVR}
+        mock_advisories.return_value = {
+            "released_errata": {
+                "id": 175922, "name": "RHSA-2026:91191",
+                "status": "SHIPPED_LIVE",
+            },
+            "all_errata": [],
+        }
+        mock_advisory.return_value = {"issue_date": "2026-10-29"}
+
+        result = find_rpms_errata("4.19.53", "4.19", "Z", vpn_ok=True)
+
+        self.assertEqual(result["advisory_name"], "RHSA-2026:91191")
+
+    @patch("post_release.errata.fetch_advisory")
+    @patch("post_release.errata.fetch_build_advisories")
+    @patch("post_release.brew.get_build_info")
+    @patch("post_release.requests.get")
     def test_et_fallback_checks_all_nvrs(self, mock_get, mock_build,
                                          mock_advisories, mock_advisory):
         # The advisory is attached to the second matching NVR (e.g. el10),
