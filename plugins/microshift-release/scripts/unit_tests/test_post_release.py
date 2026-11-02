@@ -780,6 +780,32 @@ class TestFindRpmsErrataViaErrataTool(unittest.TestCase):
         self.assertIsNone(result)
         mock_advisories.assert_not_called()
 
+    @patch("post_release.errata.fetch_advisory")
+    @patch("post_release.errata.fetch_build_advisories")
+    @patch("post_release.brew.get_build_info")
+    @patch("post_release.requests.get")
+    def test_et_fallback_checks_all_nvrs(self, mock_get, mock_build,
+                                         mock_advisories, mock_advisory):
+        # The advisory is attached to the second matching NVR (e.g. el10),
+        # not the first (el9). Both must be inspected before giving up.
+        nvr_el9 = self._NVR
+        nvr_el10 = self._NVR.replace(".el9", ".el10")
+        mock_get.return_value = _empty_hydra_response()
+        mock_build.return_value = {
+            "found": True, "nvr": nvr_el9, "nvrs": [nvr_el9, nvr_el10],
+        }
+        mock_advisories.side_effect = lambda nvr: (
+            self._et_build_advisories() if nvr == nvr_el10 else None
+        )
+        mock_advisory.return_value = {"issue_date": "2026-10-29"}
+
+        result = find_rpms_errata("4.19.53", "4.19", "Z", vpn_ok=True)
+
+        self.assertEqual(result["advisory_name"], "RHSA-2026:91191")
+        self.assertEqual(
+            [c.args[0] for c in mock_advisories.call_args_list],
+            [nvr_el9, nvr_el10])
+
 
 # ── Formatting ─────────────────────────────────────────────────
 
