@@ -175,16 +175,55 @@ This produces `jira_activity.json` in the same format as the legacy REST collect
 - **Transient error (429/500/503):** Retry once, then skip that member with a warning.
 - **Member with no results:** Valid — all 3 queries can return empty. Continue.
 
-### 4b. Collect GitHub activity via Python script
+### 4b. Collect GitHub activity (PR collection + Jira attribution via MCP)
 
-GitHub activity is collected via the existing Python script (uses GitHub GraphQL API):
+GitHub PRs are collected via the existing Python script (uses GitHub GraphQL API
+through `gh`), but it performs no Jira lookups itself — PRs reference Jira keys
+in their title/body, and those keys need resolving to a workstream the same way
+the Jira activity above does.
+
+**Collect raw PRs and referenced Jira keys:**
 
 ```bash
 python3 "$PLUGIN_ROOT/bin/collect_github.py" --members-file "$WORKDIR/roster.json" \
-  <PERIOD-FLAGS> --output "$WORKDIR/github_activity.json"
+  <PERIOD-FLAGS> --output "$WORKDIR/github_prs_raw.json"
 ```
 
-**Note:** GitHub collection is unchanged and continues to use the Python REST client.
+This writes `{"pr_pairs": [...], "jira_keys": [...], "excluded_personal_repo_prs": N,
+"excluded_personal_repos": {...}}` — no Jira data yet.
+
+**Resolve the referenced Jira keys via MCP** (batched, 100 keys per query):
+
+Read `jira_keys` from `github_prs_raw.json`. Split into batches of 100. For each batch:
+
+- JQL: `key in (OCPEDGE-1234,OCPEDGE-1235,...)`
+- Fields: `key,components,parent`
+
+**Resolve parent components** the same way as step 4a: collect the parent keys
+referenced, batch-query `key,components` for them, and build a
+`{parent_key: workstream_or_null}` map.
+
+**Write intermediate JSON** (`raw_jira_issues_for_github.json`):
+
+```json
+{
+  "issues": [
+    {"fields": {"key": "OCPEDGE-1234", "components": [...], "parent": {"key": "OCPEDGE-999"}}}
+  ],
+  "parent_workstreams": {"OCPEDGE-999": "SNO" | null}
+}
+```
+
+**Apply attribution:**
+
+```bash
+python3 "$PLUGIN_ROOT/bin/attribute_github_activities.py" \
+  --raw-prs "$WORKDIR/github_prs_raw.json" \
+  --raw-jira-issues "$WORKDIR/raw_jira_issues_for_github.json" \
+  --output "$WORKDIR/github_activity.json"
+```
+
+This produces `github_activity.json` in the same format as before.
 
 ---
 

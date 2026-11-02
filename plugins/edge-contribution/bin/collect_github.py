@@ -8,9 +8,12 @@ attributing every PR to a workstream:
 * **pr_authored** — PRs the member opened in ``openshift``/``openshift-eng``.
 * **pr_reviewed** — PRs the member reviewed in the same orgs.
 
-Attribution parses referenced Jira keys from the PR title and body, then resolves
-every unique key in a single batch prefetch, mapping each to a workstream via its
-Jira components. A PR that references no mappable workstream is kept with
+Attribution parses referenced Jira keys from the PR title and body. This script
+only collects PRs and extracts those keys — it performs no Jira lookups itself.
+It writes a raw payload (PR data + the set of referenced Jira keys) for the skill
+to resolve via the ``mcp-atlassian`` MCP tools, then ``attribute_github_activities.py``
+applies the actual attribution (component → parent epic → project fallback) as a
+pure, offline step. A PR that references no mappable workstream is kept with
 ``workstream=None`` so it lands in the unattributed bucket rather than being dropped.
 
 GraphQL queries are chunked to avoid request-size limits; if a chunk fails with an
@@ -18,12 +21,12 @@ HTTP error, it is split in half and retried until down to single-slot granularit
 Pagination follows ``pageInfo.hasNextPage`` cursors until all results are fetched.
 
 PRs in personal-namespace repos are dropped before attribution. Because a dropped
-PR leaves no record behind, the drop count is written alongside the records in a
-``{"activities": [...], "collector_meta": {...}}`` envelope rather than only being
-printed, so the data-quality block downstream can report it.
+PR leaves no record behind, the drop count is written alongside the records in the
+raw payload rather than only being printed, so the data-quality block downstream
+can report it.
 
-Both impure edges — the ``gh`` command runner and the Jira client — are injected,
-so this collector's logic is fully unit-testable without a subprocess or network.
+The ``gh`` command runner is injected, so this collector's logic is fully
+unit-testable without a subprocess or network.
 """
 
 from __future__ import annotations
@@ -32,19 +35,15 @@ import argparse
 import json
 import re
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional
 
 from _common import (
     CollectorError,
     CommandResult,
     CommandRunner,
-    JiraAuthError,
-    JiraClient,
     Window,
-    activity_payload,
     build_default_runner,
-    jira_config_from_env,
     run_with_rate_limit_retry,
     resolve_window,
 )
@@ -461,66 +460,26 @@ def _components_to_workstream(components: List[dict]) -> Optional[str]:
 
 
 def resolve_workstreams(
-    client: JiraClient, keys: List[str], batch_size: int = 100
+    keys: List[str],
+    issues_by_key: Dict[str, dict],
+    parent_workstreams: Dict[str, Optional[str]],
 ) -> dict[str, tuple[Optional[str], Optional[str]]]:
     """Map each Jira key to (workstream, attribution_source).
 
     Attribution order (first hit wins):
       1. the issue's own components → source "component"
-      2. the parent epic's component → source "parent"
+      2. the parent epic's component (via pre-resolved ``parent_workstreams``) → source "parent"
       3. project_to_workstream(key) → source "project"
 
-    Keys absent from Jira resolve to (None, None). Authentication errors propagate.
+    Keys absent from ``issues_by_key`` resolve to (None, None). Pure: all Jira
+    data is pre-fetched by the skill via MCP, so this performs no network calls.
     """
-    if not keys:
-        return {}
-    mapping: dict[str, tuple[Optional[str], Optional[str]]] = {key: (None, None) for key in keys}
+    mapping: dict[str, tuple[Optional[str], Optional[str]]] = {}
 
-    # First pass: fetch issues with their components and parent references
-    issues_by_key: dict[str, dict] = {}
-    parent_keys: List[str] = []
-
-    for i in range(0, len(keys), batch_size):
-        batch = keys[i : i + batch_size]
-        jql = f"key in ({','.join(batch)})"
-        try:
-            issues = client.search(jql, ["key", "components", "parent"])
-        except JiraAuthError:
-            raise
-        except CollectorError:
-            continue
-        for issue in issues:
-            key = issue.get("key")
-            if key:
-                issues_by_key[key] = issue
-                # Collect parent keys for batch resolution
-                parent = issue.get("fields", {}).get("parent")
-                if parent:
-                    parent_key = parent.get("key")
-                    if parent_key and parent_key not in parent_keys:
-                        parent_keys.append(parent_key)
-
-    # Second pass: batch-resolve parent keys to get their components
-    parents_by_key: dict[str, dict] = {}
-    for i in range(0, len(parent_keys), batch_size):
-        batch = parent_keys[i : i + batch_size]
-        jql = f"key in ({','.join(batch)})"
-        try:
-            parents = client.search(jql, ["key", "components"])
-        except JiraAuthError:
-            raise
-        except CollectorError:
-            continue
-        for parent in parents:
-            parent_key = parent.get("key")
-            if parent_key:
-                parents_by_key[parent_key] = parent
-
-    # Third pass: apply attribution chain for each original key
     for key in keys:
         issue = issues_by_key.get(key)
         if not issue:
-            # Issue not found in Jira, stays (None, None)
+            mapping[key] = (None, None)
             continue
 
         # 1. Try own components
@@ -534,13 +493,10 @@ def resolve_workstreams(
         parent = issue.get("fields", {}).get("parent")
         if parent:
             parent_key = parent.get("key")
-            parent_issue = parents_by_key.get(parent_key)
-            if parent_issue:
-                parent_components = parent_issue.get("fields", {}).get("components") or []
-                workstream = _components_to_workstream(parent_components)
-                if workstream:
-                    mapping[key] = (workstream, "parent")
-                    continue
+            workstream = parent_workstreams.get(parent_key) if parent_key else None
+            if workstream:
+                mapping[key] = (workstream, "parent")
+                continue
 
         # 3. Try project fallback
         workstream = project_to_workstream(key)
@@ -548,7 +504,8 @@ def resolve_workstreams(
             mapping[key] = (workstream, "project")
             continue
 
-        # No attribution found, stays (None, None)
+        # No attribution found
+        mapping[key] = (None, None)
 
     return mapping
 
@@ -564,11 +521,9 @@ def make_prefetched_resolver(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    import os
-
-    from _common import JiraClient, build_default_transport
-
-    parser = argparse.ArgumentParser(description="Collect GitHub PR contribution activity.")
+    parser = argparse.ArgumentParser(
+        description="Collect raw GitHub PR activity and the Jira keys it references."
+    )
     parser.add_argument(
         "--members-file",
         required=True,
@@ -577,7 +532,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--quarter", help="reporting quarter, e.g. 2026Q2")
     parser.add_argument("--from", dest="from_date", help="window start, YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", help="window end, YYYY-MM-DD")
-    parser.add_argument("--output", default="github_activity.json")
+    parser.add_argument(
+        "--output",
+        default="github_prs_raw.json",
+        help="raw PR data + referenced Jira keys, for attribute_github_activities.py",
+    )
     args = parser.parse_args(argv)
 
     window = resolve_window(args.quarter, args.from_date, args.to_date)
@@ -587,7 +546,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     runner = build_default_runner()
     pr_pairs = collect_prs(runner, roster, window)
 
-    # Extract all unique Jira keys from PRs
+    # Extract all unique Jira keys from PRs, for the skill to resolve via MCP
     all_keys: List[str] = []
     for _, pr in pr_pairs:
         text = f"{pr.get('title', '')}\n{pr.get('body') or ''}"
@@ -596,30 +555,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             if key not in all_keys:
                 all_keys.append(key)
 
-    # Resolve workstreams in batch
-    config = jira_config_from_env(os.environ)
-    client = JiraClient(config, build_default_transport(config))
-    workstream_map = resolve_workstreams(client, all_keys)
-    resolve_workstream = make_prefetched_resolver(workstream_map)
-
-    # Attribute every PR
-    activities: List[GithubActivity] = []
-    for slot, pr in pr_pairs:
-        activities.extend(pr_to_activities(pr, slot.member, slot.kind, resolve_workstream))
-
     excluded_repos = tally_excluded_repos(pr for _slot, pr in pr_pairs)
     excluded_count = sum(excluded_repos.values())
 
     # Excluded PRs produce no activity records at all, so the count would be lost
-    # if it were only printed. Carry it in the envelope so report.py can show it
+    # if it were only printed. Carry it in the payload so report.py can show it
     # in the data-quality block instead of silently reporting zero. The per-repo
     # breakdown rides along so a legitimate org missing from the allowlist shows
     # up by name rather than disappearing into the total.
-    payload = activity_payload(
-        [asdict(activity) for activity in activities],
-        excluded_personal_repo_prs=excluded_count,
-        excluded_personal_repos=excluded_repos,
-    )
+    payload = {
+        "pr_pairs": [{"member": slot.member, "kind": slot.kind, "pr": pr} for slot, pr in pr_pairs],
+        "jira_keys": all_keys,
+        "excluded_personal_repo_prs": excluded_count,
+        "excluded_personal_repos": excluded_repos,
+    }
     with open(args.output, "w", encoding="utf-8") as output:
         json.dump(payload, output, indent=2)
 
@@ -629,7 +578,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     attributed_prs = total_prs - excluded_count
     print(
         f"Collected {total_prs} PRs: {attributed_prs} processed, {excluded_count} excluded "
-        f"(personal repos)",
+        f"(personal repos), {len(all_keys)} unique Jira keys referenced",
         file=sys.stderr,
     )
     return 0

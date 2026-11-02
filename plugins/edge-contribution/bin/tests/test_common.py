@@ -1,8 +1,7 @@
-"""Tests for _common.py — Jira/GitHub config, clients, and date helpers.
+"""Tests for _common.py — GitHub command helpers and date/window parsing.
 
-Covers happy-path config and pagination, failure inputs (missing env, 401,
-persistent 5xx, malformed JSON), rate-limit backoff, and boundary cases (empty
-result set, retry that eventually succeeds, quarter/date parsing).
+Covers rate-limit backoff for the ``gh`` runner and boundary cases (quarter/date
+parsing, activity payload counters).
 """
 
 import json
@@ -14,92 +13,6 @@ from datetime import date
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import _common  # noqa: E402
-
-
-class _FakeTransport:
-    """Records calls and replays a queue of canned responses."""
-
-    def __init__(self, responses):
-        self._responses = list(responses)
-        self.calls = []
-
-    def __call__(self, method, path, body):
-        self.calls.append((method, path, body))
-        response = self._responses.pop(0)
-        if callable(response):
-            return response(method, path, body)
-        return response
-
-
-def _client(responses, max_retries=2, sleep=lambda _delay: None):
-    config = _common.JiraConfig(base_url="https://example.test", username="u", api_token="t")
-    return _common.JiraClient(
-        config, _FakeTransport(responses), max_retries=max_retries, sleep=sleep
-    )
-
-class TestJiraClientHappyPath(unittest.TestCase):
-    def test_search_walks_two_pages_then_stops(self):
-        page_one = _common.HttpResponse(200, '{"issues": [{"key": "A-1"}], "nextPageToken": "t2"}')
-        page_two = _common.HttpResponse(200, '{"issues": [{"key": "A-2"}], "isLast": true}')
-        client = _client([page_one, page_two])
-        issues = client.search("project = A", ["key"])
-        assert [issue["key"] for issue in issues] == ["A-1", "A-2"]
-
-    def test_empty_result_returns_empty_list(self):
-        client = _client([_common.HttpResponse(200, '{"issues": [], "isLast": true}')])
-        assert client.search("project = A", ["key"]) == []
-
-    def test_get_issue_returns_parsed_body(self):
-        client = _client([_common.HttpResponse(200, '{"key": "A-1", "fields": {}}')])
-        assert client.get_issue("A-1", ["components"])["key"] == "A-1"
-
-
-class TestJiraClientFailureInputs(unittest.TestCase):
-    def test_401_raises_auth_error(self):
-        client = _client([_common.HttpResponse(401, "nope")])
-        with self.assertRaises(_common.JiraAuthError):
-            client.search("project = A", ["key"])
-
-    def test_persistent_5xx_raises_after_retries(self):
-        responses = [_common.HttpResponse(503, "busy") for _ in range(5)]
-        client = _client(responses, max_retries=2)
-        with self.assertRaises(_common.CollectorError):
-            client.search("project = A", ["key"])
-
-    def test_malformed_json_raises_collector_error(self):
-        client = _client([_common.HttpResponse(200, "{not json")])
-        with self.assertRaises(_common.CollectorError):
-            client.search("project = A", ["key"])
-
-    def test_rate_limit_retries_with_backoff(self):
-        delays = []
-        responses = [
-            _common.HttpResponse(429, "busy"),
-            _common.HttpResponse(200, '{"issues": [], "isLast": true}'),
-        ]
-        client = _client(responses, sleep=delays.append)
-        assert client.search("project = A", ["key"]) == []
-        assert delays == [5.0]
-
-    def test_rate_limit_honors_retry_after_header(self):
-        delays = []
-        responses = [
-            _common.HttpResponse(429, "busy", {"Retry-After": "17"}),
-            _common.HttpResponse(200, '{"issues": [], "isLast": true}'),
-        ]
-        client = _client(responses, sleep=delays.append)
-        assert client.search("project = A", ["key"]) == []
-        assert delays == [17.0]
-
-
-class TestJiraClientEdgeCases(unittest.TestCase):
-    def test_retry_then_success(self):
-        responses = [
-            _common.HttpResponse(503, "busy"),
-            _common.HttpResponse(200, '{"issues": [{"key": "A-1"}], "isLast": true}'),
-        ]
-        client = _client(responses, max_retries=2)
-        assert [issue["key"] for issue in client.search("project = A", ["key"])] == ["A-1"]
 
 
 class TestDateHelpers(unittest.TestCase):

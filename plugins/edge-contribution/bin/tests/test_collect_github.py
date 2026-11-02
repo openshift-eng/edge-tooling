@@ -1,7 +1,8 @@
 """Tests for collect_github.py — GitHub PR collection via batched GraphQL queries.
 
-The command runner and the Jira workstream resolver are both injected, so tests
-are hermetic (no ``gh`` subprocess, no Jira network). Coverage spans:
+The command runner is injected, and ``resolve_workstreams`` is a pure function
+over pre-fetched Jira data, so tests are hermetic (no ``gh`` subprocess, no Jira
+network). Coverage spans:
 - Batched GraphQL query construction with aliased searches
 - Pagination following hasNextPage/endCursor
 - GraphQL response validation (errors[], null/missing aliases, issueCount completeness)
@@ -193,61 +194,24 @@ class TestFailureInputs(unittest.TestCase):
         assert delays == [5.0, 10.0, 20.0, 40.0]
 
 
-class _FakeSearchClient:
-    def __init__(self, issues_by_jql, errors=None):
-        self._issues = issues_by_jql
-        self._errors = errors or {}
-        self.search_calls = []
-
-    def search(self, jql, fields):
-        self.search_calls.append(jql)
-        if jql in self._errors:
-            raise self._errors[jql]
-        return self._issues.get(jql, [])
-
-
 def _issue_with_components(key, components):
     return {"key": key, "fields": {"components": [{"name": name} for name in components]}}
 
 
 class TestJiraWorkstreamResolver(unittest.TestCase):
     def test_resolves_component_to_workstream(self):
-        client = _FakeSearchClient(
-            {"key in (OCPEDGE-1)": [_issue_with_components("OCPEDGE-1", ["SNO"])]}
-        )
-        mapping = collect_github.resolve_workstreams(client, ["OCPEDGE-1"])
+        issues_by_key = {"OCPEDGE-1": _issue_with_components("OCPEDGE-1", ["SNO"])}
+        mapping = collect_github.resolve_workstreams(["OCPEDGE-1"], issues_by_key, {})
         assert mapping["OCPEDGE-1"] == ("SNO", "component")
 
     def test_planning_component_resolves_to_none(self):
-        client = _FakeSearchClient(
-            {"key in (OCPEDGE-2)": [_issue_with_components("OCPEDGE-2", ["Planning"])]}
-        )
-        mapping = collect_github.resolve_workstreams(client, ["OCPEDGE-2"])
+        issues_by_key = {"OCPEDGE-2": _issue_with_components("OCPEDGE-2", ["Planning"])}
+        mapping = collect_github.resolve_workstreams(["OCPEDGE-2"], issues_by_key, {})
         assert mapping["OCPEDGE-2"] == (None, None)
 
     def test_missing_issue_resolves_to_none(self):
-        client = _FakeSearchClient({"key in (OCPBUGS-9)": []})
-        mapping = collect_github.resolve_workstreams(client, ["OCPBUGS-9"])
+        mapping = collect_github.resolve_workstreams(["OCPBUGS-9"], {}, {})
         assert mapping["OCPBUGS-9"] == (None, None)
-
-    def test_auth_error_is_not_swallowed(self):
-        client = _FakeSearchClient({}, errors={"key in (OCPEDGE-1)": _common.JiraAuthError("401")})
-        with self.assertRaises(_common.JiraAuthError):
-            collect_github.resolve_workstreams(client, ["OCPEDGE-1"])
-
-    def test_batches_large_key_lists(self):
-        keys = [f"KEY-{i}" for i in range(250)]
-        issues = {f"KEY-{i}": _issue_with_components(f"KEY-{i}", ["SNO"]) for i in range(250)}
-        client = _FakeSearchClient(
-            {
-                f"key in ({','.join(keys[:100])})": [issues[k] for k in keys[:100]],
-                f"key in ({','.join(keys[100:200])})": [issues[k] for k in keys[100:200]],
-                f"key in ({','.join(keys[200:])})": [issues[k] for k in keys[200:]],
-            }
-        )
-        mapping = collect_github.resolve_workstreams(client, keys)
-        assert len(client.search_calls) >= 3  # Initial batch + possible parent batches
-        assert all(mapping[k] == ("SNO", "component") for k in keys)
 
     def test_prefetched_resolver_returns_from_mapping(self):
         mapping = {"OCPEDGE-1": ("SNO", "component"), "OCPEDGE-2": (None, None)}
@@ -648,35 +612,21 @@ class TestWave2Attribution(unittest.TestCase):
     def test_ushift_project_key_with_no_component_uses_project_fallback(self):
         # USHIFT-nnn key with no component → USHIFT via project fallback
         # This happens in resolve_workstreams, so we need to test that
-        client = _FakeSearchClient(
-            {
-                "key in (USHIFT-6337)": [
-                    {"key": "USHIFT-6337", "fields": {"components": [], "parent": None}}
-                ]
-            }
-        )
-        mapping = collect_github.resolve_workstreams(client, ["USHIFT-6337"])
+        issues_by_key = {"USHIFT-6337": {"fields": {"components": [], "parent": None}}}
+        mapping = collect_github.resolve_workstreams(["USHIFT-6337"], issues_by_key, {})
         assert mapping["USHIFT-6337"] == ("USHIFT", "project")
 
     def test_parent_hop_when_issue_has_no_component(self):
         # PR citing a component-less ticket whose parent has "Two Node Fencing" → TNF
-        client = _FakeSearchClient(
-            {
-                "key in (OCPEDGE-200)": [
-                    {
-                        "key": "OCPEDGE-200",
-                        "fields": {
-                            "components": [],
-                            "parent": {"key": "OCPEDGE-100"},
-                        },
-                    }
-                ],
-                "key in (OCPEDGE-100)": [
-                    _issue_with_components("OCPEDGE-100", ["Two Node Fencing"])
-                ],
+        issues_by_key = {
+            "OCPEDGE-200": {
+                "fields": {"components": [], "parent": {"key": "OCPEDGE-100"}},
             }
+        }
+        parent_workstreams = {"OCPEDGE-100": "TNF"}
+        mapping = collect_github.resolve_workstreams(
+            ["OCPEDGE-200"], issues_by_key, parent_workstreams
         )
-        mapping = collect_github.resolve_workstreams(client, ["OCPEDGE-200"])
         assert mapping["OCPEDGE-200"] == ("TNF", "parent")
 
     def test_shared_repo_attributes_to_shared_column(self):
@@ -759,11 +709,9 @@ class TestWave2Attribution(unittest.TestCase):
 
 
 class TestResolveWorkstreamsEmptyInput(unittest.TestCase):
-    def test_empty_input_makes_zero_queries(self):
-        client = _FakeSearchClient({})
-        mapping = collect_github.resolve_workstreams(client, [])
+    def test_empty_input_yields_empty_mapping(self):
+        mapping = collect_github.resolve_workstreams([], {}, {})
         assert mapping == {}
-        assert len(client.search_calls) == 0
 
 
 class TestTallyExcludedRepos(unittest.TestCase):

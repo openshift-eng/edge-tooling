@@ -25,12 +25,12 @@ two numbers are exported as `mean_people_per_workstream` and
 
 ## Prerequisites
 
-- `JIRA_USERNAME` and `JIRA_API_TOKEN` exported (same credentials the Atlassian
-  MCP uses). The collectors hit `redhat.atlassian.net` REST directly.
+- `mcp-atlassian` MCP server configured and available — all Jira queries run
+  through `mcp__mcp-atlassian__jira_search`, no direct Jira REST calls.
 - `gh` authenticated (`gh auth status`) with read access to
   `openshift-eng/edge-context` (the roster is fetched via `gh`) and for PR
   collection.
-- Python 3.9+ with `requests` available.
+- Python 3.9+ (stdlib only — no extra packages needed at runtime).
 
 ## Arguments
 

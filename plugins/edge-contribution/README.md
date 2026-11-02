@@ -37,13 +37,13 @@ first-hit-wins chain described below.
 
 ## Prerequisites
 
-- **Jira credentials:** export `JIRA_USERNAME` and `JIRA_API_TOKEN` (the same
-  credentials the Atlassian MCP uses). The collectors call
-  `redhat.atlassian.net` REST directly — no MCP at runtime.
+- **Atlassian MCP:** the `mcp-atlassian` MCP server configured and available.
+  All Jira queries run through `mcp__mcp-atlassian__jira_search`; the plugin
+  makes no direct Jira REST calls.
 - **GitHub CLI:** `gh` installed and authenticated (`gh auth status`), with read
   access to `openshift-eng/edge-context` — the roster is fetched via `gh`, so no
   local checkout is needed.
-- **Python 3.9+** with `requests` available.
+- **Python 3.9+** (stdlib only — no extra packages needed at runtime).
 
 ## Usage
 

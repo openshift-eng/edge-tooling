@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """Shared infrastructure for the Jira/GitHub collectors.
 
-This module isolates the impure edges of the plugin — environment/auth, HTTP
+This module isolates the impure edges of the plugin — the ``gh`` command
 transport with pagination and retry, and date/quarter parsing — so the domain
 modules (workstream_map, load_context, metrics, render) stay pure and trivially
-testable. The HTTP transport is injected, which keeps unit tests hermetic: no
+testable. The command runner is injected, which keeps unit tests hermetic: no
 live network, no third-party mocking library.
+
+Jira data is collected by the skill via the ``mcp-atlassian`` MCP tools, not by
+a client in this module — see ``attribute_jira_activities.py`` and
+``attribute_github_activities.py`` for the pure attribution logic that consumes it.
 """
 
 from __future__ import annotations
 
-import json
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
@@ -30,12 +33,6 @@ ACTIVITY_PROJECTS: Tuple[str, ...] = ("OCPEDGE", "USHIFT", "OCPBUGS")
 UNATTRIBUTED_NO_PARENT = "no_component_no_parent"
 UNATTRIBUTED_PARENT_EMPTY = "parent_also_empty"
 
-# --- HTTP transport constants -----------------------------------------------
-
-_DEFAULT_BASE_URL = "https://redhat.atlassian.net"
-_SEARCH_PATH = "/rest/api/3/search/jql"
-_DEFAULT_PAGE_SIZE = 100
-_DEFAULT_MAX_RETRIES = 2
 _DEFAULT_COMMAND_MAX_RETRIES = 4
 _DEFAULT_COMMAND_BACKOFF_SECONDS = 5.0
 _DEFAULT_COMMAND_MAX_BACKOFF_SECONDS = 60.0
@@ -63,143 +60,6 @@ def activity_payload(
 
 class CollectorError(Exception):
     """A collector could not complete because of an external failure."""
-
-
-class JiraAuthError(CollectorError):
-    """Jira credentials are missing or were rejected."""
-
-
-@dataclass(frozen=True)
-class JiraConfig:
-    """Everything needed to talk to a Jira instance."""
-
-    base_url: str
-    username: str
-    api_token: str
-
-
-@dataclass(frozen=True)
-class HttpResponse:
-    """A minimal HTTP response the transport layer returns.
-
-    Kept deliberately tiny so tests can construct one without ``requests``.
-    """
-
-    status_code: int
-    body: str
-    headers: Dict[str, str] = field(default_factory=dict)
-
-    def json(self) -> dict:
-        """Parse the body as JSON, raising ``ValueError`` on malformed input."""
-        return json.loads(self.body)
-
-
-# A transport takes (method, path, json_body) and returns an HttpResponse.
-Transport = Callable[[str, str, Optional[dict]], HttpResponse]
-
-
-def jira_config_from_env(env: Dict[str, str]) -> JiraConfig:
-    """Build a ``JiraConfig`` from environment variables.
-
-    Raises ``JiraAuthError`` (before any network call) when the required
-    credentials are absent.
-    """
-    username = env.get("JIRA_USERNAME")
-    api_token = env.get("JIRA_API_TOKEN")
-    if not username or not api_token:
-        raise JiraAuthError("JIRA_USERNAME and JIRA_API_TOKEN must be set to reach Jira REST")
-    base_url = env.get("JIRA_BASE_URL", _DEFAULT_BASE_URL).rstrip("/")
-    return JiraConfig(base_url=base_url, username=username, api_token=api_token)
-
-
-class JiraClient:
-    """Talks to Jira Cloud REST v3 over an injected transport.
-
-    Pagination uses ``nextPageToken`` (this instance does not use ``startAt``).
-    Transient 5xx responses are retried; auth failures raise immediately.
-    """
-
-    def __init__(
-        self,
-        config: JiraConfig,
-        transport: Transport,
-        max_retries: int = _DEFAULT_MAX_RETRIES,
-        sleep: Callable[[float], None] = time.sleep,
-    ) -> None:
-        self._config = config
-        self._transport = transport
-        self._max_retries = max_retries
-        self._sleep = sleep
-
-    @property
-    def base_url(self) -> str:
-        return self._config.base_url
-
-    def search(
-        self, jql: str, fields: List[str], page_size: int = _DEFAULT_PAGE_SIZE
-    ) -> List[dict]:
-        """Return every issue matching ``jql``, following pagination to the end."""
-        issues: List[dict] = []
-        next_page_token: Optional[str] = None
-        while True:
-            payload = {"jql": jql, "fields": fields, "maxResults": page_size}
-            if next_page_token:
-                payload["nextPageToken"] = next_page_token
-            page = self._request_json("POST", _SEARCH_PATH, payload)
-            issues.extend(page.get("issues", []))
-            next_page_token = page.get("nextPageToken")
-            if page.get("isLast", not next_page_token) or not next_page_token:
-                return issues
-
-    def get_issue(self, issue_key: str, fields: List[str]) -> dict:
-        """Fetch a single issue's requested fields."""
-        path = f"/rest/api/3/issue/{issue_key}?fields={','.join(fields)}"
-        return self._request_json("GET", path, None)
-
-    def _request_json(self, method: str, path: str, body: Optional[dict]) -> dict:
-        response = self._request_with_retry(method, path, body)
-        try:
-            return response.json()
-        except ValueError as error:
-            raise CollectorError(f"malformed JSON from Jira {path}: {error}") from error
-
-    def _request_with_retry(self, method: str, path: str, body: Optional[dict]) -> HttpResponse:
-        attempts = 0
-        while True:
-            response = self._transport(method, path, body)
-            if response.status_code in (401, 403):
-                raise JiraAuthError(f"Jira rejected credentials ({response.status_code})")
-            if response.status_code == 429:
-                attempts += 1
-                if attempts > self._max_retries:
-                    raise CollectorError(f"Jira rate limit after {self._max_retries} retries")
-                retry_after = next(
-                    (
-                        value
-                        for key, value in response.headers.items()
-                        if key.lower() == "retry-after"
-                    ),
-                    None,
-                )
-                try:
-                    delay = min(max(float(retry_after), 0.0), 60.0) if retry_after else None
-                except ValueError:
-                    delay = None
-                if delay is None:
-                    delay = min(5.0 * (2 ** (attempts - 1)), 60.0)
-                self._sleep(delay)
-                continue
-            if response.status_code >= 500:
-                attempts += 1
-                if attempts > self._max_retries:
-                    raise CollectorError(
-                        f"Jira server error {response.status_code} after "
-                        f"{self._max_retries} retries"
-                    )
-                continue
-            if response.status_code != 200:
-                raise CollectorError(f"Jira request to {path} failed with {response.status_code}")
-            return response
 
 
 @dataclass(frozen=True)
@@ -279,32 +139,6 @@ def resolve_window(
     if from_date and to_date:
         return Window(parse_date(from_date), parse_date(to_date))
     raise ValueError("provide a quarter, or both a start and end date")
-
-
-def build_default_transport(config: JiraConfig) -> Transport:
-    """Build the production HTTP transport backed by ``requests``.
-
-    ``requests`` is imported lazily so unit tests, which inject a transport,
-    never require it.
-    """
-    import requests
-    from requests.auth import HTTPBasicAuth
-
-    auth = HTTPBasicAuth(config.username, config.api_token)
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
-
-    def transport(method: str, path: str, body: Optional[dict]) -> HttpResponse:
-        response = requests.request(
-            method,
-            f"{config.base_url}{path}",
-            json=body,
-            auth=auth,
-            headers=headers,
-            timeout=60,
-        )
-        return HttpResponse(response.status_code, response.text, dict(response.headers))
-
-    return transport
 
 
 @dataclass(frozen=True)
