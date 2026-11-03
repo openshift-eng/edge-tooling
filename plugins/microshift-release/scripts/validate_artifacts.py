@@ -340,8 +340,10 @@ def run_rpm_checks(version_info):
                     "nvr": nbuild["nvr"],
                     "build_date": nbuild["timestamp"][:10],
                     "commit": None,
-                    "el9": True,  # assume present for nightly
-                    "el10": False,
+                    # Derived from the actual Brew NVRs so the RHEL-variant
+                    # requirement (el10 from 5.2) is validated, not assumed.
+                    "el9": nbuild.get("el9", False),
+                    "el10": nbuild.get("el10", False),
                 }
                 m = re.search(r"\.g([0-9a-f]+)\.", nbuild["nvr"])
                 if m:
