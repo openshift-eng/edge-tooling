@@ -1170,11 +1170,11 @@ class TestCatalogUrlNamespace(unittest.TestCase):
 class TestCheckCatalogImageNamespace(unittest.TestCase):
     """check_catalog_image must query the namespace of the version's major."""
 
-    def _query(self, version, rhel):
+    def _query(self, version, rhel, tag=None):
         from unittest.mock import MagicMock, patch
         resp = MagicMock()
         resp.json.return_value = {"data": [{"repositories": [
-            {"tags": [{"name": f"assembly.{version}"}]}]}]}
+            {"tags": [{"name": f"assembly.{tag or version}"}]}]}]}
         with patch("lib.pyxis.requests.get", return_value=resp) as get, \
                 patch("lib.pyxis._catalog_auth", return_value=None), \
                 patch("lib.pyxis._parse_image_metadata", return_value={}):
@@ -1192,6 +1192,13 @@ class TestCheckCatalogImageNamespace(unittest.TestCase):
         result, url = self._query("4.21.8", rhel=9)
         self.assertTrue(result["valid"])
         self.assertIn("/repository/openshift4/microshift-bootc-rhel9/images",
+                      url)
+
+    def test_5x_missing_image_is_invalid(self):
+        # Only a 4.x assembly is in the catalog, so 5.0.0 must not match.
+        result, url = self._query("5.0.0", rhel=10, tag="4.21.8")
+        self.assertFalse(result["valid"])
+        self.assertIn("/repository/openshift5/microshift-bootc-rhel10/images",
                       url)
 
 
