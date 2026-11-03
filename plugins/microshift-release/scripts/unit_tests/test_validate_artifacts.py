@@ -29,7 +29,6 @@ class TestRpmRhelVariants(unittest.TestCase):
                 )
                 self.assertEqual(result["status"], "PASS")
                 self.assertIn("el10 RPMs not required", result["reason"])
-                self.assertNotIn("before 4.23", result["reason"])
 
     def test_50_missing_el9_still_fails(self):
         result = check_rpm_rhel_version(
@@ -43,8 +42,9 @@ class TestRpmRhelVariants(unittest.TestCase):
         result = check_rpm_rhel_version(classify_version("5.0.0"), {"found": False})
         self.assertEqual(result["status"], "SKIP")
 
-    def test_other_streams_keep_existing_requirements(self):
-        for minor, expected in (("4.22", [9]), ("4.23", [9, 10]), ("5.1", [9, 10])):
+    def test_rpm_variants_by_stream(self):
+        for minor, expected in (("4.22", [9]), ("5.0", [9]), ("5.1", [9]),
+                                ("5.2", [10])):
             with self.subTest(minor=minor):
                 self.assertEqual(_rpm_rhel_versions_for(minor), expected)
                 result = check_rpm_rhel_version(
@@ -52,6 +52,21 @@ class TestRpmRhelVariants(unittest.TestCase):
                     {"found": True, "el9": True, "el10": False},
                 )
                 self.assertEqual(result["status"], "FAIL" if 10 in expected else "PASS")
+
+    def test_52_requires_el10_without_el9(self):
+        result = check_rpm_rhel_version(
+            classify_version("5.2.0"),
+            {"found": True, "el9": False, "el10": True},
+        )
+        self.assertEqual(result["status"], "PASS")
+        self.assertIn("el9 RPMs not required", result["reason"])
+
+        result = check_rpm_rhel_version(
+            classify_version("5.2.0"),
+            {"found": True, "el9": True, "el10": False},
+        )
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual(result["reason"], "Missing RHEL variant: el10")
 
     def test_50_ec_rc_mirrors_only_check_el9(self):
         for release_type in ("EC", "RC"):
@@ -78,6 +93,18 @@ class TestRpmRhelVariants(unittest.TestCase):
                 urls = [call.args[0] for call in get.call_args_list]
                 self.assertEqual(len(urls), 2)
                 self.assertTrue(all("/el9/" in url for url in urls))
+
+    def test_52_ec_rc_mirrors_only_check_el10(self):
+        for release_type in ("EC", "RC"):
+            version = f"5.2.0-{release_type.lower()}.1"
+            with self.subTest(release_type=release_type), \
+                    patch.object(artifacts, "_http_get") as get:
+                get.return_value.status_code = 200
+                result = check_rpm_mirror(classify_version(version), release_type)
+                self.assertEqual(result["status"], "PASS")
+                urls = [call.args[0] for call in get.call_args_list]
+                self.assertEqual(len(urls), 2)
+                self.assertTrue(all("/el10/" in url for url in urls))
 
     def test_50_bootc_still_checks_el10(self):
         self.assertEqual(_rhel_versions_for("5.0"), [9, 10])

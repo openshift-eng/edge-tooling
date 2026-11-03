@@ -25,8 +25,10 @@ logger = logging.getLogger(__name__)
 
 # Minimum OCP version for bootc image checks (bootc does not run for 4.18)
 _BOOTC_MIN_MINOR = (4, 19)
-# Default el10 threshold; 5.0 RPMs are el9-only, unlike bootc images.
-_EL10_MIN_MINOR = (4, 23)
+# First stream with el10 bootc images (5.0 follows 4.22).
+_EL10_MIN_MINOR = (5, 0)
+# RPMs stay on el9 through 5.1; el10 RPMs start with 5.2.
+_RPM_EL10_MIN_MINOR = (5, 2)
 
 # Check IDs in display order
 _RPM_CHECKS = [
@@ -235,12 +237,12 @@ def check_rpm_commit_id(version_info, build_info, vpn_ok):
 
 
 def check_rpm_rhel_version(version_info, build_info):
-    """rpm_rhel_version: Check required RPM variants (5.0 has only el9 RPMs)."""
+    """rpm_rhel_version: Check required RPM variants (el9 through 5.1, el10 from 5.2)."""
     if not build_info.get("found"):
         return _skip("rpm_rhel_version", "No Brew build found")
 
-    require_el10 = 10 in _rpm_rhel_versions_for(version_info["minor"])
-    result = artifacts.validate_rhel_builds(build_info, require_el10=require_el10)
+    required = _rpm_rhel_versions_for(version_info["minor"])
+    result = artifacts.validate_rhel_builds(build_info, required)
     if result["valid"]:
         return _pass("rpm_rhel_version", result["reason"])
     return _fail("rpm_rhel_version", result["reason"],
@@ -255,10 +257,10 @@ def _rhel_versions_for(minor):
 
 
 def _rpm_rhel_versions_for(minor):
-    """RPMs for the 5.0 stream are el9-only, including EC/RC and z-stream."""
-    if _minor_tuple(minor) == (5, 0):
-        return [9]
-    return _rhel_versions_for(minor)
+    """Return required RPM variants: el9 through 5.1, el10 from 5.2 onward."""
+    if _minor_tuple(minor) >= _RPM_EL10_MIN_MINOR:
+        return [10]
+    return [9]
 
 
 def check_rpm_mirror(version_info, release_type_key):

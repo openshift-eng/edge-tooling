@@ -124,37 +124,39 @@ def validate_commit_on_branch(commit_hash, minor):
         return {"valid": False, "reason": f"Git check failed: {exc}"}
 
 
-def validate_rhel_builds(build_info, require_el10=True):
+def validate_rhel_builds(build_info, required=None):
     """Check that required RHEL variant builds are present.
 
     Args:
         build_info: dict returned by brew.get_build_info().
-        require_el10: Whether el10 RPMs are required for the target stream.
+        required: RHEL versions required for the target stream
+            (default: [9, 10]).
 
     Returns:
         dict: {valid: bool, el9: bool, el10: bool, reason: str}
     """
+    required = required or [9, 10]
     el9 = build_info.get("el9", False)
     el10 = build_info.get("el10", False)
-    if not require_el10:
-        if el9:
-            return {"valid": True, "el9": True, "el10": el10,
+    present = {9: el9, 10: el10}
+    missing = [f"el{rhel}" for rhel in required if not present[rhel]]
+
+    if not missing:
+        if required == [9]:
+            return {"valid": True, "el9": el9, "el10": el10,
                     "reason": "el9 build present (el10 RPMs not required for this stream)"}
-        return {"valid": False, "el9": False, "el10": el10,
-                "reason": "Missing RHEL variant: el9"}
-    if el9 and el10:
-        return {"valid": True, "el9": True, "el10": True,
+        if required == [10]:
+            return {"valid": True, "el9": el9, "el10": el10,
+                    "reason": "el10 build present (el9 RPMs not required for this stream)"}
+        return {"valid": True, "el9": el9, "el10": el10,
                 "reason": "el9 and el10 builds present"}
-    missing = []
-    if not el9:
-        missing.append("el9")
-    if not el10:
-        missing.append("el10")
+
+    noun = "variant" if len(missing) == 1 else "variants"
     return {
         "valid": False,
         "el9": el9,
         "el10": el10,
-        "reason": f"Missing RHEL variants: {', '.join(missing)}",
+        "reason": f"Missing RHEL {noun}: {', '.join(missing)}",
     }
 
 

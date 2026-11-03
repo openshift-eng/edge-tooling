@@ -77,8 +77,8 @@ class TestRhelVersions(unittest.TestCase):
     def test_el9_el10_422_2(self):
         self.assertEqual(_rhel_versions(_version("4.22.2")), [9, 10])
 
-    def test_el9_el10_423(self):
-        self.assertEqual(_rhel_versions(_version("4.23.0")), [9, 10])
+    def test_el9_el10_50(self):
+        self.assertEqual(_rhel_versions(_version("5.0.0")), [9, 10])
 
     def test_el9_el10_422_10(self):
         self.assertEqual(_rhel_versions(_version("4.22.10")), [9, 10])
