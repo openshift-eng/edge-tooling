@@ -39,8 +39,15 @@ Use `AWS_SHARED_CREDENTIALS_FILE` for an AWS-format credentials file outside the
 default location. Set `AWS_CONFIG_FILE` only when the profile definition itself
 lives in an alternate config file, such as SSO or role settings; a named profile
 defined in the credentials file is discovered without it.
+SSO profiles may require `aws sso login --profile <profile>` first. The selected
+identity also needs access to the build-cache and results buckets. If your
+credentials live in a shell environment file rather than an AWS-format file, load
+them before starting the assistant or script, and only from a trusted file:
+`set -a; source /path/to/trusted-env-file; set +a`. Environment variables can
+override profile credentials.
+
 Run `aws sts get-caller-identity` in the same environment to diagnose
-authentication; do not display credential values.
+authentication; do not display credential values or commit credential files.
 
 ## Arguments
 

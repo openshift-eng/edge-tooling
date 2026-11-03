@@ -104,28 +104,6 @@ bash unit_tests/test_request_art_builds.sh
 
 ### AWS credentials for Prow testing
 
-The automated-testing preflight uses the AWS CLI's normal credential provider
-chain, not just environment variables. The default profile in
-`~/.aws/credentials` works without exporting keys. For a named profile, export
-`AWS_PROFILE`; for an AWS-format credentials file in a different location,
-export `AWS_SHARED_CREDENTIALS_FILE` (and, if needed, `AWS_CONFIG_FILE`). SSO
-profiles may require `aws sso login --profile <profile>` first. The selected
-identity also needs access to the build-cache and results buckets.
-
-Check the same environment that runs the skill or script:
-
-The preflight script is part of the `edge-tooling` repository. If you installed
-the plugin from the marketplace, clone `edge-tooling` and run the command from
-its checkout root.
-
-```bash
-aws sts get-caller-identity
-bash plugins/microshift-release/scripts/prow_testing.sh preflight 4.21.8
-```
-
-If your credentials are in a shell environment file rather than an AWS-format
-file, load them into the shell before starting the assistant or script. Only
-source a trusted file; `set -a; source /path/to/trusted-env-file; set +a` exports
-its assignments. Do not paste keys into conversations or commit credential
-files. Environment variables can override profile credentials; check the
-selected profile and environment if authentication still fails.
+The preflight uses the AWS CLI's standard credential provider chain. For setup
+and troubleshooting, see
+[`skills/automated-testing/SKILL.md`](skills/automated-testing/SKILL.md).
