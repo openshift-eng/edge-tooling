@@ -75,7 +75,7 @@ def classify_version(version):
     """
     # Nightly: 4.21.0-0.nightly-YYYY-MM-DD-HHMMSS
     nightly_match = re.match(
-        r"(\d+)\.(\d+)\.(\d+)-0\.nightly-(\d{4}-\d{2}-\d{2}-\d{6})", version
+        r"(\d+)\.(\d+)\.(\d+)-0\.nightly-(\d{4}-\d{2}-\d{2}-\d{6})$", version
     )
     if nightly_match:
         major, minor_num = nightly_match.group(1), nightly_match.group(2)
@@ -169,13 +169,14 @@ def check_rpm_packages_list(version_info, build_info,
                             brew_packages=None, expected_packages=None):
     """rpm_packages_list: Verify NVR exists and all expected packages are built."""
     if not build_info.get("found"):
-        if version_info["type"] == "nightly":
-            # fetch_latest_nightly_builds only tracks the latest build per
-            # stream, so a non-latest requested nightly yields no data — skip
-            # (like the sibling RPM checks) instead of a misleading hard FAIL
-            # that implies the build is absent from Brew.
-            return _skip("rpm_packages_list",
-                         "Requested nightly is not the latest tracked build")
+        # A nightly request that doesn't match the tracked latest still fails
+        # (the tool only validates the latest nightly per stream) — but with an
+        # accurate message rather than implying the build is absent from Brew.
+        latest = build_info.get("nightly_latest")
+        if latest:
+            return _fail("rpm_packages_list",
+                         f"Requested nightly not found in Brew "
+                         f"(latest tracked for stream: {latest})")
         return _fail("rpm_packages_list",
                      f"No Brew build found for {version_info['version']}")
 
@@ -357,6 +358,12 @@ def run_rpm_checks(version_info):
                 m = re.search(r"\.g([0-9a-f]+)\.", nbuild["nvr"])
                 if m:
                     build_info["commit"] = m.group(1)
+            elif nbuild:
+                # Stream has a nightly, but not the requested build. Record the
+                # tracked latest so rpm_packages_list can fail with an accurate
+                # message instead of a generic "no build found".
+                build_info = {"found": False,
+                              "nightly_latest": nbuild["ocp_nightly_name"]}
         else:
             build_info = brew.get_build_info(version_info["version"],
                                              "Z" if version_info["type"] == "Z" else "XY")

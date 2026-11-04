@@ -245,18 +245,50 @@ class TestNightlyBuildSelection(unittest.TestCase):
         self.assertEqual(rhel["status"], "FAIL")
         self.assertEqual(rhel["reason"], "Missing RHEL variant: el10")
 
-    def test_older_requested_nightly_does_not_validate_latest(self):
-        # User asked for an older nightly; Brew only exposes a newer one.
-        # We must NOT copy the newer build's variant flags.
+    def test_older_requested_nightly_fails_not_silently_passes(self):
+        # User asked for an older nightly; Brew only exposes a newer one. We
+        # must NOT copy the newer build's flags, and the tool must not exit
+        # successfully: rpm_packages_list fails with an accurate message while
+        # the variant-dependent checks skip (no data for the requested build).
         latest = self._build("2026_11_02_130000", el9=True, el10=True,
                              el="el10")
         results = self._run("5.2.0-0.nightly-2026-10-01-100000", latest)
-        # All RPM checks skip consistently — a non-latest nightly is not a
-        # hard failure (the build may exist; we just cannot fetch it here).
-        for check in ("rpm_rhel_version", "rpm_packages_list",
-                      "rpm_filename_format", "rpm_commit_id"):
+        pkgs = self._result(results, "rpm_packages_list")
+        self.assertEqual(pkgs["status"], "FAIL")
+        self.assertIn("latest tracked for stream", pkgs["reason"])
+        for check in ("rpm_rhel_version", "rpm_filename_format",
+                      "rpm_commit_id"):
             self.assertEqual(self._result(results, check)["status"], "SKIP",
                              msg=check)
+
+    def test_no_nightly_for_stream_fails(self):
+        # Brew tracks no nightly for the stream at all — must fail, not pass.
+        with patch.object(brew, "check_vpn", return_value=True), \
+                patch.object(brew, "fetch_latest_nightly_builds",
+                             return_value={}):
+            results = run_rpm_checks(
+                classify_version("5.2.0-0.nightly-2026-11-01-120000"))
+        pkgs = self._result(results, "rpm_packages_list")
+        self.assertEqual(pkgs["status"], "FAIL")
+        self.assertIn("No Brew build found", pkgs["reason"])
+
+
+class TestNightlyVersionParsing(unittest.TestCase):
+    """classify_version must reject malformed nightly versions so they cannot
+    slip through as a nightly that then skips every check."""
+
+    def test_wellformed_nightly_classifies(self):
+        info = classify_version("5.2.0-0.nightly-2026-11-01-120000")
+        self.assertIsNotNone(info)
+        self.assertEqual(info["type"], "nightly")
+
+    def test_trailing_junk_is_rejected(self):
+        self.assertIsNone(
+            classify_version("5.2.0-0.nightly-2026-11-01-120000-extra"))
+
+    def test_leading_junk_is_rejected(self):
+        self.assertIsNone(
+            classify_version("x5.2.0-0.nightly-2026-11-01-120000"))
 
 
 if __name__ == "__main__":
