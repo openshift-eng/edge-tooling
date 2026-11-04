@@ -175,8 +175,9 @@ def check_rpm_packages_list(version_info, build_info,
         latest = build_info.get("nightly_latest")
         if latest:
             return _fail("rpm_packages_list",
-                         f"Requested nightly not found in Brew "
-                         f"(latest tracked for stream: {latest})")
+                         f"Cannot validate a non-latest nightly "
+                         f"(only the latest tracked build is checked; "
+                         f"latest for stream: {latest})")
         return _fail("rpm_packages_list",
                      f"No Brew build found for {version_info['version']}")
 

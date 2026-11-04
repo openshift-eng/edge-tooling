@@ -159,6 +159,13 @@ class TestNightlyVariantDetection(unittest.TestCase):
         self.assertTrue(builds["5.1"]["el9"])
         self.assertFalse(builds["5.1"]["el10"])
 
+    def test_malformed_nightly_nvr_is_not_tracked(self):
+        # Truncated timestamp (missing _HHMMSS) must not match the Brew regex.
+        html = "microshift-5.2.0~0.nightly_2026_11_01 truncated"
+        with patch.object(brew, "_fetch_brew_page", return_value=html):
+            builds = brew.fetch_latest_nightly_builds()
+        self.assertEqual(builds, {})
+
     def test_latest_timestamp_supersedes_older_variants(self):
         html = " ".join([
             self._nvr("5.2", "2026_10_01_120000", "el9"),
@@ -255,7 +262,8 @@ class TestNightlyBuildSelection(unittest.TestCase):
         results = self._run("5.2.0-0.nightly-2026-10-01-100000", latest)
         pkgs = self._result(results, "rpm_packages_list")
         self.assertEqual(pkgs["status"], "FAIL")
-        self.assertIn("latest tracked for stream", pkgs["reason"])
+        self.assertIn("Cannot validate a non-latest nightly", pkgs["reason"])
+        self.assertIn("latest for stream", pkgs["reason"])
         for check in ("rpm_rhel_version", "rpm_filename_format",
                       "rpm_commit_id"):
             self.assertEqual(self._result(results, check)["status"], "SKIP",
