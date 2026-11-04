@@ -58,6 +58,13 @@ COMPONENT_JIRA_CREATE = {
         "summary_prefix": "MicroShift CI: ",
         "reporter": "712020:dc2a5866-d3bd-4f61-a413-4daef5b032b7",
     },
+    "lvm-operator": {
+        "pid": "10325",
+        "issuetype": "10016",
+        "component": "14941",
+        "labels": "lvms-ci-ai-generated",
+        "summary_prefix": "LVMS CI: ",
+    },
 }
 
 

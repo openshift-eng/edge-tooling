@@ -57,7 +57,7 @@ COMPONENT_MAP = {
 
 ALL_STAGES_BY_COMPONENT = {
     "microshift": ["prepare", "graphs", "analyze", "bugs", "finalize"],
-    "lvm-operator": ["prepare", "analyze", "finalize"],
+    "lvm-operator": ["prepare", "analyze", "bugs", "finalize"],
 }
 
 STAGE_LIMITS = {
@@ -340,7 +340,7 @@ def parse_args():
 
             Available stages:
               microshift:    prepare, graphs, analyze, bugs, finalize
-              lvm-operator:  prepare, analyze, finalize
+              lvm-operator:  prepare, analyze, bugs, finalize
 
             Examples:
               python3 plugins/microshift-ci/scripts/run-doctor.py \\
@@ -917,10 +917,6 @@ class DoctorPipeline:
 
     def bugs(self):
         log.info("=== Stage: bugs ===")
-        if self.component != "microshift":
-            log.info("Bug correlation is microshift-only, skipping")
-            return True
-
         sources = list(self.releases)
         sources_str = ",".join(sources)
         log_path = self.logs_dir / "bugs.log"
@@ -930,6 +926,7 @@ class DoctorPipeline:
         search_bugs_py = Path(self.plugin_dir) / "scripts" / "search-bugs.py"
         cmd = [
             "python3", str(search_bugs_py),
+            "--component", self.component,
             "--pipeline", sources_str,
             "--workdir", str(self.workdir),
         ]
