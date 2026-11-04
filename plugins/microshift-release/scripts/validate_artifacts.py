@@ -169,6 +169,13 @@ def check_rpm_packages_list(version_info, build_info,
                             brew_packages=None, expected_packages=None):
     """rpm_packages_list: Verify NVR exists and all expected packages are built."""
     if not build_info.get("found"):
+        if version_info["type"] == "nightly":
+            # fetch_latest_nightly_builds only tracks the latest build per
+            # stream, so a non-latest requested nightly yields no data — skip
+            # (like the sibling RPM checks) instead of a misleading hard FAIL
+            # that implies the build is absent from Brew.
+            return _skip("rpm_packages_list",
+                         "Requested nightly is not the latest tracked build")
         return _fail("rpm_packages_list",
                      f"No Brew build found for {version_info['version']}")
 
@@ -330,11 +337,13 @@ def run_rpm_checks(version_info):
         if vtype in ("RC", "EC"):
             build_info = brew.get_build_info(version_info["version"], vtype)
         elif vtype == "nightly":
-            # For nightly, look up via fetch_latest_nightly_builds
+            # fetch_latest_nightly_builds only tracks the latest build per
+            # stream, so only trust it when it is the nightly the user asked
+            # to validate; otherwise we have no data for the requested build
+            # and the checks must skip rather than validate the wrong one.
             nightly_builds = brew.fetch_latest_nightly_builds()
-            minor = version_info["minor"]
-            if minor in nightly_builds:
-                nbuild = nightly_builds[minor]
+            nbuild = nightly_builds.get(version_info["minor"])
+            if nbuild and nbuild["ocp_nightly_name"] == version_info["version"]:
                 build_info = {
                     "found": True,
                     "nvr": nbuild["nvr"],

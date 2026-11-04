@@ -16,6 +16,7 @@ from validate_artifacts import (  # noqa: E402
     check_rpm_rhel_version,
     classify_version,
     run_bootc_checks,
+    run_rpm_checks,
 )
 
 
@@ -127,9 +128,13 @@ class TestNightlyVariantDetection(unittest.TestCase):
     check_rpm_rhel_version can validate the el10-from-5.2 requirement."""
 
     @staticmethod
-    def _nvr(stream, ts, el):
+    def _nvr(stream, ts, el, commit="gabc1234"):
+        # Realistic nightly NVR token matching artifacts._NVR_NIGHTLY:
+        # microshift-X.Y.0~0.nightly_<ts>-<12digits>.p0.g<commit>
+        #   .assembly.microshift.el<N>
+        date12 = ts.replace("_", "")[:12]
         return (f"microshift-{stream}.0~0.nightly_{ts}"
-                f".p0.gabc1234.assembly.{stream}.0.{el}")
+                f"-{date12}.p0.{commit}.assembly.microshift.{el}")
 
     def test_detects_both_variants(self):
         html = " ".join([
@@ -141,8 +146,11 @@ class TestNightlyVariantDetection(unittest.TestCase):
         self.assertIn("5.2", builds)
         self.assertTrue(builds["5.2"]["el9"])
         self.assertTrue(builds["5.2"]["el10"])
-        self.assertEqual(builds["5.2"]["nvr"],
-                         "microshift-5.2.0~0.nightly_2026_11_01_120000")
+        # The stored NVR is the full token (carries commit + variant suffix),
+        # so downstream commit/filename checks have real data to validate.
+        self.assertTrue(
+            artifacts.validate_nvr_format(builds["5.2"]["nvr"], "nightly")["valid"]
+        )
 
     def test_el9_only_build_reports_no_el10(self):
         html = self._nvr("5.1", "2026_11_01_120000", "el9")
@@ -179,6 +187,76 @@ class TestNightlyVariantDetection(unittest.TestCase):
         result = check_rpm_rhel_version(classify_version("5.2.0"), build_info)
         self.assertEqual(result["status"], "FAIL")
         self.assertEqual(result["reason"], "Missing RHEL variant: el10")
+
+
+class TestNightlyBuildSelection(unittest.TestCase):
+    """run_rpm_checks must validate the nightly the user requested, not
+    whichever build is latest in the stream (fetch_latest_nightly_builds
+    only tracks the latest build per stream)."""
+
+    @staticmethod
+    def _result(results, check):
+        return next(r for r in results if r["check"] == check)
+
+    @staticmethod
+    def _nvr(ts, el, commit="gabc1234"):
+        # Mirrors the full token brew.fetch_latest_nightly_builds returns.
+        date12 = ts.replace("_", "")[:12]
+        return (f"microshift-5.2.0~0.nightly_{ts}"
+                f"-{date12}.p0.{commit}.assembly.microshift.{el}")
+
+    @staticmethod
+    def _build(ts, el9, el10, el):
+        y, mo, d, hms = ts.split("_")
+        return {
+            "nvr": TestNightlyBuildSelection._nvr(ts, el),
+            "ocp_nightly_name": f"5.2.0-0.nightly-{y}-{mo}-{d}-{hms}",
+            "timestamp": f"{y}-{mo}-{d}T{hms[:2]}:{hms[2:4]}:{hms[4:6]}",
+            "el9": el9,
+            "el10": el10,
+        }
+
+    def _run(self, requested_version, latest_build):
+        with patch.object(brew, "check_vpn", return_value=True), \
+                patch.object(brew, "fetch_latest_nightly_builds",
+                             return_value={"5.2": latest_build}), \
+                patch.object(artifacts, "validate_commit_on_branch",
+                             return_value={"valid": True, "commit_date": "x"}):
+            return run_rpm_checks(classify_version(requested_version))
+
+    def test_requested_nightly_matches_latest_validates_variants(self):
+        latest = self._build("2026_11_01_120000", el9=False, el10=True,
+                             el="el10")
+        results = self._run("5.2.0-0.nightly-2026-11-01-120000", latest)
+        self.assertEqual(self._result(results, "rpm_rhel_version")["status"],
+                         "PASS")
+        # Full NVR carries the commit and a valid filename, so these checks
+        # now have real data instead of failing on a truncated NVR.
+        self.assertEqual(self._result(results, "rpm_commit_id")["status"],
+                         "PASS")
+        self.assertEqual(self._result(results, "rpm_filename_format")["status"],
+                         "PASS")
+
+    def test_requested_nightly_matches_but_missing_el10_fails(self):
+        latest = self._build("2026_11_01_120000", el9=True, el10=False,
+                             el="el9")
+        results = self._run("5.2.0-0.nightly-2026-11-01-120000", latest)
+        rhel = self._result(results, "rpm_rhel_version")
+        self.assertEqual(rhel["status"], "FAIL")
+        self.assertEqual(rhel["reason"], "Missing RHEL variant: el10")
+
+    def test_older_requested_nightly_does_not_validate_latest(self):
+        # User asked for an older nightly; Brew only exposes a newer one.
+        # We must NOT copy the newer build's variant flags.
+        latest = self._build("2026_11_02_130000", el9=True, el10=True,
+                             el="el10")
+        results = self._run("5.2.0-0.nightly-2026-10-01-100000", latest)
+        # All RPM checks skip consistently — a non-latest nightly is not a
+        # hard failure (the build may exist; we just cannot fetch it here).
+        for check in ("rpm_rhel_version", "rpm_packages_list",
+                      "rpm_filename_format", "rpm_commit_id"):
+            self.assertEqual(self._result(results, check)["status"], "SKIP",
+                             msg=check)
 
 
 if __name__ == "__main__":

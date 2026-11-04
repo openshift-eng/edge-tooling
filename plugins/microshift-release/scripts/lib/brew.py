@@ -64,7 +64,10 @@ def fetch_latest_nightly_builds():
 
     Returns:
         dict: Keyed by stream (e.g., "4.21"), each value is a dict with:
-            - nvr: Canonical NVR string (through the timestamp)
+            - nvr: Full NVR token, e.g.
+              "microshift-5.2.0~0.nightly_YYYY_MM_DD_HHMMSS-NNNNNNNNNNNN.p0."
+              "g<commit>.assembly.microshift.el9" (carries the commit and the
+              RHEL variant suffix, so commit/filename checks have data)
             - ocp_nightly_name: Mapped OCP nightly name
             - timestamp: ISO format timestamp string
             - el9: True if an el9 RPM variant is present for the build
@@ -72,10 +75,10 @@ def fetch_latest_nightly_builds():
     """
     html = _fetch_brew_page()
 
-    # Group 1 is the canonical NVR (through the timestamp); the trailing group
-    # captures the remainder of the NVR token so the RHEL variant suffix
-    # (".el9"/".el10") can be detected. Brew lists one NVR per RHEL variant,
-    # so a single build may match more than once.
+    # The leading group pins the build identity (stream + timestamp); the
+    # trailing group captures the rest of the NVR token (release, commit, and
+    # the RHEL variant suffix ".el9"/".el10"). Brew lists one NVR per RHEL
+    # variant, so a single build may match more than once.
     pattern = re.compile(
         r"(microshift-(\d+\.\d+)\.0~0\.nightly_(\d{4})_(\d{2})_(\d{2})_(\d{6}))"
         r"([^\s\"<]*)"
@@ -83,7 +86,7 @@ def fetch_latest_nightly_builds():
 
     builds = {}
     for match in pattern.finditer(html):
-        nvr = match.group(1)
+        nvr = match.group(0)  # full NVR token incl. commit and .el<N> suffix
         stream = match.group(2)
         year, month, day, time_part = match.group(3), match.group(4), match.group(5), match.group(6)
         hours = time_part[:2]
@@ -92,9 +95,8 @@ def fetch_latest_nightly_builds():
 
         timestamp = f"{year}-{month}-{day}T{hours}:{minutes}:{seconds}"
         ocp_name = f"{stream}.0-0.nightly-{year}-{month}-{day}-{time_part}"
-        full_token = match.group(0)
-        has_el9 = "el9" in full_token
-        has_el10 = "el10" in full_token
+        has_el9 = "el9" in nvr
+        has_el10 = "el10" in nvr
 
         existing = builds.get(stream)
         if existing is None or timestamp > existing["timestamp"]:
