@@ -102,13 +102,13 @@ grouped by the sections it prints.
 | `pr_rpms_customer_portal` | RPM advisory page accessible on access.redhat.com |
 | `pr_rpms_cdn` | RPMs pushed to rhocp CDN repos (VPN required) |
 
-### Errata (Bootc Stage / Prod) — 4.19+ only
+### Advisory (Bootc Stage / Prod) — 4.19+ only
 
 | Check | Description |
 |---|---|
-| `pr_errata_bootc_stage_found` / `pr_errata_bootc_prod_found` | Bootc stage/prod advisory published (Hydra search) |
-| `pr_errata_bootc_stage_shipped` / `pr_errata_bootc_prod_shipped` | Bootc stage/prod advisory present in the shipment MR |
-| `pr_errata_bootc_stage_images` / `pr_errata_bootc_prod_images` | Expected bootc images attached to the stage/prod advisory |
+| `pr_advisory_bootc_stage_found` / `pr_advisory_bootc_prod_found` | Bootc stage/prod advisory published (Hydra search) |
+| `pr_advisory_bootc_stage_shipped` / `pr_advisory_bootc_prod_shipped` | Bootc stage/prod advisory present in the shipment MR |
+| `pr_advisory_bootc_stage_images` / `pr_advisory_bootc_prod_images` | Expected bootc images attached to the stage/prod advisory |
 
 ### RPMs (downloads)
 
@@ -149,15 +149,15 @@ Post-Release Verification: 4.21.7
 ✅  pr_rpms_customer_portal      Advisory page accessible
 ✅  pr_rpms_cdn                  4 CDN repo(s) found
 
-── Errata (Bootc Stage) ─────────────────────────────────────
-✅  pr_errata_bootc_stage_found    Published on 2026-07-29
-✅  pr_errata_bootc_stage_shipped  Advisory: RHBA-2026:12346
-✅  pr_errata_bootc_stage_images   Expected images attached
+── Advisory (Bootc Stage) ─────────────────────────────────────
+✅  pr_advisory_bootc_stage_found    Published on 2026-07-29
+✅  pr_advisory_bootc_stage_shipped  Advisory: RHBA-2026:12346
+✅  pr_advisory_bootc_stage_images   Expected images attached
 
-── Errata (Bootc Prod) ──────────────────────────────────────
-✅  pr_errata_bootc_prod_found     Published on 2026-07-29
-✅  pr_errata_bootc_prod_shipped   Advisory: RHBA-2026:12347
-✅  pr_errata_bootc_prod_images    Expected images attached
+── Advisory (Bootc Prod) ──────────────────────────────────────
+✅  pr_advisory_bootc_prod_found     Published on 2026-07-29
+✅  pr_advisory_bootc_prod_shipped   Advisory: RHBA-2026:12347
+✅  pr_advisory_bootc_prod_images    Expected images attached
 
 ── RPMs from https://access.redhat.com/downloads ────────────
 ✅  pr_rpms_downloads           RPMs listed on downloads page

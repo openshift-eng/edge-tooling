@@ -38,12 +38,12 @@ _ARCHES = ["amd64", "arm64"]
 _CHECKS_ERRATA = [
     "pr_errata_rpms_found",
     "pr_errata_rpms_shipped",
-    "pr_errata_bootc_stage_found",
-    "pr_errata_bootc_stage_shipped",
-    "pr_errata_bootc_stage_images",
-    "pr_errata_bootc_prod_found",
-    "pr_errata_bootc_prod_shipped",
-    "pr_errata_bootc_prod_images",
+    "pr_advisory_bootc_stage_found",
+    "pr_advisory_bootc_stage_shipped",
+    "pr_advisory_bootc_stage_images",
+    "pr_advisory_bootc_prod_found",
+    "pr_advisory_bootc_prod_shipped",
+    "pr_advisory_bootc_prod_images",
 ]
 
 _CHECKS_BOOTC = [
@@ -68,12 +68,12 @@ _CHECKS_LIFECYCLE = [
 _CHECK_SECTIONS = {
     "pr_errata_rpms_found": "Errata (RPMs)",
     "pr_errata_rpms_shipped": "Errata (RPMs)",
-    "pr_errata_bootc_stage_found": "Errata (Bootc Stage)",
-    "pr_errata_bootc_stage_shipped": "Errata (Bootc Stage)",
-    "pr_errata_bootc_stage_images": "Errata (Bootc Stage)",
-    "pr_errata_bootc_prod_found": "Errata (Bootc Prod)",
-    "pr_errata_bootc_prod_shipped": "Errata (Bootc Prod)",
-    "pr_errata_bootc_prod_images": "Errata (Bootc Prod)",
+    "pr_advisory_bootc_stage_found": "Advisory (Bootc Stage)",
+    "pr_advisory_bootc_stage_shipped": "Advisory (Bootc Stage)",
+    "pr_advisory_bootc_stage_images": "Advisory (Bootc Stage)",
+    "pr_advisory_bootc_prod_found": "Advisory (Bootc Prod)",
+    "pr_advisory_bootc_prod_shipped": "Advisory (Bootc Prod)",
+    "pr_advisory_bootc_prod_images": "Advisory (Bootc Prod)",
     "pr_bootc_catalog_el9": "Bootc Images from https://catalog.redhat.com",
     "pr_bootc_catalog_el10": "Bootc Images from https://catalog.redhat.com",
     "pr_rpms_customer_portal": "Errata (RPMs)",
@@ -85,7 +85,7 @@ _CHECK_SECTIONS = {
 }
 
 _SECTION_ORDER = [
-    "Errata (RPMs)", "Errata (Bootc Stage)", "Errata (Bootc Prod)",
+    "Errata (RPMs)", "Advisory (Bootc Stage)", "Advisory (Bootc Prod)",
     "RPMs from https://access.redhat.com/downloads",
     "Bootc Images from https://catalog.redhat.com",
     "Documentation", "Lifecycle",
@@ -120,10 +120,10 @@ def _all_check_ids(version_info):
     ]
     if _has_bootc(version_info):
         ids += [
-            "pr_errata_bootc_stage_found", "pr_errata_bootc_stage_shipped",
-            "pr_errata_bootc_stage_images",
-            "pr_errata_bootc_prod_found", "pr_errata_bootc_prod_shipped",
-            "pr_errata_bootc_prod_images",
+            "pr_advisory_bootc_stage_found", "pr_advisory_bootc_stage_shipped",
+            "pr_advisory_bootc_stage_images",
+            "pr_advisory_bootc_prod_found", "pr_advisory_bootc_prod_shipped",
+            "pr_advisory_bootc_prod_images",
         ]
     ids.append("pr_rpms_downloads")
     rhel_vers = _rhel_versions(version_info)
@@ -273,7 +273,7 @@ def _check_bootc_errata_shipped(errata_info, check_id=None):
     """Bootc errata is published. Konflux erratas are not in the Errata Tool,
     so presence in the shipment MR is the verification signal."""
     if check_id is None:
-        check_id = "pr_errata_bootc_shipped"
+        check_id = "pr_advisory_bootc_shipped"
     if errata_info is None:
         return _fail(check_id, "No bootc errata found to verify")
     if "error" in errata_info:
@@ -692,18 +692,18 @@ def run_post_release_checks(version_info):
                 ("prod", bootc_prod_errata, "prod_errata_url"),
             ):
                 futures[ex.submit(
-                    _check_errata_found, f"pr_errata_bootc_{env}_found",
+                    _check_errata_found, f"pr_advisory_bootc_{env}_found",
                     f"bootc {env}", bootc_info
-                )] = f"pr_errata_bootc_{env}_found"
+                )] = f"pr_advisory_bootc_{env}_found"
                 futures[ex.submit(
                     _check_bootc_errata_shipped, bootc_info,
-                    f"pr_errata_bootc_{env}_shipped"
-                )] = f"pr_errata_bootc_{env}_shipped"
+                    f"pr_advisory_bootc_{env}_shipped"
+                )] = f"pr_advisory_bootc_{env}_shipped"
                 futures[ex.submit(
                     check_bootc_errata_images,
-                    f"pr_errata_bootc_{env}_images",
+                    f"pr_advisory_bootc_{env}_images",
                     (shipment or {}).get(url_key), advisory_details
-                )] = f"pr_errata_bootc_{env}_images"
+                )] = f"pr_advisory_bootc_{env}_images"
 
         # RPM checks (depend on RPM errata info)
         futures[ex.submit(check_rpms_customer_portal,
