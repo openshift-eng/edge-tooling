@@ -186,7 +186,9 @@ def get_build_info(version, release_type):
         release_type: One of "Z", "X", "Y", "RC", "EC", "nightly".
 
     Returns:
-        dict: {found, nvr, build_date, commit, el9, el10} or {found: False}.
+        dict: {found, nvr, nvrs, build_date, commit, el9, el10} or
+        {found: False}. ``nvr`` is the first match; ``nvrs`` lists every
+        matching NVR (e.g. separate el9 and el10 builds).
     """
     brew_version = version.replace("-", "~") if release_type in ("RC", "EC") else version
 
@@ -216,6 +218,7 @@ def get_build_info(version, release_type):
     return {
         "found": True,
         "nvr": first_nvr,
+        "nvrs": all_nvrs,
         "build_date": build_date,
         "commit": commit,
         "el9": el9,

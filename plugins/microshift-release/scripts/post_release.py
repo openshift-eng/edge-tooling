@@ -176,21 +176,100 @@ def _parse_hydra_doc(doc):
     }
 
 
-def find_rpms_errata(version, minor):
-    """Search Hydra for the RPM errata matching this exact version."""
+def _find_rpms_errata_via_et(version, release_type):
+    """Discover the RPM advisory from the Brew build record in the Errata Tool.
+
+    Hydra's search index lags several days behind advisory publication, so a
+    shipped advisory can be absent from search results. The ET build record is
+    authoritative: it lists the advisories the build belongs to.
+    """
+    if not release_type:
+        return None
+    try:
+        build = brew.get_build_info(version, release_type)
+    except requests.RequestException as exc:
+        logger.debug("Brew lookup failed for %s: %s", version, exc)
+        return None
+    if not build.get("found"):
+        return None
+
+    # A version can map to several builds (e.g. separate el9 and el10 NVRs),
+    # and the advisory may be attached to any of them. Inspect every matching
+    # NVR and only give up once none yields a shipped advisory.
+    for nvr in build.get("nvrs") or [build["nvr"]]:
+        found = _shipped_advisory_for_nvr(nvr)
+        if found is not None:
+            return found
+    return None
+
+
+def _shipped_advisory_for_nvr(nvr):
+    """Return the shipped-advisory info for a single Brew NVR, or None."""
+    data = errata.fetch_build_advisories(nvr)
+    if not data:
+        return None
+
+    # ``released_errata`` is a single advisory object (or null); ``all_errata``
+    # is a list of them. Keep the released advisory whole rather than splitting
+    # its fields, so it can be matched when it is not also in ``all_errata``.
+    candidates = []
+    released = data.get("released_errata")
+    if isinstance(released, dict):
+        candidates.append(released)
+    elif isinstance(released, list):
+        candidates.extend(released)
+    candidates.extend(data.get("all_errata") or [])
+
+    for adv in candidates:
+        if not isinstance(adv, dict):
+            continue
+        name = adv.get("name") or ""
+        if not name or (adv.get("status") or "").upper() != "SHIPPED_LIVE":
+            continue
+        advisory = errata.fetch_advisory(name)
+        if advisory is None:
+            continue
+        logger.info("Found %s via Errata Tool (Hydra index lag)", name)
+        issue_date = (advisory.get("issue_date")
+                      or advisory.get("publish_date") or "")
+        return {
+            "advisory_name": name,
+            "portal_url": f"https://access.redhat.com/errata/{name}",
+            "publication_date": str(issue_date)[:10],
+            "synopsis": advisory.get("synopsis", ""),
+        }
+    return None
+
+
+def find_rpms_errata(version, minor, release_type=None, vpn_ok=False):
+    """Find the RPM errata matching this exact version.
+
+    Hydra is tried first (fast, no VPN). When its index has not caught up
+    yet, fall back to the Errata Tool build record if the VPN is available.
+    """
+    hydra_error = None
     try:
         docs = _hydra_search(
             f'"Red Hat build of MicroShift {minor}" documentKind:Errata'
         )
     except (requests.RequestException, json.JSONDecodeError) as e:
         logger.warning("Hydra RPM errata search failed for %s: %s", version, e)
-        return {"error": str(e)}
+        hydra_error = str(e)
+        docs = []
 
     version_pattern = re.compile(rf"\b{re.escape(version)}\b")
     for doc in docs:
         synopsis = doc.get("portal_synopsis", "")
         if version_pattern.search(synopsis):
             return _parse_hydra_doc(doc)
+
+    if vpn_ok:
+        found = _find_rpms_errata_via_et(version, release_type)
+        if found is not None:
+            return found
+
+    if hydra_error is not None:
+        return {"error": hydra_error}
     return None
 
 
@@ -458,17 +537,21 @@ def check_rpms_cdn(advisory, vpn_ok):
         return _fail(check_id, "No CDN push found",
                      [f"Advisory: {advisory_name}"])
 
-    all_complete = all(
-        (p.get("status") or "").upper() == "COMPLETE" for p in cdn_pushes
-    )
-    if all_complete:
+    # The Errata Tool keeps a record of every push attempt, including ones
+    # that failed and were re-pushed. A superseded FAILED record is not a
+    # live failure, so judge CDN delivery by the most recent push (push ids
+    # are monotonic, so the highest id is the latest attempt).
+    latest = max(cdn_pushes, key=lambda p: p.get("id") or 0)
+    status = (latest.get("status") or "").upper()
+    if status == "COMPLETE":
         return _pass(check_id,
                      f"CDN push complete ({len(cdn_pushes)} job(s))",
                      [f"Advisory: {advisory_name}"])
     statuses = [p.get("status", "?") for p in cdn_pushes]
     return _fail(check_id,
-                 f"CDN push not complete: {', '.join(statuses)}",
-                 [f"Advisory: {advisory_name}"])
+                 f"Latest CDN push not complete: {status or '?'}",
+                 [f"Advisory: {advisory_name}",
+                  f"Push jobs: {', '.join(statuses)}"])
 
 
 _ERRATA_RPM_RE = re.compile(
@@ -605,8 +688,11 @@ def run_post_release_checks(version_info):
     with ThreadPoolExecutor(max_workers=8) as ex:
         futures = {}
 
-        # Errata searches (Hydra — public internet)
-        rpms_errata_future = ex.submit(find_rpms_errata, version, minor)
+        # Errata searches (Hydra — public internet, ET if the index lags)
+        rpms_errata_future = ex.submit(
+            find_rpms_errata, version, minor,
+            version_info.get("type"), vpn_ok
+        )
         shipment_future = None
         if has_bootc:
             logger.info("Fetching shipment MR for %s...", version)
