@@ -9,6 +9,7 @@ Edge Tooling is a multi-tool deployment and development toolkit for OpenShift an
 | Component | Path | Purpose |
 |-----------|------|---------|
 | Two-Node Toolbox | `two-node-toolbox/` | OpenShift two-node cluster deployment (arbiter/fencing topologies) |
+| OpenShift Test Helpers | `openshift-tests/` | Local two-node test runners and diagnostic captures |
 | EC2 Deploy | `ec2-deploy/` | Standalone EC2 instance setup for development |
 | EC2 Watchman | `watchman/` | Automatic EC2 shutdown and weekly Slack reporting |
 | SNO Deploy | `sno-deploy/` | Single Node OpenShift with DU configuration |
@@ -20,6 +21,7 @@ Edge Tooling is a multi-tool deployment and development toolkit for OpenShift an
 **Use case routing:**
 
 - Two-node HA cluster → Two-Node Toolbox
+- Run tests or collect diagnostics on a two-node cluster → OpenShift Test Helpers
 - EC2 dev host → EC2 Deploy (often used as hypervisor for Two-Node Toolbox)
 - Automatic EC2 shutdown and weekly report → EC2 Watchman
 - Single-node OpenShift → SNO Deploy

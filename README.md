@@ -7,6 +7,7 @@ Automation, AI skills, and deployment tools for OpenShift edge engineering. This
 | Use case | Component |
 |----------|-----------|
 | Two-node HA cluster (arbiter or fencing) | [two-node-toolbox/](two-node-toolbox/) |
+| Local two-node tests and diagnostic captures | [openshift-tests/](openshift-tests/) |
 | EC2 dev host or hypervisor | [ec2-deploy/](ec2-deploy/) |
 | Automatic EC2 shutdown and weekly Slack report | [watchman/](watchman/) |
 | Single Node OpenShift with DU config | [sno-deploy/](sno-deploy/) |
@@ -69,6 +70,7 @@ Then enable whichever plugins you need. See the [plugin README](plugins/README.m
 | Directory | What it does |
 |-----------|-------------|
 | [two-node-toolbox/](two-node-toolbox/) | Deploy two-node OpenShift clusters (arbiter/fencing topologies) |
+| [openshift-tests/](openshift-tests/) | Run local two-node tests and collect diagnostics |
 | [ec2-deploy/](ec2-deploy/) | Spin up EC2 instances for development and hypervisor use |
 | [watchman/](watchman/) | Stop stale EC2 instances and send weekly Slack reports |
 | [sno-deploy/](sno-deploy/) | Deploy Single Node OpenShift with DU configuration |
