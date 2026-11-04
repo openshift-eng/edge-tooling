@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify all artifacts and docs are publicly available after shipping — Phase 4.
+"""Verify all artifacts and docs are publicly available after shipping — Phase 5.
 
 Post-release checks for GA and z-stream MicroShift releases. Confirms
 bootc images, RPMs, errata, documentation, and lifecycle page are
@@ -813,7 +813,7 @@ def format_text_full(version, results, version_info):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Verify post-release artifact availability (Phase 4)"
+        description="Verify post-release artifact availability (Phase 5)"
     )
     parser.add_argument("version",
                         help="Version string, e.g., 4.21.7, 4.22.0")

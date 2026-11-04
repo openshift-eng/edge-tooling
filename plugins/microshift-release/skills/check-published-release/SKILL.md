@@ -90,26 +90,38 @@ Paste the **complete stdout** of the script into the response as a code block. E
 
 ## Checks Performed
 
-### Errata
+Check IDs below match the identifiers emitted by `check_published-release.sh`,
+grouped by the sections it prints.
+
+### Errata (RPMs)
 
 | Check | Description |
 |---|---|
-| `pr_errata_found` | Public errata advisory exists for this version (Hydra search) |
-| `pr_errata_shipped` | Advisory status is SHIPPED_LIVE (VPN required) |
+| `pr_errata_rpms_found` | Public RPM advisory exists for this version (Hydra search) |
+| `pr_errata_rpms_shipped` | RPM advisory status is SHIPPED_LIVE (VPN/Errata Tool) |
+| `pr_rpms_customer_portal` | RPM advisory page accessible on access.redhat.com |
+| `pr_rpms_cdn` | RPMs pushed to rhocp CDN repos (VPN required) |
 
-### Bootc Images
+### Errata (Bootc Stage / Prod) — 4.19+ only
+
+| Check | Description |
+|---|---|
+| `pr_errata_bootc_stage_found` / `pr_errata_bootc_prod_found` | Bootc stage/prod advisory published (Hydra search) |
+| `pr_errata_bootc_stage_shipped` / `pr_errata_bootc_prod_shipped` | Bootc stage/prod advisory present in the shipment MR |
+| `pr_errata_bootc_stage_images` / `pr_errata_bootc_prod_images` | Expected bootc images attached to the stage/prod advisory |
+
+### RPMs (downloads)
+
+| Check | Description |
+|---|---|
+| `pr_rpms_downloads` | RPMs listed on the public errata downloads page (access.redhat.com/downloads) |
+
+### Bootc Images (catalog)
 
 | Check | Description |
 |---|---|
 | `pr_bootc_catalog_el9` | `microshift-bootc-rhel9` image in prod catalog (catalog.redhat.com) |
 | `pr_bootc_catalog_el10` | `microshift-bootc-rhel10` image in prod catalog (4.22.2+ only) |
-
-### RPMs
-
-| Check | Description |
-|---|---|
-| `pr_rpms_customer_portal` | Advisory page accessible on Red Hat Customer Portal (access.redhat.com) |
-| `pr_rpms_cdn` | RPMs pushed to rhocp CDN repos (VPN required) |
 
 ### Documentation
 
@@ -131,19 +143,30 @@ Paste the **complete stdout** of the script into the response as a code block. E
 ```text
 Post-Release Verification: 4.21.7
 
-── Errata ──────────────────────────────────────────────────
-✅  pr_errata_found            RHBA-2026:12345 (published 2026-07-29)
-✅  pr_errata_shipped          Status: SHIPPED_LIVE
+── Errata (RPMs) ────────────────────────────────────────────
+✅  pr_errata_rpms_found         RHBA-2026:12345 (published 2026-07-29)
+✅  pr_errata_rpms_shipped       Status: SHIPPED_LIVE
+✅  pr_rpms_customer_portal      Advisory page accessible
+✅  pr_rpms_cdn                  4 CDN repo(s) found
 
-── Bootc Images ────────────────────────────────────────────
-✅  pr_bootc_catalog_el9       Found in prod catalog (rhel9)
+── Errata (Bootc Stage) ─────────────────────────────────────
+✅  pr_errata_bootc_stage_found    Published on 2026-07-29
+✅  pr_errata_bootc_stage_shipped  Advisory: RHBA-2026:12346
+✅  pr_errata_bootc_stage_images   Expected images attached
 
-── RPMs ────────────────────────────────────────────────────
-✅  pr_rpms_customer_portal    Advisory page accessible
-✅  pr_rpms_cdn                4 CDN repo(s) found
+── Errata (Bootc Prod) ──────────────────────────────────────
+✅  pr_errata_bootc_prod_found     Published on 2026-07-29
+✅  pr_errata_bootc_prod_shipped   Advisory: RHBA-2026:12347
+✅  pr_errata_bootc_prod_images    Expected images attached
 
-── Documentation ───────────────────────────────────────────
-✅  pr_docs_published          Release notes page accessible (4.21)
+── RPMs from https://access.redhat.com/downloads ────────────
+✅  pr_rpms_downloads           RPMs listed on downloads page
+
+── Bootc Images from https://catalog.redhat.com ─────────────
+✅  pr_bootc_catalog_el9        Found in prod catalog (rhel9)
+
+── Documentation ────────────────────────────────────────────
+✅  pr_docs_published           Release notes page accessible (4.21)
 ```
 
 On failure, details appear below the failing check:

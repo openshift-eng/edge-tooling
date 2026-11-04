@@ -59,8 +59,10 @@ bash "$SCRIPTS_DIR/request_release-to-art.sh" "$VERSION" "$ART_DUE_DATE" "$RELEA
 
 Forward `--skip-slack` if requested. Display the script's preview and explain
 which tickets will be reused or created and whether Slack will be notified.
-Dry-run ticket placeholders are not real issue keys. If `--dry-run` was requested,
-stop after the preview; do not proceed to execution.
+Dry-run ticket placeholders are not real issue keys. If the preview command exits
+non-zero (for example, Jira is unavailable), report the error and stop; do not
+proceed to confirmation or execution. If `--dry-run` was requested, also stop
+after a successful preview; do not proceed to execution.
 
 ### 3. Confirm and execute
 
