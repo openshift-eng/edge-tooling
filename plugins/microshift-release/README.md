@@ -101,3 +101,9 @@ bash unit_tests/test_request_art_builds.sh
 - `gh` CLI (for PR operations in automated testing)
 - `aws` CLI (for S3 build cache and artifact upload)
 - `gsutil` CLI (for GCS artifact download)
+
+### AWS credentials for Prow testing
+
+The preflight uses the AWS CLI's standard credential provider chain. For setup
+and troubleshooting, see
+[`skills/automated-testing/SKILL.md`](skills/automated-testing/SKILL.md).
