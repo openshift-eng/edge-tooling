@@ -1,22 +1,22 @@
 ---
-name: microshift-release:post-release
+name: microshift-release:check-published-release
 argument-hint: <version> [--json]
-description: Verify all artifacts and docs are publicly available after shipping — bootc images, RPMs, errata, documentation, and lifecycle page
+description: Step 5 after shipment — verify public artifacts, errata, documentation, and lifecycle information
 user-invocable: true
 allowed-tools: Bash
 ---
 
-# microshift-release:post-release
+# microshift-release:check-published-release
 
 ## Synopsis
 
 ```bash
-/microshift-release:post-release <version> [--json]
+/microshift-release:check-published-release <version> [--json]
 ```
 
 ## Description
 
-Phase 4 of the MicroShift release process: confirm all artifacts and documentation are publicly available after a GA or z-stream release has shipped.
+Phase 5 of the MicroShift release process: confirm all artifacts and documentation are publicly available after a GA or z-stream release has shipped.
 
 **Only GA (X.Y.0) and z-stream (X.Y.Z) releases are supported.** EC and RC versions are rejected.
 
@@ -72,7 +72,7 @@ SCRIPTS_DIR=plugins/microshift-release/scripts
 ### Step 2: Run Checks
 
 ```bash
-bash $SCRIPTS_DIR/post_release.sh <version> [--json]
+bash $SCRIPTS_DIR/check_published-release.sh <version> [--json]
 ```
 
 Display stderr only if the script exits non-zero.
@@ -156,10 +156,10 @@ On failure, details appear below the failing check:
 ## Examples
 
 ```bash
-/microshift-release:post-release 4.21.7              # z-stream
-/microshift-release:post-release 4.22.0              # GA (includes lifecycle checks)
-/microshift-release:post-release 4.22.2              # z-stream (el9 + el10)
-/microshift-release:post-release 4.21.7 --json       # machine-readable output
+/microshift-release:check-published-release 4.21.7              # z-stream
+/microshift-release:check-published-release 4.22.0              # GA (includes lifecycle checks)
+/microshift-release:check-published-release 4.22.2              # z-stream (el9 + el10)
+/microshift-release:check-published-release 4.21.7 --json       # machine-readable output
 ```
 
 ## Notes

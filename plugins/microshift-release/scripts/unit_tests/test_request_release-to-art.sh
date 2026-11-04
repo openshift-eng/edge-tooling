@@ -3,9 +3,9 @@
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCRIPT="${TEST_DIR}/../request_art_builds.sh"
+SCRIPT="${TEST_DIR}/../request_release-to-art.sh"
 FIXTURES="${TEST_DIR}/fixtures"
-TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/request_art_builds_test.XXXXXX")"
+TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/request_release-to-art_test.XXXXXX")"
 trap 'rm -rf "${TEST_ROOT}"' EXIT
 SYNTHETIC_VALUE="synthetic-${RANDOM}-${RANDOM}"
 SYNTHETIC_WEBHOOK="https://hooks.example.test/synthetic-${RANDOM}-${RANDOM}"

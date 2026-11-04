@@ -1,5 +1,5 @@
-#!/usr/bin/bash
-
+#!/usr/bin/env bash
+# Run a Prow release-testing action (release step 2).
 set -euo pipefail
 
 SCRIPTDIR="$(dirname "${BASH_SOURCE[0]}")"
@@ -19,4 +19,4 @@ if [[ ! -f "${MARKER}" ]] || [[ "${SCRIPTDIR}/requirements.txt" -nt "${MARKER}" 
     touch "${MARKER}"
 fi
 
-"${ENVDIR}/bin/python3" "${SCRIPTDIR}/validate_artifacts.py" "$@"
+"${ENVDIR}/bin/python3" "${SCRIPTDIR}/prow_testing.py" "$@"

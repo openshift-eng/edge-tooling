@@ -14,7 +14,7 @@ if [[ ! -d "${ENVDIR}" ]]; then
 fi
 "${ENVDIR}/bin/python3" -m pip install -r "${SCRIPTDIR}/requirements.txt" >&2
 
-CMD="${1:?Usage: precheck.sh <xyz|nightly|ecrc|enrich> [args...]}"
+CMD="${1:?Usage: analyze_zstream-to-release.sh <xyz|nightly|ecrc|enrich> [args...]}"
 shift
 
 case "${CMD}" in
@@ -32,7 +32,7 @@ case "${CMD}" in
         ;;
     *)
         echo "Unknown command: ${CMD}" >&2
-        echo "Usage: precheck.sh <xyz|nightly|ecrc|enrich> [args...]" >&2
+        echo "Usage: analyze_zstream-to-release.sh <xyz|nightly|ecrc|enrich> [args...]" >&2
         exit 1
         ;;
 esac

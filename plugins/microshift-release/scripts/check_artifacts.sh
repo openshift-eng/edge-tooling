@@ -1,4 +1,5 @@
 #!/usr/bin/bash
+# Validate ART-built RPMs and bootc images (release step 1).
 
 set -euo pipefail
 
@@ -19,4 +20,4 @@ if [[ ! -f "${MARKER}" ]] || [[ "${SCRIPTDIR}/requirements.txt" -nt "${MARKER}" 
     touch "${MARKER}"
 fi
 
-"${ENVDIR}/bin/python3" "${SCRIPTDIR}/errata_promotion.py" "$@"
+"${ENVDIR}/bin/python3" "${SCRIPTDIR}/validate_artifacts.py" "$@"
