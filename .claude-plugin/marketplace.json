@@ -28,7 +28,7 @@
       "name": "edge-scrum",
       "source": "./plugins/edge-scrum",
       "description": "Agents, skills, and workflows relevant to scrum process management for the OpenShift Edge Team",
-      "version": "1.4.0"
+      "version": "1.5.0"
     },
     {
       "name": "git-commits",

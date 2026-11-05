@@ -102,3 +102,13 @@ Assesses whether the team can deliver planned scope within remaining time. Class
 The method, thresholds and known limitations are documented in [`references/release-planning-method.md`](references/release-planning-method.md).
 
 Output is saved to `.reports/release_planning_{version}_{YYYY-MM-DD}.md`.
+
+---
+
+### chai-bot Skills
+
+Playbooks under [`chai/`](chai/) are for the chai-bot coordinator, not Claude Code.
+
+#### `scrum-context`
+
+Read-only. Answers "where are we in the sprint and release cycle?" for other chai-bot skills: current sprint and week, a release's refinement / development / pencils-down / branch-cut sprints and phase, next ceremony dates, and next sprint's team availability. Sources: board 11479 sprints, Product Pages, and the OpenShift Edge calendar; date logic runs in [`bin/scrum_context.py`](bin/scrum_context.py). Availability requires the `ROSTER_SOURCE` setting described in [`chai/scrum-context/SKILL.md`](chai/scrum-context/SKILL.md).
