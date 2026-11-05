@@ -64,35 +64,54 @@ def fetch_latest_nightly_builds():
 
     Returns:
         dict: Keyed by stream (e.g., "4.21"), each value is a dict with:
-            - nvr: Full NVR string
+            - nvr: Full NVR token, e.g.
+              "microshift-5.2.0~0.nightly_YYYY_MM_DD_HHMMSS-NNNNNNNNNNNN.p0."
+              "g<commit>.assembly.microshift.el9" (carries the commit and the
+              RHEL variant suffix, so commit/filename checks have data)
             - ocp_nightly_name: Mapped OCP nightly name
             - timestamp: ISO format timestamp string
+            - el9: True if an el9 RPM variant is present for the build
+            - el10: True if an el10 RPM variant is present for the build
     """
     html = _fetch_brew_page()
 
-    # Pattern: microshift-X.Y.0~0.nightly_YYYY_MM_DD_HHMMSS
+    # The leading group pins the build identity (stream + timestamp); the
+    # trailing group captures the rest of the NVR token (release, commit, and
+    # the RHEL variant suffix ".el9"/".el10"). Brew lists one NVR per RHEL
+    # variant, so a single build may match more than once.
     pattern = re.compile(
-        r"microshift-(\d+\.\d+)\.0~0\.nightly_(\d{4})_(\d{2})_(\d{2})_(\d{6})"
+        r"(microshift-(\d+\.\d+)\.0~0\.nightly_(\d{4})_(\d{2})_(\d{2})_(\d{6}))"
+        r"([^\s\"<]*)"
     )
 
     builds = {}
     for match in pattern.finditer(html):
-        stream = match.group(1)
-        year, month, day, time_part = match.group(2), match.group(3), match.group(4), match.group(5)
+        nvr = match.group(0)  # full NVR token incl. commit and .el<N> suffix
+        stream = match.group(2)
+        year, month, day, time_part = match.group(3), match.group(4), match.group(5), match.group(6)
         hours = time_part[:2]
         minutes = time_part[2:4]
         seconds = time_part[4:6]
 
         timestamp = f"{year}-{month}-{day}T{hours}:{minutes}:{seconds}"
         ocp_name = f"{stream}.0-0.nightly-{year}-{month}-{day}-{time_part}"
+        has_el9 = "el9" in nvr
+        has_el10 = "el10" in nvr
 
-        # Keep only the latest build per stream
-        if stream not in builds or timestamp > builds[stream]["timestamp"]:
+        existing = builds.get(stream)
+        if existing is None or timestamp > existing["timestamp"]:
+            # Newer build supersedes any previously seen variants.
             builds[stream] = {
-                "nvr": match.group(0),
+                "nvr": nvr,
                 "ocp_nightly_name": ocp_name,
                 "timestamp": timestamp,
+                "el9": has_el9,
+                "el10": has_el10,
             }
+        elif timestamp == existing["timestamp"]:
+            # Same build, another RHEL variant token — merge variant flags.
+            existing["el9"] = existing["el9"] or has_el9
+            existing["el10"] = existing["el10"] or has_el10
 
     return builds
 

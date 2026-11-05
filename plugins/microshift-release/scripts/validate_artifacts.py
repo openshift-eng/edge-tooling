@@ -25,8 +25,10 @@ logger = logging.getLogger(__name__)
 
 # Minimum OCP version for bootc image checks (bootc does not run for 4.18)
 _BOOTC_MIN_MINOR = (4, 19)
-# el10 builds required starting in 4.23 / 5.0
-_EL10_MIN_MINOR = (4, 23)
+# First stream with el10 bootc images (5.0 follows 4.22).
+_EL10_MIN_MINOR = (5, 0)
+# RPMs stay on el9 through 5.1; el10 RPMs start with 5.2.
+_RPM_EL10_MIN_MINOR = (5, 2)
 
 # Check IDs in display order
 _RPM_CHECKS = [
@@ -73,7 +75,7 @@ def classify_version(version):
     """
     # Nightly: 4.21.0-0.nightly-YYYY-MM-DD-HHMMSS
     nightly_match = re.match(
-        r"(\d+)\.(\d+)\.(\d+)-0\.nightly-(\d{4}-\d{2}-\d{2}-\d{6})", version
+        r"(\d+)\.(\d+)\.(\d+)-0\.nightly-(\d{4}-\d{2}-\d{2}-\d{6})$", version
     )
     if nightly_match:
         major, minor_num = nightly_match.group(1), nightly_match.group(2)
@@ -167,6 +169,15 @@ def check_rpm_packages_list(version_info, build_info,
                             brew_packages=None, expected_packages=None):
     """rpm_packages_list: Verify NVR exists and all expected packages are built."""
     if not build_info.get("found"):
+        # A nightly request that doesn't match the tracked latest still fails
+        # (the tool only validates the latest nightly per stream) — but with an
+        # accurate message rather than implying the build is absent from Brew.
+        latest = build_info.get("nightly_latest")
+        if latest:
+            return _fail("rpm_packages_list",
+                         f"Cannot validate a non-latest nightly "
+                         f"(only the latest tracked build is checked; "
+                         f"latest for stream: {latest})")
         return _fail("rpm_packages_list",
                      f"No Brew build found for {version_info['version']}")
 
@@ -235,12 +246,12 @@ def check_rpm_commit_id(version_info, build_info, vpn_ok):
 
 
 def check_rpm_rhel_version(version_info, build_info):
-    """rpm_rhel_version: Check el9 and el10 builds are both present (el10 required 4.23+)."""
+    """rpm_rhel_version: Check required RPM variants (el9 through 5.1, el10 from 5.2)."""
     if not build_info.get("found"):
         return _skip("rpm_rhel_version", "No Brew build found")
 
-    require_el10 = _minor_tuple(version_info["minor"]) >= _EL10_MIN_MINOR
-    result = artifacts.validate_rhel_builds(build_info, require_el10=require_el10)
+    required = _rpm_rhel_versions_for(version_info["minor"])
+    result = artifacts.validate_rhel_builds(build_info, required)
     if result["valid"]:
         return _pass("rpm_rhel_version", result["reason"])
     return _fail("rpm_rhel_version", result["reason"],
@@ -248,9 +259,16 @@ def check_rpm_rhel_version(version_info, build_info):
 
 
 def _rhel_versions_for(minor):
-    """Return the RHEL versions to check based on the minor version."""
+    """Return bootc RHEL versions based on the minor version."""
     if _minor_tuple(minor) >= _EL10_MIN_MINOR:
         return [9, 10]
+    return [9]
+
+
+def _rpm_rhel_versions_for(minor):
+    """Return required RPM variants: el9 through 5.1, el10 from 5.2 onward."""
+    if _minor_tuple(minor) >= _RPM_EL10_MIN_MINOR:
+        return [10]
     return [9]
 
 
@@ -262,7 +280,7 @@ def check_rpm_mirror(version_info, release_type_key):
     if vtype != release_type_key:
         return _skip(check_id, f"N/A ({vtype}, not {release_type_key})")
 
-    rhel_versions = _rhel_versions_for(version_info["minor"])
+    rhel_versions = _rpm_rhel_versions_for(version_info["minor"])
     result = artifacts.validate_mirror_rpms(
         version_info["version"], release_type_key, rhel_versions
     )
@@ -321,22 +339,32 @@ def run_rpm_checks(version_info):
         if vtype in ("RC", "EC"):
             build_info = brew.get_build_info(version_info["version"], vtype)
         elif vtype == "nightly":
-            # For nightly, look up via fetch_latest_nightly_builds
+            # fetch_latest_nightly_builds only tracks the latest build per
+            # stream, so only trust it when it is the nightly the user asked
+            # to validate; otherwise we have no data for the requested build
+            # and the checks must skip rather than validate the wrong one.
             nightly_builds = brew.fetch_latest_nightly_builds()
-            minor = version_info["minor"]
-            if minor in nightly_builds:
-                nbuild = nightly_builds[minor]
+            nbuild = nightly_builds.get(version_info["minor"])
+            if nbuild and nbuild["ocp_nightly_name"] == version_info["version"]:
                 build_info = {
                     "found": True,
                     "nvr": nbuild["nvr"],
                     "build_date": nbuild["timestamp"][:10],
                     "commit": None,
-                    "el9": True,  # assume present for nightly
-                    "el10": False,
+                    # Derived from the actual Brew NVRs so the RHEL-variant
+                    # requirement (el10 from 5.2) is validated, not assumed.
+                    "el9": nbuild.get("el9", False),
+                    "el10": nbuild.get("el10", False),
                 }
                 m = re.search(r"\.g([0-9a-f]+)\.", nbuild["nvr"])
                 if m:
                     build_info["commit"] = m.group(1)
+            elif nbuild:
+                # Stream has a nightly, but not the requested build. Record the
+                # tracked latest so rpm_packages_list can fail with an accurate
+                # message instead of a generic "no build found".
+                build_info = {"found": False,
+                              "nightly_latest": nbuild["ocp_nightly_name"]}
         else:
             build_info = brew.get_build_info(version_info["version"],
                                              "Z" if version_info["type"] == "Z" else "XY")
