@@ -58,7 +58,7 @@ class TestLayoutChecks(unittest.TestCase):
         path.write_text(content)
 
     def test_valid_layout(self):
-        self.write("skills/pre-check/SKILL.md", "# Pre-check\n")
+        self.write("skills/analyze-zstream-to-release/SKILL.md", "# Pre-check\n")
         self.write("scripts/precheck.py", "print('check')\n")
         self.write("scripts/unit_tests/fixtures/input.json", "{}\n")
         self.assertEqual(layout_errors(self.root), [])
@@ -67,15 +67,15 @@ class TestLayoutChecks(unittest.TestCase):
         for suffix in sorted(SCRIPT_SUFFIXES):
             with self.subTest(suffix=suffix), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
-                path = root / "skills/pre-check/nested" / f"check{suffix.upper()}"
+                path = root / "skills/analyze-zstream-to-release/nested" / f"check{suffix.upper()}"
                 path.parent.mkdir(parents=True)
                 path.touch()
                 self.assertEqual(len(layout_errors(root)), 1)
 
     def test_extensionless_script_under_skills(self):
-        self.write("skills/pre-check/helpers/check", "#!/usr/bin/env python3\n")
+        self.write("skills/analyze-zstream-to-release/helpers/check", "#!/usr/bin/env python3\n")
         self.assertEqual(layout_errors(self.root), [
-            "skills/pre-check/helpers/check: scripts belong under scripts/",
+            "skills/analyze-zstream-to-release/helpers/check: scripts belong under scripts/",
         ])
 
     def test_markdown_under_nested_scripts(self):

@@ -53,4 +53,4 @@ jobs:
         run: python -m pytest unit_tests/ -q
 
       - name: Run shell unit tests
-        run: bash unit_tests/test_request_art_builds.sh
+        run: bash unit_tests/test_request_release-to-art.sh

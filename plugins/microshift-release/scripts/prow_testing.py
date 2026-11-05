@@ -637,7 +637,7 @@ def cmd_create_pr(args):
     logger.info("Creating draft PR...")
     body = (
         f"Release testing PR for MicroShift {v['version']}. Do not merge.\n\n"
-        "Created by /microshift-release:automated-testing"
+        "Created by /microshift-release:run-ci-testing"
     )
     pr_result = subprocess.run(
         [

@@ -1,4 +1,6 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
+# Check RPM errata for QE sign-off (release step 3).
+
 set -euo pipefail
 
 SCRIPTDIR="$(dirname "${BASH_SOURCE[0]}")"
@@ -18,4 +20,4 @@ if [[ ! -f "${MARKER}" ]] || [[ "${SCRIPTDIR}/requirements.txt" -nt "${MARKER}" 
     touch "${MARKER}"
 fi
 
-"${ENVDIR}/bin/python3" "${SCRIPTDIR}/prow_testing.py" "$@"
+"${ENVDIR}/bin/python3" "${SCRIPTDIR}/errata_promotion.py" "$@"

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# request_art_builds.sh - MicroShift z-stream build & QE release coordinator.
+# request_release-to-art.sh - MicroShift z-stream build & QE release coordinator.
 #
 # Usage:
-#   request_art_builds.sh <X.Y.Z> <ART_DUE_DATE> <RELEASE_DATE> --reason <TEXT> [FLAGS]
+#   request_release-to-art.sh <X.Y.Z> <ART_DUE_DATE> <RELEASE_DATE> --reason <TEXT> [FLAGS]
 #
 # Flags:
 #   --reason <TEXT>    Mandatory explanation (CVE, cadence, etc.)
@@ -119,7 +119,7 @@ if ! ${DRY_RUN} && ! ${SKIP_SLACK}; then
 fi
 
 # Atomic directory lock (trap installed only after successful acquisition)
-LOCKDIR="${TMPDIR:-/tmp}/request_art_builds_${VERSION}.lock"
+LOCKDIR="${TMPDIR:-/tmp}/request_release-to-art_${VERSION}.lock"
 mkdir "${LOCKDIR}" 2>/dev/null || die "Cannot acquire lock: ${LOCKDIR} (another run active or stale lock)"
 # Remove the lock owned by this process.
 cleanup_lock() { rmdir "${LOCKDIR}" 2>/dev/null || true; }

@@ -1,17 +1,17 @@
 ---
-name: microshift-release:pre-check
+name: microshift-release:analyze-zstream-to-release
 argument-hint: [Z|X|Y|RC|EC|nightly] [version|time-range...]
-description: Check OCP release schedule, verify availability, evaluate z-stream need, or check nightly build gaps
+description: Step 0a before requesting builds — evaluate OCP releases and whether MicroShift should release
 user-invocable: true
 allowed-tools: Bash, mcp__jira__jira_search
 ---
 
-# microshift-release:pre-check
+# microshift-release:analyze-zstream-to-release
 
 ## Synopsis
 
 ```bash
-/microshift-release:pre-check [release_type] [version|time-range...] [--verbose]
+/microshift-release:analyze-zstream-to-release [release_type] [version|time-range...] [--verbose]
 ```
 
 ## Description
@@ -112,14 +112,14 @@ If `mcp__jira__jira_search` is not available, skip this step — the script degr
 
 ### Step 4: Run the Script
 
-Map each release type to the corresponding `precheck.sh` subcommand and run via Bash:
+Map each release type to the corresponding `analyze_zstream-to-release.sh` subcommand and run via Bash:
 
 | Release Type | Command |
 |---|---|
-| `Z`, `X`, `Y` (default) | `ART_TICKETS_JSON=/tmp/art_tickets.json bash ${SCRIPTS_DIR}/precheck.sh xyz [versions...]` |
-| `nightly` | `bash ${SCRIPTS_DIR}/precheck.sh nightly [version]` |
-| `EC` | `ART_TICKETS_JSON=/tmp/art_tickets.json bash ${SCRIPTS_DIR}/precheck.sh ecrc EC [version]` |
-| `RC` | `ART_TICKETS_JSON=/tmp/art_tickets.json bash ${SCRIPTS_DIR}/precheck.sh ecrc RC [version]` |
+| `Z`, `X`, `Y` (default) | `ART_TICKETS_JSON=/tmp/art_tickets.json bash ${SCRIPTS_DIR}/analyze_zstream-to-release.sh xyz [versions...]` |
+| `nightly` | `bash ${SCRIPTS_DIR}/analyze_zstream-to-release.sh nightly [version]` |
+| `EC` | `ART_TICKETS_JSON=/tmp/art_tickets.json bash ${SCRIPTS_DIR}/analyze_zstream-to-release.sh ecrc EC [version]` |
+| `RC` | `ART_TICKETS_JSON=/tmp/art_tickets.json bash ${SCRIPTS_DIR}/analyze_zstream-to-release.sh ecrc RC [version]` |
 
 Stderr contains progress messages — only display it if the script exits non-zero.
 
@@ -161,17 +161,17 @@ If the script exits non-zero, display stderr and suggest:
 ## Examples
 
 ```bash
-/microshift-release:pre-check this week                   # OCP versions releasing this week
-/microshift-release:pre-check next week                   # OCP versions releasing next week
-/microshift-release:pre-check today                       # OCP versions releasing today
-/microshift-release:pre-check next 3 days                 # OCP versions in next 3 days
-/microshift-release:pre-check 4.21.10                     # specific version
-/microshift-release:pre-check 4.20 4.21 4.22              # xyz eval for multiple streams
-/microshift-release:pre-check 4.19.27 --verbose           # specific version, detailed report
-/microshift-release:pre-check nightly                     # nightly gaps for all active branches
-/microshift-release:pre-check EC                          # latest EC status
-/microshift-release:pre-check RC                          # latest RC status
-/microshift-release:pre-check nightly EC RC               # combined report
+/microshift-release:analyze-zstream-to-release this week                   # OCP versions releasing this week
+/microshift-release:analyze-zstream-to-release next week                   # OCP versions releasing next week
+/microshift-release:analyze-zstream-to-release today                       # OCP versions releasing today
+/microshift-release:analyze-zstream-to-release next 3 days                 # OCP versions in next 3 days
+/microshift-release:analyze-zstream-to-release 4.21.10                     # specific version
+/microshift-release:analyze-zstream-to-release 4.20 4.21 4.22              # xyz eval for multiple streams
+/microshift-release:analyze-zstream-to-release 4.19.27 --verbose           # specific version, detailed report
+/microshift-release:analyze-zstream-to-release nightly                     # nightly gaps for all active branches
+/microshift-release:analyze-zstream-to-release EC                          # latest EC status
+/microshift-release:analyze-zstream-to-release RC                          # latest RC status
+/microshift-release:analyze-zstream-to-release nightly EC RC               # combined report
 ```
 
 ## Recommendation statuses
@@ -187,7 +187,7 @@ If the script exits non-zero, display stderr and suggest:
 ## Notes
 
 - Read-only — does NOT create tickets or modify external state
-- Scripts support `--json` for raw JSON output when called directly (e.g., `bash ${SCRIPTS_DIR}/precheck.sh xyz 4.21.10 --json`)
+- Scripts support `--json` for raw JSON output when called directly (e.g., `bash ${SCRIPTS_DIR}/analyze_zstream-to-release.sh xyz 4.21.10 --json`)
 - `--verbose` works for all types: detailed tables for xyz, NVR/nightly names for nightly, next versions for EC/RC
 - OCPBUGS and CVE enrichment run inside the script via Jira REST API (`JIRA_API_TOKEN` + `JIRA_USERNAME`)
 - VPN required for Brew and errata access
