@@ -16,7 +16,7 @@ not new command names.
 | 1 | `check_artifacts.sh` | **Validate ART builds** | Once ART has built RPMs and bootc images, check their contents, provenance and availability. | `/microshift-release:check-artifacts` |
 | 2 | `run_ci-testing.sh` | **Run release tests** | After step 1. Check the S3 RPM cache and AWS/GitHub/Google Cloud tools, then run Prow CI (4.21+): draft PR, jobs, results and upload. | `/microshift-release:run-ci-testing` |
 | 3 | `check_bootc-advisory.sh` | **Check bootc advisory for QE sign-off** | Check the bootc advisory and stage/prod catalogs. Checks may start alongside step 1, but wait for step 2 before signing off Shipment. | `/microshift-release:check-bootc-advisory` |
-| 4 | `check_rpm-errata.sh` | **Check RPM advisory for QE sign-off** | Check the RPM advisory in Errata Tool. Checks may start alongside step 1, but wait for step 2 before signing off Errata. | `/microshift-release:check-rpm-errata` |
+| 4 | `check_rpm-errata.sh` | **Check RPM Advisory in Errata for QE sign-off** | Check the RPM Advisory in Errata Tool. Checks may start alongside step 1, but wait for step 2 before signing off Errata. | `/microshift-release:check-rpm-errata` |
 | 5 | `check_published-release.sh` | **Verify the published release** | After shipping a GA or z-stream release, verify public artifacts, errata, documentation and lifecycle information. | `/microshift-release:check-published-release` |
 | Optional, extra info | — (skill only) | **Find artifact locations** | Look up availability and locations of RPMs and bootc images at any time. Informational; does not replace step 1. | `/microshift-release:release-versions` |
 
