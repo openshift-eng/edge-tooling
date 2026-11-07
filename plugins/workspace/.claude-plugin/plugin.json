@@ -2,11 +2,58 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "workspace",
   "displayName": "Multi-Repo Workspace Manager",
-  "version": "0.3.0",
-  "description": "Bootstrap and manage multi-repo dev environments for AI-assisted development: clone repos from a domain, layer per-repo Claude context, and track work in structured project workspaces.",
+  "version": "0.4.0",
+  "description": "Bootstrap and manage multi-repo dev environments for AI-assisted development: clone repos from a domain, layer per-repo Claude context, track work in structured project workspaces, and see it all in a live pane with a task list, git guardrails and worktree tooling.",
   "author": {
     "name": "fonta-rh"
   },
   "homepage": "https://github.com/openshift-eng/edge-tooling",
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "workspaceRoot": {
+      "type": "string",
+      "title": "Workspace root",
+      "description": "Absolute path to the workspace root; defaults to the session's project root."
+    },
+    "statusLine": {
+      "type": "boolean",
+      "title": "Show status line",
+      "description": "Pin a one-line workspace digest (repos, dirty, ahead/behind) under the prompt.",
+      "default": true
+    },
+    "paneAutoOpen": {
+      "type": "boolean",
+      "title": "Open pane at start",
+      "description": "Open the workspace pane automatically at session start.",
+      "default": false
+    },
+    "guardrails": {
+      "type": "string",
+      "title": "Guardrail posture",
+      "description": "How to react to a git command that looks like a mistake (push to the source remote, commit on a default branch).",
+      "options": [
+        "off",
+        "warn",
+        "deny"
+      ],
+      "default": "warn"
+    },
+    "autoSyncDoc": {
+      "type": "boolean",
+      "title": "Auto-sync workspace doc",
+      "description": "Automatically write the managed workspace-map block into the root AGENTS.md/CLAUDE.md when it drifts, instead of only nudging.",
+      "default": false
+    },
+    "docFile": {
+      "type": "string",
+      "title": "Workspace doc file",
+      "description": "Which root doc owns the managed workspace-map block.",
+      "options": [
+        "AGENTS.md",
+        "CLAUDE.md"
+      ],
+      "default": "AGENTS.md"
+    }
+  }
 }
