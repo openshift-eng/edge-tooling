@@ -4,7 +4,10 @@ validate_recs() gates --strict (exit 2); soft_warnings() is advisory only.
 Both are validation logic and need positive and negative cases.
 """
 
+import json
+import subprocess
 import sys
+import tempfile
 import os
 import unittest
 
@@ -332,6 +335,77 @@ class TestVersionArg(unittest.TestCase):
     def test_rejects_invalid_versions(self):
         for v in ("5", "5.1.1.1", "v5.1", "5.1<b>", ""):
             self.assertIsNone(VERSION_RE.fullmatch(v), f"{v!r} should be rejected")
+
+
+
+
+class NoHiddenScopeEstimateEndToEndTest(unittest.TestCase):
+    """run-checks.py --no-hidden-scope-estimate → assemble-report.py renders without None values."""
+
+    BIN = os.path.join(os.path.dirname(__file__), "..")
+
+    def _write(self, d, name, obj):
+        path = os.path.join(d, name)
+        with open(path, "w") as f:
+            json.dump(obj, f)
+        return path
+
+    def _story(self, key, sp, status="In Progress"):
+        return {"key": key, "summary": "Synthetic story", "type": "Story", "status": status, "sp": sp,
+                "assignee": "aexample@example.com", "assignee_display": "Alex Example", "epic_key": "EPIC-1",
+                "priority": "Major", "labels": [], "updated": "2030-01-20", "sprints": [],
+                "flagged": False, "blocked_by": [], "stale": False}
+
+    def _run(self, d, extra):
+        files = {
+            "features": self._write(d, "features.json", {"features": [
+                {"key": "OCPSTRAT-9001", "summary": "Synthetic feature", "status": "In Progress", "priority": "Major",
+                 "size": "M", "sme": "Alex Example", "rank": 1, "labels": [], "type": "Feature"}]}),
+            "epics": self._write(d, "epics.json", {"feature_to_epics": {"OCPSTRAT-9001": ["EPIC-1"]}, "epics": [
+                {"key": "EPIC-1", "summary": "Synthetic epic", "status": "In Progress",
+                 "feature_key": "OCPSTRAT-9001", "target_versions": [], "fix_versions": [], "labels": []}]}),
+            "stories": self._write(d, "stories.json", {"stories": [
+                self._story("TEST-1", 5), self._story("TEST-2", 0), self._story("TEST-3", 0),
+                self._story("TEST-4", 3, "Closed"), self._story("TEST-5", 5, "Closed"),
+                self._story("TEST-6", 2, "Closed"), self._story("TEST-7", 8, "Closed")]}),
+            "bugs": self._write(d, "bugs.json", {"bugs": []}),
+            "roster": self._write(d, "roster.json", {"members": [
+                {"username": "aexample@example.com", "display_name": "Alex Example", "sp_target": 8}]}),
+        }
+        checks = os.path.join(d, "checks.json")
+        subprocess.run([sys.executable, os.path.join(self.BIN, "run-checks.py"),
+                        *[x for k, v in files.items() for x in (f"--{k}", v)],
+                        "--remaining-sprints", "2", "--version", "9.1", "--today", "2030-01-21",
+                        "--output", checks, *extra], check=True, capture_output=True)
+        recs = self._write(d, "recs.json", {"headline": "Synthetic headline.", "decisions": []})
+        out = os.path.join(d, "report")
+        r = subprocess.run([sys.executable, os.path.join(self.BIN, "assemble-report.py"),
+                            "--checks", checks, "--recommendations", recs,
+                            "--template", os.path.join(self.BIN, "..", "references", "release-planning-report-template.md"),
+                            "--version", "9.1", "--today", "2030-01-21", "--first-sprint", "10",
+                            "--last-sprint", "12", "--remaining-sprints", "2", "--total-dev-sprints", "2",
+                            "--output", out], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        with open(out + ".md") as f:
+            return json.load(open(checks)), f.read()
+
+    def test_report_renders_without_hidden_scope(self):
+        with tempfile.TemporaryDirectory() as d:
+            checks, report = self._run(d, ["--no-hidden-scope-estimate"])
+        self.assertIsNone(checks["meta"]["gap_with_hidden_low"])
+        self.assertNotIn("None", report)
+        self.assertNotIn("incl. hidden", report)
+        self.assertNotIn("Hidden scope", report)
+        self.assertNotIn("≈", report)
+        self.assertIn("| Scope (pointed) | Capacity | Gap |", report)
+        # The gap covers pointed work only: the verdict counts the unpointed stories, never sizes them.
+        self.assertIn("pointed scope fits with ~11 SP to spare; 2 unpointed items not counted.", report)
+
+    def test_default_run_still_shows_hidden_scope(self):
+        with tempfile.TemporaryDirectory() as d:
+            checks, report = self._run(d, [])
+        self.assertIsNotNone(checks["meta"]["gap_with_hidden_low"])
+        self.assertIn("incl. hidden", report)
 
 
 if __name__ == "__main__":

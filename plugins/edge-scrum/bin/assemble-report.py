@@ -92,14 +92,24 @@ def build_blocks(checks, recs, params):
 
     risk = meta.get("overall_risk", "LOW")
     gap = meta.get("gap_sp", 0)
+    hidden = checks.get("hidden_scope", {})
     gap_hidden_low = meta.get("gap_with_hidden_low", gap)
+    gap_hidden_high = meta.get("gap_with_hidden_high", gap)
+    # run-checks --no-hidden-scope-estimate emits these keys as None: never format
+    # them, and leave the hidden-scope figures out of the report.
+    hidden_estimated = all(v is not None for v in (
+        hidden.get("estimate_low", 0), hidden.get("estimate_high", 0), gap_hidden_low, gap_hidden_high))
     headline = recs.get("headline") or recs.get("executive_summary") or ""
     glyph = RISK_GLYPH.get(risk, "")
     if gap < 0:
         verdict = f"**{glyph} {risk} — ~{abs(gap)} SP must leave the release.**"
-    elif gap_hidden_low < 0:
+    elif hidden_estimated and gap_hidden_low < 0:
         verdict = (f"**{glyph} {risk} — pointed scope fits with {gap} SP to spare, but not once unpointed work "
                    f"is estimated ({gap_hidden_low:+d} SP at the high estimate).**")
+    elif not hidden_estimated and hidden.get("unpointed_open", 0) > 0:
+        # Not estimated: the gap covers pointed work only; count the rest, never size it.
+        verdict = (f"**{glyph} {risk} — pointed scope fits with ~{gap} SP to spare; "
+                   f"{plural(hidden['unpointed_open'], 'unpointed item')} not counted.**")
     else:
         verdict = f"**{glyph} {risk} — scope fits with {gap} SP to spare.**"
     verdict += (f" {plural(params['remaining_sprints'], 'dev sprint')} left · pencils down S{params['pencils_down']}"
@@ -131,20 +141,28 @@ def build_blocks(checks, recs, params):
         verdict += f"\n\n{headline}"
     blocks["VERDICT"] = [{"t": "p", "text": verdict}]
 
-    hidden = checks.get("hidden_scope", {})
-    blocks["SUMMARY_STRIP"] = [{
-        "t": "table",
-        "headers": ["Scope (pointed)", "Hidden scope", "Capacity", "Gap"],
-        "align": ["r", "r", "r", "r"],
-        "rows": [[
-            f"**{meta['total_remaining_sp']} SP**",
-            f"{hidden.get('unpointed_open', 0)} stories unpointed ({hidden.get('unpointed_assigned', 0)} assigned)"
-            f" ≈ {hidden.get('estimate_low', 0)}–{hidden.get('estimate_high', 0)} SP"
-            + (f"; {hidden.get('unpointed_bugs', 0)} unpointed bugs (excl.)" if hidden.get("unpointed_bugs") else ""),
-            f"**{meta['total_capacity_sp']} SP**",
-            f"**{gap:+d} SP** ({meta.get('gap_with_hidden_low', gap):+d} to {meta.get('gap_with_hidden_high', gap):+d} incl. hidden)",
-        ]],
-    }]
+    if hidden_estimated:
+        blocks["SUMMARY_STRIP"] = [{
+            "t": "table",
+            "headers": ["Scope (pointed)", "Hidden scope", "Capacity", "Gap"],
+            "align": ["r", "r", "r", "r"],
+            "rows": [[
+                f"**{meta['total_remaining_sp']} SP**",
+                f"{hidden.get('unpointed_open', 0)} stories unpointed ({hidden.get('unpointed_assigned', 0)} assigned)"
+                f" ≈ {hidden.get('estimate_low', 0)}–{hidden.get('estimate_high', 0)} SP"
+                + (f"; {hidden.get('unpointed_bugs', 0)} unpointed bugs (excl.)" if hidden.get("unpointed_bugs") else ""),
+                f"**{meta['total_capacity_sp']} SP**",
+                f"**{gap:+d} SP** ({gap_hidden_low:+d} to {gap_hidden_high:+d} incl. hidden)",
+            ]],
+        }]
+    else:
+        blocks["SUMMARY_STRIP"] = [{
+            "t": "table",
+            "headers": ["Scope (pointed)", "Capacity", "Gap"],
+            "align": ["r", "r", "r"],
+            "rows": [[f"**{meta['total_remaining_sp']} SP**", f"**{meta['total_capacity_sp']} SP**",
+                      f"**{gap:+d} SP**"]],
+        }]
 
     blocks["STATS_LINE"] = [{"t": "small", "text": (
         f"{plural(meta['active_features'], 'active feature')} · {meta['dormant_features']} dormant · "
