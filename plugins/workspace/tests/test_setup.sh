@@ -78,7 +78,7 @@ new_plugin() {
     local plugin
     plugin=$(mktemp -d)
     mkdir -p "$plugin/scripts"
-    cp "$REPO_ROOT/scripts/setup.sh" "$plugin/scripts/"
+    cp "$REPO_ROOT"/scripts/*.sh "$REPO_ROOT"/scripts/*.py "$plugin/scripts/"
     cp -r "$REPO_ROOT/domains" "$plugin/"
     cp -r "$REPO_ROOT/templates" "$plugin/"
     echo "$plugin"
@@ -340,8 +340,37 @@ assert_file     "DOMAIN-CONTEXT.md distributed"           "$ws/repos/sharedrepo/
 assert_contains "context is from ALPHA (active domain)"   "$ws/repos/sharedrepo/DOMAIN-CONTEXT.md" "ALPHA"
 assert_not_contains "context is NOT from BETA"            "$ws/repos/sharedrepo/DOMAIN-CONTEXT.md" "BETA"
 assert_dir       ".claude/skills dir created by clone"       "$ws/.claude/skills"
+assert_file      "root CLAUDE.md created by clone"          "$ws/CLAUDE.md"
+assert_contains  "root CLAUDE.md names the domain"          "$ws/CLAUDE.md" "\*\*alpha\*\*"
+assert_contains  "root CLAUDE.md has the repo row"          "$ws/CLAUDE.md" "| \`sharedrepo\` | testing | shared test repo |"
+assert_file      "clone applies the settings template"      "$ws/.claude/settings.local.json"
+
+printf '\n## My notes\nkeep me\n' >> "$ws/CLAUDE.md"
+sed -i.bak 's/shared test repo/renamed summary/' "$ws/dev-env.yaml" && rm -f "$ws/dev-env.yaml.bak"
+run_setup "$PLUGIN" "$ws" clone >/dev/null 2>&1
+assert_contains  "re-clone refreshes the repo table"        "$ws/CLAUDE.md" "renamed summary"
+assert_not_contains "old table row is gone"                 "$ws/CLAUDE.md" "shared test repo"
+assert_contains  "content outside the markers is kept"      "$ws/CLAUDE.md" "keep me"
 
 cleanup "$ws" "$shared_src"
+
+# ── 8b. clone links repo-shipped skills ───────────────────────────────────────
+group "clone links repo skills"
+
+ws=$(new_workspace)
+skill_src=$(mktemp -d)
+mkdir -p "$skill_src/.claude/skills/hello"
+printf -- '---\nname: hello\ndescription: test skill\n---\n# hello\n' \
+    > "$skill_src/.claude/skills/hello/SKILL.md"
+make_cloneable_repo "$skill_src" "skillrepo"
+printf 'repos:\n  - name: skillrepo\n    url: file://%s\n    branch: main\n    category: testing\n    summary: "s"\n' \
+    "$skill_src" > "$ws/dev-env.yaml"
+out=$(run_setup "$PLUGIN" "$ws" clone 2>&1) || true
+assert_success "skill symlinked into .claude/skills" test -L "$ws/.claude/skills/hello"
+assert_output_contains "clone reports the linked skill" "Linked skill /hello" "$out"
+assert_contains "custom workspace CLAUDE.md says custom" "$ws/CLAUDE.md" "\*\*custom\*\*"
+
+cleanup "$ws" "$skill_src"
 
 # ── 9. Workspace domain shadows bundled ───────────────────────────────────────
 group "Workspace domain shadows bundled"
@@ -419,7 +448,39 @@ assert_failure "second init --self refuses (dev-env.yaml exists)" \
 
 assert_success "clone is a clean no-op with empty repos" \
     run_setup "$plugin" "$ws" clone
+assert_success "clone never writes a root CLAUDE.md in a self-workspace" \
+    test ! -e "$ws/CLAUDE.md"
 
+out=$(run_setup "$plugin" "$ws" detect 2>/dev/null)
+assert_output_contains "detect: self" '"mode": "self"' "$out"
+
+cleanup "$ws"
+
+ws=$(new_workspace)
+git init -q -b main "$ws"
+printf 'build/\n' > "$ws/.gitignore"
+run_setup "$plugin" "$ws" init --self myrepo --summary 'A "quoted" repo' --ignore-projects >/dev/null 2>&1
+assert_contains "--summary is written YAML-quoted" "$ws/dev-env.yaml" 'summary: "A \\"quoted\\" repo"'
+assert_success "--summary yields valid YAML" python3 -c \
+    "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); assert d['self']['summary']=='A \"quoted\" repo'" "$ws/dev-env.yaml"
+assert_contains "--ignore-projects adds projects/ to .gitignore" "$ws/.gitignore" "^projects/$"
+assert_contains "existing .gitignore lines kept" "$ws/.gitignore" "^build/$"
+cleanup "$ws"
+
+ws=$(new_workspace)
+git init -q -b main "$ws"
+mkdir -p "$ws/sub"
+out=$(run_setup "$plugin" "$ws/sub" detect 2>/dev/null)
+assert_output_contains "detect: repo (no dev-env.yaml, in git)" '"mode": "repo"' "$out"
+assert_output_contains "detect: root is the repo top level" "\"root\": \"$ws\"" "$out"
+cleanup "$ws"
+
+ws=$(new_workspace)
+out=$(run_setup "$plugin" "$ws" detect 2>/dev/null)
+assert_output_contains "detect: new" '"mode": "new"' "$out"
+run_setup_yn "$plugin" "$ws" "y" init example >/dev/null 2>&1
+out=$(run_setup "$plugin" "$ws" detect 2>/dev/null)
+assert_output_contains "detect: domain" '"mode": "domain"' "$out"
 cleanup "$ws"
 
 ws=$(new_workspace)
