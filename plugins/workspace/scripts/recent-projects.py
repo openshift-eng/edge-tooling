@@ -19,32 +19,6 @@ from pathlib import Path
 import workspace_lib
 
 
-def parse_frontmatter(claude_md: Path) -> dict[str, str]:
-    """Extract YAML frontmatter as a flat key-value dict.
-
-    Only parses if line 1 is exactly '---' and a closing '---' exists.
-    """
-    try:
-        lines = claude_md.read_text().splitlines()
-    except OSError:
-        return {}
-
-    if not lines or lines[0].strip() != "---":
-        return {}
-
-    result = {}
-    for line in lines[1:]:
-        if line.strip() == "---":
-            break
-        if ":" in line:
-            key, _, value = line.partition(":")
-            result[key.strip()] = value.strip()
-    else:
-        return {}
-
-    return result
-
-
 def newest_mtime(directory: Path) -> float | None:
     """Return the most recent file mtime under directory, or None."""
     newest = None
@@ -82,7 +56,7 @@ def collect_projects(projects_dir: Path) -> list[dict]:
         if not d.is_dir() or d.name.startswith("."):
             continue
 
-        fm = parse_frontmatter(d / "CLAUDE.md")
+        fm = workspace_lib.parse_frontmatter_flat(d / "CLAUDE.md")
         if fm.get("status", "").lower() in TERMINAL_STATUSES:
             continue
 

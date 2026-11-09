@@ -306,19 +306,19 @@ def consolidate(project_dir: Path, dry_run: bool = False) -> dict[str, Any]:
                 continue
             new_blocks.append(block)
         if new_blocks:
-            with archive_path.open("a") as f:
-                f.write("\n" + "\n".join(new_blocks))
+            workspace_lib.write_atomic(
+                archive_path, existing + "\n" + "\n".join(new_blocks))
         archive_action = "appended"
     else:
         header = (
             "# Progress Archive\n"
             "\n"
             "_Completed checklist items archived from CLAUDE.md by\n"
-            "`/workspace:consolidate-project`. Items grouped by source section,\n"
+            "`consolidate-project.py`. Items grouped by source section,\n"
             "ordered chronologically (oldest first)._\n"
             "\n"
         )
-        archive_path.write_text(header + "\n".join(archive_blocks))
+        workspace_lib.write_atomic(archive_path, header + "\n".join(archive_blocks))
         archive_action = "created"
 
     # Rebuild CLAUDE.md with consolidated sections
@@ -356,7 +356,7 @@ def consolidate(project_dir: Path, dry_run: bool = False) -> dict[str, Any]:
             new_text += "\n"
         ref_updated = True
 
-    claude_md.write_text(new_text)
+    workspace_lib.write_atomic(claude_md, new_text)
 
     return {
         "status": "consolidated",

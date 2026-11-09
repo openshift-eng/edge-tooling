@@ -15,82 +15,24 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
 
 # Plugins cannot declare python dependencies. PyYAML is required to parse
 # project frontmatter — emit a self-describing JSON error (that the calling
 # skill can relay) instead of a raw ImportError traceback.
 try:
-    import yaml
+    import yaml  # noqa: F401  (fail fast with a JSON error)
 except ImportError:
     print(json.dumps({
         "status": "error",
-        "error": "PyYAML is required by resume-project.py (project frontmatter "
-                 "is YAML). Install with: pip3 install pyyaml",
+        "error_message": "PyYAML is required (project frontmatter is YAML). "
+                         "Tell the user to install it with: pip3 install pyyaml. "
+                         "Do not retry until it is installed.",
     }))
     sys.exit(0)
 
 import workspace_lib
 
-SKILL_SUGGESTIONS: dict[str, list[str]] = {
-    "bug": [
-        "/prow-job:analyze-test-failure",
-        "/prow-job:analyze-install-failure",
-        "/prow-job:extract-must-gather",
-        "/feature-dev:feature-dev",
-    ],
-    "feature": [
-        "/feature-dev:feature-dev",
-        "/pr-review-toolkit:review-pr",
-    ],
-    "ci-testing": [
-        "/prow-job:analyze-test-failure",
-        "/prow-job:analyze-install-failure",
-        "/prow-job:analyze-resource",
-        "/prow-job:extract-must-gather",
-    ],
-    "docs": [
-        "/feature-dev:feature-dev",
-    ],
-    "analysis": [
-        "/pr-review-toolkit:review-pr",
-        "/prow-job:analyze-test-failure",
-        "/feature-dev:feature-dev",
-    ],
-}
-DEFAULT_SKILLS = ["/feature-dev:feature-dev"]
-
 ALWAYS_PRESENT = {"CLAUDE.md", "README.md", ".gitignore"}
-
-
-def parse_frontmatter(path: Path) -> dict[str, Any]:
-    """Extract YAML frontmatter between --- delimiters."""
-    try:
-        lines = path.read_text().splitlines()
-    except OSError:
-        return {}
-
-    if not lines or lines[0].strip() != "---":
-        return {}
-
-    fm_lines: list[str] = []
-    for line in lines[1:]:
-        if line.strip() == "---":
-            break
-        fm_lines.append(line)
-    else:
-        return {}
-
-    try:
-        result = yaml.safe_load("\n".join(fm_lines))
-    except yaml.YAMLError:
-        return {}
-    if not isinstance(result, dict):
-        return {}
-    for k, v in result.items():
-        if isinstance(v, (datetime.date, datetime.datetime)):
-            result[k] = str(v)
-    return result
 
 
 def stamp_last_active(claude_md: Path) -> None:
@@ -129,35 +71,6 @@ def stamp_last_active(claude_md: Path) -> None:
         claude_md.write_text("".join(lines))
     except OSError:
         pass
-
-
-def normalize_worktrees(raw: Any, fallback_branch: str) -> list[dict[str, str]]:
-    """Normalize any worktree frontmatter format to list[dict] with repo, branch, path."""
-    if not raw:
-        return []
-    if isinstance(raw, str):
-        raw = [raw]
-    if isinstance(raw, dict):
-        return [
-            {"repo": str(repo), "branch": str(branch),
-             "path": f"repos/{repo}/.worktrees/{branch}"}
-            for repo, branch in raw.items()
-        ]
-    if isinstance(raw, list):
-        result: list[dict[str, str]] = []
-        for item in raw:
-            if isinstance(item, dict):
-                repo = str(item.get("repo", ""))
-                branch = str(item.get("branch", fallback_branch))
-                path = str(item.get("path", f"repos/{repo}/.worktrees/{branch}"))
-                result.append({"repo": repo, "branch": branch, "path": path})
-            else:
-                item = str(item)
-                result.append(
-                    {"repo": item, "branch": fallback_branch,
-                     "path": f"repos/{item}/.worktrees/{fallback_branch}"})
-        return result
-    return []
 
 
 def parse_reference_files(text: str) -> list[dict[str, str]]:
@@ -308,65 +221,6 @@ def resolve_repo_context(repos: list[str], root: Path) -> list[dict[str, str]]:
     return results
 
 
-def resolve_worktree_status(
-    worktrees: list[dict[str, str]], root: Path
-) -> list[dict]:
-    """Check status of declared worktrees."""
-    if not worktrees:
-        return []
-
-    results = []
-    for wt in worktrees:
-        wt_path = root / wt["path"]
-        entry: dict = {
-            "repo": wt["repo"],
-            "branch": wt["branch"],
-            "path": str(wt_path),
-            "exists": False,
-            "dirty": False,
-            "dirty_count": 0,
-            "ahead": 0,
-            "no_upstream": False,
-            "error": None,
-        }
-        if not wt_path.is_dir():
-            results.append(entry)
-            continue
-
-        entry["exists"] = True
-
-        try:
-            status_result = subprocess.run(
-                ["git", "-C", str(wt_path), "status", "--porcelain"],
-                capture_output=True, text=True,
-            )
-            if status_result.returncode != 0:
-                entry["error"] = f"git status failed: {status_result.stderr.strip()}"
-            elif status_result.stdout.strip():
-                lines = [l for l in status_result.stdout.splitlines() if l.strip()]
-                entry["dirty"] = True
-                entry["dirty_count"] = len(lines)
-
-            upstream_check = subprocess.run(
-                ["git", "-C", str(wt_path), "rev-parse", "--verify", "@{upstream}"],
-                capture_output=True, text=True,
-            )
-            if upstream_check.returncode != 0:
-                entry["no_upstream"] = True
-            else:
-                ahead_result = subprocess.run(
-                    ["git", "-C", str(wt_path), "rev-list", "--count", "@{upstream}..HEAD"],
-                    capture_output=True, text=True,
-                )
-                if ahead_result.returncode == 0 and ahead_result.stdout.strip():
-                    entry["ahead"] = int(ahead_result.stdout.strip())
-        except (OSError, ValueError) as exc:
-            entry["error"] = str(exc)
-
-        results.append(entry)
-    return results
-
-
 def get_recent_names(root: Path) -> list[str]:
     """Get recent non-done project names via recent-projects.py --names."""
     script = Path(__file__).resolve().parent / "recent-projects.py"
@@ -380,7 +234,7 @@ def get_recent_names(root: Path) -> list[str]:
         )
         if result.returncode != 0:
             return _fallback_project_names(root)
-        return [l.strip() for l in result.stdout.splitlines() if l.strip()]
+        return [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
     except OSError:
         return _fallback_project_names(root)
 
@@ -393,34 +247,48 @@ def _fallback_project_names(root: Path) -> list[str]:
     return sorted(d.name for d in projects_dir.iterdir() if d.is_dir())
 
 
+PICK = ("Ask the user to pick one of `alternatives` (offer the first 3 "
+        "plus \"See all projects\"), then re-run with the chosen name.")
+NO_PROJECTS = ("There are no active projects in this workspace. Tell the user "
+               "and suggest /workspace:new-project. Stop.")
+
+
 def resolve_project(arg: str | None, root: Path) -> dict:
     """Resolve a project argument and return full structured context.
 
     Returns a dict with:
       status: "ok" | "not_found" | "no_projects" | "out_of_range" | "no_argument"
-      error_message: str (when status != "ok")
+      error_message: what the calling skill should do (when status != "ok")
       alternatives: list[str] (when status != "ok")
       project: dict (only when status == "ok")
     """
     projects_dir = root / "projects"
 
     if not projects_dir.is_dir():
-        return {"status": "no_projects", "error_message": "No projects/ directory found.", "alternatives": []}
+        return {"status": "no_projects", "error_message": NO_PROJECTS, "alternatives": []}
 
     # Resolve argument to a project name
     if arg is None:
         names = get_recent_names(root)
         if not names:
-            return {"status": "no_projects", "error_message": "No active projects found.", "alternatives": []}
-        return {"status": "no_argument", "alternatives": names}
+            return {"status": "no_projects", "error_message": NO_PROJECTS, "alternatives": []}
+        return {
+            "status": "no_argument",
+            "error_message": ("No project was given. If a project is already "
+                              "loaded in this conversation, re-run with its "
+                              "name. Otherwise: " + PICK),
+            "alternatives": names,
+        }
 
     if arg.isdigit():
         names = get_recent_names(root)
+        if not names:
+            return {"status": "no_projects", "error_message": NO_PROJECTS, "alternatives": []}
         idx = int(arg) - 1
         if idx < 0 or idx >= len(names):
             return {
                 "status": "out_of_range",
-                "error_message": f"Only {len(names)} projects exist.",
+                "error_message": f"Only {len(names)} active projects exist. " + PICK,
                 "alternatives": names,
             }
         project_name = names[idx]
@@ -432,7 +300,7 @@ def resolve_project(arg: str | None, root: Path) -> dict:
         all_names = sorted(d.name for d in projects_dir.iterdir() if d.is_dir())
         return {
             "status": "not_found",
-            "error_message": f"Project '{project_name}' not found.",
+            "error_message": f"Project '{project_name}' not found. " + PICK,
             "alternatives": all_names,
         }
 
@@ -459,7 +327,7 @@ def resolve_project(arg: str | None, root: Path) -> dict:
         context_type = "none"
         text = ""
 
-    fm = parse_frontmatter(claude_md) if claude_md.is_file() else {}
+    fm = workspace_lib.parse_frontmatter(claude_md) if claude_md.is_file() else {}
     has_frontmatter = bool(fm)
 
     repos_list = fm.get("repos", [])
@@ -482,20 +350,14 @@ def resolve_project(arg: str | None, root: Path) -> dict:
         domain = domain[0] if domain else ""
     domain_ctx = resolve_domain_context(domain, root)
 
-    project_type = fm.get("type", "")
-    if isinstance(project_type, list):
-        project_type = project_type[0] if project_type else ""
-    suggestions = SKILL_SUGGESTIONS.get(project_type, DEFAULT_SKILLS)
-
     frontmatter = dict(fm)
     frontmatter["repos"] = repos_list
 
     branch = fm.get("branch", "")
     if isinstance(branch, list):
         branch = branch[0] if branch else ""
-    worktrees = normalize_worktrees(fm.get("worktrees", []), branch)
-    worktree_repos = [wt["repo"] for wt in worktrees]
-    worktree_status = resolve_worktree_status(worktrees, root)
+    worktrees = workspace_lib.project_worktrees(fm, root)
+    worktree_status = [workspace_lib.worktree_status(wt) for wt in worktrees]
 
     if claude_md.is_file():
         stamp_last_active(claude_md)
@@ -518,9 +380,7 @@ def resolve_project(arg: str | None, root: Path) -> dict:
             "repo_context_files": repo_context,
             "domain_context": domain_ctx["context_file"],
             "domain_docs": domain_ctx["docs"],
-            "skill_suggestions": suggestions,
             "branch": branch,
-            "worktree_repos": worktree_repos,
             "worktree_status": worktree_status,
         },
     }
@@ -531,8 +391,10 @@ def main():
     if root is None:
         print(json.dumps({
             "status": "error",
-            "error": "Could not determine the workspace root. Set WORKSPACE_ROOT "
-                     "or run inside a workspace (a directory containing dev-env.yaml).",
+            "error_message": "Could not determine the workspace root. Tell the "
+                             "user to launch claude inside a workspace (a "
+                             "directory with dev-env.yaml) or to run "
+                             "/workspace:setup-environment. Stop.",
         }))
         sys.exit(0)
     arg = sys.argv[1] if len(sys.argv) > 1 else None

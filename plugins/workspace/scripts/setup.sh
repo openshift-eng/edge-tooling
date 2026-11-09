@@ -12,8 +12,11 @@
 #   setup.sh --workspace <path> init <name>       Initialize from a bundled domain
 #   setup.sh --workspace <path> init <url>        Initialize from an external domain git URL
 #   setup.sh --workspace <path> init <url#subdir> External pack repo with multiple domains
-#   setup.sh --workspace <path> init --self [<name>] Initialize a single-repo self-workspace
-#   setup.sh --workspace <path> clone             Clone all repos (first time setup)
+#   setup.sh --workspace <path> init --self [<name>] [--summary "..."] [--ignore-projects]
+#                                                 Initialize a single-repo self-workspace
+#   setup.sh [--workspace <path>] detect          Print the setup mode as JSON
+#   setup.sh --workspace <path> clone             Clone all repos, link repo skills,
+#                                                 write the root CLAUDE.md
 #   setup.sh --workspace <path> clone <dir>       Clone a specific repo by directory name
 #   setup.sh --workspace <path> update            Update all repos (git pull)
 #   setup.sh --workspace <path> update <dir>      Update a specific repo by directory name
@@ -833,7 +836,15 @@ init_domain() {
 # clone; dev-env.yaml gets a self: block and an empty repos list.
 
 init_self() {
-    local name="${1:-}"
+    local name="" summary="" ignore_projects=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --summary) summary="$2"; shift 2 ;;
+            --summary=*) summary="${1#*=}"; shift ;;
+            --ignore-projects) ignore_projects=true; shift ;;
+            *) name="$1"; shift ;;
+        esac
+    done
 
     if [[ ! -d "$WORKSPACE_ROOT_RESOLVED/.git" ]]; then
         log_error "Not a git repository root: $WORKSPACE_ROOT_RESOLVED"
@@ -876,15 +887,113 @@ init_self() {
         return 1
     fi
 
+    if [[ -n "$summary" ]]; then
+        python3 - "$DEV_ENV_YAML" "$summary" << 'PYEOF'
+import json, sys
+path, summary = sys.argv[1], sys.argv[2]
+text = open(path).read().replace('summary: ""', 'summary: ' + json.dumps(summary), 1)
+open(path, 'w').write(text)
+PYEOF
+    fi
+
     log_success "Initialized dev-env.yaml (self-workspace: $name)"
 
     mkdir -p "$WORKSPACE_ROOT_RESOLVED/projects"
+    if [[ "$ignore_projects" == "true" ]]; then
+        local gi="$WORKSPACE_ROOT_RESOLVED/.gitignore"
+        if ! grep -qxF 'projects/' "$gi" 2>/dev/null; then
+            [[ -s "$gi" && -n "$(tail -c1 "$gi")" ]] && echo >> "$gi"
+            echo 'projects/' >> "$gi"
+            log_success "Added projects/ to .gitignore"
+        fi
+    fi
     apply_settings_template ""
 
     echo
     log_info "Next steps:"
-    log_info "  Fill in self.summary in dev-env.yaml"
+    [[ -z "$summary" ]] && log_info "  Fill in self.summary in dev-env.yaml"
     log_info "  /workspace:new-project — scaffold a task under projects/"
+}
+
+# ─── Detect ──────────────────────────────────────────────────────────────────
+# Print {"mode": ..., "root": ...} for /workspace:setup-environment:
+#   self    — dev-env.yaml with a self: block (already set up)
+#   domain  — dev-env.yaml with a domain: block (offer refresh)
+#   custom  — dev-env.yaml without either (e.g. from /workspace:create-domain)
+#   repo    — no dev-env.yaml, inside a git repo (root = repo top level)
+#   new     — none of the above (root = the candidate directory)
+
+detect_mode() {
+    local mode root="$WORKSPACE_ROOT_RESOLVED"
+    if [[ -f "$DEV_ENV_YAML" ]]; then
+        if has_self_block; then
+            mode=self
+        elif grep -q '^domain:' "$DEV_ENV_YAML"; then
+            mode=domain
+        else
+            mode=custom
+        fi
+    elif root_git="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null)" && [[ -n "$root_git" ]]; then
+        mode=repo
+        root="$root_git"
+    else
+        mode=new
+    fi
+    python3 -c 'import json,sys; print(json.dumps({"mode": sys.argv[1], "root": sys.argv[2]}))' "$mode" "$root"
+}
+
+# ─── Root CLAUDE.md ──────────────────────────────────────────────────────────
+# Create $WS/CLAUDE.md from the template, or refresh only the repo table
+# between the AUTO-GENERATED markers. Never runs in a self-workspace.
+
+write_root_claude_md() {
+    if has_self_block; then echo "skipped (self-workspace)"; return 0; fi
+    local rows
+    rows=$(parse_yaml_repos "$REPO_SOURCE" | while IFS='|' read -r url dir _b name cat summary; do
+        [[ -z "$url" || -z "$dir" ]] && continue
+        printf '| `%s` | %s | %s |\n' "${name:-$dir}" "$cat" "$summary"
+    done)
+    python3 - "$WORKSPACE_ROOT_RESOLVED/CLAUDE.md" "$TEMPLATES_DIR/workspace-CLAUDE.md.template" \
+        "${ACTIVE_DOMAIN_NAME:-custom}" "$rows" << 'PYEOF'
+import os, re, sys
+target, template, domain, rows = sys.argv[1:5]
+table = "| Name | Category | Summary |\n|------|----------|---------|\n" + rows
+block = re.compile(r"(<!-- AUTO-GENERATED[^\n]*-->\n(?:<!--[^\n]*-->\n)*).*?(<!-- END AUTO-GENERATED -->)", re.S)
+if os.path.isfile(target):
+    text = open(target).read()
+    if not block.search(text):
+        print("unchanged (no AUTO-GENERATED markers)")
+        sys.exit(0)
+    action = "updated"
+else:
+    text = open(template).read().replace("__DOMAIN__", domain)
+    action = "created"
+text = block.sub(lambda m: m.group(1) + "\n" + table + "\n" + m.group(2), text, count=1)
+open(target, "w").write(text)
+print(action)
+PYEOF
+}
+
+# Link every repo-shipped skill into $WS/.claude/skills/ (skills.py link-all).
+link_repo_skills() {
+    local out
+    if ! out=$(WORKSPACE_ROOT="$WORKSPACE_ROOT_RESOLVED" python3 "$SCRIPT_DIR/skills.py" link-all 2>&1); then
+        log_warn "Repo skill linking failed: $out"
+        return 0
+    fi
+    python3 - "$out" << 'PYEOF' || log_warn "Repo skill linking: $out"
+import json, sys
+r = json.loads(sys.argv[1])
+if r.get("status") != "ok":
+    print(f"[WARN] Repo skills not linked: {r.get('error')}")
+    sys.exit(0)
+for s in r["linked"]:
+    print(f"[OK] Linked skill /{s['name']} (from {s['repo']})")
+for s in r["skipped"]:
+    print(f"[WARN] Skill {s['name']} from {s['repo']} skipped: {s['reason']}")
+for e in r["errors"]:
+    print(f"[WARN] {e}")
+PYEOF
 }
 
 # ─── Refresh Domain ──────────────────────────────────────────────────────────
@@ -958,9 +1067,11 @@ usage() {
     echo "  init <name>           Initialize from a bundled/workspace domain"
     echo "  init <url>            Initialize from an external domain git URL"
     echo "  init <url#subdir>     External pack containing multiple domains"
-    echo "  init --self [<name>]  Initialize a single-repo self-workspace"
+    echo "  init --self [<name>] [--summary \"...\"] [--ignore-projects]"
+    echo "                        Initialize a single-repo self-workspace"
     echo "                        (workspace root = the repo checkout; no domain)"
-    echo "  clone                 Clone all repos (first time setup)"
+    echo "  detect                Print the setup mode as JSON"
+    echo "  clone                 Clone all repos, link repo skills, write CLAUDE.md"
     echo "  clone <dir>           Clone a specific repo by directory name"
     echo "  update                Update all repos (git pull)"
     echo "  update <dir>          Update a specific repo by directory name"
@@ -1008,11 +1119,16 @@ main() {
         init)
             resolve_workspace_root create
             if [[ "$target" == "--self" ]]; then
-                init_self "${3:-}"
+                shift 2
+                init_self "$@"
             else
                 init_domain "$target"
             fi
             ensure_skills_dir
+            ;;
+        detect)
+            resolve_workspace_root create
+            detect_mode
             ;;
         refresh-domain)
             resolve_workspace_root require
@@ -1027,6 +1143,9 @@ main() {
             else
                 clone_all
             fi
+            apply_settings_template "$(find_domain_dir "$ACTIVE_DOMAIN_NAME")"
+            link_repo_skills
+            log_info "Root CLAUDE.md: $(write_root_claude_md)"
             ;;
         update)
             resolve_workspace_root require

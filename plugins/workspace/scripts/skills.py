@@ -4,14 +4,13 @@
 Skills living in repos (repos/<repo>/.claude/skills/) are only discovered
 by Claude Code inside that repo's directory. Flat-symlinking them into the
 workspace's .claude/skills/ makes them visible in autocomplete at the
-workspace root. This script owns discovery, symlinking, verification, and
-the cross-project refcount used at close time.
+workspace root. `setup.sh clone` runs `link-all` once; the links are
+workspace-wide, not owned by a project.
 
 Usage:
   skills.py scan <repo> [<repo>...]
   skills.py link <name> <repo>
-  skills.py verify <project>
-  skills.py unlink-check <project>
+  skills.py link-all
 
 Output: JSON to stdout. Always {"status": "ok" | "error", ...}; fatal
 problems report status "error" and still exit 0 so calling skills can
@@ -30,7 +29,7 @@ from typing import Any
 # skill and project frontmatter — emit a self-describing JSON error (that
 # the calling skill can relay) instead of a raw ImportError traceback.
 try:
-    import yaml
+    import yaml  # noqa: F401  (fail fast with a JSON error)
 except ImportError:
     print(json.dumps({
         "status": "error",
@@ -40,6 +39,10 @@ except ImportError:
     sys.exit(0)
 
 import workspace_lib
+
+
+class SkillError(Exception):
+    pass
 
 
 def fail(message: str) -> None:
@@ -63,28 +66,7 @@ def is_safe_name(name: str) -> bool:
 
 
 def parse_frontmatter(path: Path) -> dict[str, Any]:
-    """Extract YAML frontmatter between --- delimiters."""
-    try:
-        lines = path.read_text().splitlines()
-    except (OSError, UnicodeDecodeError):
-        return {}
-
-    if not lines or lines[0].strip() != "---":
-        return {}
-
-    fm_lines: list[str] = []
-    for line in lines[1:]:
-        if line.strip() == "---":
-            break
-        fm_lines.append(line)
-    else:
-        return {}
-
-    try:
-        result = yaml.safe_load("\n".join(fm_lines))
-    except yaml.YAMLError:
-        return {}
-    return result if isinstance(result, dict) else {}
+    return workspace_lib.parse_frontmatter(path)
 
 
 def ws_skills_dir(root: Path) -> Path:
@@ -182,23 +164,23 @@ def cmd_scan(root: Path, repos: list[str]) -> dict:
 
 def cmd_link(root: Path, name: str, repo: str) -> dict:
     if not is_safe_name(name):
-        fail(f"skill name '{name}' is not a valid skill name")
+        raise SkillError(f"skill name '{name}' is not a valid skill name")
 
     skill_dir = find_skill_dir(root, repo, name)
     if skill_dir is None:
-        fail(f"No skill with frontmatter name '{name}' found in "
+        raise SkillError(f"No skill with frontmatter name '{name}' found in "
              f"repos/{repo}/.claude/skills/")
 
     skills_dir = ws_skills_dir(root)
     if skills_dir.exists() and not skills_dir.is_dir():
-        fail(f"{skills_dir} exists and is not a directory — refusing to link")
+        raise SkillError(f"{skills_dir} exists and is not a directory — refusing to link")
     created_dir = not skills_dir.is_dir()
     skills_dir.mkdir(parents=True, exist_ok=True)
 
     entry = skills_dir / name
     state = classify_existing(entry, skill_dir)
     if state == "collision":
-        fail(f"{entry} already exists and is not a symlink to this skill "
+        raise SkillError(f"{entry} already exists and is not a symlink to this skill "
              f"— refusing to touch it")
     existed = state == "same_source"
     if state == "dangling":
@@ -217,89 +199,40 @@ def cmd_link(root: Path, name: str, repo: str) -> dict:
     }
 
 
-def read_project_skills(root: Path, project: str) -> list[dict]:
-    """Normalized [{name, source}] from a project's frontmatter skills: list."""
-    claude_md = root / "projects" / project / "CLAUDE.md"
-    if not claude_md.is_file():
-        fail(f"Project '{project}' not found (no {claude_md})")
-    raw = parse_frontmatter(claude_md).get("skills") or []
-    if not isinstance(raw, list):
-        return []
-    result = []
-    for item in raw:
-        if isinstance(item, dict) and item.get("name"):
-            result.append({"name": str(item["name"]),
-                           "source": str(item.get("source", ""))})
-    return result
+def cmd_link_all(root: Path) -> dict:
+    """Link every repo skill under repos/*/.claude/skills/ into the workspace.
 
-
-def cmd_verify(root: Path, project: str) -> dict:
-    results = []
-    for skill in read_project_skills(root, project):
-        name, source = skill["name"], skill["source"]
-        source_dir = find_skill_dir(root, source, name)
-        entry = ws_skills_dir(root) / name
-
-        record = {"name": name, "source": source}
-        if source_dir is None:
-            record["state"] = "source_gone"
+    A name offered by more than one repo, or already taken at the workspace
+    root by something else, is skipped and reported.
+    """
+    repos_dir = root / "repos"
+    repos = sorted(d.name for d in repos_dir.iterdir()
+                   if d.is_dir()) if repos_dir.is_dir() else []
+    scan = cmd_scan(root, repos)
+    linked, reused, skipped = [], [], []
+    created_dir = False
+    for s in scan["skills"]:
+        state = (s["already_present"] or {}).get("status")
+        if s["conflict"]:
+            skipped.append({"name": s["name"], "repo": s["repo"],
+                            "reason": "same name in more than one repo"})
+        elif state == "collision":
+            skipped.append({"name": s["name"], "repo": s["repo"],
+                            "reason": "name already in use in .claude/skills/"})
+        elif state == "same_source":
+            reused.append({"name": s["name"], "repo": s["repo"]})
         else:
-            state = classify_existing(entry, source_dir)
-            if state == "absent":
-                record["state"] = "missing"
-            elif state == "same_source":
-                record["state"] = "ok"
-            elif state == "dangling":
-                record["state"] = "broken"
-            else:  # collision: real dir or symlink to a different skill
-                record["state"] = "broken"
-                record["detail"] = "points_elsewhere"
-        results.append(record)
-
-    return {"status": "ok", "skills": results}
-
-
-def cmd_unlink_check(root: Path, project: str) -> dict:
-    own_skills = read_project_skills(root, project)
-
-    # Skill name -> other active (status != done) projects referencing it.
-    used_by: dict[str, list[str]] = {}
-    projects_dir = root / "projects"
-    if projects_dir.is_dir():
-        for other_dir in sorted(projects_dir.iterdir()):
-            if not other_dir.is_dir() or other_dir.name == project:
+            try:
+                result = cmd_link(root, s["name"], s["repo"])
+            except SkillError as exc:
+                skipped.append({"name": s["name"], "repo": s["repo"],
+                                "reason": str(exc)})
                 continue
-            claude_md = other_dir / "CLAUDE.md"
-            if not claude_md.is_file():
-                continue
-            fm = parse_frontmatter(claude_md)
-            if fm.get("status") == "done":
-                continue
-            raw = fm.get("skills") or []
-            if not isinstance(raw, list):
-                continue
-            for item in raw:
-                if isinstance(item, dict) and item.get("name"):
-                    used_by.setdefault(str(item["name"]), []).append(
-                        other_dir.name)
-
-    results = []
-    for skill in own_skills:
-        name = skill["name"]
-        entry = ws_skills_dir(root) / name
-        missing = not os.path.lexists(entry)
-        is_symlink = entry.is_symlink()
-        users = used_by.get(name, [])
-        results.append({
-            "name": name,
-            "source": skill["source"],
-            "missing": missing,
-            "is_symlink": is_symlink,
-            "removable": not missing and is_symlink and not users,
-            "used_by": users,
-        })
-
-    return {"status": "ok", "skills": results}
+            created_dir = created_dir or result["created_dir"]
+            linked.append({"name": s["name"], "repo": s["repo"]})
+    return {"status": "ok", "linked": linked, "reused": reused,
+            "skipped": skipped, "errors": scan["errors"],
+            "created_dir": created_dir}
 
 
 def main():
@@ -310,7 +243,7 @@ def main():
 
     args = sys.argv[1:]
     if not args:
-        fail("Usage: skills.py <scan|link|verify|unlink-check> ...")
+        fail("Usage: skills.py <scan|link|link-all> ...")
     command, rest = args[0], args[1:]
 
     if command == "scan":
@@ -320,15 +253,13 @@ def main():
     elif command == "link":
         if len(rest) != 2:
             fail("Usage: skills.py link <name> <repo>")
-        result = cmd_link(root, rest[0], rest[1])
-    elif command == "verify":
-        if len(rest) != 1:
-            fail("Usage: skills.py verify <project>")
-        result = cmd_verify(root, rest[0])
-    elif command == "unlink-check":
-        if len(rest) != 1:
-            fail("Usage: skills.py unlink-check <project>")
-        result = cmd_unlink_check(root, rest[0])
+        try:
+            result = cmd_link(root, rest[0], rest[1])
+        except SkillError as exc:
+            fail(str(exc))
+            return
+    elif command == "link-all":
+        result = cmd_link_all(root)
     else:
         fail(f"Unknown subcommand: {command}")
         return  # unreachable; keeps type-checkers happy
