@@ -34,7 +34,8 @@ The skill walks you through everything. Inside a git repo it offers to wrap
 it as a **single-repo self-workspace** — no cloning needed. Otherwise it
 asks **where** to create a multi-repo workspace, lets you pick a **domain**
 (or an external one by git URL), clones the repos, distributes context
-files, and generates the workspace's root `CLAUDE.md`. Either way, launch
+files, links skills that the repos ship, and generates the workspace's root
+`CLAUDE.md`. Either way, launch
 `claude` from the workspace directory for future sessions.
 
 To build a multi-repo workspace from an arbitrary set of repos instead of a
@@ -60,7 +61,7 @@ sessions as they need.
 
 | Step | What happens |
 |------|-------------|
-| **new-project** | Creates a `projects/<name>/CLAUDE.md` with the task description, checklist, and links to relevant repos. Optionally sets up a git worktree for isolated work. |
+| **new-project** | Creates a `projects/<name>/CLAUDE.md` with the task summary, a plan, and links to relevant repos. Sets up a git worktree for code tasks. |
 | **work** | Normal development. The project CLAUDE.md keeps you oriented — Claude loads it when you resume. |
 | **update-project** | Records what the session accomplished: checked-off items, decisions, blockers. Run this before ending a session. |
 | **resume-project** | Reloads the project context in a new session. The SessionStart hook also surfaces your recent projects automatically. |
@@ -90,8 +91,7 @@ shouldn't live in the repos you contribute to.
 | `/workspace:resume-project` | Reload a project's context and continue |
 | `/workspace:close-project` | Mark a project done and clean up worktrees |
 | `/workspace:handoff` | Arm a handoff so the next `/clear` auto-resumes |
-| `/workspace:consolidate-project` | Archive completed checklist items from a large project |
-| `/workspace:auto-update` | Automatically save project notes within 50 minutes of any work, during idle |
+| `/workspace:consolidate-project` | Archive completed checklist items from a large project (`update-project` does this automatically over 100 lines) |
 
 **Workspace setup** — usually one-time:
 
