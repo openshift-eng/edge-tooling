@@ -24,58 +24,34 @@ for lesson mining.
   writable git checkout you could technically edit: it is not *this*
   workspace's copy, and editing it silently changes the plugin for every
   other workspace instead of this one. Always run
-  `domain-info.py --copy-on-write` (Step 6) first and use only the `dir`
+  `domain-info.py --copy-on-write` (Step 5) first and use only the `dir`
   path it returns for Edit/Write calls.
-- **No writes before Step 5's confirmation.** Mining and routing are
+- **No writes before Step 4's confirmation.** Mining and routing are
   read-only; nothing is written until the user approves the plan.
 - **Never touch:** `domain.yaml` (domain identity), the domain's own
   `dev-env.yaml` (repo list), the workspace root `dev-env.yaml`,
   `settings.local.json.tpl`, `projects/` files (that's
   `/workspace:update-project`'s territory), memory files. Never delete a
   domain file.
-- **Redistribution is copy-only.** Step 7 may `cp` an edited
+- **Redistribution is copy-only.** Step 6 copies an edited
   `context/<repo>.md` over an already-cloned repo's `DOMAIN-CONTEXT.md`.
-  Never overwrite a repo's own `CLAUDE.md` from `supplemental/<repo>.md`
-  — it may have diverged; tell the user instead.
+  Never overwrite a repo's own `CLAUDE.md` from `supplemental/<repo>.md`;
+  it can have diverged. Tell the user instead.
 
-## Step 1: Resolve Project
+## Step 1: Resolve Project and Domain
 
-Extract the first token from `$ARGUMENTS`. Run
-`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/resume-project.py" <first-token>`
-via Bash (omit the token if none was provided). Parse the JSON and handle
-by `status`, same as `/workspace:consolidate-project` Step 1:
+Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/resume-project.py" <first-token>`
+(no token: use the project loaded in this conversation, if any). If
+`status` is not `ok`, do what `error_message` says.
 
-- **`ok`** — use `project.name`. Proceed to Step 2.
-- **`no_argument`** — check if a project was loaded earlier in this
-  conversation; if so, re-run with that name. Otherwise present the first
-  3 `alternatives` as AskUserQuestion options plus "See all projects".
-- **`not_found`** / **`out_of_range`** — show `error_message`, present
-  `alternatives` as a picker, re-run with chosen name.
-- **`no_projects`** — show `error_message` and stop.
-- **`error`** — if the message mentions **PyYAML**, relay the install
-  command (`pip3 install pyyaml`). Otherwise show the message and stop.
+Then run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/domain-info.py" <project-name>`.
+If `status` is not `ok`, tell the user the `error` and stop. Note
+`domain.writable`, `domain.dir`, `domain.files`, `domain.repos`, and
+`domain.source.type`.
 
-## Step 2: Resolve Domain
+## Step 2: Mine Lessons
 
-Run via Bash:
-```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/domain-info.py" <project-name>
-```
-
-Parse the JSON and handle by `status`:
-
-- **`ok`** — note `domain.writable`, `domain.location`, and
-  `domain.source.type`. Proceed to Step 3.
-- **`no_domain`** — tell the user this workspace/project has no domain to
-  update (e.g. a single-repo self-workspace) and stop.
-- **`not_found`** — tell the user the recorded domain has no directory on
-  disk and stop.
-- **`error`** — if the message mentions **PyYAML**, relay the install
-  command. Otherwise show the message and stop.
-
-## Step 3: Mine Lessons
-
-Read `domain.files` from Step 2 first — never propose a lesson that's
+Read `domain.files` from Step 1 first — never propose a lesson that's
 already documented there.
 
 Mine from: the current session's conversation, the project's CLAUDE.md and
@@ -95,13 +71,13 @@ status, not one-off debugging detail, not anything already in the target
 file. If nothing qualifies, say so and stop — do not manufacture a lesson
 to justify writing something.
 
-## Step 4: Route Each Lesson
+## Step 3: Route Each Lesson
 
 For each lesson, pick exactly one target:
 
 | Lesson shape | Target |
 |---|---|
-| Repo-specific orientation | `context/<repo>.md` — create from `${CLAUDE_PLUGIN_ROOT}/skills/create-domain/context-template.md`'s shape if missing. The repo must appear in `domain.repos` (Step 2's output). |
+| Repo-specific orientation | `context/<repo>.md` — create from `${CLAUDE_PLUGIN_ROOT}/skills/create-domain/context-template.md`'s shape if missing. The repo must appear in `domain.repos`. |
 | Repo working-doc material | `supplemental/<repo>.md` — only if it already exists; never create a new supplemental file. |
 | Domain-wide fact | `context.md` — keep the whole file ~20–40 lines. |
 | Long-form reference | `docs/<topic>.md` — new or existing. |
@@ -110,7 +86,7 @@ Follow `context-template.md`'s line discipline (30–75 lines per-repo file).
 If a per-repo file would overflow, move the long-form part to `docs/` and
 leave a one-line pointer instead.
 
-## Step 5: Confirm (Dry Run)
+## Step 4: Confirm (Dry Run)
 
 Show a table, one row per lesson:
 
@@ -120,17 +96,16 @@ Show a table, one row per lesson:
 ```
 
 Followed by the actual diff (or full content, for new files) for each
-target file — computed against the **current** files at `domain.dir` from
-Step 2 (identical content will exist post-copy-on-write, since Step 6 is
-a plain copy).
+target file — computed against the current files at `domain.dir` (Step 5 is a plain
+copy, so the content is the same after it).
 
 Ask via AskUserQuestion: apply all / apply a subset / cancel.
 
 **No file is written before this is answered.**
 
-## Step 6: Ensure Writable
+## Step 5: Ensure Writable
 
-If `domain.writable` was `false` in Step 2:
+If `domain.writable` was `false` in Step 1:
 
 Explain briefly: this domain is bundled with the plugin, so the workspace
 gets its own copy at `domains/<name>/` before editing (shadows the
@@ -144,25 +119,21 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/domain-info.py" --copy-on-write <project-
 Use the `domain.dir` from **this** response for every Edit/Write in Step
 7 — not the original bundled path.
 
-## Step 7: Apply
+## Step 6: Apply
 
-For each approved lesson: Edit the existing file or Write the new one
-(never echo/cat file contents into existence).
+Edit or write each approved lesson in `domain.dir`. Then record and
+redistribute in one call, with one `--entry` per changed file:
 
-Append an entry to `UPDATES.md` in the domain dir (create it with a short
-one-line header if it doesn't exist yet):
-
-```markdown
-## <YYYY-MM-DD> — <project-name>
-- <file>: <one-line summary of what changed and why>
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/domain-info.py" --record <project-name> \
+  --entry "context/<repo>.md: <what changed and why>" [--entry ...]
 ```
 
-For each edited `context/<repo>.md`, if
-`<workspace>/repos/<repo>/DOMAIN-CONTEXT.md` exists, `cp` the updated file
-over it (mirrors `distribute_domain_files`'s unconditional overwrite for
-that exact file). Do not touch a repo's own `CLAUDE.md`.
+It appends an entry to the domain's `UPDATES.md` and copies each edited
+`context/<repo>.md` over `repos/<repo>/DOMAIN-CONTEXT.md` when that file
+exists. It never touches a repo's own `CLAUDE.md`.
 
-## Step 8: Offer PR-Back (External Domains Only)
+## Step 7: Offer PR-Back (External Domains Only)
 
 If `domain.source.type == "git"`, ask via AskUserQuestion whether to open
 a PR against the source repo. If yes:
@@ -174,7 +145,7 @@ a PR against the source repo. If yes:
    pushing, then create the PR (or print manual push/PR instructions if
    `gh` isn't available or the user declines the push).
 
-## Step 9: Report
+## Step 8: Report
 
 Summarize: files changed, whether redistribution ran, the `UPDATES.md`
 entry, and the PR link if one was opened.
