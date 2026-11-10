@@ -13,7 +13,9 @@ _validate_results, so a passing run (exit 0) also proves the byte contract
 consumed by --report is satisfied.
 """
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import re
@@ -22,6 +24,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parent.parent / "search-bugs.py"
 
@@ -685,21 +688,160 @@ class PipelineFailureTests(unittest.TestCase):
             self.assertFalse((bugs / "bug-matches-4.21.json").exists())
             self.assertFalse((bugs / "bug-matches-4.22.json").exists())
 
-    def test_unknown_release_fails_prepare(self):
-        """A source that cannot be confirmed failure-free (e.g. a mistyped
-        release with an empty status list) is an error, not an empty result."""
+    @staticmethod
+    def _write_zero_job_release(jobs_dir, release):
+        """Simulate a completed collection that matched no periodic jobs."""
+        (jobs_dir / f"release-{release}-jobs.json").write_text("[]")
+        (jobs_dir / f"release-{release}-status.json").write_text("[]")
+
+    @staticmethod
+    def _write_job_report(jobs_dir, release, build_id, signature):
+        """Write one per-job analysis report for *release*."""
+        job = [{
+            "severity": 3,
+            "stack_layer": "test",
+            "step_name": "e2e",
+            "error_signature": signature,
+            "root_cause": signature,
+            "raw_error": signature,
+            "infrastructure_failure": False,
+            "job_url": f"https://prow.example/{build_id}",
+            "job_name": f"periodic-ci-lvm-operator-release-{release}",
+            "release": release,
+            "remediation": "inspect capacity reporting",
+            "finished": "2026-11-09",
+        }]
+        (jobs_dir / f"release-{release}-job-0-{build_id}.json").write_text(
+            json.dumps(job))
+
+    def _run_prepare(self, workdir, source):
+        """Run prepare mode for *source*; return the process."""
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), source, "--workdir", workdir],
+            capture_output=True, text=True, check=False,
+        )
+
+    def test_zero_job_release_prepares_empty_candidates(self):
+        """A completed collection that matched no periodic jobs (empty status
+        and jobs lists, no error file) prepares an empty candidate set."""
         with tempfile.TemporaryDirectory() as workdir:
             jobs = Path(workdir) / "jobs"
             jobs.mkdir()
-            (jobs / "release-9.9-jobs.json").write_text("[]")
-            (jobs / "release-9.9-status.json").write_text("[]")
+            self._write_zero_job_release(jobs, "5.1")
 
-            proc = subprocess.run(
-                [sys.executable, str(SCRIPT), "9.9", "--workdir", workdir],
-                capture_output=True, text=True,
-            )
+            proc = self._run_prepare(workdir, "5.1")
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("WARNING: no periodic jobs were collected for "
+                          "release 5.1", proc.stderr)
+            self.assertNotIn("no analysis reports found", proc.stderr)
+            data = json.loads(
+                (Path(workdir) / "bugs" / "bug-candidates-5.1.json").read_text())
+            self.assertEqual(data["candidates"], [])
+            self.assertEqual(data["job_files_found"], 0)
+
+    def test_unconfirmed_zero_job_release_fails_prepare(self):
+        """An empty status list is only accepted alongside an empty jobs
+        list; missing, unparsable or non-empty collection records fail."""
+        cases = {
+            "no collection files": {},
+            "status file missing": {"jobs": "[]"},
+            "status file unparsable": {"status": "[", "jobs": "[]"},
+            "status file not a list": {"status": "{}", "jobs": "[]"},
+            "status file null": {"status": "null", "jobs": "[]"},
+            "jobs file missing": {"status": "[]"},
+            "jobs file unparsable": {"status": "[]", "jobs": ""},
+            "jobs file not a list": {"status": "[]", "jobs": "{}"},
+            "failed jobs without status": {
+                "status": "[]",
+                "jobs": json.dumps([{"job": "periodic-x", "build_id": "9",
+                                     "status": "failure"}]),
+            },
+        }
+        for name, files in cases.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as workdir:
+                jobs = Path(workdir) / "jobs"
+                jobs.mkdir()
+                for kind, content in files.items():
+                    (jobs / f"release-5.1-{kind}.json").write_text(content)
+
+                proc = self._run_prepare(workdir, "5.1")
+
+                self.assertNotEqual(proc.returncode, 0)
+                self.assertIn("no analysis reports found for release 5.1",
+                              proc.stderr)
+                self.assertNotIn("WARNING: no periodic jobs", proc.stderr)
+                self.assertFalse(
+                    (Path(workdir) / "bugs" / "bug-candidates-5.1.json").exists())
+
+    def test_zero_job_release_continues_pipeline(self):
+        """A zero-job release between releases with failures does not stop
+        the pipeline: later releases are searched and the report is built."""
+        with tempfile.TemporaryDirectory() as workdir:
+            jobs = Path(workdir) / "jobs"
+            jobs.mkdir()
+            self._write_job_report(jobs, "5.0", "101",
+                                   "CSI capacity mismatch for thick class")
+            self._write_zero_job_release(jobs, "5.1")
+            self._write_healthy_release(jobs, "4.14")
+            self._write_job_report(jobs, "4.23", "102",
+                                   "RAID disk simulation namespace missing")
+
+            self.addCleanup(_search_bugs.configure_component,
+                            _search_bugs.DEFAULT_COMPONENT)
+            _search_bugs.configure_component("lvm-operator")
+            jira = _search_bugs.jira_search
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with mock.patch.object(jira, "credentials_available",
+                                   return_value=True), \
+                    mock.patch.object(jira, "search", return_value=[]), \
+                    mock.patch.object(jira, "search_all", return_value=[]), \
+                    contextlib.redirect_stdout(stdout), \
+                    contextlib.redirect_stderr(stderr):
+                try:
+                    _search_bugs.main_pipeline("5.0,5.1,4.14,4.23", workdir)
+                except SystemExit:
+                    self.fail(f"pipeline exited early:\n{stderr.getvalue()}")
+
+            self.assertIn("=== Pipeline complete ===", stderr.getvalue())
+            bugs = Path(workdir) / "bugs"
+            for source in ("5.0", "5.1", "4.14", "4.23"):
+                self.assertTrue((bugs / f"bug-matches-{source}.json").is_file())
+            matches = json.loads((bugs / "bug-matches-5.1.json").read_text())
+            self.assertEqual(matches["candidates"], [])
+            merged = json.loads(
+                (bugs / "bug-candidates-merged-5.0.json").read_text())
+            self.assertEqual(merged["sources"], ["5.0", "5.1", "4.14", "4.23"])
+            results = json.loads((bugs / "bug-results-5.0.json").read_text())
+            self.assertEqual(
+                sorted(r["error_signature"] for r in results["results"]),
+                ["CSI capacity mismatch for thick class",
+                 "RAID disk simulation namespace missing"])
+
+    def test_zero_job_release_does_not_mask_missing_reports(self):
+        """Accepting a zero-job release must not hide a later release whose
+        failed jobs lack analysis reports."""
+        with tempfile.TemporaryDirectory() as workdir:
+            jobs = Path(workdir) / "jobs"
+            jobs.mkdir()
+            self._write_zero_job_release(jobs, "5.1")
+            (jobs / "release-4.22-jobs.json").write_text(json.dumps([
+                {"job": "periodic-x", "build_id": "9", "status": "failure"},
+            ]))
+            (jobs / "release-4.22-status.json").write_text(json.dumps([
+                {"job": "periodic-x", "status": "failure"},
+            ]))
+
+            proc = self._run_pipeline(workdir, "5.1,4.22")
+
             self.assertNotEqual(proc.returncode, 0)
-            self.assertIn("no analysis reports found", proc.stderr)
+            self.assertIn("WARNING: no periodic jobs were collected for "
+                          "release 5.1", proc.stderr)
+            self.assertIn("no analysis reports found for release 4.22",
+                          proc.stderr)
+            bugs = Path(workdir) / "bugs"
+            self.assertFalse((bugs / "bug-matches-5.1.json").exists())
+            self.assertFalse((bugs / "bug-matches-4.22.json").exists())
 
     def test_collection_error_release_fails_prepare(self):
         """A release whose data collection failed (error file present) is a

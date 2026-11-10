@@ -510,13 +510,18 @@ def _confirmed_no_failures(workdir, source):
     source, distinguishing a healthy source from one with missing reports.
 
     doctor-helper.sh writes jobs/release-<source>-status.json (every periodic
-    job for a release, pass and fail) and jobs/prs-status.json (per-PR job
-    counts). A release with no failed jobs has a non-empty, failure-free
-    status file and no release-<source>-error.txt; a mistyped release or a
-    failed collection yields an empty status list (plus the error file on
-    collection failure) and is NOT treated as healthy. PR and rebase sources
-    are healthy when every matching entry in prs-status.json has zero failed
-    jobs.
+    job for a release, pass and fail), jobs/release-<source>-jobs.json (the
+    failed jobs selected for analysis) and jobs/prs-status.json (per-PR job
+    counts). A release with no failed jobs has a failure-free status file and
+    no release-<source>-error.txt. A collection that completed without
+    matching any periodic job (e.g. a release with no periodic jobs yet, or a
+    release name no job matches) writes empty status and jobs lists; it has
+    nothing to correlate and is reported with a warning. A failed collection
+    writes the same empty lists plus the error file and is NOT treated as
+    healthy, nor is a missing or unparsable status file, or an empty status
+    list whose jobs file is missing, unparsable or non-empty. PR and rebase
+    sources are healthy when every matching entry in prs-status.json has zero
+    failed jobs.
     """
     jobs_dir = os.path.join(workdir, "jobs")
 
@@ -532,9 +537,18 @@ def _confirmed_no_failures(workdir, source):
             return False
         statuses = _load_json(
             os.path.join(jobs_dir, f"release-{source}-status.json"))
-        return (isinstance(statuses, list) and len(statuses) > 0
-                and all(isinstance(s, dict) and s.get("status") != "failure"
-                        for s in statuses))
+        if not isinstance(statuses, list):
+            return False
+        if not statuses:
+            failed_jobs = _load_json(
+                os.path.join(jobs_dir, f"release-{source}-jobs.json"))
+            if failed_jobs != []:
+                return False
+            print(f"WARNING: no periodic jobs were collected for release "
+                  f"{source}", file=sys.stderr)
+            return True
+        return all(isinstance(s, dict) and s.get("status") != "failure"
+                   for s in statuses)
 
     pr_num = None
     title_fragment = None
