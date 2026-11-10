@@ -6,9 +6,9 @@ set -euo pipefail
 # Action modes (approve, restart): text on stdout
 # Progress/errors: stderr
 
-GCS_API="https://storage.googleapis.com/storage/v1/b/test-platform-results/o"
-GCS_BASE="https://storage.googleapis.com/test-platform-results"
-PROW_VIEW="https://prow.ci.openshift.org/view/gs/test-platform-results"
+GCS_API="https://storage.googleapis.com/storage/v1/b/test-platform-results-public/o"
+GCS_BASE="https://storage.googleapis.com/test-platform-results-public"
+PROW_VIEW="https://prow.ci.openshift.org/view/gs/test-platform-results-public"
 GH_REPO=""
 GCS_PR_PREFIX=""
 SIGNATURE=$'\n'"*Added by $(basename "${0}")* :robot:"$'\n'
@@ -48,12 +48,38 @@ fetch_open_prs() {
     fi
 }
 
+# Summarize a failed listing response: the API error message, or the start of the body
+_listing_error() {
+    local body="${1}" message
+    message=$(jq -r '(.error.message)? // empty' "${body}" 2>/dev/null) || message=""
+    [[ -n "${message}" ]] || message=$(head -c 200 "${body}" | tr -s '\n\r\t' ' ')
+    echo "${message:-empty response}"
+}
+
 # List job names for a PR from GCS
+# Fails with a diagnostic on stderr when the request fails, returns an HTTP
+# error, or the response is not an object listing. A listing without
+# prefixes is a valid empty result.
 list_pr_jobs() {
     local pr="${1}"
-    curl -s --max-time 60 --retry 3 --retry-delay 5 "${GCS_API}?prefix=${GCS_PR_PREFIX}/${pr}/&delimiter=/" | \
-        jq -r '.prefixes[]? // empty' | \
-        sed "s|${GCS_PR_PREFIX}/${pr}/||; s|/$||"
+    local url="${GCS_API}?prefix=${GCS_PR_PREFIX}/${pr}/&delimiter=/"
+    local body="${SCRIPT_TMPDIR}/list-pr-${pr}.json"
+    local http_code
+
+    : > "${body}"
+    if ! http_code=$(curl -sS --max-time 60 --retry 3 --retry-delay 5 -o "${body}" -w '%{http_code}' "${url}"); then
+        echo "Error: PR #${pr}: job listing request failed: ${url}" >&2
+        return 1
+    fi
+    if [[ "${http_code}" != "200" ]]; then
+        echo "Error: PR #${pr}: job listing returned HTTP ${http_code}: $(_listing_error "${body}")" >&2
+        return 1
+    fi
+    if ! jq -e '.kind == "storage#objects" and ((.prefixes // []) | type == "array")' "${body}" >/dev/null 2>&1; then
+        echo "Error: PR #${pr}: job listing is not a GCS object listing: $(_listing_error "${body}")" >&2
+        return 1
+    fi
+    jq -r '(.prefixes // [])[]' "${body}" | sed "s|${GCS_PR_PREFIX}/${pr}/||; s|/$||"
 }
 
 # Get latest build result as a JSON object
@@ -182,9 +208,10 @@ mode_detail() {
         local tmpdir="${SCRIPT_TMPDIR}/detail-pr-${pr_number}"
         mkdir -p "${tmpdir}"
 
+        # Skipping would return a successful array silently missing this PR
         if ! fetch_pr_results "${pr_number}" "${tmpdir}"; then
-            echo "PR #${pr_number}: incomplete job results, skipping" >&2
-            continue
+            echo "Error: PR #${pr_number}: incomplete job results, aborting" >&2
+            return 1
         fi
 
         local jobs_json
