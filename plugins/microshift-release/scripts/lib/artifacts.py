@@ -7,9 +7,16 @@ import re
 import subprocess
 
 import requests
+import truststore
 import urllib3
 
 logger = logging.getLogger(__name__)
+
+# gitlab.cee.redhat.com chains to a Red Hat internal root that certifi (the
+# requests default bundle) doesn't ship. Use the OS trust store instead, where
+# RH-managed machines already have it, so token-bearing requests keep TLS
+# verification on without per-user REQUESTS_CA_BUNDLE setup.
+truststore.inject_into_ssl()
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -52,12 +59,19 @@ _RHEL_VERSIONS = [9, 10]
 # GitLab internal instance for ocp-shipment-data
 _GITLAB_BASE = "https://gitlab.cee.redhat.com"
 _SHIPMENT_PROJECT_PATH = "hybrid-platforms/art/ocp-shipment-data"
+_GITLAB_TLS_HINT = ("TLS verification failed for gitlab.cee.redhat.com — the "
+                    "Red Hat CA must be in the system trust store "
+                    "(Red Hat-managed machine or CI image with the CA)")
+# Set when a GitLab request fails TLS verification, so callers that only see
+# a None response can report the TLS cause instead of a token problem.
+_gitlab_tls_failed = False
 
 
-def _http_get(url, timeout=15, verify=True, headers=None, proxies=None):
+def _http_get(url, timeout=15, verify=True, headers=None, proxies=None,
+              allow_redirects=True):
     """Perform an HTTP GET, returning the response or raising RequestException."""
     return requests.get(url, timeout=timeout, verify=verify, headers=headers,
-                        allow_redirects=True, proxies=proxies)
+                        allow_redirects=allow_redirects, proxies=proxies)
 
 
 def validate_nvr_format(nvr, release_type):
@@ -379,12 +393,22 @@ def _gitlab_get(path):
     Returns:
         requests.Response or None on failure.
     """
+    global _gitlab_tls_failed  # noqa: PLW0603
     headers = _gitlab_headers() or {}
     url = f"{_GITLAB_BASE}/api/v4/{path.lstrip('/')}"
     try:
-        return _http_get(url, headers=headers, verify=False, timeout=15)
+        # Trusted origin (_GITLAB_BASE); verify TLS and never follow a redirect
+        # that could forward PRIVATE-TOKEN to another host.
+        return _http_get(url, headers=headers, timeout=15,
+                         allow_redirects=False)
+    except requests.exceptions.SSLError as exc:
+        _gitlab_tls_failed = True
+        logger.error("%s: %s", _GITLAB_TLS_HINT, exc)
+        return None
     except requests.RequestException as exc:
-        logger.debug("GitLab API request failed for %s: %s", path, exc)
+        # Warn, not debug: callers report a None response as "no access",
+        # which hides TLS/network failures behind a misleading token hint.
+        logger.warning("GitLab API request failed for %s: %s", path, exc)
         return None
 
 
@@ -420,11 +444,9 @@ def fetch_shipment_mr(version):
     """
     project_id = _get_gitlab_project_id()
     if project_id is None:
-        return {
-            "found": False,
-            "reason": f"No access to {_SHIPMENT_PROJECT_PATH} — check GITLAB_API_TOKEN permissions",
-            "skipped": True,
-        }
+        reason = (_GITLAB_TLS_HINT if _gitlab_tls_failed else
+                  f"No access to {_SHIPMENT_PROJECT_PATH} — check GITLAB_API_TOKEN permissions")
+        return {"found": False, "reason": reason, "skipped": True}
 
     # Search all MRs (open + merged) filtering by version in title
     search_version = version.replace("-", " ")
