@@ -337,6 +337,12 @@ def sprint_health(sprint_issues, sprint, today, mode, velocity=None, availabilit
         if not links_complete:
             out["left_out"].append({"what": "blocked-by links",
                                     "why": "issue link details incomplete (get_jira_issue)"})
+        if goal and goal.get("rating") == GREEN and (not links_complete or not flagged_known):
+            # No visible blocker is not proof the goal work is unblocked when a
+            # blocked signal is missing: do not report green.
+            missing = "blocked-by links" if not links_complete else "Flagged"
+            out["goal"] = {"rating": None,
+                           "note": f"{goal.get('note') or 'goal on track'} (not rated: {missing} not available)"}
         if blockers:
             hard = [b for b in blockers if any(not r.startswith("no update") for r in b["reasons"])]
             out["risks"].append({"severity": RED if hard else YELLOW,

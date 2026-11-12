@@ -69,6 +69,8 @@ fields:  # request fields by id only
    (`{"text": ..., "jql": "<query sent>"}`). The page counts as complete and
    empty only when that JQL matches the query sent; otherwise the fetch is
    incomplete.
+8. When `query_jira` says a field value was shortened or stored, read it whole
+   with `result_page` before passing the results to the script.
 
 ```python
 import chai_jira_adapter as ad
@@ -182,11 +184,14 @@ sprint-health analyzers at team level:
   "Blocked" label, Flagged (unless the field was rejected), and issues in an
   active status per law 07 (In Progress, Review, or OCPBUGS ASSIGNED) with no
   update for more than 5 business days).
-- **Sprint goal (mid-sprint, inline judgement):** take the goal text from the
-  current sprint's `goal` in the `list_jira_board_sprints` result (it is not in
-  scrum-context's `current_sprint`). List the issues whose summary clearly
+- **Sprint goal (mid-sprint, inline judgement):** call `list_jira_board_sprints`
+  for board 11479 with state `active`, take the sprint whose id matches
+  scrum-context's `current_sprint` id, and read its `goal` (scrum-context does
+  not return the goal, and the velocity call above lists closed sprints only). List the issues whose summary clearly
   matches the goal's terms, and rate the goal 🟢 (none blocked and burndown on
-  track), 🟡 (stalled or slightly behind) or 🔴 (goal work blocked, or behind).
+  track; never green when blocked-by links are incomplete or Flagged was
+  rejected, since `sprint_health` then clears the rating), 🟡 (stalled or
+  slightly behind) or 🔴 (goal work blocked, or behind).
   Pass `goal={"rating": <emoji>, "note": "<one line>"}` to `sprint_health`; it
   is shown in the sprint reply. No goal on the sprint →
   `goal={"rating": None, "note": "no sprint goal set"}`; sprint data not readable

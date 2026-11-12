@@ -177,6 +177,21 @@ SAMPLE_NO_RESULTS = '{"result":"No issues found for JQL: key = OCPEDGE-1 AND key
 SAMPLE_NO_RESULTS_JQL = "key = OCPEDGE-1 AND key = OCPEDGE-2"
 
 
+# Sample 8: full Sprint value after CHAI-1254 (no "+N more" cut; long values read whole
+# with result_page). Entries are separated by "; ". Generic summary, anonymized assignee.
+SPRINT_FULL = ("OCPEDGE Sprint 250 (id 12577, closed, board 8557, start 2024-02-26T10:32:56.158Z, "
+               "end 2024-03-18T04:01:00.000Z, completed 2024-03-18T10:02:55.043Z); "
+               "OCPEDGE Sprint 249 (id 14536, closed, board 8557, start 2024-02-05T16:21:59.538Z, "
+               "end 2024-02-26T05:01:00.000Z, completed 2024-02-26T10:08:48.181Z)")
+SAMPLE_SPRINTS = f"""Found 1 issues (showing 1):
+  [TEST-250] Synthetic story carried across two sprints
+    Type: Story | Status: Closed | Priority: Major | Assignee: Engineer A | Reporter: Engineer A | Resolution: Done
+    Created: 2024-02-20 | Updated: 2024-03-18 | Resolved: 2024-03-18
+    customfield_10020: {SPRINT_FULL}
+    customfield_10028: 3.0
+"""
+
+
 def block(key, summary="Synthetic item", type_="Story", status="In Progress", assignee="Alex Example",
           sp="3.0", sprints=SPRINT_11, extra=()):
     """One issue block in chai-bot's layout (indented, combined lines)."""
@@ -458,6 +473,55 @@ class NoResultsTest(unittest.TestCase):
         self.assertEqual(ad.unwrap("{not json"), "{not json")
 
 
+class SprintValueTest(unittest.TestCase):
+    """customfield_10020 after CHAI-1254: whole values, tolerant entries, never guessed."""
+
+    def test_full_multi_sprint_value(self):
+        out = ad.adapt_fetch({"pages": [{"text": SAMPLE_SPRINTS}]})
+        self.assertTrue(out["fetch"]["complete"], out["fetch"]["problems"])
+        issue = out["issues"][0]
+        self.assertEqual(issue["assignee"]["name"], "Engineer A")
+        sprints = issue["customfield_10020"]
+        self.assertEqual([(s["id"], s["name"], s["state"]) for s in sprints],
+                         [(12577, "OCPEDGE Sprint 250", "closed"), (14536, "OCPEDGE Sprint 249", "closed")])
+        self.assertEqual(sprints[0]["endDate"], "2024-03-18T04:01:00.000Z")  # "completed" not glued on
+        self.assertEqual(sprints[0]["completeDate"], "2024-03-18T10:02:55.043Z")
+        row = transform_sprint_issues.transform_issue(issue, "2024-03-20")
+        self.assertEqual(row["sprint_details"], [{"id": 12577, "end": "2024-03-18"}, {"id": 14536, "end": "2024-02-26"}])
+        self.assertNotIn("sprint_data_incomplete", issue)
+
+    def test_parts_in_any_order_and_unknown_keys(self):
+        sprints, problem = ad.parse_sprint_value("Sprint X (future, foo bar, id 7, end 2030-01-02T00:00:00.000Z)")
+        self.assertIsNone(problem)
+        self.assertEqual((sprints[0]["id"], sprints[0]["state"], sprints[0]["endDate"]),
+                         (7, "future", "2030-01-02T00:00:00.000Z"))
+
+    def test_empty_sprint(self):
+        self.assertEqual(ad.parse_sprint_value(""), ([], None))
+        text = SAMPLE_SPRINTS.replace(SPRINT_FULL, "")
+        out = ad.adapt_fetch({"pages": [{"text": text}]})
+        self.assertTrue(out["fetch"]["complete"])
+        self.assertEqual(out["issues"][0]["customfield_10020"], [])
+        unset = ad.adapt_fetch({"pages": [{"text": SAMPLE_SPRINTS.replace(f"    customfield_10020: {SPRINT_FULL}\n", "")}]})
+        self.assertTrue(unset["fetch"]["complete"])
+        self.assertNotIn("customfield_10020", unset["issues"][0])
+
+    def test_shortened_value_is_marked_incomplete(self):
+        first = SPRINT_FULL.split("; ")[0]
+        for shortened in (first + " +1 more", first + "; OCPEDGE Sprint 249 (id 14536, clo...",
+                          first + " (value stored; read the rest with result_page)"):
+            out = ad.adapt_fetch({"pages": [{"text": SAMPLE_SPRINTS.replace(SPRINT_FULL, shortened)}]})
+            self.assertFalse(out["fetch"]["complete"], shortened)
+            self.assertEqual(out["fetch"]["sprint_incomplete"], ["TEST-250"])
+            self.assertIn("TEST-250: sprint value was shortened", out["fetch"]["problems"][0])
+            self.assertIn("result_page", out["issues"][0]["sprint_data_incomplete"])
+
+    def test_entry_without_id_is_incomplete(self):
+        sprints, problem = ad.parse_sprint_value("Sprint X (closed, board 1)")
+        self.assertEqual(sprints, [])
+        self.assertIn("has no id", problem)
+
+
 class LinkedSpikesCliTest(unittest.TestCase):
     """CLI --linked-spikes: an incomplete per-feature fetch marks the output incomplete."""
 
@@ -531,6 +595,12 @@ class PeopleTest(unittest.TestCase):
         out = ad.adapt_fetch({"pages": [{"text": page(["TEST-5"], assignee="alex   EXAMPLE")}]}, ROSTER)
         self.assertEqual(out["issues"][0]["assignee"]["email"], "aexample@redhat.com")
         self.assertEqual(out["people"], {"matched": 1, "unmatched": []})
+
+    def test_contact_without_rover_email_matches_by_display_name(self):
+        roster = {"contacts": [{"display_name": "Nolink Person", "email": None}]}
+        out = ad.adapt_fetch({"pages": [{"text": page(["TEST-5"], assignee="Nolink Person")}]}, roster)
+        self.assertEqual(out["people"], {"matched": 1, "unmatched": []})
+        self.assertEqual(out["issues"][0]["assignee"]["email"], "Nolink Person")
 
     def test_unmatched_name_is_kept_not_unassigned(self):
         out = ad.adapt_fetch({"pages": [{"text": page(["TEST-5"], assignee="Robin Outsider")}]}, ROSTER)

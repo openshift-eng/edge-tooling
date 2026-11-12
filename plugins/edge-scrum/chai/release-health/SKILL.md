@@ -73,6 +73,8 @@ fields:  # request fields by id only
    (`{"text": ..., "jql": "<query sent>"}`). The page counts as complete and
    empty only when that JQL matches the query sent; otherwise the fetch is
    incomplete.
+8. When `query_jira` says a field value was shortened or stored, read it whole
+   with `result_page` before passing the results to the script.
 
 **Features keep PM rank.** Fetch features once with `(<JQL>) ORDER BY Rank ASC`,
 `max_results: 50`, and adapt with `"order": "rank"`. If that page has the
@@ -138,7 +140,9 @@ The release-health `--refinement` checks for refinement and test-plan spikes.
    features fetch incomplete, so the refinement section is left out)
    **before** `transform-features.py`; they merge with the refinement-sprint
    spikes in `transform-spikes.py`.
-5. Write `{"refinement_sprint_closed": <refinement sprint state is closed>}` as
+5. Read the refinement sprint's state from `list_jira_board_sprints` for board
+   11479 (all states; match the refinement sprint's id): scrum-context's window
+   has no state. Write `{"refinement_sprint_closed": <that state is closed>}` as
    `sprints.json`, then run `transform-features.py`, and `transform-spikes.py`
    with `--input <refinement-sprint spikes> --linked-spikes <all linked spikes>
    --features-file --epics-file --sprints-file`.

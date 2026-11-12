@@ -22,7 +22,7 @@ unset custom field prints no line at all::
         Type: Story | Status: Code Review | Priority: Major | Assignee: <name> | Reporter: <name> | Resolution: Done
         Created: 2030-01-02 | Updated: 2030-01-06 | Resolved: 2030-01-06
         Components: <name> | Labels: a, b | Fix Versions: x | Parent: KEY-100
-        customfield_10020: <sprint name> (id N, <state>, board B, start <iso>, end <iso>)
+        customfield_10020: <name> (id N, <state>, board B, start <iso>, end <iso>, completed <iso>); <name> (...)
         customfield_10028: <story points>
         customfield_<id>: <value>
         issuelinks: (set, but query_jira cannot render this field's structure)
@@ -83,9 +83,10 @@ KEY_PATTERN = r"[A-Z][A-Z0-9_]*-\d+"
 _HEADER_RE = re.compile(r"^\s*\[(" + KEY_PATTERN + r")\]\s*(.*?)\s*$")
 _KEY_RE = re.compile(r"^(?P<project>[A-Z][A-Z0-9_]*)-(?P<num>\d+)$")
 _LABEL_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_ ]{0,40}?)\s*:\s?(.*)$")
-_SPRINT_RE = re.compile(
-    r"(?P<name>[^()]*?)\s*\(\s*id\s+(?P<id>\d+)\s*,\s*(?P<state>[^,]+?)\s*,\s*"
-    r"board\s+(?P<board>[^,]+?)\s*,\s*start\s+(?P<start>[^,]+?)\s*,\s*end\s+(?P<end>[^)]+?)\s*\)")
+_SPRINT_ENTRY_RE = re.compile(r"([^;()]*?)\s*\(([^()]*)\)")
+_SPRINT_STATES = {"active", "closed", "future"}
+# Signs that a field value is not whole (chai-bot shortened it or stored it for result_page).
+_SHORTENED_RE = re.compile(r"\+\s*\d+\s+more\b|(\.\.\.|…)\s*$|\b(stored|shortened|truncated|result_page)\b", re.I)
 _FOUND_RE = re.compile(r"^\s*Found\s+(\d+)\s+issues?(?:\s*\(showing\s+(\d+)\))?", re.I)
 _MORE_RE = re.compile(r"^\s*Showing the first\s+(\d+)\s+matching issues?.*more match", re.I)
 _NO_RESULTS_RE = re.compile(r"^\s*No issues found for JQL:(.*)$", re.S)
@@ -174,17 +175,48 @@ def _number(value):
         return None
 
 
+def parse_sprint_value(value):
+    """``customfield_10020`` text → ``(sprint dicts, problem or None)``.
+
+    Entries look like ``<name> (id N, <state>, board B, start <iso>, end <iso>,
+    completed <iso>)``, separated by ``; `` (or ``, ``). Only the name, ``id N``
+    and the state (active / closed / future) are required; other ``key value``
+    parts are kept when known (board, start, end, completed) and ignored
+    otherwise, in any order. An empty value means no sprint. A value that still
+    looks shortened ("+N more", a trailing "...", a note that it was stored), an
+    entry without an id, or text with no entry at all returns a ``problem``: the
+    caller must not guess the missing sprints (decision 0018: never estimate).
+    """
+    text = _clean(value)
+    if text is None:
+        return [], None
+    out, problem = [], None
+    for m in _SPRINT_ENTRY_RE.finditer(text):
+        entry = {"name": m.group(1).strip(" ,;"), "id": None, "state": None}
+        for part in (p.strip() for p in m.group(2).split(",")):
+            idm = re.fullmatch(r"id\s+(\d+)", part, re.I)
+            key, _, val = part.partition(" ")
+            if idm:
+                entry["id"] = int(idm.group(1))
+            elif part.lower() in _SPRINT_STATES:
+                entry["state"] = part.lower()
+            elif key.lower() in ("board", "start", "end", "completed"):
+                entry[{"board": "boardId", "start": "startDate", "end": "endDate",
+                       "completed": "completeDate"}[key.lower()]] = _clean(val)
+        if entry["id"] is None:
+            problem = problem or f"sprint entry '{entry['name']}' has no id"
+            continue
+        out.append(entry)
+    if _SHORTENED_RE.search(text):
+        problem = "sprint value was shortened; read it whole with result_page"
+    elif not out and problem is None:
+        problem = "sprint value not recognized"
+    return out, problem
+
+
 def parse_sprints(value):
-    """``customfield_10020`` text → sprint dicts (one per ``name (id …)`` entry)."""
-    out = []
-    for m in _SPRINT_RE.finditer(value or ""):
-        name = m.group("name").strip().lstrip(",;").strip()
-        start, end = _clean(m.group("start")), _clean(m.group("end"))
-        out.append({"id": int(m.group("id")), "name": name,
-                    "state": m.group("state").strip().lower(),
-                    "boardId": _clean(m.group("board")),
-                    "startDate": start, "endDate": end})
-    return out
+    """``customfield_10020`` text → sprint dicts (see :func:`parse_sprint_value`)."""
+    return parse_sprint_value(value)[0]
 
 
 def parse_issue_links(text):
@@ -427,7 +459,10 @@ class PeopleMatcher:
     def __init__(self, roster=None):
         """Index the roster's contacts (or members) by display name and email."""
         people = (roster or {}).get("contacts") or (roster or {}).get("members") or []
-        members = [{"username": p.get("email") or p.get("username"), "display_name": p.get("display_name")}
+        # A contact without a Rover email falls back to its display name, as
+        # parse_team_roster does for members, so it still matches.
+        members = [{"username": p.get("email") or p.get("username") or p.get("display_name"),
+                    "display_name": p.get("display_name")}
                    for p in people]
         self.index = build_roster_index({"members": members})
         self.matched = set()
@@ -490,7 +525,10 @@ def to_issue(raw, people):
                 parent["issue_type"] = {"name": "Epic"}
             issue["parent"] = parent
     if "customfield_10020" in raw:
-        issue["customfield_10020"] = parse_sprints(raw["customfield_10020"])
+        sprints, problem = parse_sprint_value(raw["customfield_10020"])
+        issue["customfield_10020"] = sprints
+        if problem:
+            issue["sprint_data_incomplete"] = problem
     if "customfield_10028" in raw:
         issue["customfield_10028"] = _number(raw["customfield_10028"])
     for field in ("customfield_10795",):
@@ -709,6 +747,11 @@ def adapt_fetch(manifest, roster=None):
                 seen.add(raw["key"])
                 issues.append(to_issue(raw, people))
 
+    # An issue whose sprint value is not whole: its sprint data is incomplete, so
+    # nothing that depends on sprints (velocity, activity) is computed from it.
+    sprint_incomplete = [i["key"] for i in issues if i.get("sprint_data_incomplete")]
+    for key in sprint_incomplete:
+        problems.append(f"{key}: {next(i for i in issues if i['key'] == key)['sprint_data_incomplete']}")
     signals = set(manifest.get("signals") or [])
     skipped = []
     # Unset custom fields print no line, so a missing Flagged line means "not
@@ -731,7 +774,7 @@ def adapt_fetch(manifest, roster=None):
     return {
         "issues": issues,
         "fetch": {"name": manifest.get("name"), "complete": not problems, "pages": page_count,
-                  "fetched": len(issues), "problems": problems},
+                  "fetched": len(issues), "problems": problems, "sprint_incomplete": sprint_incomplete},
         "skipped_signals": skipped,
         "people": {"matched": len(people.matched), "unmatched": sorted(people.unmatched)},
         "warnings": warnings,

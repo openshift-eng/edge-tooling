@@ -472,6 +472,22 @@ class CodeRabbitFixesTest(unittest.TestCase):
                                 goal={"rating": None, "note": "no sprint goal set"})
         self.assertIn("• Sprint goal: no sprint goal set", cr.build_report(none, [])["replies"][0])
 
+    def test_goal_is_not_green_without_blocked_signals(self):
+        green = {"rating": "🟢", "note": "goal work on track"}
+        ok = cr.sprint_health(ISSUES, dict(SPRINT, week=2), "2030-02-07", "mid-sprint", goal=green)
+        self.assertEqual(ok["goal"], green)
+        no_links = cr.sprint_health(ISSUES, dict(SPRINT, week=2), "2030-02-07", "mid-sprint", goal=green,
+                                    links_complete=False)
+        self.assertEqual(no_links["goal"], {"rating": None,
+                                            "note": "goal work on track (not rated: blocked-by links not available)"})
+        no_flag = cr.sprint_health(ISSUES, dict(SPRINT, week=2), "2030-02-07", "mid-sprint", goal=green,
+                                   skipped_signals=[ad.SKIPPED_FLAGGED])
+        self.assertIsNone(no_flag["goal"]["rating"])
+        self.assertIn("Flagged not available", no_flag["goal"]["note"])
+        yellow = cr.sprint_health(ISSUES, dict(SPRINT, week=2), "2030-02-07", "mid-sprint",
+                                  goal={"rating": "🟡", "note": "stalled"}, links_complete=False)
+        self.assertEqual(yellow["goal"]["rating"], "🟡")  # only green is withheld
+
     def test_build_report_rejects_section_descriptors(self):
         sections, _ = cr.select_sections({}, [_window("9.1", "development")])
         with self.assertRaises(ValueError):

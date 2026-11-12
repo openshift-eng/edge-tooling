@@ -61,6 +61,8 @@ ROSTER_SOURCE: "openshift-eng/edge-context: people/team-roster.md"
    (`{"text": ..., "jql": "<query sent>"}`). The page counts as complete and
    empty only when that JQL matches the query sent; otherwise the fetch is
    incomplete.
+8. When `query_jira` says a field value was shortened or stored, read it whole
+   with `result_page` before passing the results to the script.
 
 ## Steps
 
