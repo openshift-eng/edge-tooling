@@ -516,6 +516,18 @@ class SprintValueTest(unittest.TestCase):
             self.assertIn("TEST-250: sprint value was shortened", out["fetch"]["problems"][0])
             self.assertIn("result_page", out["issues"][0]["sprint_data_incomplete"])
 
+    def test_cut_off_entry_without_ellipsis_is_incomplete(self):
+        sprints, problem = ad.parse_sprint_value("Sprint A (id 1, closed); Sprint B (id 2, closed")
+        self.assertEqual([s["id"] for s in sprints], [1])
+        self.assertIn("unparsed text", problem)
+        cut = SPRINT_FULL[:SPRINT_FULL.rindex(", completed")]  # second entry loses its ")"
+        out = ad.adapt_fetch({"pages": [{"text": SAMPLE_SPRINTS.replace(SPRINT_FULL, cut)}]})
+        self.assertFalse(out["fetch"]["complete"])
+        self.assertEqual(out["fetch"]["sprint_incomplete"], ["TEST-250"])
+        # Whole values with either separator still parse cleanly.
+        self.assertIsNone(ad.parse_sprint_value(SPRINT_FULL)[1])
+        self.assertIsNone(ad.parse_sprint_value(SPRINT_FULL.replace("; ", ", "))[1])
+
     def test_entry_without_id_is_incomplete(self):
         sprints, problem = ad.parse_sprint_value("Sprint X (closed, board 1)")
         self.assertEqual(sprints, [])

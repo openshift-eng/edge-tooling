@@ -207,8 +207,13 @@ def parse_sprint_value(value):
             problem = problem or f"sprint entry '{entry['name']}' has no id"
             continue
         out.append(entry)
+    # Every part of the value must belong to an entry: text left over besides the
+    # "; " / ", " separators means an entry was cut off (e.g. a missing ")").
+    remainder = _SPRINT_ENTRY_RE.sub("", text).strip(" \t\n;,")
     if _SHORTENED_RE.search(text):
         problem = "sprint value was shortened; read it whole with result_page"
+    elif remainder:
+        problem = problem or "sprint value has unparsed text after the last entry (cut off?)"
     elif not out and problem is None:
         problem = "sprint value not recognized"
     return out, problem
