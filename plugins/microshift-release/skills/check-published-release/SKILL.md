@@ -99,6 +99,7 @@ grouped by the sections it prints.
 |---|---|
 | `pr_errata_rpms_found` | Public RPM advisory exists for this version (Hydra search) |
 | `pr_errata_rpms_shipped` | RPM advisory status is SHIPPED_LIVE (VPN/Errata Tool) |
+| `pr_errata_rpms_kcs_indexed` | Advisory is discoverable in the KCS search index — FAILs if it shipped but Hydra search can't find it (resolved only via the Errata Tool fallback) |
 | `pr_rpms_customer_portal` | RPM advisory page accessible on access.redhat.com |
 | `pr_rpms_cdn` | RPMs pushed to rhocp CDN repos (VPN required) |
 

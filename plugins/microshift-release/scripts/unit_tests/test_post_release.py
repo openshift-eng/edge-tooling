@@ -12,6 +12,7 @@ from post_release import (  # noqa: E402
     _bootc_erratas_from_shipment,
     _check_errata_found,
     _check_errata_shipped,
+    check_rpms_kcs_indexed,
     _check_bootc_errata_shipped,
     check_bootc_errata_images,
     check_bootc_catalog,
@@ -123,6 +124,10 @@ class TestAllCheckIds(unittest.TestCase):
         self.assertIn("pr_errata_rpms_found", ids)
         self.assertIn("pr_errata_rpms_shipped", ids)
 
+    def test_kcs_indexed_always_included(self):
+        ids = _all_check_ids(_version("4.17.3"))
+        self.assertIn("pr_errata_rpms_kcs_indexed", ids)
+
 
 # ── Errata found ───────────────────────────────────────────────
 
@@ -226,6 +231,40 @@ class TestBootcErrataShipped(unittest.TestCase):
     def test_search_error(self):
         r = _check_bootc_errata_shipped({"error": "timeout"})
         self.assertEqual(r["status"], "WARN")
+
+
+# ── KCS (Hydra) search index ──────────────────────────────────
+
+
+class TestRpmsKcsIndexed(unittest.TestCase):
+    """The advisory must be discoverable via the public KCS search index."""
+
+    def test_indexed_via_hydra(self):
+        info = _errata_info()
+        info["source"] = "hydra"
+        r = check_rpms_kcs_indexed("pr_errata_rpms_kcs_indexed", info)
+        self.assertEqual(r["status"], "PASS")
+        self.assertIn("RHBA-2026:12345", r["reason"])
+
+    def test_shipped_but_not_indexed(self):
+        # Resolved only via the Errata Tool fallback → shipped but the KCS
+        # index has not caught up. This is the gap we must report.
+        info = _errata_info(advisory_name="RHSA-2026:91191")
+        info["source"] = "errata_tool"
+        r = check_rpms_kcs_indexed("pr_errata_rpms_kcs_indexed", info)
+        self.assertEqual(r["status"], "FAIL")
+        self.assertIn("RHSA-2026:91191", r["reason"])
+        self.assertIn("KCS", r["reason"])
+
+    def test_no_advisory(self):
+        r = check_rpms_kcs_indexed("pr_errata_rpms_kcs_indexed", None)
+        self.assertEqual(r["status"], "WARN")
+
+    def test_hydra_search_failed(self):
+        r = check_rpms_kcs_indexed("pr_errata_rpms_kcs_indexed",
+                                   {"error": "timeout"})
+        self.assertEqual(r["status"], "WARN")
+        self.assertIn("Hydra search failed", r["reason"])
 
 
 # ── Bootc errata ID match ────────────────────────────────
@@ -648,6 +687,7 @@ class TestFindRpmsErrata(unittest.TestCase):
         result = find_rpms_errata("4.21.7", "4.21")
         self.assertIsNotNone(result)
         self.assertEqual(result["advisory_name"], "RHBA-2026:12345")
+        self.assertEqual(result["source"], "hydra")
 
     @patch("post_release.requests.get")
     def test_not_found(self, mock_get):
@@ -707,6 +747,7 @@ class TestFindRpmsErrataViaErrataTool(unittest.TestCase):
 
         self.assertEqual(result["advisory_name"], "RHSA-2026:91191")
         self.assertEqual(result["publication_date"], "2026-10-29")
+        self.assertEqual(result["source"], "errata_tool")
         self.assertEqual(
             result["portal_url"],
             "https://access.redhat.com/errata/RHSA-2026:91191")
