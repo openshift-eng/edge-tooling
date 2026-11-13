@@ -20,7 +20,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-_VERSION_RE = re.compile(r"Release\s+(4\.\d+\.\d+)")
+_VERSION_RE = re.compile(r"Release\s+(\d+\.\d+\.\d+)")
 _DATE_RE = re.compile(r"\[(\d{4}-\w{3}-\d{2})\]")
 
 _cached_tickets = None
@@ -102,8 +102,12 @@ def query_art_releases_due(days_ahead=7, minor_version=None, specific_version=No
             continue
 
         parts = version.split(".")
-        if len(parts) >= 2 and int(parts[1]) < 14:
-            continue
+        # MicroShift GA'd at 4.14: keep 4.14+ and every later major (5.x+);
+        # drop anything older (all 3.x and below, plus 4.0-4.13).
+        if len(parts) >= 2:
+            major, minor = int(parts[0]), int(parts[1])
+            if major < 4 or (major == 4 and minor < 14):
+                continue
 
         if specific_version and version != specific_version:
             continue
