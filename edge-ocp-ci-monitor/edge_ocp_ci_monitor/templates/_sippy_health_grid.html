@@ -1,0 +1,43 @@
+<div class="table-wrapper sippy-health-grid">
+  <div class="detail-grid-header">
+    <div></div>
+    <div class="sortable" data-sort-col="0" data-sort-cell="detail-cell-job">Job</div>
+    <div class="sortable" data-sort-col="1" data-sort-cell="detail-cell-topology">Topology</div>
+    <div class="sortable" data-sort-col="2" data-sort-cell="detail-cell-version">Version</div>
+    <div class="sortable" data-sort-col="3" data-sort-cell="sippy-cell-runs">Runs</div>
+    <div class="sortable" data-sort-col="4" data-sort-cell="sippy-cell-current">Current Pass Rate</div>
+    <div class="sortable" data-sort-col="5" data-sort-cell="sippy-cell-previous">Previous Pass Rate</div>
+    <div class="sortable" data-sort-col="6" data-sort-cell="sippy-cell-change">Relative change</div>
+    <div>Action</div>
+  </div>
+  {% for r in all_regressions %}
+  {% set has_analysis = r.analysis_key in sippy_analysis_cards %}
+  {% set row_tag = 'details' if has_analysis else 'div' %}
+  {% set summary_tag = 'summary' if has_analysis else 'div' %}
+  <{{ row_tag }} id="sippy-row-{{ loop.index }}" class="regression-row failure-row" data-sippy-key="{{ r.analysis_key }}" data-job-name="{{ r.test_name }}" data-regtopology="{{ r.topology }}" data-regversion="{{ r.version }}" data-row-index="{{ loop.index }}">
+    <{{ summary_tag }}{% if not has_analysis %} class="sippy-job-summary"{% endif %}>
+      <span class="detail-cell-job" title="{{ r.test_name }}"><span class="sippy-job-name">{{ r.test_name }}</span><!-- /sippy-job-name -->{% if has_analysis %}<span class="badge ai-analyzed">AI Analyzed</span>{% endif %}</span>
+      <span class="detail-cell-topology"><span class="badge {{ r.topology | lower }}">{{ r.topology }}</span></span>
+      <span class="detail-cell-version">{{ r.version }}</span>
+      <span class="sippy-cell-runs">{{ r.current_runs }}</span>
+      <span class="sippy-cell-current pass-rate {% if r.sample_pass_rate < 70 %}low{% elif r.sample_pass_rate < 90 %}medium{% else %}high{% endif %}">{{ "%.1f" | format(r.sample_pass_rate) }}%</span>
+      <span class="sippy-cell-previous">{{ "%.1f" | format(r.basis_pass_rate) }}%</span>
+      {% set change = r.relative_change %}
+      <span class="sippy-cell-change">{% if change is not none %}<span class="pass-rate {% if change < -50 %}low{% elif change < 0 %}medium{% else %}high{% endif %}">{{ "%+.1f" | format(change) }}%</span>{% else %}<span title="Previous pass rate is zero">N/A</span>{% endif %}</span>
+      <span class="sippy-cell-action">
+        <a href="{{ r.triage_url }}" target="_blank" onclick="event.stopPropagation()">Sippy &#8599;</a>
+        {% if r.jira_bug %}<a href="https://issues.redhat.com/browse/{{ r.jira_bug }}" target="_blank" onclick="event.stopPropagation()">{{ r.jira_bug }}</a>{% endif %}
+        <span class="cmd-copy-row">
+          <code>Why is {{ r.test_name }} unhealthy on {{ r.version }}? What tests are failing?</code>
+          <button class="copy-btn" onclick="event.stopPropagation();copyCommand(this)" title="Copy to clipboard">Copy</button>
+        </span>
+      </span>
+    </{{ summary_tag }}><!-- /sippy-job-summary -->
+    {% if r.analysis_key in sippy_analysis_ids %}
+    <div class="content sippy-job-analysis"{% if not has_analysis %} hidden{% endif %}>
+      <div class="sippy-analysis" data-sippy-key="{{ r.analysis_key }}">{% if has_analysis %}{{ sippy_analysis_cards[r.analysis_key] | safe }}{% endif %}</div><!-- /sippy-analysis -->
+    </div>
+    {% endif %}
+  </{{ row_tag }}><!-- /sippy-job -->
+  {% endfor %}
+</div>

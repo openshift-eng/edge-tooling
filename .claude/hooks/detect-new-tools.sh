@@ -26,6 +26,7 @@ DOCUMENTED_TOOLS=(
     "ec2-deploy"
     "sno-deploy"
     "payload-monitor"
+    "edge-ocp-ci-monitor"
     "ci-tooling"
     "ci-tooling/readiness-report"
     "environments/lvm-operator"
