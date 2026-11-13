@@ -62,7 +62,10 @@ to `<WORKDIR>/report-bug-search.txt` when several releases are analyzed. Bugs
 are filed manually via the prefilled "Create Bug in JIRA" buttons in the HTML
 report. The buttons follow the categorization decisions: they appear only for
 failures categorized as `suggest`; `linked` and `skipped` failures show their
-decision instead.
+decision instead. A closed bug is listed only when its summary or description
+names the failure's distinctive terms (version numbers do not count); it is
+shown as possibly related, with the matched terms, and the failure stays
+`suggest` because Jira cannot show whether the fix was in the tested build.
 
 ## Requirements
 

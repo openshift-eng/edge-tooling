@@ -618,6 +618,17 @@ assert(skipBadge, 'skip renders a decision badge');
 assert.equal(skipBadge.textContent, 'Skipped \u2014 stale regression');
 assert.equal(skipBadge.title, 'Stale failure predating fix for OCPBUGS-4242');
 assert(skipped.textContent.includes('OCPBUGS-4242'), 'skip keeps the regression evidence');
+// suggest for possibly related closed bugs: button kept, no regression claim, match evidence shown
+const related = decisionLinks({error_signature: 'greenboot timeout', duplicates: [], regressions: [
+    {key: 'SYNTH-501', summary: 'earlier occurrence', status: 'Closed', assignee: '', updated: '2026-01-01',
+     match_evidence: {matched_terms: ['greenboot', 'timeout'], matched_fields: ['summary'], ignored_terms: []}},
+    {key: 'SYNTH-502', summary: 'legacy entry', status: 'Verified', assignee: '', updated: '2026-01-02'},
+], decision: {action: 'suggest', jira_key: '', skip_category: '', reason: 'Possibly related to closed SYNTH-501, SYNTH-502; fix inclusion in the tested code is not established — suggest filing a new bug'}});
+assert(related.querySelector('.create-bug-btn'), 'possibly related keeps the Create Bug button');
+assert(related.textContent.includes('Possibly related closed bugs (fix inclusion unverified):'));
+assert(!related.textContent.includes('Regressions:'), 'closed matches are not labelled regressions');
+assert(related.textContent.includes('SYNTH-501') && related.textContent.includes('— matched: greenboot, timeout'));
+assert(related.textContent.includes('SYNTH-502') && related.textContent.includes('— match evidence unavailable'));
 // skip/infrastructure: badge on the no-tracked-bugs path
 const infra = decisionLinks({error_signature: 'greenboot timeout', duplicates: [], regressions: [], decision: {action: 'skip', jira_key: '', skip_category: 'infrastructure', reason: 'Infrastructure failure — not a product bug'}});
 assert.equal(infra.querySelector('.create-bug-btn'), null, 'infrastructure skip suppresses the button');

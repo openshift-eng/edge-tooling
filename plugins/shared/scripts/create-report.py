@@ -527,13 +527,18 @@ function renderBugLinks(parent, bugMatch, issue, sourceLabel) {
         });
     }
     if (hasRegs) {
-        div.appendChild(h('strong', '', 'Regressions:')); div.appendChild(document.createElement('br'));
+        // Closed bugs sharing the failure context; whether their fixes were
+        // in the tested code is unknown, so they are not called regressions.
+        div.appendChild(h('strong', '', 'Possibly related closed bugs (fix inclusion unverified):'));
+        div.appendChild(document.createElement('br'));
         bugMatch.regressions.forEach(function(r) {
             var a = makeLink(JIRA_BASE + '/browse/' + r.key, r.key + ' \\u27F2', 'bug-tag bug-tag-regression', '_blank');
             div.appendChild(a);
             var info = ' ' + (r.summary || '') + ' (' + (r.status || '');
             if (r.assignee) info += ', ' + r.assignee;
             info += ')';
+            var terms = (r.match_evidence && r.match_evidence.matched_terms) || [];
+            info += terms.length ? ' \\u2014 matched: ' + terms.join(', ') : ' \\u2014 match evidence unavailable';
             div.appendChild(h('span', 'job-date', info));
             div.appendChild(document.createElement('br'));
         });
