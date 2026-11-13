@@ -185,26 +185,25 @@ class DecisionPolicyTests(unittest.TestCase):
         self.assertPossiblyRelated(r, "SYNTH-102")
         self.assertNotIn("2026-08-01", r["reason"])
 
-    def test_closed_match_with_unlisted_jobs_is_not_skipped(self):
+    def test_closed_match_is_not_skipped_for_any_affected_jobs(self):
         """affected_jobs can count jobs that a merge with post-Jira bug-matches
-        inputs (affected_jobs, no jobs) could not list. Whatever the count,
-        the listed jobs' finish dates do not hide the closed match as stale."""
-        for affected in (None, 0, 1, 2, 3):
-            with self.subTest(affected_jobs=affected):
-                cand = _candidate(
-                    "old failure",
-                    regressions=[{"key": "SYNTH-500", "updated": "2026-08-01"}],
-                    finished=["2026-07-01"],  # the only listed job predates 'updated'
-                )
-                if affected is None:
-                    del cand["affected_jobs"]
-                else:
-                    cand["affected_jobs"] = affected
-                r = one(cand)
-                self.assertEqual(r["action"], "suggest")
-                self.assertEqual(r["jira_key"], "")
-                self.assertEqual(r["skip_category"], "")
-                self.assertIn("SYNTH-500", r["reason"])
+        inputs (affected_jobs, no jobs) could not list. Whether it is missing,
+        lower, equal or higher than the listed jobs, listed jobs finished
+        on or before 'updated' neither hide the closed match as stale nor
+        make it a regression."""
+        for finished in (["2026-07-01"], ["2026-07-01", "2026-08-01"]):
+            for affected in (None, 0, 1, 2, 3):
+                with self.subTest(finished=finished, affected_jobs=affected):
+                    cand = _candidate(
+                        "old failure",
+                        regressions=[{"key": "SYNTH-500", "updated": "2026-08-01"}],
+                        finished=finished,
+                    )
+                    if affected is None:
+                        del cand["affected_jobs"]
+                    else:
+                        cand["affected_jobs"] = affected
+                    self.assertPossiblyRelated(one(cand), "SYNTH-500")
 
     def test_multiple_closed_matches_are_all_named_in_key_order(self):
         regs = [
@@ -1260,7 +1259,7 @@ class ExactSignatureMergeTests(unittest.TestCase):
                 "deleted files",
             ])
 
-    def test_merge_with_post_jira_matches_does_not_hide_regression(self):
+    def test_merge_with_post_jira_matches_does_not_hide_closed_match(self):
         """--merge accepts bug-matches files, whose candidates carry
         affected_jobs but no jobs. Merged with a dated candidate of the same
         signature, the closed match is still suggested, not hidden."""
@@ -1303,9 +1302,11 @@ class ExactSignatureMergeTests(unittest.TestCase):
                 (bugs / "bug-results-5.1.json").read_text())["results"][0]
             self.assertEqual(result["action"], "suggest")
             self.assertEqual(result["skip_category"], "")
-            self.assertIn("USHIFT-500", result["reason"])
+            self.assertIn("Possibly related to closed USHIFT-500",
+                          result["reason"])
+            self.assertNotIn("regression", result["reason"].lower())
 
-    def test_same_source_post_jira_matches_do_not_hide_regression(self):
+    def test_same_source_post_jira_matches_do_not_hide_closed_match(self):
         """bug-candidates and bug-matches files of the same source: the
         source is aggregated once, so its listed job is not repeated. The
         bug-matches count has no job URLs to match against the listed job,
@@ -1353,6 +1354,10 @@ class ExactSignatureMergeTests(unittest.TestCase):
             result = json.loads(
                 (bugs / "bug-results-5.1.json").read_text())["results"][0]
             self.assertEqual(result["action"], "suggest")
+            self.assertEqual(result["skip_category"], "")
+            self.assertIn("Possibly related to closed USHIFT-500",
+                          result["reason"])
+            self.assertNotIn("regression", result["reason"].lower())
 
     def test_empty_signature_still_fails_categorize(self):
         with tempfile.TemporaryDirectory() as workdir:
