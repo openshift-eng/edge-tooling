@@ -591,49 +591,9 @@ prTab.textContent = ''; reportTest.renderPRs(prTab);
 document.getElementById('button-periodics').click();
 console.log('PASS PR zero summaries: supplied five explicit zero records, missing/partial status, pending, failed, analysis-empty, collection error and filter/Today/tab/reset');
 
-// === Categorization decisions gate the Create Bug button ===
-const savedJiraCfg = reportTest.data.jira_cfg;
-reportTest.data.jira_cfg = {pid: '12345', issuetype: '10100', component: 'MicroShift', labels: 'triaged', summary_prefix: ''};
-const decisionIssue = {title: 'greenboot timeout', severity: 'HIGH', failure_type: 'test', root_cause: 'node failed to boot', affected_jobs: []};
-function decisionLinks(bugMatch) {
-    const parent = new Element('div');
-    reportTest.renderBugLinks(parent, bugMatch, decisionIssue, '4.20');
-    return parent.querySelector('.bug-links');
-}
-// suggest (and uncategorized) candidates keep the manual-filing button
-for (const bugMatch of [
-    {error_signature: 'greenboot timeout', duplicates: [], regressions: []},
-    {error_signature: 'greenboot timeout', duplicates: [], regressions: [], decision: {action: 'suggest', jira_key: '', skip_category: '', reason: 'No existing bugs found — suggest filing a new bug'}},
-]) {
-    const links = decisionLinks(bugMatch);
-    assert(links.querySelector('.create-bug-btn'), 'suggest keeps the Create Bug button');
-    assert.equal(links.querySelector('.decision-skip'), null, 'suggest renders no skip badge');
-    assert(links.textContent.includes('No tracked bugs'));
-}
-// skip/stale_regression: no button, skip badge with reason tooltip, regression evidence kept
-const skipped = decisionLinks({error_signature: 'greenboot timeout', duplicates: [], regressions: [{key: 'OCPBUGS-4242', summary: 'old fix', status: 'Closed', assignee: '', updated: '2026-01-01'}], decision: {action: 'skip', jira_key: '', skip_category: 'stale_regression', reason: 'Stale failure predating fix for OCPBUGS-4242'}});
-assert.equal(skipped.querySelector('.create-bug-btn'), null, 'skip suppresses the Create Bug button');
-const skipBadge = skipped.querySelector('.decision-skip');
-assert(skipBadge, 'skip renders a decision badge');
-assert.equal(skipBadge.textContent, 'Skipped \u2014 stale regression');
-assert.equal(skipBadge.title, 'Stale failure predating fix for OCPBUGS-4242');
-assert(skipped.textContent.includes('OCPBUGS-4242'), 'skip keeps the regression evidence');
-// skip/infrastructure: badge on the no-tracked-bugs path
-const infra = decisionLinks({error_signature: 'greenboot timeout', duplicates: [], regressions: [], decision: {action: 'skip', jira_key: '', skip_category: 'infrastructure', reason: 'Infrastructure failure — not a product bug'}});
-assert.equal(infra.querySelector('.create-bug-btn'), null, 'infrastructure skip suppresses the button');
-assert.equal(infra.querySelector('.decision-skip').textContent, 'Skipped \u2014 infrastructure failure');
-assert(infra.textContent.includes('No tracked bugs'));
-// linked: no button, badge pointing at the tracked bug
-const linked = decisionLinks({error_signature: 'greenboot timeout', duplicates: [{key: 'USHIFT-1234', summary: 'tracks failure', status: 'Open', assignee: 'dev', updated: '2026-02-02'}], decision: {action: 'linked', jira_key: 'USHIFT-1234', skip_category: '', reason: 'Linked to existing bug USHIFT-1234'}});
-assert.equal(linked.querySelector('.create-bug-btn'), null, 'linked suppresses the Create Bug button');
-const linkedBadge = linked.querySelector('a.bug-tag-open');
-assert(linkedBadge, 'linked renders a badge link');
-assert.equal(linkedBadge.textContent, 'Linked \u2192 USHIFT-1234');
-assert(linkedBadge.href.includes('/browse/USHIFT-1234'));
-assert.equal(linkedBadge.title, 'Linked to existing bug USHIFT-1234');
-assert(linked.textContent.includes('Bugs:'), 'linked keeps the duplicate evidence');
-reportTest.data.jira_cfg = savedJiraCfg;
-console.log('PASS bug decision badges: suggest keeps the button, linked and skip show their decision and suppress manual filing');
+// === Create Bug button and categorization decision badges (test_report_create_bug.js) ===
+require('./test_report_create_bug.js')({reportTest, Element, document, renderGroupFixture, prTab,
+    reportFiles: process.argv.filter(arg => arg.startsWith('--create-bug-report=')).map(arg => arg.slice('--create-bug-report='.length))});
 
 if (process.argv[3]) {
     const supplied = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));

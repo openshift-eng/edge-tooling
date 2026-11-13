@@ -115,20 +115,70 @@ def extract_keywords(error_signature):
     Uses KEYWORD_STOP_WORDS (broader filtering) so generic CI terms
     like "test", "failed", "microshift" don't pollute Jira searches.
     """
+    return _ranked_tokens(error_signature)[:4]
+
+
+def _keyword_specificity(token):
+    score = len(token)
+    if "-" in token or "." in token:
+        score += 10
+    if any(c.isdigit() for c in token):
+        score += 5
+    return score
+
+
+def _ranked_tokens(error_signature):
+    """Return every keyword-eligible token, most specific first."""
     tokens = tokenize(error_signature, KEYWORD_STOP_WORDS)
-    if not tokens:
-        return []
+    return sorted(tokens, key=lambda t: (-_keyword_specificity(t), t))
 
-    def specificity(token):
-        score = len(token)
-        if "-" in token or "." in token:
-            score += 10
-        if any(c.isdigit() for c in token):
-            score += 5
-        return score
 
-    ranked = sorted(tokens, key=lambda t: (-specificity(t), t))
-    return ranked[:4]
+# Optional alphabetic prefix and separator before the first digit, as in
+# "go1", "v2", "rhel-9" or "ocp-68256".
+_VERSION_PREFIX_RE = re.compile(r"^[a-z]*[-_.]?(?=\d)")
+_DOTTED_NUMBER_RE = re.compile(r"\d\.\d")
+
+
+def is_version_like(token):
+    """Return True for version strings, numbers and similar identifiers.
+
+    Tokens such as "1.2.3", "go1.2.3", "rhel-9.6", "4.18.0-rc.1", "x86_64" or
+    a bare test ID recur across unrelated bugs, so they are never counted as
+    failure-context evidence when matching closed bugs. A token qualifies
+    when it contains a dotted number anywhere (so versioned names such as
+    "builder-1.22-base" also qualify), or when, after an optional alphabetic
+    prefix and separator, it starts with a digit and has at least as many
+    digits as letters. The second rule also covers short names such as
+    "ipv6", "x509" or "k8s": by shape they cannot be told apart from "go1" or
+    "el9", and on their own they rarely distinguish one failure from another.
+    """
+    if _DOTTED_NUMBER_RE.search(token):
+        return True
+    rest = _VERSION_PREFIX_RE.sub("", token, count=1)
+    if not rest or not rest[0].isdigit():
+        return False
+    digits = sum(c.isdigit() for c in rest)
+    letters = sum(c.isalpha() for c in rest)
+    return digits >= letters
+
+
+# Single-letter dotted abbreviations ("e.g", "i.e") are prose, not context.
+_ABBREVIATION_RE = re.compile(r"^(?:[a-z]\.)+[a-z]$")
+
+
+def extract_context_terms(error_signature):
+    """Split keyword-eligible tokens into (context_terms, ignored_terms).
+
+    context_terms are the words and structured identifiers that describe the
+    failure, most specific first; ignored_terms are the version-like tokens
+    that never count as context evidence (see is_version_like).
+    """
+    context, ignored = [], []
+    for token in _ranked_tokens(error_signature):
+        if _ABBREVIATION_RE.match(token):
+            continue
+        (ignored if is_version_like(token) else context).append(token)
+    return context, ignored
 
 
 def extract_test_ids(error_signature):
@@ -207,14 +257,121 @@ def _convert_jira_issue_to_entry(issue, include_priority_created=False):
     return entry
 
 
-def find_jira_bugs_for_candidate(cand, search_fn=None):
+def _jira_text(value):
+    """Flatten a Jira text field (plain string or ADF document) to text.
+
+    Inline leaves (text runs split by formatting marks, mentions, links) are
+    joined without a separator so a token split across marks stays whole;
+    block nodes are joined by newlines.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "\n".join(_jira_text(item) for item in value)
+    if not isinstance(value, dict):
+        return ""
+    if value.get("type") == "hardBreak":
+        return "\n"
+    children = value.get("content")
+    if not isinstance(children, list) or not children:
+        if isinstance(value.get("text"), str):
+            return value["text"]
+        attrs = value.get("attrs") if isinstance(value.get("attrs"), dict) else {}
+        leaf = attrs.get("text") or attrs.get("url")
+        return leaf if isinstance(leaf, str) else ""
+    inline = all(isinstance(child, dict) and not child.get("content")
+                 for child in children)
+    return ("" if inline else "\n").join(_jira_text(child) for child in children)
+
+
+_STRUCTURED_TERM_RE = re.compile(r"[-_.]")
+
+
+def required_context_terms(context_terms):
+    """Return the context terms a closed bug must contain.
+
+    These are the two most specific context terms. When neither of them is a
+    structured identifier (a file, script, target, image or component name
+    joined by '-', '_' or '.') but the failure names one, the most specific
+    identifier is required too, so the same symptom on a different build path
+    does not match. Retrieval and local verification use the same terms, so
+    an acceptable hit cannot fall off the search result page. Returns [] when
+    fewer than two context terms exist.
+    """
+    if len(context_terms) < 2:
+        return []
+    required = list(context_terms[:2])
+    if not any(_STRUCTURED_TERM_RE.search(term) for term in required):
+        structured = [t for t in context_terms if _STRUCTURED_TERM_RE.search(t)]
+        required.extend(structured[:1])
+    return required
+
+
+def match_closed_issue_context(issue, context_terms, ignored_terms=()):
+    """Return match evidence when a closed hit shares the failure context.
+
+    Jira text search matches stemmed fragments anywhere in an issue,
+    including comments, so a retrieved closed bug is not evidence on its own.
+    The hit is re-checked against its summary and description: every
+    required_context_terms() term must occur there as a whole token.
+    Version-like tokens are never context terms (see extract_context_terms).
+    Returns None when the hit fails the check or lacks the fields to make it;
+    otherwise {matched_terms, matched_fields, ignored_terms}.
+    """
+    required = required_context_terms(context_terms)
+    if not required:
+        return None
+    fields = issue.get("fields") or {}
+    field_tokens = {
+        "summary": tokenize(_jira_text(fields.get("summary"))),
+        "description": tokenize(_jira_text(fields.get("description"))),
+    }
+    issue_tokens = field_tokens["summary"] | field_tokens["description"]
+    if not all(term in issue_tokens for term in required):
+        return None
+    matched = [term for term in context_terms if term in issue_tokens]
+    return {
+        "matched_terms": matched,
+        "matched_fields": [name for name, tokens in field_tokens.items()
+                           if tokens.intersection(matched)],
+        "ignored_terms": list(ignored_terms),
+    }
+
+
+def _resolve_search_fns(search_fn=None, search_all_fn=None):
+    """Return (search_fn, search_all_fn), defaulting to the Jira client.
+
+    search_fn returns one bounded page (open-bug duplicate queries);
+    search_all_fn returns a complete paginated result (closed-bug matches and
+    the open-bug inventory). The production default, jira_search.search_all,
+    is bounded (page_size 50, max_pages 200, max_issues 10000) and raises
+    JiraSearchError when a result is incomplete or exceeds a bound, so an
+    incomplete search is never presented as complete. Only a caller that
+    injects search_fn alone (a test harness) gets a single-page stand-in.
+    """
+    if search_all_fn is None:
+        if search_fn is None:
+            search_all_fn = jira_search.search_all
+        else:
+            injected = search_fn
+
+            def single_page(jql, fields):
+                return injected(jql, fields=fields, max_results=50)
+
+            search_all_fn = single_page
+    if search_fn is None:
+        search_fn = jira_search.search
+    return search_fn, search_all_fn
+
+
+def find_jira_bugs_for_candidate(cand, search_fn=None, search_all_fn=None):
     """Search Jira for bugs matching one candidate's keywords and test IDs.
 
     Returns {duplicates: [...], regressions: [...]}.
-    Uses injectable search_fn for testability (defaults to jira_search.search).
+    Uses injectable search_fn/search_all_fn for testability (see
+    _resolve_search_fns for the production defaults).
     """
-    if search_fn is None:
-        search_fn = jira_search.search
+    search_fn, search_all_fn = _resolve_search_fns(search_fn, search_all_fn)
 
     error_signature = cand.get("error_signature", "")
     test_ids = extract_test_ids(error_signature)
@@ -268,19 +425,6 @@ def find_jira_bugs_for_candidate(cand, search_fn=None):
                 record(open_hits, iss, "bare_ids", tid)
                 record(open_hits, iss, "keywords", kw)
 
-    # Find closed bugs by keyword (top 2 keywords) → potential regressions.
-    # Acceptance requires compound evidence (a hit on both keywords), so query
-    # the conjunction directly — a regression cannot be lost to single-keyword
-    # page truncation. With fewer than 2 keywords no closed bug can be
-    # accepted, so no query is needed.
-    closed_hits = {}
-    if len(keywords) >= 2:
-        jql = build_search_jql_closed_match_keywords(keywords[:2])
-        issues = search_fn(jql, fields="summary,status,assignee,updated", max_results=50)
-        for iss in issues:
-            record(closed_hits, iss, "keywords", keywords[0])
-            record(closed_hits, iss, "keywords", keywords[1])
-
     def accepted(hits):
         result = []
         for key in sorted(hits):
@@ -292,8 +436,41 @@ def find_jira_bugs_for_candidate(cand, search_fn=None):
 
     return {
         "duplicates": accepted(open_hits),
-        "regressions": accepted(closed_hits),
+        "regressions": _find_closed_context_matches(error_signature, search_all_fn),
     }
+
+
+def _find_closed_context_matches(error_signature, search_all_fn):
+    """Return closed bugs that share the candidate's failure context.
+
+    Retrieval ANDs the required context terms (see required_context_terms);
+    version-like tokens are excluded because they match unrelated bugs that
+    merely mention the same version. Every hit is then verified by
+    match_closed_issue_context and kept with its match_evidence, which the
+    merge, categorize and report stages carry through. Without two context
+    terms nothing can be verified, so no query is made.
+
+    Every result page is read (search_all_fn): the local check can reject
+    the most recently updated hits and keep a later one. A pagination
+    failure or an exceeded bound propagates as JiraSearchError.
+    """
+    context_terms, ignored_terms = extract_context_terms(error_signature)
+    required = required_context_terms(context_terms)
+    if not required:
+        return []
+    jql = build_search_jql_closed_match_keywords(required)
+    issues = search_all_fn(jql, fields="summary,status,assignee,updated,description")
+    matches = {}
+    for issue in issues:
+        key = issue.get("key")
+        if not key or key in matches:
+            continue
+        evidence = match_closed_issue_context(issue, context_terms, ignored_terms)
+        if evidence is not None:
+            entry = _convert_jira_issue_to_entry(issue)
+            entry["match_evidence"] = evidence
+            matches[key] = entry
+    return [matches[key] for key in sorted(matches)]
 
 
 def find_jira_bugs_for_source(candidates_data, search_fn=None,
@@ -304,22 +481,15 @@ def find_jira_bugs_for_source(candidates_data, search_fn=None,
     Each candidate gets {error_signature, severity, failure_type, step_name,
     affected_jobs, duplicates, regressions}.
     """
-    injected_search = search_fn is not None
-    if search_fn is None:
-        search_fn = jira_search.search
-    if search_all_fn is None:
-        if injected_search:
-            search_all_fn = lambda jql, fields: search_fn(
-                jql, fields=fields, max_results=50)
-        else:
-            search_all_fn = jira_search.search_all
+    search_fn, search_all_fn = _resolve_search_fns(search_fn, search_all_fn)
 
     source = candidates_data.get("source", "")
     candidates = candidates_data.get("candidates", [])
 
     result_candidates = []
     for cand in candidates:
-        search_result = find_jira_bugs_for_candidate(cand, search_fn=search_fn)
+        search_result = find_jira_bugs_for_candidate(
+            cand, search_fn=search_fn, search_all_fn=search_all_fn)
         result_candidates.append({
             "error_signature": cand.get("error_signature", ""),
             "severity": cand.get("severity"),
@@ -845,6 +1015,9 @@ def merge_candidate_files(filepaths, workdir=None):
 # ---------------------------------------------------------------------------
 
 VALID_ACTIONS = {"suggest", "skip", "linked"}
+# categorize_candidate no longer emits stale_regression (a closed bug's
+# 'updated' date is not proof its fix was in the tested code); it stays valid
+# so results files written by earlier versions still render.
 VALID_SKIP_CATEGORIES = {"infrastructure", "stale_regression"}
 JIRA_URL_BASE = "https://redhat.atlassian.net/browse"
 SEPARATOR = "=" * 63
@@ -942,6 +1115,19 @@ def _format_jira_refs(label, refs):
     return f"{label}: {', '.join(parts)}"
 
 
+def _format_closed_refs(refs):
+    """Format the closed-bug line with each match's failure-context evidence."""
+    label = "Possibly Related Closed Bugs (fix inclusion unverified)"
+    if not refs:
+        return f"{label}: None"
+    parts = []
+    for ref in refs:
+        terms = (ref.get("match_evidence") or {}).get("matched_terms") or []
+        detail = f"matched: {', '.join(terms)}" if terms else "match evidence unavailable"
+        parts.append(f"{ref['key']} [{ref.get('status', 'Unknown')}] ({detail})")
+    return f"{label}: {'; '.join(parts)}"
+
+
 def _format_grouped_with(merged_signatures):
     """Format 'Grouped with:' block."""
     if not merged_signatures:
@@ -991,6 +1177,10 @@ def format_report(candidates_data, results_data):
 
     result_lookup = {r["error_signature"]: r for r in results}
     counters = _compute_summary_counters(results)
+    n_possibly_related = sum(
+        1 for cand in candidates
+        if cand.get("regressions")
+        and result_lookup[cand["error_signature"]]["action"] == "suggest")
     n_unique = len(candidates)
     n_total = candidates_data["total_candidates"]
     n_sources = len(sources)
@@ -1028,7 +1218,7 @@ def format_report(candidates_data, results_data):
             lines.append(grouped)
 
         lines.append(f"     {_format_jira_refs('Potential Duplicates', cand.get('duplicates', []))}")
-        lines.append(f"     {_format_jira_refs('Potential Regressions', cand.get('regressions', []))}")
+        lines.append(f"     {_format_closed_refs(cand.get('regressions', []))}")
 
         jobs_block = _format_jobs(cand.get("jobs", []))
         if jobs_block:
@@ -1045,10 +1235,13 @@ def format_report(candidates_data, results_data):
         f"  Sources processed: {n_sources}",
         f"  Unique failures: {n_unique} (from {n_total} total candidates)",
         f"  Suggest filing: {counters['suggest']}",
+        f"    Possibly related to closed bugs: {n_possibly_related}",
         f"  Linked to existing: {counters['linked']}",
         f"  Skipped (infrastructure): {counters['skip_infrastructure']}",
-        f"  Skipped (stale regression): {counters['skip_stale_regression']}",
     ])
+    if counters["skip_stale_regression"]:
+        lines.append(
+            f"  Skipped (stale regression): {counters['skip_stale_regression']}")
 
     return "\n".join(lines)
 
@@ -1097,30 +1290,18 @@ def main_report(report_file, candidates_file, workdir):
 # Categorization (deterministic decision policy)
 # ---------------------------------------------------------------------------
 #
-# The suggest/linked/skip decision — including whether a failure is a
-# regression of a closed Jira bug — is deterministic. This module is the source of truth for the decision policy: the rules and
+# The suggest/linked/skip decision — including how a failure that matches a
+# closed Jira bug is reported — is deterministic. This module is the source
+# of truth for the decision policy: the rules and
 # reason strings in categorize_candidate() below are enforced by
 # scripts/tests/test_search_bugs.py. The decisions are consumed by the
 # --report text stage (bug-search-*.txt), by downstream skills reading
 # bug-results-*.json, and by the HTML report (plugins/shared
-# create-report.py), which renders each decision next to the failure and
-# offers the Create Bug button only for suggest decisions.
+# create-report.py), which renders each decision next to the failure. The
+# report's manual Create Bug button does not depend on the decision.
 
 REASON_INFRASTRUCTURE = "Infrastructure failure — not a product bug"
-REASON_NO_BUGS = "No existing bugs found — suggest filing a new bug"
-
-
-def _most_recent_regression(regressions):
-    """Return the regression with the most recent 'updated' date.
-
-    'updated' values are ISO 'YYYY-MM-DD' strings, so a lexicographic max is
-    chronological. A missing/empty 'updated' sorts lowest, so a regression
-    carrying a real date is always preferred when one exists. Returns None
-    for an empty list.
-    """
-    if not regressions:
-        return None
-    return max(regressions, key=lambda r: r.get("updated") or "")
+REASON_NO_BUGS = "No matching existing bugs found — suggest filing a new bug"
 
 
 def categorize_candidate(candidate):
@@ -1130,13 +1311,15 @@ def categorize_candidate(candidate):
 
       1. infrastructure failure                 -> skip / infrastructure
       2. open duplicates                        -> linked (first duplicate)
-      3. closed regressions, no open duplicates -> compare job finish dates
-         against the most recently fixed regression:
-           - any job finished after that fix    -> suggest
-           - all jobs on/before that fix        -> skip / stale_regression
-           - indeterminate dates (undated or unlisted jobs)
-                                                -> suggest (never hide a regression)
-      4. no duplicates, no regressions          -> suggest
+      3. closed bugs matching the failure context, no open duplicates
+                                                -> suggest, reported as
+         possibly related for a human to review. The match is a text
+         heuristic, not a root-cause finding, and Jira data cannot show
+         whether a closed bug's fix was in the code a job tested ('updated'
+         moves on any edit), so the match is neither confirmed as a
+         regression nor used to skip the failure as stale, whatever the job
+         finish dates.
+      4. no duplicates, no closed matches       -> suggest
 
     Returns {action, jira_key, skip_category, reason}. Missing
     duplicates/regressions keys are treated as empty (they are omitted from
@@ -1145,8 +1328,6 @@ def categorize_candidate(candidate):
     failure_type = candidate.get("failure_type", "test")
     duplicates = candidate.get("duplicates") or []
     regressions = candidate.get("regressions") or []
-    jobs = candidate.get("jobs") or []
-    finished = [j.get("finished") for j in jobs if j.get("finished")]
 
     # Rule 1: infrastructure failures are transient CI/cloud issues, not bugs.
     if failure_type == "infrastructure":
@@ -1167,34 +1348,20 @@ def categorize_candidate(candidate):
             "reason": f"Linked to existing bug {key}",
         }
 
-    # Rule 3: a previously-closed bug covered this signature.
+    # Rule 3: closed bugs share the failure context (match_evidence), but
+    # whether their fixes were in the tested code is unknown. Entries from
+    # bug-matches files written before the context check carry no
+    # match_evidence; they get the same label and the reports show
+    # "match evidence unavailable".
     if regressions:
-        ref = _most_recent_regression(regressions)
-        ref_updated = ref.get("updated") or ""
-        ref_key = ref.get("key", "")
-        # If we cannot establish that every failure predates the fix, treat it
-        # as a potential regression rather than silently skipping. 'finished'
-        # above excludes undated jobs, so detect them against the original
-        # jobs list: a job with an unknown finish date must not be assumed to
-        # predate the fix.
-        missing_dates = any(not j.get("finished") for j in jobs)
-        # Jobs counted in affected_jobs but not listed (merged from post-Jira
-        # bug-matches inputs, which carry no jobs) have unknown dates too.
-        unlisted_jobs = (candidate.get("affected_jobs") or 0) > len(jobs)
-        indeterminate = (not ref_updated or not jobs or missing_dates
-                         or unlisted_jobs)
-        if indeterminate or any(f > ref_updated for f in finished):
-            return {
-                "action": "suggest",
-                "jira_key": "",
-                "skip_category": "",
-                "reason": f"Potential regression of {ref_key} — suggest filing a new bug",
-            }
+        keys = sorted({r.get("key", "") for r in regressions} - {""})
         return {
-            "action": "skip",
+            "action": "suggest",
             "jira_key": "",
-            "skip_category": "stale_regression",
-            "reason": f"Stale failure predating fix for {ref_key} (updated {ref_updated})",
+            "skip_category": "",
+            "reason": (f"Possibly related to closed {', '.join(keys) or 'bug'}; "
+                       "fix inclusion in the tested code is not established "
+                       "— review before filing a new bug"),
         }
 
     # Rule 4: nothing found — draft a new-bug suggestion.
@@ -1284,8 +1451,7 @@ def main_categorize(candidates_file, output_file, workdir):
     print(f"Written: {output_path}", file=sys.stderr)
     print(
         f"Categorized {n} candidates: {counters['suggest']} suggest, "
-        f"{counters['linked']} linked, {counters['skip_infrastructure']} skip(infra), "
-        f"{counters['skip_stale_regression']} skip(stale)",
+        f"{counters['linked']} linked, {counters['skip_infrastructure']} skip(infra)",
         file=sys.stderr,
     )
     print(json.dumps(results_data, indent=2))

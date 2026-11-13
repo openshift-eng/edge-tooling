@@ -17,9 +17,15 @@ python3 plugins/lvms-ci/scripts/run-doctor.py \
 The `bugs` stage runs `search-bugs.py --component lvm-operator --pipeline`
 (deterministic Jira search + categorization — no LLM). It searches OCPBUGS under
 the "Logical Volume Manager Storage" component for existing duplicates and closed
-regressions, then populates the HTML report's Bugs tab. Bugs are filed manually
-via the prefilled "Create Bug in JIRA" buttons in the report (label
-`lvms-ci-ai-generated`).
+bugs that share the failure context, then populates the HTML report's Bugs tab.
+A closed match must name the failure's distinctive terms in its summary or
+description (version numbers do not count) and is reported as possibly related
+with the matched terms, because Jira cannot show whether its fix was in the
+tested build. Closed bugs read from bug-matches files written before this check
+(for example, artifacts from an earlier run) were not context-verified; they
+show "match evidence unavailable" and must not be treated as verified matches.
+Bugs are filed manually via the prefilled "Create Bug in JIRA" buttons in the
+report (label `lvms-ci-ai-generated`).
 
 Requires `JIRA_USERNAME` and `JIRA_API_TOKEN` environment variables (Jira REST
 API credentials); without them the `bugs` stage fails.

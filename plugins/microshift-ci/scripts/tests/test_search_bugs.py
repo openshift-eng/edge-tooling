@@ -5,14 +5,15 @@ Zero-dependency (stdlib unittest + subprocess + tempfile). Run with:
 
     python3 plugins/microshift-ci/scripts/tests/test_search_bugs.py
 
-The categorization that decides suggest/linked/skip — including whether a CI
-failure is a regression of a closed Jira bug — is deterministic. Each case
+The categorization that decides suggest/linked/skip — including how a CI
+failure that matches a closed Jira bug is reported — is deterministic. Each case
 builds a merged-candidates JSON, runs --categorize as a subprocess, and asserts
 the resulting bug-results-*.json. The script self-checks its output against
 _validate_results, so a passing run (exit 0) also proves the byte contract
 consumed by --report is satisfied.
 """
 
+import contextlib
 import importlib.util
 import io
 import json
@@ -143,110 +144,91 @@ class DecisionPolicyTests(unittest.TestCase):
     def test_no_bugs_suggests(self):
         r = one(_candidate("brand new failure", finished=["2026-09-01"]))
         self.assertEqual(r["action"], "suggest")
+        self.assertEqual(r["reason"],
+                         "No matching existing bugs found — suggest filing a new bug")
         self.assertEqual(r["jira_key"], "")
         self.assertEqual(r["skip_category"], "")
 
-    def test_regression_job_after_fix_suggests(self):
+    # A closed bug matching the failure context is only possibly related:
+    # its 'updated' date moves on any edit and is not proof that its fix was
+    # in the tested code, so job finish dates neither confirm a regression
+    # nor hide the failure as stale.
+
+    def assertPossiblyRelated(self, result, *keys):
+        self.assertEqual(result["action"], "suggest")
+        self.assertEqual(result["jira_key"], "")
+        self.assertEqual(result["skip_category"], "")
+        self.assertIn("Possibly related to closed", result["reason"])
+        self.assertIn("fix inclusion in the tested code is not established",
+                      result["reason"])
+        self.assertIn("review before filing a new bug", result["reason"])
+        self.assertNotIn("regression", result["reason"].lower())
+        for key in keys:
+            self.assertIn(key, result["reason"])
+
+    def test_closed_match_with_job_after_updated_is_not_a_confirmed_regression(self):
         r = one(_candidate(
             "gitops mismatch",
-            regressions=[{"key": "USHIFT-6786", "updated": "2026-04-09"}],
+            regressions=[{"key": "SYNTH-101", "updated": "2026-04-09"}],
             finished=["2026-08-18"],
         ))
-        self.assertEqual(r["action"], "suggest")
-        self.assertIn("USHIFT-6786", r["reason"])
-        self.assertIn("Potential regression", r["reason"])
+        self.assertPossiblyRelated(r, "SYNTH-101")
 
-    def test_regression_all_jobs_before_fix_is_stale(self):
+    def test_closed_match_updated_after_failure_is_not_skipped_as_stale(self):
+        """A closed bug edited after the failure (comment, label, triage) says
+        nothing about when its fix landed, so the failure stays visible."""
         r = one(_candidate(
             "old failure",
-            regressions=[{"key": "USHIFT-500", "updated": "2026-08-01"}],
-            finished=["2026-07-01", "2026-08-01"],  # on/before fix
+            regressions=[{"key": "SYNTH-102", "updated": "2026-08-01"}],
+            finished=["2026-07-01", "2026-08-01"],
         ))
-        self.assertEqual(r["action"], "skip")
-        self.assertEqual(r["skip_category"], "stale_regression")
-        self.assertIn("USHIFT-500", r["reason"])
-        self.assertIn("2026-08-01", r["reason"])
+        self.assertPossiblyRelated(r, "SYNTH-102")
+        self.assertNotIn("2026-08-01", r["reason"])
 
-    def test_regression_with_unlisted_jobs_is_indeterminate_suggest(self):
-        """affected_jobs counts jobs that a merge with post-Jira bug-matches
-        inputs (affected_jobs, no jobs) could not list; their finish dates
-        are unknown, so the listed jobs alone must not mark it stale."""
-        cand = _candidate(
-            "old failure",
-            regressions=[{"key": "USHIFT-500", "updated": "2026-08-01"}],
-            finished=["2026-07-01"],  # the only listed job predates the fix
-        )
-        cand["affected_jobs"] = 3
-        r = one(cand)
-        self.assertEqual(r["action"], "suggest")
-        self.assertEqual(r["skip_category"], "")
-        self.assertIn("Potential regression of USHIFT-500", r["reason"])
+    def test_closed_match_is_not_skipped_for_any_affected_jobs(self):
+        """affected_jobs can count jobs that a merge with post-Jira bug-matches
+        inputs (affected_jobs, no jobs) could not list. Whether it is missing,
+        lower, equal or higher than the listed jobs, listed jobs finished
+        on or before 'updated' neither hide the closed match as stale nor
+        make it a regression."""
+        for finished in (["2026-07-01"], ["2026-07-01", "2026-08-01"]):
+            for affected in (None, 0, 1, 2, 3):
+                with self.subTest(finished=finished, affected_jobs=affected):
+                    cand = _candidate(
+                        "old failure",
+                        regressions=[{"key": "SYNTH-500", "updated": "2026-08-01"}],
+                        finished=finished,
+                    )
+                    if affected is None:
+                        del cand["affected_jobs"]
+                    else:
+                        cand["affected_jobs"] = affected
+                    self.assertPossiblyRelated(one(cand), "SYNTH-500")
 
-    def test_regression_without_unlisted_jobs_stays_stale(self):
-        """Only a count above the listed jobs is indeterminate; a missing,
-        equal or lower affected_jobs keeps the dated-jobs decision."""
-        for affected in (None, 0, 1, 2):
-            with self.subTest(affected_jobs=affected):
-                cand = _candidate(
-                    "old failure",
-                    regressions=[{"key": "USHIFT-500", "updated": "2026-08-01"}],
-                    finished=["2026-07-01", "2026-08-01"],
-                )
-                if affected is None:
-                    del cand["affected_jobs"]
-                else:
-                    cand["affected_jobs"] = affected
-                r = one(cand)
-                self.assertEqual(r["skip_category"], "stale_regression")
-
-    def test_multiple_regressions_use_most_recent_fix(self):
-        """The reference fix is the regression with the latest 'updated' date."""
+    def test_multiple_closed_matches_are_all_named_in_key_order(self):
         regs = [
-            {"key": "USHIFT-OLD", "updated": "2026-03-01"},
-            {"key": "USHIFT-NEW", "updated": "2026-08-15"},
+            {"key": "SYNTH-202", "updated": "2026-08-15"},
+            {"key": "SYNTH-201", "updated": "2026-03-01"},
         ]
-        # Job after old fix but before new fix -> stale relative to newest.
-        r = one(_candidate("multi", regressions=regs, finished=["2026-06-01"]))
-        self.assertEqual(r["action"], "skip")
-        self.assertEqual(r["skip_category"], "stale_regression")
-        self.assertIn("USHIFT-NEW", r["reason"])  # newest key referenced
-        self.assertNotIn("USHIFT-OLD", r["reason"])
+        for finished in (["2026-06-01"], ["2026-09-01"]):
+            with self.subTest(finished=finished):
+                r = one(_candidate("multi", regressions=regs, finished=finished))
+                self.assertPossiblyRelated(r, "SYNTH-201", "SYNTH-202")
+                self.assertLess(r["reason"].index("SYNTH-201"),
+                                r["reason"].index("SYNTH-202"))
 
-        # Job after the newest fix -> suggest, referencing the newest key.
-        r2 = one(_candidate("multi", regressions=regs, finished=["2026-09-01"]))
-        self.assertEqual(r2["action"], "suggest")
-        self.assertIn("USHIFT-NEW", r2["reason"])
-
-    def test_regression_missing_updated_is_indeterminate_suggest(self):
-        r = one(_candidate(
-            "no date",
-            regressions=[{"key": "USHIFT-700"}],  # no 'updated'
-            finished=["2026-09-01"],
-        ))
-        self.assertEqual(r["action"], "suggest")
-        self.assertIn("USHIFT-700", r["reason"])
-
-    def test_regression_no_finished_dates_is_indeterminate_suggest(self):
-        r = one(_candidate(
-            "no jobs finished",
-            regressions=[{"key": "USHIFT-800", "updated": "2026-08-01"}],
-            finished=[],  # no comparable job dates
-        ))
-        self.assertEqual(r["action"], "suggest")
-        self.assertIn("USHIFT-800", r["reason"])
-
-    def test_regression_partial_missing_finished_dates_is_indeterminate_suggest(self):
-        """A job with an unknown finish date cannot be shown to predate the
-        fix, so a mixed dated/undated candidate must not be skipped as stale."""
-        r = one(_candidate(
-            "mixed dates",
-            regressions=[{"key": "USHIFT-900", "updated": "2026-08-01"}],
-            finished=["2026-07-01", ""],  # one dated before fix, one unknown
-        ))
-        self.assertEqual(r["action"], "suggest")
-        self.assertEqual(r["skip_category"], "")
-        self.assertIn("USHIFT-900", r["reason"])
-        self.assertIn("Potential regression", r["reason"])
+    def test_closed_match_with_missing_metadata_is_possibly_related(self):
+        """Missing 'updated', match_evidence or finish dates change nothing."""
+        cases = [
+            ([{"key": "SYNTH-301"}], ["2026-09-01"]),
+            ([{"key": "SYNTH-302", "updated": "2026-08-01"}], []),
+            ([{"key": "SYNTH-303", "updated": "2026-08-01"}], ["2026-07-01", ""]),
+        ]
+        for regs, finished in cases:
+            with self.subTest(key=regs[0]["key"]):
+                r = one(_candidate("missing metadata", regressions=regs,
+                                   finished=finished))
+                self.assertPossiblyRelated(r, regs[0]["key"])
 
     def test_one_result_per_candidate_and_signatures_match(self):
         cands = [
@@ -350,10 +332,11 @@ class JiraSearchTests(unittest.TestCase):
                                                       "assignee": None, "updated": "2026-08-01T00:00:00Z"}},  # dup
                 ]
             else:  # closed bugs (C)
+                # Closed hits must share the failure context to be kept.
                 return [
-                    {"key": "USHIFT-200", "fields": {"summary": "Bug 200", "status": {"name": "Closed"},
+                    {"key": "USHIFT-200", "fields": {"summary": "greenboot timeout on boot", "status": {"name": "Closed"},
                                                       "assignee": None, "updated": "2026-07-01T00:00:00Z"}},
-                    {"key": "USHIFT-200", "fields": {"summary": "Bug 200", "status": {"name": "Closed"},
+                    {"key": "USHIFT-200", "fields": {"summary": "greenboot timeout on boot", "status": {"name": "Closed"},
                                                       "assignee": None, "updated": "2026-07-01T00:00:00Z"}},  # dup
                 ]
 
@@ -526,6 +509,445 @@ class JiraSearchTests(unittest.TestCase):
         with self.assertRaises(_search_bugs.jira_search.JiraSearchError):
             _search_bugs.find_jira_bugs_for_candidate(
                 {"error_signature": "test fails"}, search_fn=failed_search)
+
+
+def _closed_issue(key, summary, description=None, status="Closed",
+                  updated="2026-08-01T00:00:00Z"):
+    """Build a Jira API issue as returned by the closed-bug search."""
+    fields = {"summary": summary, "status": {"name": status},
+              "assignee": None, "updated": updated}
+    if description is not None:
+        fields["description"] = description
+    return {"key": key, "fields": fields}
+
+
+def _adf(text):
+    """Wrap text in a minimal Atlassian Document Format code block."""
+    return {"type": "doc", "version": 1, "content": [
+        {"type": "codeBlock", "content": [{"type": "text", "text": text}]}]}
+
+
+class ClosedMatchContextTests(unittest.TestCase):
+    """Closed Jira hits must share the failure context before being kept.
+
+    Each fake search returns its closed issue for every closed-bug query,
+    standing in for Jira's broad stemmed text search, so the local
+    failure-context check is what decides acceptance.
+    """
+
+    BUILD_PATH_SIG = "toolchain download timed out in tools/pkg-build/build-rpm.sh"
+
+    @staticmethod
+    def closed_search(*issues, queries=None):
+        def fake_search(jql, **kwargs):
+            if queries is not None:
+                queries.append((jql, kwargs.get("fields", "")))
+            return list(issues) if "status in (Closed, Verified)" in jql else []
+        return fake_search
+
+    def find(self, signature, *issues, queries=None):
+        return _search_bugs.find_jira_bugs_for_candidate(
+            {"error_signature": signature},
+            search_fn=self.closed_search(*issues, queries=queries))
+
+    def test_version_like_tokens(self):
+        for token in ("1.2.3", "go9.87.6", "rhel-10.2", "release-4.18",
+                      "4.18.0-rc.1", "x86_64", "68256", "ocp-68256", "v2",
+                      "base-9-tool-9.87-dist-1.2", "component-1.31",
+                      # short names are indistinguishable from "go1"/"el9"
+                      "ipv6", "x509", "k8s"):
+            with self.subTest(token=token):
+                self.assertTrue(_search_bugs.is_version_like(token))
+        for token in ("toolchain", "build-rpm.sh", "pkg-build",
+                      "kube-apiserver", "v1beta1", "3-node", "go.mod"):
+            with self.subTest(token=token):
+                self.assertFalse(_search_bugs.is_version_like(token))
+
+    def test_context_terms_exclude_version_tokens(self):
+        sig = "toolchain mismatch: go9.87.6 builder requires 9.87.6 on rhel-10.2"
+        # Keyword ranking favours punctuated/numeric tokens ...
+        self.assertTrue(all(_search_bugs.is_version_like(kw)
+                            for kw in _search_bugs.extract_keywords(sig)[:2]))
+        # ... so context terms leave them out.
+        context, ignored = _search_bugs.extract_context_terms(sig)
+        self.assertEqual(context, ["toolchain", "mismatch", "requires", "builder"])
+        self.assertEqual(ignored, ["rhel-10.2", "go9.87.6", "9.87.6"])
+
+    def test_context_terms_drop_dotted_abbreviations(self):
+        context, _ = _search_bugs.extract_context_terms(
+            "toolchain download timed out, e.g. in build-rpm.sh")
+        self.assertNotIn("e.g", context)
+        self.assertEqual(context[0], "build-rpm.sh")
+
+    def test_required_context_terms(self):
+        required = _search_bugs.required_context_terms
+        self.assertEqual(required([]), [])
+        self.assertEqual(required(["toolchain"]), [])
+        self.assertEqual(required(["toolchain", "download", "timed"]),
+                         ["toolchain", "download"])
+        self.assertEqual(required(["build-rpm.sh", "toolchain", "run_x"]),
+                         ["build-rpm.sh", "toolchain"])
+        # A structured identifier outside the top two is required as well,
+        # and therefore also part of the retrieval query.
+        self.assertEqual(
+            required(["toolchain", "download", "run_x", "build-rpm.sh"]),
+            ["toolchain", "download", "run_x"])
+
+    def test_jira_text_flattens_adf(self):
+        text = _search_bugs._jira_text
+        doc = {"type": "doc", "version": 1, "content": [
+            {"type": "paragraph", "content": [
+                {"type": "text", "text": "failed in tools/pkg-"},
+                {"type": "text", "text": "build/build-",
+                 "marks": [{"type": "strong"}]},
+                {"type": "text", "text": "rpm.sh"}]},
+            {"type": "bulletList", "content": [
+                {"type": "listItem", "content": [
+                    {"type": "paragraph", "content": [
+                        {"type": "text", "text": "toolchain"},
+                        {"type": "hardBreak"},
+                        {"type": "inlineCard",
+                         "attrs": {"url": "https://example.test/img-build"}},
+                        {"type": "text", "text": " download"}]}]}]},
+            {"type": "rule"},
+            {"type": "paragraph"},
+            {"type": "text", "text": 5},
+        ]}
+        tokens = _search_bugs.tokenize(text(doc))
+        for token in ("pkg-build", "build-rpm.sh", "toolchain", "img-build",
+                      "download"):
+            self.assertIn(token, tokens)
+        self.assertNotIn("build", tokens)  # a mark boundary does not split
+        self.assertEqual(text("plain description"), "plain description")
+        self.assertEqual(text(["a", {"type": "text", "text": "b"}]), "a\nb")
+        for empty in (None, 5, {}, {"type": "text", "text": 5},
+                      {"type": "mention", "attrs": None}):
+            with self.subTest(value=empty):
+                self.assertEqual(text(empty), "")
+
+    def test_mixed_result_page_keeps_only_contextual_hits_in_key_order(self):
+        genuine = "toolchain download timed out in tools/pkg-build/build-rpm.sh"
+        issues = [
+            _closed_issue("SYNTH-23", genuine),
+            _closed_issue("SYNTH-22", "toolchain download timed out",
+                          "Seen in tools/img-build/build-iso.sh only."),
+            _closed_issue("SYNTH-21", "build-rpm.sh in pkg-build", genuine),
+            _closed_issue("SYNTH-23", genuine),
+        ]
+        result = self.find(self.BUILD_PATH_SIG, *issues)
+        self.assertEqual([r["key"] for r in result["regressions"]],
+                         ["SYNTH-21", "SYNTH-23"])
+
+    def test_versioned_name_in_signature_is_not_context(self):
+        unrelated = _closed_issue(
+            "SYNTH-9", "Bump builder to base-9-tool-9.87-dist-1.2",
+            "Pull it from registry.example.test.")
+        result = self.find(
+            "version mismatch: registry.example.test/builder:"
+            "base-9-tool-9.87-dist-1.2 requires go9.87.6", unrelated)
+        self.assertEqual(result["regressions"], [])
+
+    def test_numeric_only_unrelated_closed_hit_is_rejected(self):
+        queries = []
+        unrelated = _closed_issue(
+            "SYNTH-1", "Rebuild images with go9.87.6 on rhel-10.2",
+            "Pin 9.87.6 in every builder image.")
+        result = self.find(
+            "toolchain mismatch: go9.87.6 builder requires 9.87.6 on rhel-10.2",
+            unrelated, queries=queries)
+        self.assertEqual(result["regressions"], [])
+        closed = [(jql, fields) for jql, fields in queries
+                  if "status in (Closed, Verified)" in jql]
+        self.assertEqual(len(closed), 1)
+        jql, fields = closed[0]
+        self.assertIn('text ~ "toolchain" AND text ~ "mismatch"', jql)
+        for version in ("9.87.6", "rhel-10.2"):
+            self.assertNotIn(version, jql)
+        self.assertIn("description", fields.split(","))
+
+    def test_same_symptom_on_different_build_path_is_rejected(self):
+        other_path = _closed_issue(
+            "SYNTH-2", "toolchain download timed out",
+            "Seen in tools/img-build/build-iso.sh only.")
+        self.assertEqual(
+            self.find(self.BUILD_PATH_SIG, other_path)["regressions"], [])
+
+        # A structured identifier must match even when the two most specific
+        # terms are plain words.
+        terms = ["toolchain", "download", "build-rpm.sh"]
+        self.assertIsNone(_search_bugs.match_closed_issue_context(
+            other_path, terms))
+        same_path = _closed_issue(
+            "SYNTH-3", "toolchain download timed out", "Seen in build-rpm.sh.")
+        self.assertIsNotNone(_search_bugs.match_closed_issue_context(
+            same_path, terms))
+
+    def test_genuine_contextual_match_is_kept_with_evidence(self):
+        queries = []
+        genuine = _closed_issue(
+            "SYNTH-4", "toolchain download timed out",
+            _adf("tools/pkg-build/build-rpm.sh: toolchain download timed out "
+                 "(go9.87.6)"),
+            status="Verified")
+        result = self.find(self.BUILD_PATH_SIG + " with go9.87.6", genuine,
+                           queries=queries)
+        self.assertEqual(len(result["regressions"]), 1)
+        entry = result["regressions"][0]
+        self.assertEqual(entry["key"], "SYNTH-4")
+        self.assertEqual(entry["status"], "Verified")
+        self.assertEqual(entry["match_evidence"], {
+            "matched_terms": ["build-rpm.sh", "pkg-build", "toolchain",
+                              "download", "timed", "tools", "out"],
+            "matched_fields": ["summary", "description"],
+            "ignored_terms": ["go9.87.6"],
+        })
+        closed_jql = [jql for jql, _ in queries
+                      if "status in (Closed, Verified)" in jql]
+        self.assertEqual(len(closed_jql), 1)
+        self.assertIn('text ~ "build-rpm.sh" AND text ~ "pkg-build"',
+                      closed_jql[0])
+
+    def test_closed_hit_with_missing_metadata_is_rejected(self):
+        for issue in ({"key": "SYNTH-5"},
+                      {"key": "SYNTH-6", "fields": None},
+                      {"key": "SYNTH-7", "fields": {"summary": None,
+                                                     "description": None}},
+                      {"fields": {"summary": self.BUILD_PATH_SIG}}):
+            with self.subTest(issue=issue):
+                self.assertEqual(
+                    self.find(self.BUILD_PATH_SIG, issue)["regressions"], [])
+
+    def test_signature_without_two_context_terms_skips_closed_search(self):
+        hit = _closed_issue("SYNTH-8", "anything 9.87.6")
+        for sig in ("", "9.87.6 go9.87.6 rhel-10.2", "toolchain 9.87.6"):
+            with self.subTest(sig=sig):
+                queries = []
+                self.assertEqual(self.find(sig, hit, queries=queries)["regressions"], [])
+                self.assertFalse(any("status in (Closed, Verified)" in jql
+                                     for jql, _ in queries))
+
+
+class ClosedSearchPaginationTests(unittest.TestCase):
+    """Closed-bug matches read every result page and fail closed."""
+
+    SIG = "toolchain download timed out in tools/pkg-build/build-rpm.sh"
+
+    @staticmethod
+    def filler(count):
+        return [_closed_issue(f"SYNTH-{1000 + i}", f"unrelated closed bug {i}")
+                for i in range(count)]
+
+    @staticmethod
+    def qualifying():
+        return _closed_issue(
+            "SYNTH-51", "toolchain download timed out",
+            _adf("tools/pkg-build/build-rpm.sh: toolchain download timed out"))
+
+    def test_production_defaults_use_paginated_search(self):
+        search_fn, search_all_fn = _search_bugs._resolve_search_fns()
+        self.assertIs(search_fn, _search_bugs.jira_search.search)
+        self.assertIs(search_all_fn, _search_bugs.jira_search.search_all)
+
+    def test_qualifying_closed_hit_beyond_first_page_is_kept(self):
+        page_queries, all_queries = [], []
+
+        def search_fn(jql, **kwargs):
+            page_queries.append((jql, kwargs.get("max_results")))
+            return []
+
+        def search_all_fn(jql, fields):
+            all_queries.append((jql, fields))
+            return self.filler(50) + [self.qualifying()]
+
+        result = _search_bugs.find_jira_bugs_for_candidate(
+            {"error_signature": self.SIG}, search_fn=search_fn,
+            search_all_fn=search_all_fn)
+        self.assertEqual([r["key"] for r in result["regressions"]], ["SYNTH-51"])
+        self.assertEqual(len(all_queries), 1)
+        self.assertIn("status in (Closed, Verified)", all_queries[0][0])
+        self.assertIn("description", all_queries[0][1].split(","))
+        # Open-bug duplicate queries stay on bounded single pages.
+        self.assertTrue(page_queries)
+        self.assertFalse(any("status in (Closed, Verified)" in jql
+                             for jql, _ in page_queries))
+        self.assertTrue(all(limit in (5, 50) for _, limit in page_queries))
+
+    def test_closed_search_failure_propagates(self):
+        def search_all_fn(jql, fields):
+            raise _search_bugs.jira_search.JiraSearchError("incomplete result")
+
+        with self.assertRaises(_search_bugs.jira_search.JiraSearchError):
+            _search_bugs.find_jira_bugs_for_candidate(
+                {"error_signature": self.SIG},
+                search_fn=lambda jql, **kwargs: [], search_all_fn=search_all_fn)
+
+    def test_source_search_threads_search_all_to_closed_matches(self):
+        all_queries = []
+
+        def search_all_fn(jql, fields):
+            all_queries.append(jql)
+            if "status in (Closed, Verified)" in jql:
+                return self.filler(50) + [self.qualifying()]
+            return []
+
+        result = _search_bugs.find_jira_bugs_for_source(
+            {"source": "4.22", "candidates": [{"error_signature": self.SIG}]},
+            search_fn=lambda jql, **kwargs: [], include_open_bugs=True,
+            search_all_fn=search_all_fn)
+        self.assertEqual(
+            [r["key"] for r in result["candidates"][0]["regressions"]],
+            ["SYNTH-51"])
+        self.assertEqual(
+            sum("status in (Closed, Verified)" in q for q in all_queries), 1)
+        self.assertEqual(result["open_bugs"], [])
+
+
+class _JiraResponse:
+    def __init__(self, data):
+        self.body = json.dumps(data).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self.body
+
+
+class ClosedSearchCliTests(unittest.TestCase):
+    """--pipeline reads closed matches through the real paginated client.
+
+    Only urlopen is faked: main(), jira_search.search_all and _request run
+    unchanged, so the CLI path and the pagination/error checks are covered.
+    """
+
+    SIG = ClosedSearchPaginationTests.SIG
+
+    def setUp(self):
+        self.addCleanup(_search_bugs.configure_component,
+                        _search_bugs.DEFAULT_COMPONENT)
+        env = mock.patch.dict(os.environ, {"JIRA_USERNAME": "user",
+                                           "JIRA_API_TOKEN": "token"})
+        env.start()
+        self.addCleanup(env.stop)
+        self.requests = []
+
+    def run_pipeline(self, workdir, component, closed_pages):
+        jobs = Path(workdir) / "jobs"
+        jobs.mkdir()
+        (jobs / "release-4.22-job-0-1.json").write_text(json.dumps([{
+            "severity": 3, "stack_layer": "test", "step_name": "build",
+            "error_signature": self.SIG, "root_cause": "rc",
+            "raw_error": self.SIG, "infrastructure_failure": False,
+            "job_url": "https://prow.example/1", "job_name": "periodic-build",
+            "release": "4.22", "remediation": "", "finished": "2026-09-01"}]))
+
+        def urlopen(request, timeout=None):
+            payload = json.loads(request.data)
+            self.requests.append(payload)
+            if "status in (Closed, Verified)" in payload["jql"]:
+                return _JiraResponse(closed_pages[payload.get("nextPageToken")])
+            return _JiraResponse({"issues": [], "isLast": True})
+
+        argv = [str(SCRIPT), "--component", component, "--pipeline", "4.22",
+                "--workdir", workdir]
+        with mock.patch.object(_search_bugs.jira_search.urllib.request,
+                               "urlopen", urlopen), \
+                mock.patch.object(sys, "argv", argv), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            _search_bugs.main()
+
+    def test_pipeline_reads_closed_results_past_first_page(self):
+        pages = {
+            None: {"issues": ClosedSearchPaginationTests.filler(50),
+                   "isLast": False, "nextPageToken": "page-2"},
+            "page-2": {"issues": [ClosedSearchPaginationTests.qualifying()],
+                       "isLast": True},
+        }
+        for component in ("microshift", "lvm-operator"):
+            with self.subTest(component=component), \
+                    tempfile.TemporaryDirectory() as workdir:
+                self.requests = []
+                self.run_pipeline(workdir, component, pages)
+                bugs = Path(workdir) / "bugs"
+                matches = json.loads((bugs / "bug-matches-4.22.json").read_text())
+                regressions = matches["candidates"][0]["regressions"]
+                self.assertEqual([r["key"] for r in regressions], ["SYNTH-51"])
+                self.assertIn("match_evidence", regressions[0])
+                closed = [r for r in self.requests
+                          if "status in (Closed, Verified)" in r["jql"]]
+                self.assertEqual([r.get("nextPageToken") for r in closed],
+                                 [None, "page-2"])
+                self.assertTrue(all(r["maxResults"] == 50 for r in closed))
+                report = (bugs / "bug-search-4.22.txt").read_text()
+                self.assertIn("SYNTH-51 [Closed] (matched:", report)
+
+    def test_incomplete_closed_pagination_fails_without_publishing(self):
+        pages = {None: {"issues": [ClosedSearchPaginationTests.qualifying()],
+                        "isLast": False}}
+        with tempfile.TemporaryDirectory() as workdir:
+            with self.assertRaisesRegex(
+                    _search_bugs.jira_search.JiraSearchError, "nextPageToken"):
+                self.run_pipeline(workdir, "microshift", pages)
+            bugs = Path(workdir) / "bugs"
+            self.assertFalse((bugs / "bug-matches-4.22.json").exists())
+            self.assertFalse((bugs / "bug-results-4.22.json").exists())
+
+
+class ClosedMatchReportTests(unittest.TestCase):
+    """match_evidence survives merge, categorize and the text report."""
+
+    SIG = "toolchain download timed out in tools/pkg-build/build-rpm.sh"
+
+    def merged(self, regressions):
+        with tempfile.TemporaryDirectory() as workdir:
+            bugs = Path(workdir) / "bugs"
+            bugs.mkdir()
+            cand = _candidate(self.SIG, finished=["2026-07-01"])
+            (bugs / "bug-candidates-4.22.json").write_text(json.dumps(
+                {"source": "4.22", "candidates": [cand]}))
+            (bugs / "bug-matches-4.22.json").write_text(json.dumps(
+                {"source": "4.22", "candidates": [{
+                    "error_signature": self.SIG, "duplicates": [],
+                    "regressions": regressions}]}))
+            return _search_bugs.merge_candidate_files(
+                [str(bugs / "bug-candidates-4.22.json")], workdir=workdir)
+
+    def test_evidence_reaches_text_report(self):
+        evidence = {"matched_terms": ["build-rpm.sh", "pkg-build", "toolchain"],
+                    "matched_fields": ["description"], "ignored_terms": []}
+        merged = self.merged([
+            {"key": "SYNTH-11", "summary": "s", "status": "Closed",
+             "updated": "2026-08-01", "match_evidence": evidence},
+            {"key": "SYNTH-12", "summary": "legacy", "status": "Verified"},
+        ])
+        regs = {r["key"]: r for r in merged["candidates"][0]["regressions"]}
+        self.assertEqual(regs["SYNTH-11"]["match_evidence"], evidence)
+
+        results = _search_bugs.categorize_candidates(merged)
+        report = _search_bugs.format_report(merged, results)
+        self.assertIn(
+            "Possibly Related Closed Bugs (fix inclusion unverified): "
+            "SYNTH-11 [Closed] (matched: build-rpm.sh, pkg-build, toolchain); "
+            "SYNTH-12 [Verified] (match evidence unavailable)", report)
+        self.assertIn("Decision: Possibly related to closed SYNTH-11, SYNTH-12;",
+                      report)
+        self.assertIn("    Possibly related to closed bugs: 1", report)
+        self.assertNotIn("Potential Regressions", report)
+        self.assertNotIn("Skipped (stale regression)", report)
+
+    def test_legacy_stale_results_still_report(self):
+        merged = self.merged([{"key": "SYNTH-13", "status": "Closed"}])
+        results = {"mode": "search", "date": "2026-09-01", "results": [{
+            "error_signature": self.SIG, "action": "skip", "jira_key": "",
+            "skip_category": "stale_regression", "reason": "legacy decision"}]}
+        _search_bugs._validate_results(results, merged)
+        report = _search_bugs.format_report(merged, results)
+        self.assertIn("  Skipped (stale regression): 1", report)
+        self.assertIn("    Possibly related to closed bugs: 0", report)
 
 
 class JiraMergeTests(unittest.TestCase):
@@ -837,10 +1259,10 @@ class ExactSignatureMergeTests(unittest.TestCase):
                 "deleted files",
             ])
 
-    def test_merge_with_post_jira_matches_does_not_hide_regression(self):
+    def test_merge_with_post_jira_matches_does_not_hide_closed_match(self):
         """--merge accepts bug-matches files, whose candidates carry
         affected_jobs but no jobs. Merged with a dated candidate of the same
-        signature, the unlisted jobs keep a closed regression indeterminate."""
+        signature, the closed match is still suggested, not hidden."""
         with tempfile.TemporaryDirectory() as workdir:
             bugs = Path(workdir) / "bugs"
             bugs.mkdir()
@@ -879,15 +1301,17 @@ class ExactSignatureMergeTests(unittest.TestCase):
             result = json.loads(
                 (bugs / "bug-results-5.1.json").read_text())["results"][0]
             self.assertEqual(result["action"], "suggest")
-            self.assertIn("Potential regression of USHIFT-500",
+            self.assertEqual(result["skip_category"], "")
+            self.assertIn("Possibly related to closed USHIFT-500",
                           result["reason"])
+            self.assertNotIn("regression", result["reason"].lower())
 
-    def test_same_source_post_jira_matches_do_not_hide_regression(self):
+    def test_same_source_post_jira_matches_do_not_hide_closed_match(self):
         """bug-candidates and bug-matches files of the same source: the
         source is aggregated once, so its listed job is not repeated. The
         bug-matches count has no job URLs to match against the listed job,
-        so it stays counted as jobs with unknown dates and keeps the closed
-        regression indeterminate."""
+        so it stays counted as jobs with unknown dates and the closed match
+        is still suggested."""
         with tempfile.TemporaryDirectory() as workdir:
             bugs = Path(workdir) / "bugs"
             bugs.mkdir()
@@ -930,6 +1354,10 @@ class ExactSignatureMergeTests(unittest.TestCase):
             result = json.loads(
                 (bugs / "bug-results-5.1.json").read_text())["results"][0]
             self.assertEqual(result["action"], "suggest")
+            self.assertEqual(result["skip_category"], "")
+            self.assertIn("Possibly related to closed USHIFT-500",
+                          result["reason"])
+            self.assertNotIn("regression", result["reason"].lower())
 
     def test_empty_signature_still_fails_categorize(self):
         with tempfile.TemporaryDirectory() as workdir:
