@@ -529,6 +529,78 @@ def availability(absences, engineer_count, start, end):
     return round(max(0.0, 1 - len(off) / total), 2)
 
 
+# Calendar window read for absences when the caller does not pass one: the
+# window the SKILL documents for calendar reads (21 days back, 42 ahead).
+DEFAULT_ABSENCE_DAYS_BEFORE = 21
+DEFAULT_ABSENCE_DAYS_AFTER = 42
+OUTSIDE_CALENDAR_WINDOW = "not available (outside the calendar window read)"
+
+
+def absence_window(raw, today, warnings):
+    """The calendar window absences were read for, as ``(start, end)`` dates.
+
+    ``raw`` is the optional ``absence_window`` input (``{"start", "end"}``,
+    inclusive). Missing or malformed → the default window around ``today``.
+    """
+    default = (today - dt.timedelta(days=DEFAULT_ABSENCE_DAYS_BEFORE),
+               today + dt.timedelta(days=DEFAULT_ABSENCE_DAYS_AFTER))
+    if not raw:
+        return default
+    start, start_ok = source_date(raw.get("start"))
+    end, end_ok = source_date(raw.get("end"))
+    if not (start_ok and end_ok and start and end) or end < start:
+        warnings.append("ignored absence_window: bad date; using the default window")
+        return default
+    return start, end
+
+
+def sprint_availability(sprint, absences, engineer_count, window):
+    """Availability of one sprint, or why it is not available.
+
+    Unlike ``next_sprint_availability``, a sprint whose working days are not all
+    inside the calendar window that was read is "not available": absences after
+    the window were never seen, so a figure would overstate availability.
+    """
+    if not engineer_count:
+        return ROSTER_NOT_CONFIGURED
+    if absences is None:
+        return NOT_AVAILABLE
+    days = working_days(sprint["start"], sprint["end"])
+    if not days:
+        return NOT_AVAILABLE
+    if days[0] < window[0] or days[-1] > window[1]:
+        return OUTSIDE_CALENDAR_WINDOW
+    return availability(absences, engineer_count, sprint["start"], sprint["end"])
+
+
+def _horizon_end(windows, following):
+    """Last day to report availability for: the latest branch-cut sprint end of
+    ``windows`` (release windows), else the next sprint's end."""
+    ends = []
+    for w in windows:
+        bc = w.get("branch_cut_sprint")
+        if isinstance(bc, dict):
+            end = to_date(bc.get("end"))
+            if end:
+                ends.append(end)
+    if ends:
+        return max(ends)
+    return following["end"] if following else None
+
+
+def availability_by_sprint(sprints, current, horizon_end, absences, engineer_count, window):
+    """Availability for the current sprint and each later sprint ending by ``horizon_end``."""
+    if current is None or horizon_end is None:
+        return []
+    out = []
+    for s in project_sprints(sprints, horizon_end):
+        if s["start"] < current["start"] or s["end"] > max(horizon_end, current["end"]):
+            continue
+        out.append({**_sprint_out(s),
+                    "availability": sprint_availability(s, absences, engineer_count, window)})
+    return out
+
+
 # ---------------------------------------------------------------- assembly
 
 
@@ -673,13 +745,16 @@ def build_context(data):
     result["next_sprint"] = _sprint_out(following) if following else NOT_AVAILABLE
 
     release = data.get("release")
+    horizon_windows = []
     if release is not None and release != "":
         # Non-strings are rejected: a JSON number would turn 5.10 into 5.1.
         result["release"] = release_window(release, schedules, sprints, today, current)
+        horizon_windows = [result["release"]]
     elif not schedules:
         result["release_in_progress"] = NOT_AVAILABLE
     else:
         in_progress = releases_in_progress(schedules, sprints, today, current)
+        horizon_windows = in_progress
         result["release_in_progress"] = (
             [{"release": w["release"], "phase": w["phase"],
               "development_sprints_remaining": w["development_sprints_remaining"]}
@@ -702,6 +777,16 @@ def build_context(data):
     else:
         result["next_sprint_availability"] = availability(
             absences, data["engineer_count"], following["start"], following["end"])
+
+    # Current sprint and every later sprint up to the latest branch-cut sprint
+    # (or the next sprint), for capacity = velocity x availability (decision 0018).
+    window = absence_window(data.get("absence_window"), today, warnings)
+    by_sprint = availability_by_sprint(
+        sprints, current, _horizon_end(horizon_windows, following),
+        absences, data.get("engineer_count"), window)
+    result["sprint_availability"] = by_sprint
+    result["current_sprint_availability"] = (
+        by_sprint[0]["availability"] if by_sprint else NOT_AVAILABLE)
     result["warnings"] = warnings
     return result
 

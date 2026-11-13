@@ -933,6 +933,34 @@ def build_cut_line(timeline_results, capacity_sp, timeline_risk_by_key=None):
     return out
 
 
+def count_unpointed(features, active_keys):
+    """Unpointed open items under active features: stories/tasks/spikes and bugs, counted.
+
+    No SP estimate — this is what the chai-bot report uses (edge-context decision
+    0018: never estimate). :func:`estimate_hidden_scope` builds on it.
+    """
+    active_open_unpointed = [
+        s for f in features if f["key"] in active_keys for s in f["all_stories"]
+        if not is_story_done(s) and s["sp"] <= 0
+    ]
+    unpointed = [s for s in active_open_unpointed if s["type"] != "Bug"]
+    unpointed_bugs = [s for s in active_open_unpointed if s["type"] == "Bug"]
+    return {
+        "unpointed_open": len(unpointed),
+        "unpointed_assigned": sum(1 for s in unpointed if s["assignee"]),
+        "unpointed_bugs": len(unpointed_bugs),
+        "unpointed_bug_keys": [s["key"] for s in unpointed_bugs],
+    }
+
+
+def unestimated_hidden_scope(features, active_keys):
+    """:func:`count_unpointed` in the hidden-scope shape, with every estimate None."""
+    return {**count_unpointed(features, active_keys),
+            "sp_per_story_low": None, "sp_per_story_typical": None, "sp_per_story_high": None,
+            "estimate_low": None, "estimate_typical": None, "estimate_high": None,
+            "basis": "not estimated (--no-hidden-scope-estimate)"}
+
+
 def estimate_hidden_scope(features, active_keys):
     """Estimate SP for unpointed open stories from closed pointed stories' distribution.
 
@@ -947,14 +975,8 @@ def estimate_hidden_scope(features, active_keys):
         s["sp"] for f in features for s in f["all_stories"]
         if is_story_done(s) and s["sp"] > 0
     ]
-    active_open_unpointed = [
-        s for f in features if f["key"] in active_keys for s in f["all_stories"]
-        if not is_story_done(s) and s["sp"] <= 0
-    ]
-    unpointed = [s for s in active_open_unpointed if s["type"] != "Bug"]
-    unpointed_bugs = [s for s in active_open_unpointed if s["type"] == "Bug"]
-    n = len(unpointed)
-    assigned = sum(1 for s in unpointed if s["assignee"])
+    counts = count_unpointed(features, active_keys)
+    n = counts["unpointed_open"]
     if len(closed_pointed) >= 4:
         srt = sorted(closed_pointed)
         q1, q2, q3 = statistics.quantiles(srt, n=4, method="inclusive")
@@ -964,10 +986,7 @@ def estimate_hidden_scope(features, active_keys):
         low, typical, high = FALLBACK_SP_RANGE
         basis = "fallback range (fewer than 4 closed pointed stories)"
     return {
-        "unpointed_open": n,
-        "unpointed_assigned": assigned,
-        "unpointed_bugs": len(unpointed_bugs),
-        "unpointed_bug_keys": [s["key"] for s in unpointed_bugs],
+        **counts,
         "sp_per_story_low": low,
         "sp_per_story_typical": typical,
         "sp_per_story_high": high,
@@ -1005,6 +1024,7 @@ def build_process_gaps(features, active, dormant, capacity, sizing, hidden):
 
 def build_method(meta, roster, remaining_sprints, hidden, activity_days, window, version):
     """Formula + inputs + result for every headline figure. Rendered verbatim by the report."""
+    estimated = hidden.get("estimate_low") is not None
     members = roster.get("members", [])
     targets = [m.get("sp_target", DEFAULT_SP_TARGET) for m in members]
     avg_target = round(sum(targets) / len(targets), 1) if targets else DEFAULT_SP_TARGET
@@ -1044,7 +1064,7 @@ def build_method(meta, roster, remaining_sprints, hidden, activity_days, window,
                           f"Σ targets {sum(targets)} SP/sprint × {sprints_shown} sprints = {meta['total_capacity_sp']} SP ({len(members)} people, targets {min(targets)}–{max(targets)})")
                          + " — roster fallback; team velocity was unavailable" + pto_note),
         }
-    return [
+    rows = [
         capacity_entry,
         {
             "id": "scope",
@@ -1061,8 +1081,10 @@ def build_method(meta, roster, remaining_sprints, hidden, activity_days, window,
             "inputs": {"unpointed_open": hidden["unpointed_open"], "sp_low": hidden["sp_per_story_low"],
                        "sp_typical": hidden["sp_per_story_typical"], "sp_high": hidden["sp_per_story_high"],
                        "unpointed_bugs": hidden["unpointed_bugs"], "basis": hidden["basis"]},
-            "result": f"{hidden['estimate_low']}–{hidden['estimate_high']} SP",
-            "shown_as": f"{hidden['unpointed_open']} × {hidden['sp_per_story_low']}–{hidden['sp_per_story_high']} SP = {hidden['estimate_low']}–{hidden['estimate_high']} SP"
+            "result": (f"{hidden['estimate_low']}–{hidden['estimate_high']} SP" if estimated
+                       else "not estimated"),
+            "shown_as": (f"{hidden['unpointed_open']} × {hidden['sp_per_story_low']}–{hidden['sp_per_story_high']} SP = {hidden['estimate_low']}–{hidden['estimate_high']} SP"
+                         if estimated else f"{hidden['unpointed_open']} unpointed open stories (not estimated)")
                         + (f" ({hidden['unpointed_bugs']} unpointed bugs excluded)" if hidden["unpointed_bugs"] else ""),
         },
         {
@@ -1072,8 +1094,9 @@ def build_method(meta, roster, remaining_sprints, hidden, activity_days, window,
             "inputs": {"capacity": meta["total_capacity_sp"], "scope": meta["total_remaining_sp"],
                        "hidden_low": hidden["estimate_low"], "hidden_high": hidden["estimate_high"]},
             "result": f"{meta['gap_sp']} SP",
-            "shown_as": f"{meta['total_capacity_sp']} − {meta['total_remaining_sp']} = {meta['gap_sp']} SP "
-                        f"({meta['gap_with_hidden_low']} to {meta['gap_with_hidden_high']} incl. hidden)",
+            "shown_as": f"{meta['total_capacity_sp']} − {meta['total_remaining_sp']} = {meta['gap_sp']} SP"
+                        + (f" ({meta['gap_with_hidden_low']} to {meta['gap_with_hidden_high']} incl. hidden)"
+                           if estimated else ""),
         },
         {
             "id": "priority_focus",
@@ -1147,6 +1170,8 @@ def build_method(meta, roster, remaining_sprints, hidden, activity_days, window,
             "shown_as": f"{meta['excluded_epics_count']} epics ({meta['excluded_open_sp']} open SP) left out",
         },
     ]
+    # Not estimated (--no-hidden-scope-estimate): leave the hidden-scope row out.
+    return [row for row in rows if estimated or row["id"] != "hidden_scope"]
 
 
 # --- Main ---
@@ -1245,6 +1270,9 @@ def main():
                         help="CSV of feature priorities to assess (default: Blocker,Critical,Major)")
     parser.add_argument("--include-lower-when", default=",".join(sorted(LOWER_PRIORITY_INCLUDE_STATUSES)),
                         help="CSV of statuses that pull a lower-priority feature into focus (default: Refinement)")
+    parser.add_argument("--no-hidden-scope-estimate", action="store_true",
+                        help="Count unpointed open items but do not estimate their SP (chai-bot report, "
+                             "edge-context decision 0018: never estimate).")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
@@ -1304,7 +1332,8 @@ def main():
     bug_load = run_bug_load_check(unlinked_bugs, all_epic_stories, args.component_filter)
     sizing = run_sizing_check(active, timeline, roster)
     composite = run_composite_check(active, gate, capacity, timeline, assignment, sizing)
-    hidden = estimate_hidden_scope(in_focus, active_keys)
+    hidden = (unestimated_hidden_scope(in_focus, active_keys) if args.no_hidden_scope_estimate
+              else estimate_hidden_scope(in_focus, active_keys))
 
     unknown_contributors = [c["person"] for c in capacity if not c["in_roster"]]
 
@@ -1361,8 +1390,8 @@ def main():
         "hidden_scope_low": hidden["estimate_low"],
         "hidden_scope_typical": hidden["estimate_typical"],
         "hidden_scope_high": hidden["estimate_high"],
-        "gap_with_hidden_low": gap - hidden["estimate_high"],
-        "gap_with_hidden_high": gap - hidden["estimate_low"],
+        "gap_with_hidden_low": gap - hidden["estimate_high"] if hidden["estimate_high"] is not None else None,
+        "gap_with_hidden_high": gap - hidden["estimate_low"] if hidden["estimate_low"] is not None else None,
         "total_unpointed_stories": hidden["unpointed_open"],
         "total_unpointed_assigned": hidden["unpointed_assigned"],
         # Unpointed open bugs are reported separately, never folded into hidden scope.
