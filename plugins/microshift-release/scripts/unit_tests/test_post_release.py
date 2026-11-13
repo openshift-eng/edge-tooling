@@ -246,15 +246,56 @@ class TestRpmsKcsIndexed(unittest.TestCase):
         self.assertEqual(r["status"], "PASS")
         self.assertIn("RHBA-2026:12345", r["reason"])
 
-    def test_shipped_but_not_indexed(self):
-        # Resolved only via the Errata Tool fallback → shipped but the KCS
-        # index has not caught up. This is the gap we must report.
+    @patch("post_release.requests.get")
+    def test_shipped_but_not_indexed(self, mock_get):
+        # Resolved only via the Errata Tool fallback and a direct by-name Hydra
+        # lookup still cannot find it → shipped but the KCS index has not caught
+        # up. This is the gap we must report.
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {"response": {"docs": []}},
+        )
         info = _errata_info(advisory_name="RHSA-2026:91191")
         info["source"] = "errata_tool"
         r = check_rpms_kcs_indexed("pr_errata_rpms_kcs_indexed", info)
         self.assertEqual(r["status"], "FAIL")
         self.assertIn("RHSA-2026:91191", r["reason"])
         self.assertIn("KCS", r["reason"])
+
+    @patch("post_release.requests.get")
+    def test_indexed_beyond_first_page(self, mock_get):
+        # The minor-scoped search missed it (so it fell to the Errata Tool),
+        # but a direct by-name Hydra lookup finds it → it IS in the KCS index,
+        # just sorted past the first page. Must not be reported as a gap.
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "response": {
+                    "docs": [{
+                        "uri": ("https://access.redhat.com/errata/"
+                                "RHSA-2026:91191"),
+                        "portal_synopsis": "Red Hat build of MicroShift update",
+                    }]
+                }
+            },
+        )
+        info = _errata_info(advisory_name="RHSA-2026:91191")
+        info["source"] = "errata_tool"
+        r = check_rpms_kcs_indexed("pr_errata_rpms_kcs_indexed", info)
+        self.assertEqual(r["status"], "PASS")
+        self.assertIn("RHSA-2026:91191", r["reason"])
+
+    @patch("post_release.requests.get")
+    def test_by_name_lookup_fails(self, mock_get):
+        # The by-name confirmation lookup errors out → cannot prove the
+        # advisory is absent from the index, so warn rather than fail.
+        import requests
+        mock_get.side_effect = requests.RequestException("timeout")
+        info = _errata_info(advisory_name="RHSA-2026:91191")
+        info["source"] = "errata_tool"
+        r = check_rpms_kcs_indexed("pr_errata_rpms_kcs_indexed", info)
+        self.assertEqual(r["status"], "WARN")
+        self.assertIn("RHSA-2026:91191", r["reason"])
 
     def test_no_advisory(self):
         r = check_rpms_kcs_indexed("pr_errata_rpms_kcs_indexed", None)
@@ -753,6 +794,41 @@ class TestFindRpmsErrataViaErrataTool(unittest.TestCase):
             "https://access.redhat.com/errata/RHSA-2026:91191")
         mock_build.assert_called_once_with("4.19.53", "Z")
         mock_advisories.assert_called_once_with(self._NVR)
+
+    @patch("post_release.errata.fetch_advisory")
+    @patch("post_release.errata.fetch_build_advisories")
+    @patch("post_release.brew.get_build_info")
+    @patch("post_release.requests.get")
+    def test_hydra_exception_then_et_success(self, mock_get, mock_build,
+                                             mock_advisories, mock_advisory):
+        # Hydra's search raises (not merely empty), but the ET fallback finds
+        # the advisory. RPM discovery must still succeed, while the Hydra error
+        # is preserved separately so KCS indexing can report an unknown status.
+        import requests as _requests
+        mock_get.side_effect = _requests.RequestException("hydra down")
+        mock_build.return_value = {"found": True, "nvr": self._NVR}
+        mock_advisories.return_value = self._et_build_advisories()
+        mock_advisory.return_value = {
+            "issue_date": "2026-10-29 12:00:00",
+            "synopsis": "Red Hat build of MicroShift 4.19.53 security update",
+        }
+
+        result = find_rpms_errata("4.19.53", "4.19", "Z", vpn_ok=True)
+
+        self.assertEqual(result["advisory_name"], "RHSA-2026:91191")
+        self.assertEqual(result["source"], "errata_tool")
+        # Recorded separately — NOT under "error", so RPM discovery still passes.
+        self.assertNotIn("error", result)
+        self.assertIn("hydra down", result["hydra_error"])
+
+        # RPM discovery passes despite the Hydra error.
+        found = _check_errata_found("pr_errata_rpms_found", "RPMs", result)
+        self.assertEqual(found["status"], "PASS")
+
+        # KCS indexing is unknown (Hydra could not be consulted), not a gap.
+        kcs = check_rpms_kcs_indexed("pr_errata_rpms_kcs_indexed", result)
+        self.assertEqual(kcs["status"], "WARN")
+        self.assertIn("RHSA-2026:91191", kcs["reason"])
 
     @patch("post_release.errata.fetch_build_advisories")
     @patch("post_release.requests.get")

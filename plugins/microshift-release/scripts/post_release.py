@@ -273,6 +273,14 @@ def find_rpms_errata(version, minor, release_type=None, vpn_ok=False):
     if vpn_ok:
         found = _find_rpms_errata_via_et(version, release_type)
         if found is not None:
+            # The advisory was discovered via the Errata Tool, so RPM discovery
+            # succeeds. But if Hydra's search *errored* (rather than returning
+            # no match), its KCS index could not be consulted — record that
+            # separately under ``hydra_error`` so the KCS-indexing check reports
+            # an unknown status instead of claiming a discoverability gap. Kept
+            # distinct from ``error`` so it does not block RPM discovery.
+            if hydra_error is not None:
+                return {**found, "hydra_error": hydra_error}
             return found
 
     if hydra_error is not None:
@@ -355,6 +363,34 @@ def _check_errata_shipped(check_id, advisory, errata_info, vpn_ok):
                   f"Current: {status}"])
 
 
+def _hydra_indexes_advisory(advisory_name):
+    """Return whether Hydra's KCS search can find a specific advisory by name.
+
+    The minor-scoped search in :func:`find_rpms_errata` only inspects the first
+    page of results (``rows=20``, newest first), so an advisory that is genuinely
+    in the KCS index but sorts past that page — e.g. re-verifying an older
+    z-stream whose errata is buried under newer ones — is never surfaced and gets
+    resolved via the Errata Tool instead. A direct by-name query settles whether
+    the advisory is actually indexed, independent of its position.
+
+    Returns True if indexed, False if not, None if the search could not run.
+    """
+    if not advisory_name or advisory_name == "?":
+        return None
+    try:
+        docs = _hydra_search(advisory_name)
+    except (requests.RequestException, json.JSONDecodeError) as exc:
+        logger.debug("Hydra by-name search failed for %s: %s",
+                     advisory_name, exc)
+        return None
+    for doc in docs:
+        uri = doc.get("uri", doc.get("id", ""))
+        synopsis = doc.get("portal_synopsis", "")
+        if advisory_name in uri or advisory_name in synopsis:
+            return True
+    return False
+
+
 def check_rpms_kcs_indexed(check_id, errata_info):
     """Advisory is discoverable via the public KCS (Hydra) search index.
 
@@ -367,7 +403,8 @@ def check_rpms_kcs_indexed(check_id, errata_info):
 
     PASS when the advisory came from Hydra's KCS search (it is indexed).
     FAIL when it was shipped but had to be resolved via the Errata Tool
-    fallback (shipped, but not in the KCS index).
+    fallback and a direct by-name Hydra lookup still cannot find it (shipped,
+    but not in the KCS index).
     """
     if errata_info is None:
         return _warn(check_id,
@@ -379,6 +416,31 @@ def check_rpms_kcs_indexed(check_id, errata_info):
     name = errata_info.get("advisory_name", "?")
     if errata_info.get("source") == "hydra":
         return _pass(check_id, f"{name} is indexed in KCS search")
+
+    # The advisory was resolved via the Errata Tool because Hydra's search
+    # errored, not because it returned no match — so the KCS index could not be
+    # consulted and its status is genuinely unknown, not a confirmed gap.
+    if errata_info.get("hydra_error"):
+        return _warn(check_id,
+                     f"KCS index status unknown for {name} — Hydra search "
+                     f"failed: {errata_info['hydra_error']}",
+                     [f"Advisory: {name}",
+                      "Resolved via the Errata Tool; Hydra could not be "
+                      "queried to confirm KCS indexing"])
+
+    # Resolved via the Errata Tool fallback. The minor-scoped Hydra search only
+    # inspects the first page of results, so confirm the advisory is genuinely
+    # absent — not merely sorted past that page — with a direct by-name lookup
+    # before reporting a discoverability gap.
+    indexed = _hydra_indexes_advisory(name)
+    if indexed:
+        return _pass(check_id, f"{name} is indexed in KCS search",
+                     ["Past the first page of the minor-scoped search; "
+                      "confirmed via a direct by-name lookup"])
+    if indexed is None:
+        return _warn(check_id,
+                     f"Could not confirm KCS index status for {name}",
+                     ["Hydra by-name search did not complete"])
     return _fail(check_id,
                  f"{name} shipped but missing from the KCS search index",
                  [f"Advisory: {name}",
