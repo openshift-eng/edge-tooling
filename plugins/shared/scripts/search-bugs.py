@@ -698,7 +698,10 @@ def merge_candidate_files(filepaths, workdir=None):
         with open(filepath, "r") as f:
             data = json.load(f)
         source = data["source"]
-        sources.append(source)
+        # Several inputs can share a source (e.g. its bug-candidates and
+        # bug-matches files); per-source releases and jobs are emitted once.
+        if source not in sources:
+            sources.append(source)
         for cand in data.get("candidates", []):
             all_candidates.append({**cand, "_source": source})
 

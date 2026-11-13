@@ -598,8 +598,8 @@ class ExactSignatureMergeTests(unittest.TestCase):
         """Write {source: candidates} files and merge them in order."""
         with tempfile.TemporaryDirectory() as tmp:
             paths = []
-            for source, candidates in files:
-                path = Path(tmp) / f"bug-candidates-{source}.json"
+            for index, (source, candidates) in enumerate(files):
+                path = Path(tmp) / f"bug-candidates-{index}-{source}.json"
                 path.write_text(json.dumps(
                     {"source": source, "candidates": candidates}))
                 paths.append(str(path))
@@ -742,6 +742,29 @@ class ExactSignatureMergeTests(unittest.TestCase):
         ])
         self.assertEqual(cand["affected_jobs"], 2)
 
+    def test_same_source_files_aggregate_source_once(self):
+        """Two inputs with the same source list each source, release entry
+        and job once, for merged and unmerged candidates alike."""
+        merged = self._merge([
+            ("5.1", [_source_candidate(self.SIG, "test-rpm", [1]),
+                     _source_candidate("unrelated failure", "e2e", [2],
+                                       raw_error="zzz", severity=3)]),
+            ("5.1", [_source_candidate(self.SIG, "rpm-build", [1, 3],
+                                       raw_error="other")]),
+        ])
+        self.assertEqual(merged["sources"], ["5.1"])
+        by_sig = {c["error_signature"]: c for c in merged["candidates"]}
+        self.assertEqual(
+            [j["job_url"] for j in by_sig[self.SIG]["jobs"]],
+            ["https://prow.example/1", "https://prow.example/3"])
+        self.assertEqual(by_sig[self.SIG]["affected_jobs"], 2)
+        self.assertEqual(by_sig[self.SIG]["releases"],
+                         [{"source": "5.1", "affected_jobs": 2}])
+        other = by_sig["unrelated failure"]
+        self.assertEqual(len(other["jobs"]), 1)
+        self.assertEqual(other["releases"],
+                         [{"source": "5.1", "affected_jobs": 1}])
+
     def test_jobs_without_url_are_not_deduplicated(self):
         first = _source_candidate(self.SIG, "rpm-build", [1])
         second = _source_candidate(self.SIG, "test-rpm", [2])
@@ -858,6 +881,55 @@ class ExactSignatureMergeTests(unittest.TestCase):
             self.assertEqual(result["action"], "suggest")
             self.assertIn("Potential regression of USHIFT-500",
                           result["reason"])
+
+    def test_same_source_post_jira_matches_do_not_hide_regression(self):
+        """bug-candidates and bug-matches files of the same source: the
+        source is aggregated once, so its listed job is not repeated. The
+        bug-matches count has no job URLs to match against the listed job,
+        so it stays counted as jobs with unknown dates and keeps the closed
+        regression indeterminate."""
+        with tempfile.TemporaryDirectory() as workdir:
+            bugs = Path(workdir) / "bugs"
+            bugs.mkdir()
+            listed = _source_candidate(self.SIG, "test-rpm", [1],
+                                       raw_error=self.RAW)
+            listed["jobs"][0]["finished"] = "2026-07-01"
+            candidates_path = bugs / "bug-candidates-5.1.json"
+            candidates_path.write_text(json.dumps(
+                {"source": "5.1", "candidates": [listed]}))
+            matches_path = bugs / "bug-matches-5.1.json"
+            matches_path.write_text(json.dumps({
+                "source": "5.1",
+                "candidates": [{
+                    "error_signature": self.SIG,
+                    "severity": 5,
+                    "failure_type": "build",
+                    "step_name": "test-rpm",
+                    "affected_jobs": 1,
+                    "duplicates": [],
+                    "regressions": [{"key": "USHIFT-500",
+                                     "updated": "2026-08-01"}],
+                }],
+            }))
+            merged_path = bugs / "bug-candidates-merged-5.1.json"
+            proc = self._run("--merge", str(candidates_path),
+                             str(matches_path), "--output", str(merged_path),
+                             "--workdir", workdir)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            merged = json.loads(merged_path.read_text())
+            self.assertEqual(merged["sources"], ["5.1"])
+            cand = merged["candidates"][0]
+            self.assertEqual(cand["affected_jobs"], 2)
+            self.assertEqual([j["job_url"] for j in cand["jobs"]],
+                             ["https://prow.example/1"])
+            self.assertEqual(cand["releases"],
+                             [{"source": "5.1", "affected_jobs": 2}])
+            proc = self._run("--categorize", str(merged_path),
+                             "--workdir", workdir)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            result = json.loads(
+                (bugs / "bug-results-5.1.json").read_text())["results"][0]
+            self.assertEqual(result["action"], "suggest")
 
     def test_empty_signature_still_fails_categorize(self):
         with tempfile.TemporaryDirectory() as workdir:
