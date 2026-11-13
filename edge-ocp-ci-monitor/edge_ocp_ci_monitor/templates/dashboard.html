@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Edge OCP CI Monitor</title>
+  <script>
+    // Resolve the theme before first paint to avoid a flash of the wrong theme.
+    // Precedence: explicit user choice (localStorage) > system preference.
+    (function () {
+      try {
+        var stored = localStorage.getItem('theme');
+        var theme = stored
+          || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    })();
+  </script>
+  <style>{{ css | safe }}</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>Edge OCP CI Monitor</h1>
+    <div class="meta">SNO / TNA / TNF topology health across OpenShift nightly payloads</div>
+    <div class="meta"><a href="https://github.com/openshift-eng/edge-context/blob/main/roles/ocp-payload-manager.md" target="_blank">Review the Edge CI Payload Manager Responsibilities</a></div>
+  </div>
+  <div style="text-align:right">
+    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle color theme" title="Toggle light/dark theme">
+      <span class="theme-icon-sun" aria-hidden="true">☀︎</span>
+      <span class="theme-icon-moon" aria-hidden="true">☾</span>
+    </button>
+    <div class="meta"><a href="https://github.com/openshift-eng/edge-tooling" target="_blank" style="color:var(--text-muted)">View source on GitHub ↗</a></div>
+    <div class="meta">Generated: {{ report.generated_at }}</div>
+    {% set has_ai = [] %}{% set has_blocking = [] %}{% for item in all_failing %}{% if item.job.deep_analysis %}{% if has_ai.append(1) %}{% endif %}{% endif %}{% if item.job.job_type.value == "blocking" %}{% if has_blocking.append(1) %}{% endif %}{% endif %}{% endfor %}
+    {% if has_ai or sippy_analysis_cards %}
+    <div class="meta" style="margin-top:4px">
+      <span style="color:var(--green)">● AI-enriched via Chai</span>
+    </div>
+    {% elif has_blocking or priority_sippy %}
+    <div class="meta" style="margin-top:4px" data-enrichment-status="data-only">
+      <span style="color:var(--text-muted)">○ Data only</span>
+      <span style="margin-left:4px">- run <code style="font-size:12px;color:var(--accent)">python -m edge_ocp_ci_monitor</code> for AI analysis</span>
+    </div>
+    {% else %}
+    <div class="meta" style="margin-top:4px">
+      <span style="color:var(--green)">● No blocking failures found</span>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Tab Navigation -->
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="payload-health">Payload Health</button>
+  {% if timing_html %}
+  <button class="tab-btn" data-tab="timing-insights">Timing Insights</button>
+  {% endif %}
+</div>
+
+<!-- Tab: Payload Health -->
+<div class="tab-panel active" id="tab-payload-health">
+
+{% if ai_warnings %}
+<div class="warning-banner" role="status" id="chai-analysis-warning">
+  <strong>Chai AI analysis unavailable or incomplete.</strong> Collected dashboard data remains available.
+  <ul>{% for warning in ai_warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+{% if report.skip_prow or report.skip_sippy or report.skip_timing %}
+<div class="skip-banner">
+  <strong>Note:</strong> This report was generated with limited data.
+  {% if report.skip_prow %}
+  <span class="skip-flag">--skip-prow</span> Prow artifact fetching was skipped - Error column, Failing Tests, and Failure Details will be empty.
+  {% endif %}
+  {% if report.skip_sippy %}
+  <span class="skip-flag">--skip-sippy</span> Sippy job health check was skipped - Sippy Job Health section is not available.
+  {% endif %}
+  {% if report.skip_timing %}
+  <span class="skip-flag">Insights</span> Timing insights are disabled by default. Use <code>--with-timing</code> to include install/upgrade timing data.
+  {% endif %}
+</div>
+{% endif %}
+
+{% if report.data_errors %}
+<div class="error-banner">
+  <strong>Data collection errors:</strong> {{ report.data_errors | length }} data source{{ 's' if report.data_errors | length != 1 else '' }} failed. The report may be incomplete.
+  <details class="error-details">
+    <summary>Show details</summary>
+    <ul>
+      {% for err in report.data_errors %}
+      <li>{{ err }}</li>
+      {% endfor %}
+    </ul>
+  </details>
+</div>
+{% endif %}
+
+{% if report.payloads_per_stream < report.persistent_threshold %}
+<div class="warning-banner">
+  <strong>Note:</strong> Analyzing only {{ report.payloads_per_stream }} payload{{ 's' if report.payloads_per_stream != 1 else '' }} per stream -
+  {% if report.payloads_per_stream < report.recurring_threshold %}Recurring, {% endif %}Persistent{% if report.payloads_per_stream < 3 %} and Unstable{% endif %} failure labels require more payloads to appear.
+</div>
+{% endif %}
+
+{% if timing_unavailable %}
+<div class="warning-banner">
+  <strong>Timing insights unavailable:</strong> <code>--with-timing</code> was enabled but timing
+  data could not be collected. The Timing Insights tab is not available for this report.
+  {% if timing_errors %}
+  <details class="error-details">
+    <summary>Show details</summary>
+    <ul>
+      {% for err in timing_errors %}
+      <li>{{ err }}</li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- Edge OCP Jobs Health Overview -->
+<h2 style="margin-top:0">Edge OCP Jobs Health Overview</h2>
+<div class="health-overview">
+  <div class="health-header">
+    <div class="health-header-left">Version</div>
+    <div class="health-header-status">Status</div>
+    <div class="health-header-counts">Blocking / Informing</div>
+    <div class="health-header-topos">Topology</div>
+    <div class="health-header-trend" title="Compares edge job failure count in recent vs older payloads">Trend <span style="font-weight:normal;color:var(--text-muted);font-size:10px">(recent vs older)</span></div>
+    <div class="health-header-timeline">
+      <span>Payload History <span class="time-arrow">older &#8594; newer</span></span>
+    </div>
+  </div>
+  {% for view in stream_views %}
+  {% set stream = view.stream %}
+  {% set latest = stream.latest_payload %}
+  {% set blocking_count = stream.total_blocking_edge_failures %}
+  {% set informing_count = stream.total_informing_edge_failures %}
+  <div class="health-row">
+    <div class="health-version">{{ stream.version }}</div>
+    <div class="health-status {% if blocking_count > 0 %}critical clickable{% elif informing_count > 0 %}warning clickable{% else %}healthy{% endif %}"
+         {% if blocking_count > 0 or informing_count > 0 %}onclick="jumpToFailures('{{ stream.version }}')" title="View all edge failures for {{ stream.version }}"{% endif %}>
+      {% if blocking_count > 0 %}Critical{% elif informing_count > 0 %}Warning{% else %}Healthy{% endif %}
+    </div>
+    <div class="health-counts">
+      {% if latest %}
+      {% if blocking_count > 0 %}
+      <a class="health-count red clickable" onclick="jumpToFailures('{{ stream.version }}','blocking')" title="View blocking failures for {{ stream.version }}">{{ blocking_count }}</a>
+      {% else %}
+      <span class="health-count">{{ blocking_count }}</span>
+      {% endif %}
+      <span class="health-count-sep">/</span>
+      {% if informing_count > 0 %}
+      <a class="health-count yellow clickable" onclick="jumpToFailures('{{ stream.version }}','informing')" title="View informing failures for {{ stream.version }}">{{ informing_count }}</a>
+      {% else %}
+      <span class="health-count">{{ informing_count }}</span>
+      {% endif %}
+      {% else %}
+      <span class="health-count" style="color:var(--text-muted)">&mdash;</span>
+      {% endif %}
+    </div>
+    <div class="health-topos">
+      {% for t in view.affected_topologies %}
+      <span class="badge {{ t | lower }}">{{ t }}</span>
+      {% endfor %}
+      {% if not view.affected_topologies %}
+      <span style="color:var(--text-muted);font-size:12px">&mdash;</span>
+      {% endif %}
+    </div>
+    <div class="health-trend">
+      {% if blocking_count == 0 and informing_count == 0 %}
+      <span class="trend-indicator stable" title="No failures">&#9644;</span>
+      {% elif view.trend_signal < 2 %}
+      <span class="trend-indicator stable" title="Not enough recent failures to establish a trend">&#9644; stable</span>
+      {% elif view.recent_fails > view.older_fails %}
+      <span class="trend-indicator worsening" title="Higher weighted failure rate in recent payloads ({{ '%.1f' | format(view.recent_fails) }} recent vs {{ '%.1f' | format(view.older_fails) }} older)">&#9660; worsening</span>
+      {% elif view.recent_fails < view.older_fails %}
+      <span class="trend-indicator improving" title="Lower weighted failure rate in recent payloads ({{ '%.1f' | format(view.recent_fails) }} recent vs {{ '%.1f' | format(view.older_fails) }} older)">&#9650; improving</span>
+      {% else %}
+      <span class="trend-indicator stable" title="Failure rate unchanged ({{ '%.1f' | format(view.recent_fails) }} in each half)">&#9644; stable</span>
+      {% endif %}
+    </div>
+    <div class="health-timeline">
+      {% for payload in stream.payloads | reverse %}
+      {% set b_fails = payload.blocking_edge_failures %}
+      {% set i_fails = payload.informing_edge_failures %}
+      <a href="{{ payload.url }}" target="_blank"
+         class="timeline-dot {% if b_fails %}edge-critical{% elif i_fails %}edge-warning{% elif payload.status.value == 'Rejected' %}rejected-noedge{% else %}edge-healthy{% endif %}"
+         title="{{ payload.tag }}">
+        <span class="tooltip">
+          {{ payload.tag }}<br>
+          Payload: {{ payload.status.value }}
+          {% if b_fails %}
+          <br><strong>{{ b_fails | length }} blocking edge failure{{ 's' if b_fails | length != 1 else '' }}:</strong>
+          {% for j in b_fails %}
+          <br>&#9656; {{ j.name }} ({{ j.topology }})
+          {% endfor %}
+          {% endif %}
+          {% if i_fails %}
+          <br>{{ i_fails | length }} informing edge failure{{ 's' if i_fails | length != 1 else '' }}
+          {% endif %}
+          {% if not b_fails and not i_fails and payload.status.value == 'Rejected' %}
+          <br>Rejected for non-edge reasons
+          {% endif %}
+          {% if not b_fails and not i_fails and payload.status.value == 'Accepted' %}
+          <br>All edge jobs passing
+          {% endif %}
+        </span>
+        {{ 'A' if payload.status.value == 'Accepted' else 'R' if payload.status.value == 'Rejected' else 'P' }}
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+  <div class="health-legend">
+    <span class="health-legend-colors">
+      <span><span style="color:var(--green)">&#9679;</span> no edge issues</span>
+      <span><span style="color:var(--yellow)">&#9679;</span> informing failures</span>
+      <span><span style="color:var(--red)">&#9679;</span> blocking failures</span>
+      <span><span style="color:var(--text-muted)">&#9679;</span> non-edge rejection</span>
+    </span>
+    <span class="health-legend-note">across last {{ report.streams[0].payloads | length if report.streams else 6 }} payloads per stream</span>
+  </div>
+</div>
+
+<!-- Findings Summary -->
+{% set ns = namespace(
+  total_failures=all_failing|length,
+  blocking_failures=blocking_failures,
+  informing_failures=informing_failures,
+  rejected_payloads=rejected_payloads,
+  total_payloads=total_payloads,
+  regression_count=all_regressions|length,
+  component_regression_count=component_regressions|length
+) %}
+
+<div class="findings-summary">
+  <h2 style="border-bottom:none;margin-top:0;padding-bottom:0">Findings Summary</h2>
+
+  {% if ns.total_failures == 0 and ns.regression_count == 0 and ns.component_regression_count == 0 %}
+  <div class="fs-healthy-banner">
+    All edge jobs are passing across all monitored payloads. No Sippy job health or component findings detected.
+  </div>
+  {% else %}
+
+  {# Situation bar: compact horizontal summary with real context #}
+  <div class="fs-situation-bar">
+    <div class="fs-situation-item {% if blocking_jobs_list %}critical{% endif %}" onclick="jumpToFailures(null,'blocking')" title="View blocking failures">
+      <span class="fs-situation-count">{{ ns.blocking_failures }}</span>
+      <span class="fs-situation-label">blocking</span>
+      {% if blocking_jobs_list|length < ns.blocking_failures %}
+      <span class="fs-situation-context">{{ blocking_jobs_list|length }} unique job{{ 's' if blocking_jobs_list|length != 1 else '' }}</span>
+      {% elif ns.rejected_payloads > 0 %}
+      <span class="fs-situation-context">{{ ns.rejected_payloads }} payload{{ 's' if ns.rejected_payloads != 1 else '' }} rejected</span>
+      {% endif %}
+    </div>
+    <div class="fs-situation-sep"></div>
+    <div class="fs-situation-item {% if ns.informing_failures > 0 %}warning{% endif %}" onclick="jumpToFailures(null,'informing')" title="View informing failures">
+      <span class="fs-situation-count">{{ ns.informing_failures }}</span>
+      <span class="fs-situation-label">informing</span>
+      {% if escalation_risks %}
+      <span class="fs-situation-context">{{ escalation_risks|length }} unstable</span>
+      {% endif %}
+    </div>
+    <div class="fs-situation-sep"></div>
+    <div class="fs-situation-item {% if ns.regression_count + ns.component_regression_count > 0 %}critical{% endif %}" onclick="document.getElementById('findings-job-health')?.scrollIntoView({behavior:'smooth'})" title="View Sippy job health and component findings">
+      <span class="fs-situation-count">{{ ns.regression_count + ns.component_regression_count }}</span>
+      <span class="fs-situation-label">health findings</span>
+    </div>
+    <div class="fs-situation-sep"></div>
+    <div class="fs-situation-item" onclick="document.getElementById('{{ 'findings-critical' if all_regressions else 'section-edge-failures' }}')?.scrollIntoView({behavior:'smooth'})" title="View topologies affected by payload failures or Sippy job findings">
+      <div class="fs-situation-topos">
+        {% for t in affected_topologies %}
+        <span class="badge {{ t | lower }}">{{ t }}</span>
+        {% endfor %}
+        {% if not affected_topologies %}
+        <span style="color:var(--text-muted)">&mdash;</span>
+        {% endif %}
+      </div>
+      <span class="fs-situation-label">affected topologies</span>
+    </div>
+  </div>
+
+  {# One critical block, with separate blocking and Sippy groups. #}
+  {% if ns.blocking_failures > 0 or ns.regression_count > 0 or ns.component_regression_count > 0 %}
+  <div class="fs-section fs-section-critical" id="findings-critical">
+  {% if ns.blocking_failures > 0 %}
+  <section class="fs-critical-group" id="findings-blocking" aria-label="Blocking failures">
+    <div class="fs-section-header">
+      <div class="fs-severity-icon fs-icon-critical" title="Critical - requires immediate action">!</div>
+      <div class="fs-section-content">
+        <div class="fs-priority-label">Critical - Immediate Action Required</div>
+        <div class="fs-section-title">{{ ns.blocking_failures }} Blocking Failure{{ 's' if ns.blocking_failures != 1 else '' }}{% if blocking_jobs_list|length < ns.blocking_failures %} ({{ blocking_jobs_list|length }} Unique Job{{ 's' if blocking_jobs_list|length != 1 else '' }}){% endif %}</div>
+        <div class="fs-section-desc">prevents payload acceptance</div>
+      </div>
+      <a class="fs-section-action fs-action-critical" onclick="jumpToFailures(null,'blocking')">Investigate All &#8594;</a>
+    </div>
+    {# Compact blocking job summary - unique jobs with versions and top failing test #}
+    <div class="fs-inline-jobs">
+      {% for item in blocking_jobs_list %}
+      {% set fc = failure_counts.get(item.job.name, 0) %}
+      {% set versions = blocking_job_versions.get(item.job.name, []) %}
+      {% set tests = blocking_job_tests.get(item.job.name, []) %}
+      <div class="fs-blocking-row fs-job-card" onclick="scrollToJob({{ item.job.name | js_attr }})">
+        <div class="fs-blocking-main">
+          <span class="badge {{ item.job.topology | lower }}">{{ item.job.topology }}</span>
+          <span class="fs-blocking-name">{{ item.job.name }}</span>
+          {% if fc >= recurring_threshold %}
+          <span class="badge {% if fc >= persistent_threshold %}persistent{% else %}recurring{% endif %}">{{ fc }}x</span>
+          {% endif %}
+          <span class="fs-blocking-versions">{{ versions | join(', ') }}</span>
+        </div>
+        {% if tests %}
+        <div class="fs-blocking-test">
+          <span class="fs-blocking-test-label">failing:</span>
+          <span class="fs-blocking-test-name">{{ tests[0] }}</span>
+          {% if tests | length > 1 %}
+          <span class="fs-blocking-test-more">+{{ tests | length - 1 }} more</span>
+          {% endif %}
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {# AI analysis sub-items injected here by JS #}
+    <div id="ai-highlights-container"></div>
+  </section>
+  {% endif %}
+
+  {# CRITICAL: Job health findings follow current blocking failures. #}
+  {% if ns.regression_count > 0 or ns.component_regression_count > 0 %}
+  <section class="fs-critical-group" id="findings-job-health" aria-label="Sippy Job regression">
+    <div class="fs-section-header">
+      <div class="fs-severity-icon fs-icon-critical" title="Critical - investigate job health findings">!</div>
+      <div class="fs-section-content">
+        <div class="fs-priority-label">Critical - Investigation Required</div>
+        <div class="fs-section-title">Sippy Job regression</div>
+        <div class="fs-section-desc">
+          {% if ns.regression_count > 0 %}{{ ns.regression_count }} Sippy job finding{{ 's' if ns.regression_count != 1 else '' }}{% endif %}
+          {% if ns.regression_count > 0 and ns.component_regression_count > 0 %} &middot; {% endif %}
+          {% if ns.component_regression_count > 0 %}{{ ns.component_regression_count }} component regression{{ 's' if ns.component_regression_count != 1 else '' }} (edge vs HA){% endif %}
+        </div>
+      </div>
+      <div class="fs-section-actions">
+        {% if ns.regression_count > 0 %}
+        <a class="fs-section-action fs-action-critical" href="#section-sippy-regressions">Triage Sippy &#8594;</a>
+        {% endif %}
+        {% if ns.component_regression_count > 0 %}
+        <a class="fs-section-action fs-action-critical" href="#section-component-readiness">Review Components &#8594;</a>
+        {% endif %}
+      </div>
+    </div>
+    {% if priority_sippy %}
+    <div class="fs-sippy-findings">
+      <div class="fs-sippy-heading">Worst {{ priority_sippy|length }} of {{ priority_sippy_count }} Sippy jobs needing attention</div>
+      <p class="fs-section-desc">Historical job pass rates; these findings do not determine payload blocking status.</p>
+      <div class="fs-sippy-legend">
+        <strong>Selection:</strong> relative pass-rate drop &gt;50%, or current pass rate &lt;50%, even if flat or improving.
+        Relative change = (current &minus; previous) / previous &times; 100; unavailable when previous is 0%.
+        Ranked by lowest current rate first, then largest relative drop.
+      </div>
+      <ul class="fs-sippy-list" role="list">
+        {% for r in priority_sippy %}
+        <li data-analysis-id="{{ sippy_analysis_ids[r.analysis_key] }}">
+          <div class="fs-job-card fs-sippy-summary">
+          <div class="fs-sippy-job"><a href="{{ r.triage_url }}" target="_blank">{{ r.test_name }}</a></div>
+          <div class="fs-sippy-rates">
+            <span class="fs-sippy-current">Current pass rate <strong>{{ "%.1f" | format(r.sample_pass_rate) }}%</strong></span>
+          </div>
+          <div class="fs-sippy-details">
+            <span class="badge {{ r.topology | lower }}">{{ r.topology }}</span>
+            <span class="fs-job-version">{{ r.version }}</span>
+            <span>{{ r.current_runs }} runs</span>
+            {% if (r.version, r.test_name) in blocking_job_pairs %}
+            <a class="fs-sippy-blocking" onclick="scrollToJob({{ r.test_name | js_attr }})">Also in blocking failures above</a>
+            {% endif %}
+          </div>
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </section>
+  {% endif %}
+  </div>
+  {% endif %}
+
+  {# RETRIED: Blocking jobs that passed only after retry - flaky but not blocking #}
+  {% if retried_successes %}
+  <div class="fs-section fs-section-retried">
+    <div class="fs-section-header">
+      <div class="fs-severity-icon fs-icon-retried" title="Blocking jobs that needed a retry to pass">&#8635;</div>
+      <div class="fs-section-content">
+        <div class="fs-priority-label">Warning - Passed After Retry</div>
+        <div class="fs-section-title">{{ retried_successes|length }} Blocking Job{{ 's' if retried_successes|length != 1 else '' }} Succeeded on Retry</div>
+        <div class="fs-section-desc">first attempt failed - may indicate flakiness or transient infrastructure issues</div>
+      </div>
+    </div>
+    <div class="fs-inline-jobs">
+      {% for item in retried_successes %}
+      <div class="fs-blocking-row fs-job-card" onclick="scrollToJob({{ item.job.name | js_attr }})">
+        <div class="fs-blocking-main">
+          <span class="badge {{ item.job.topology | lower }}">{{ item.job.topology }}</span>
+          <a class="fs-blocking-name" href="{{ item.job.prow_url }}" target="_blank" onclick="event.stopPropagation()">{{ item.job.name }}</a>
+          <span class="badge green">Succeeded</span>
+          <span class="fs-blocking-versions">{{ item.version }}</span>
+        </div>
+        <div class="fs-blocking-test" style="font-size:12px">
+          <span style="color:var(--text-muted)">Payload:</span>
+          <a href="{{ item.payload_url }}" target="_blank" style="font-size:12px">{{ item.payload_tag }}</a>
+          &middot;
+          {% if item.job.previous_attempts %}
+          <span style="color:var(--text-muted)">Attempt #1:</span>
+          <a href="{{ item.job.previous_attempts[0].prow_url }}" target="_blank" style="font-size:12px">Prow</a>
+          &middot;
+          {% endif %}
+          <span style="color:var(--text-muted)">Attempt #{{ item.job.previous_attempts|length + 1 }}:</span>
+          <a href="{{ item.job.prow_url }}" target="_blank" style="font-size:12px">Prow</a>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# WARNING: Informing failures - surface escalation risks by name #}
+  {% if ns.informing_failures > 0 %}
+  <div class="fs-section fs-section-warning">
+    <div class="fs-section-header">
+      <div class="fs-severity-icon fs-icon-warning" title="Warning - monitor for stability">&#9650;</div>
+      <div class="fs-section-content">
+        <div class="fs-priority-label">Warning - Monitor for Stability</div>
+        <div class="fs-section-title">{{ ns.informing_failures }} Informing Job Failure{{ 's' if ns.informing_failures != 1 else '' }}</div>
+        <div class="fs-section-desc">across {{ ns.total_payloads }} payload{{ 's' if ns.total_payloads != 1 else '' }} - not blocking</div>
+      </div>
+      <a class="fs-section-action fs-action-warning" onclick="jumpToFailures(null,'informing')">View All &#8594;</a>
+    </div>
+    {% if escalation_risks %}
+    <div class="fs-escalation-list">
+      {% for er in escalation_risks %}
+      <a class="fs-escalation-item fs-job-card" onclick="scrollToJob({{ er.job_name | js_attr }})">
+        <span class="fs-escalation-left">
+          <span class="fs-escalation-name">{{ er.job_name }}</span>
+          <span class="badge escalation-risk">Unstable</span>
+          <span class="badge {{ er.topology | lower }}">{{ er.topology }}</span>
+          <span class="fs-job-version">{{ er.version }}</span>
+        </span>
+        <span class="fs-escalation-streak">{{ er.consecutive_failures }}x consecutive</span>
+      </a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+
+
+  {% endif %}
+</div>
+
+<!-- Failure Analysis -->
+<h2 id="section-edge-failures">Nightly Payload - Failure Analysis <span style="font-weight:normal;color:var(--text-muted);font-size:13px">(<span id="visible-count">{{ all_failing | length }}</span> total)</span></h2>
+
+{% if all_failing %}
+<div class="filters">
+  <span class="filter-label">Topology:</span>
+  <button class="filter-btn active" data-group="topology" data-value="all">All</button>
+  {% for topo in topologies %}
+  <button class="filter-btn" data-group="topology" data-value="{{ topo }}">{{ topo }}</button>
+  {% endfor %}
+
+  <span class="filter-label">Type:</span>
+  <button class="filter-btn active" data-group="jobtype" data-value="all">All</button>
+  <button class="filter-btn" data-group="jobtype" data-value="blocking">Blocking</button>
+  <button class="filter-btn" data-group="jobtype" data-value="informing">Informing</button>
+
+  <span class="filter-label">Version:</span>
+  <button class="filter-btn active" data-group="version" data-value="all">All</button>
+  {% for v in versions %}
+  <button class="filter-btn" data-group="version" data-value="{{ v }}">{{ v }}</button>
+  {% endfor %}
+
+  <span class="filter-label">Status:</span>
+  <button class="filter-btn active" data-group="status" data-value="all">All</button>
+  <button class="filter-btn" data-group="status" data-value="persistent">Persistent</button>
+  <button class="filter-btn" data-group="status" data-value="recurring">Recurring</button>
+  <button class="filter-btn" data-group="status" data-value="unstable">Unstable</button>
+  <button class="filter-btn" data-group="status" data-value="ai-analyzed">AI Analyzed</button>
+</div>
+
+<div class="badge-legend">
+  <span class="badge-legend-title">Badge Legend: </span>
+  <span class="badge-legend-item"><span class="badge recurring" style="cursor:default">Recurring</span> job failed in {{ recurring_threshold }}+ payloads</span>
+  <span class="badge-legend-item"><span class="badge persistent" style="cursor:default">Persistent</span> job failed in {{ persistent_threshold }}+ payloads - likely not a flake</span>
+  <span class="badge-legend-item"><span class="badge escalation-risk" style="cursor:default">Unstable</span> informing job failing 3+ consecutive payloads</span>
+</div>
+<div class="table-wrapper">
+<div class="detail-grid-header">
+  <div></div>
+  <div class="sortable" data-sort-col="0">Job</div>
+  <div class="sortable" data-sort-col="1" style="text-align:center">Version</div>
+  <div class="sortable" data-sort-col="2">Payload</div>
+  <div class="sortable" data-sort-col="3" style="text-align:center">Topology</div>
+  <div class="sortable" data-sort-col="4">Type</div>
+  <div class="sortable" data-sort-col="5">Recurrence</div>
+  <div class="sortable" data-sort-col="6">Date</div>
+</div>
+{% for detail in all_failing %}
+{% set _fc = failure_counts.get(detail.job.name, 0) %}
+{% set _statuses = [] %}
+{% if _fc >= persistent_threshold %}{% if _statuses.append('persistent') %}{% endif %}{% endif %}
+{% if _fc >= recurring_threshold and _fc < persistent_threshold %}{% if _statuses.append('recurring') %}{% endif %}{% endif %}
+{% if detail.job.name in escalation_risk_jobs %}{% if _statuses.append('unstable') %}{% endif %}{% endif %}
+{% if detail.job.deep_analysis %}{% if _statuses.append('ai-analyzed') %}{% endif %}{% endif %}
+<details id="detail-{{ loop.index }}" class="detail-row failure-row" data-topology="{{ detail.job.topology }}" data-jobtype="{{ detail.job.job_type.value }}" data-version="{{ detail.version }}" data-status="{{ _statuses | join(' ') }}" data-row-index="{{ loop.index }}" data-prow-url="{{ detail.job.prow_url }}" data-job-name="{{ detail.job.name }}">
+  <summary>
+    <span class="detail-cell-job" title="{{ detail.job.name }}">{{ detail.job.name }}{% if detail.job.deep_analysis %}<span class="badge ai-analyzed">AI Analyzed</span>{% endif %}{% set also_in = cross_topology.get(detail.job.name, []) %}{% if also_in %}<span class="cross-topo-hint" title="Also failing in other topologies">{% for t in also_in %}<span class="badge {{ t|lower }}">{{ t }}</span>{% endfor %}</span>{% endif %}</span>
+    <span class="detail-cell-version">{{ detail.version }}</span>
+    <span class="detail-cell-payload"><a href="{{ detail.payload_url }}" target="_blank" title="{{ detail.payload_tag }}" onclick="event.stopPropagation()">{{ detail.payload_tag }}</a></span>
+    <span class="detail-cell-topology"><span class="badge {{ detail.job.topology | lower }}">{{ detail.job.topology }}</span></span>
+    <span class="detail-cell-type"><span class="badge {{ detail.job.job_type.value }}">{{ detail.job.job_type.value }}</span></span>
+    <span class="detail-cell-recurrence">{% set fc = failure_counts.get(detail.job.name, 0) %}{% if fc >= persistent_threshold %}<span class="badge persistent" title="Failed in {{ fc }} payloads">Persistent</span>{% elif fc >= recurring_threshold %}<span class="badge recurring" title="Failed in {{ fc }} payloads">Recurring</span>{% endif %}{% if detail.job.name in escalation_risk_jobs %}<span class="badge escalation-risk">Unstable</span>{% endif %}{% if fc < recurring_threshold and detail.job.name not in escalation_risk_jobs %}<span style="color:var(--text-muted)">&mdash;</span>{% endif %}</span>
+    <span class="detail-cell-date">{% if detail.date %}{{ detail.date }}{% endif %}</span>
+  </summary>
+  <div class="content">
+
+    {# AI analysis: rendered inline if deep_analysis exists, or placeholder for post-generation patching #}
+    {% if detail.job.deep_analysis %}
+    {% set da = detail.job.deep_analysis %}
+    {% set root_cause = da.root_cause %}
+    {% set failure_type = da.failure_type %}
+    {% set impact = da.impact %}
+    {% set suspect_prs = da.suspect_prs %}
+    {% set recommendation = da.recommendation %}
+    {% set same_root_cause = da.same_root_cause %}
+    {% set attempt_analyses = da.attempt_analyses %}
+    {% set attempt_count = detail.job.previous_attempts|length + 1 %}
+    {% set payload_tag = detail.payload_tag %}
+    {% set job_name = detail.job.name %}
+    {% include "_analysis_card.html" %}
+    {% else %}
+    <div class="claude-suggestion" data-prow-url="{{ detail.job.prow_url }}" data-attempt-count="{{ detail.job.previous_attempts|length + 1 }}">
+      For deeper analysis, ask Chai:<br>
+      <div class="cmd-copy-row">
+        <code>Investigate this failing Prow job: {{ detail.job.prow_url }}</code>
+        <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>
+      </div>
+    </div><!-- /claude-suggestion -->
+    {% endif %}
+
+    {# Escalation risk: consecutive failure history #}
+    {% set er_info = escalation_risk_by_job.get(detail.job.name) %}
+    {% if er_info and er_info.failing_runs %}
+    <div class="escalation-history">
+      <strong>Consecutive Failures ({{ er_info.consecutive_failures }}x, newest first)</strong>
+      <div class="escalation-history-runs">
+        {% for run in er_info.failing_runs %}
+        <a href="{{ run.prow_url }}" target="_blank" class="escalation-history-run">{{ run.payload_tag }}</a>
+        {% endfor %}
+        {% if er_info.triage_url %}
+        <a href="{{ er_info.triage_url }}" target="_blank" class="escalation-history-run escalation-history-sippy">View full history in Sippy &#8594;</a>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    {# Attempts and failing tests #}
+    {% if detail.job.previous_attempts %}
+    <div class="previous-attempts">
+      {% for attempt in detail.job.previous_attempts %}
+      <div class="previous-attempt-card">
+        <p><strong>Attempt #{{ loop.index }}:</strong> <a href="{{ attempt.prow_url }}" target="_blank">View in Prow</a>
+          <span class="badge blocking">Failed</span>
+        </p>
+        {% if attempt.failing_tests %}
+        <details>
+          <summary>Failing Tests ({{ attempt.failing_tests|length }})</summary>
+          <div class="content">
+            {% for test in attempt.failing_tests %}
+            <details style="margin-left:12px">
+              <summary>{{ test.name }}</summary>
+              <div class="content"><pre>{{ test.error_message }}</pre></div>
+            </details>
+            {% endfor %}
+          </div>
+        </details>
+        {% elif attempt.error_summary %}
+        <p style="color:var(--text-muted);font-size:13px;margin:4px 0 0 0">{{ attempt.error_summary }}</p>
+        {% endif %}
+      </div>
+      {% endfor %}
+      <div class="previous-attempt-card" style="margin-top:8px">
+        <p><strong>Attempt #{{ detail.job.previous_attempts|length + 1 }}:</strong> <a href="{{ detail.job.prow_url }}" target="_blank">View in Prow</a>
+          <span class="badge {{ 'green' if detail.job.result.value == 'S' else 'blocking' }}">{{ 'Succeeded' if detail.job.result.value == 'S' else 'Failed' }}</span>
+        </p>
+        {% if detail.job.failing_tests %}
+        <details>
+          <summary>Failing Tests ({{ detail.job.failing_tests|length }})</summary>
+          <div class="content">
+            {% for test in detail.job.failing_tests %}
+            <details style="margin-left:12px">
+              <summary>{{ test.name }}</summary>
+              <div class="content"><pre>{{ test.error_message }}</pre></div>
+            </details>
+            {% endfor %}
+          </div>
+        </details>
+        {% endif %}
+      </div>
+    </div>
+    {% else %}
+    {# Failing tests for jobs without previous attempts #}
+    {% if detail.job.failing_tests %}
+    <div class="previous-attempts">
+      <div class="previous-attempt-card">
+        <p><strong>Failing Tests ({{ detail.job.failing_tests|length }})</strong></p>
+        {% for test in detail.job.failing_tests %}
+        <details style="margin-left:12px">
+          <summary>{{ test.name }}</summary>
+          <div class="content"><pre>{{ test.error_message }}</pre></div>
+        </details>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    {% endif %}
+  </div>
+</details>
+{% endfor %}
+</div>
+{% if all_failing | length > 5 %}
+<button class="expand-btn" id="expand-details-btn" onclick="expandSection('details')">Show all {{ all_failing | length }} failure details</button>
+{% endif %}
+{% else %}
+<div class="empty-state">No failing edge jobs found across monitored payloads.</div>
+{% endif %}
+
+<!-- Sippy Regressions -->
+{% if all_regressions %}
+<h2 id="section-sippy-regressions">Sippy Job Health Status</h2>
+<div class="meta" style="margin-bottom:8px">Source: <a href="https://sippy.dptools.openshift.org" target="_blank">Sippy Jobs</a> - jobs with negative net improvement or current pass rate below 50%, with at least 3 current runs. Investigation actions are available for each job.</div>
+<div class="filters">
+  <span class="filter-label">Topology:</span>
+  <button class="filter-btn active" data-group="regtopology" data-value="all">All</button>
+  {% for topo in reg_topologies %}
+  <button class="filter-btn" data-group="regtopology" data-value="{{ topo }}">{{ topo }}</button>
+  {% endfor %}
+
+  <span class="filter-label">Version:</span>
+  <button class="filter-btn active" data-group="regversion" data-value="all">All</button>
+  {% for v in reg_versions %}
+  <button class="filter-btn" data-group="regversion" data-value="{{ v }}">{{ v }}</button>
+  {% endfor %}
+</div>
+{% include "_sippy_health_grid.html" %}
+{% if all_regressions|length > 5 %}
+<button class="expand-btn" id="expand-regressions-btn" onclick="expandSection('regressions')">Show all {{ all_regressions|length }} job findings</button>
+{% endif %}
+{% endif %}
+
+
+<!-- Component Readiness: HA vs Edge Topologies -->
+{% if component_regressions %}
+<h2 id="section-component-readiness">Component Readiness - HA vs Edge Topologies</h2>
+<div class="meta" style="margin-bottom:8px">
+  Source: <a href="https://sippy.dptools.openshift.org/sippy-ng/component_readiness/main" target="_blank">Sippy Component Readiness</a> - components with statistically significant regressions on edge topologies (SNO, TNF) compared to HA (Fisher's exact test, 95% confidence).
+</div>
+<div class="filters" id="cr-filters">
+  {% if cr_comparisons | length > 1 %}
+  <span class="filter-label">Comparison:</span>
+  <button class="filter-btn active" data-group="crcomparison" data-value="all">All</button>
+  {% for c in cr_comparisons %}
+  <button class="filter-btn" data-group="crcomparison" data-value="{{ c }}">{{ c }}</button>
+  {% endfor %}
+  {% endif %}
+
+  <span class="filter-label">Platform:</span>
+  <button class="filter-btn active" data-group="crplatform" data-value="all">All</button>
+  {% for p in cr_platforms %}
+  <button class="filter-btn" data-group="crplatform" data-value="{{ p }}">{{ p }}</button>
+  {% endfor %}
+
+  <span class="filter-label">Version:</span>
+  <button class="filter-btn active" data-group="crversion" data-value="all">All</button>
+  {% for v in cr_versions %}
+  <button class="filter-btn" data-group="crversion" data-value="{{ v }}">{{ v }}</button>
+  {% endfor %}
+</div>
+
+<div class="table-wrapper">
+<table id="cr-table">
+  <thead>
+    <tr>
+      <th class="sortable" data-col="0">Component</th>
+      <th class="sortable" data-col="1">Test</th>
+      <th class="sortable" data-col="2">Version</th>
+      <th class="sortable" data-col="3">Variant</th>
+      <th class="sortable" data-col="4">HA Pass Rate</th>
+      <th class="sortable" data-col="5">Edge Pass Rate</th>
+      <th class="sortable" data-col="6">Delta</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for cr in component_regressions %}
+    <tr class="cr-row" data-row-index="{{ loop.index }}" data-crcomparison="{{ cr.comparison }}" data-crplatform="{{ cr.variants.get('Platform', '') }}" data-crversion="{{ cr.version }}">
+      <td>{{ cr.component }}</td>
+      <td style="font-size:13px">
+        {% if cr.detail_url %}
+        <a href="{{ cr.detail_url }}" target="_blank">{{ cr.test_name }}</a>
+        {% else %}
+        {{ cr.test_name }}
+        {% endif %}
+      </td>
+      <td>{{ cr.version }}{% if cr.comparison %} <span class="badge {{ cr.comparison | lower }}">{{ cr.comparison }}</span>{% endif %}</td>
+      <td style="font-size:13px;color:var(--text-muted)">
+        {% set parts = [] %}
+        {% if cr.variants.get('Platform') %}{% set _ = parts.append(cr.variants['Platform']) %}{% endif %}
+        {% if cr.variants.get('Architecture') %}{% set _ = parts.append(cr.variants['Architecture']) %}{% endif %}
+        {% if cr.variants.get('Network') %}{% set _ = parts.append(cr.variants['Network']) %}{% endif %}
+        {{ parts | join(' / ') }}
+      </td>
+      <td>
+        <span class="pass-rate high">{{ "%.1f" | format(cr.base_pass_rate) }}%</span>
+        <span style="font-size:11px;color:var(--text-muted)">({{ cr.base_success }}/{{ cr.base_success + cr.base_failure }})</span>
+      </td>
+      <td>
+        <span class="pass-rate {% if cr.sample_pass_rate < 70 %}low{% elif cr.sample_pass_rate < 90 %}medium{% else %}high{% endif %}">
+          {{ "%.1f" | format(cr.sample_pass_rate) }}%
+        </span>
+        <span style="font-size:11px;color:var(--text-muted)">({{ cr.sample_success }}/{{ cr.sample_success + cr.sample_failure }})</span>
+      </td>
+      <td>
+        {% set delta = cr.sample_pass_rate - cr.base_pass_rate %}
+        <span class="pass-rate {% if delta < -10 %}low{% elif delta < 0 %}medium{% else %}high{% endif %}">
+          {{ "%+.1f" | format(delta) }}%
+        </span>
+      </td>
+      <td class="action-cell">
+        <div class="cmd-copy-row" style="margin:0">
+          <code style="font-size:11px">Why is test "{{ cr.test_name }}" regressing on {{ cr.comparison }} vs HA for {{ cr.version }}? What variants are affected and what changed recently?</code>
+          <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if component_regressions|length > 5 %}
+<button class="expand-btn" id="expand-cr-btn" onclick="expandSection('cr')">Show all {{ component_regressions|length }} component regressions</button>
+{% endif %}
+{% endif %}
+
+</div><!-- /tab-payload-health -->
+
+<!-- Tab: Timing Insights -->
+{% if timing_html %}
+<div class="tab-panel" id="tab-timing-insights">
+{{ timing_html | safe }}
+</div>
+{% endif %}
+
+{% include "_jira_drafts.html" %}
+
+<script>{{ js | safe }}</script>
+</body>
+</html>

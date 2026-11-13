@@ -1,0 +1,8 @@
+"""Load the standalone tool and shared collector from the checkout."""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import edge_ocp_ci_monitor  # noqa: F401

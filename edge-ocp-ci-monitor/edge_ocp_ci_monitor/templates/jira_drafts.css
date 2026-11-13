@@ -1,0 +1,69 @@
+.jira-draft { padding: 0; }
+.jira-draft-summary {
+  display: block;
+  width: 100%;
+  padding: 16px 20px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.jira-draft-summary:hover { background: var(--surface-hover); }
+.jira-draft-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.jira-draft-summary .title, .jira-draft-summary .meta { display: block; }
+.jira-draft-summary .meta { margin-bottom: 0; }
+.jira-draft-heading { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 16px; }
+.jira-draft-heading .title { flex: 1 1 220px; }
+.jira-draft-details-cue {
+  flex-shrink: 0;
+  margin-bottom: 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: rgba(88,166,255,0.1);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.jira-version { background: rgba(88,166,255,0.15); color: var(--accent); }
+.jira-draft-dialog {
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  margin: auto;
+  padding: 20px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+}
+.jira-draft-dialog::backdrop { background: rgba(0,0,0,0.55); }
+.jira-draft-dialog h3 { margin-top: 0; color: var(--text); }
+.jira-draft-dialog .meta { overflow-wrap: anywhere; }
+.jira-draft label {
+  display: block;
+  margin: 12px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.jira-draft input, .jira-draft textarea {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.jira-draft textarea { resize: vertical; line-height: 1.5; }
+.jira-draft-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.jira-draft-actions .create-btn { margin: 0; }
+.jira-draft-feedback { min-height: 1.5em; margin-top: 8px; font-size: 12px; color: var(--text-muted); }

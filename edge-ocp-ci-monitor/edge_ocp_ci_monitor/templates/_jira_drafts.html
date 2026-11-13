@@ -1,0 +1,51 @@
+{% if report.suggested_bugs %}
+<section id="section-suggested-bugs" aria-labelledby="jira-drafts-title">
+  <h2 id="jira-drafts-title">Chai-recommended New Bugs</h2>
+  <p class="meta">Chai recommends these drafts after checking for existing bugs. Scope: SNO, two node fencing (TNF), and two node arbiter (TNA). Review the evidence and fields before filing. No issue has been created.</p>
+  {% for bug in report.suggested_bugs %}
+  <article class="suggest-card jira-draft">
+    <button type="button" class="jira-draft-summary" aria-haspopup="dialog" aria-controls="jira-draft-{{ loop.index }}">
+      <span class="jira-draft-heading">
+        <span class="title">{{ bug.title }}</span>
+        <span class="jira-draft-details-cue">View details <span aria-hidden="true">&#8599;</span></span>
+      </span>
+      <span class="meta">
+        <span class="badge {{ bug.topology | lower }}">{{ bug.topology }}</span>
+        {% for version in bug.versions %}<span class="badge jira-version">{{ version }}</span>{% endfor %}
+      </span>
+    </button>
+    <dialog class="jira-draft-dialog" id="jira-draft-{{ loop.index }}" aria-labelledby="jira-draft-heading-{{ loop.index }}" aria-describedby="jira-draft-dismiss-{{ loop.index }}">
+      <h3 id="jira-draft-heading-{{ loop.index }}">Bug draft</h3>
+      <p class="meta"><span class="badge {{ bug.topology | lower }}">{{ bug.topology }}</span> {{ bug.job_name }}</p>
+      <label>Title
+        <input class="jira-draft-title" type="text" value="{{ bug.title }}" readonly>
+      </label>
+      <label>Description
+        <textarea class="jira-draft-description" rows="8" readonly>{{ bug.full_description }}</textarea>
+      </label>
+      <label>Target versions
+        <input class="jira-draft-versions" type="text" value="{{ bug.versions | join(', ') }}" readonly>
+      </label>
+      <label>Labels
+        <input class="jira-draft-labels" type="text" value="{{ jira_draft_label }}" readonly>
+      </label>
+      <div class="jira-draft-actions">
+        <a href="{{ bug.create_url }}" target="_blank" rel="noopener noreferrer" class="create-btn">Review draft in Jira</a>
+        <button type="button" class="create-btn gather-jira-details" aria-expanded="false" aria-controls="jira-chai-prompt-{{ loop.index }}">Gather details with Chai</button>
+        <button type="button" class="create-btn copy-jira-description">Copy full description</button>
+      </div>
+      <div class="jira-chai-prompt" id="jira-chai-prompt-{{ loop.index }}" hidden>
+        <label>Paste this prompt into Chai
+          <textarea rows="4" readonly>Investigate this {{ bug.topology }} finding: {{ bug.prow_url }}
+Draft: {{ bug.title }}
+Target versions: {{ bug.versions | join(', ') }}
+Gather evidence and reproduction details, check for an existing Jira bug, and refine the draft description. Do not create or change any issue.</textarea>
+        </label>
+      </div>
+      <p class="jira-draft-feedback" role="status" aria-live="polite"></p>
+      <p class="meta" id="jira-draft-dismiss-{{ loop.index }}">Press Esc or click outside to close.</p>
+    </dialog>
+  </article>
+  {% endfor %}
+</section>
+{% endif %}

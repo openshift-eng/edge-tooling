@@ -13,6 +13,7 @@ Automation, AI skills, and deployment tools for OpenShift edge engineering. This
 | Single Node OpenShift with DU config | [sno-deploy/](sno-deploy/) |
 | LVM Operator development workspace | [environments/lvm-operator/](environments/lvm-operator/) |
 | Nightly payload health monitoring | [payload-monitor/](payload-monitor/) |
+| Nightly payload dashboard with Chai MCP analysis | [edge-ocp-ci-monitor/](edge-ocp-ci-monitor/) |
 | Component Readiness triage report (HA vs edge) | [ci-tooling/readiness-report/](ci-tooling/readiness-report/) |
 | Multi-repo workspace management | [workspace plugin](plugins/workspace/) via the marketplace |
 | Claude Code plugins for edge workflows | [plugins/](plugins/) via the marketplace |
@@ -75,6 +76,7 @@ Then enable whichever plugins you need. See the [plugin README](plugins/README.m
 | [watchman/](watchman/) | Stop stale EC2 instances and send weekly Slack reports |
 | [sno-deploy/](sno-deploy/) | Deploy Single Node OpenShift with DU configuration |
 | [payload-monitor/](payload-monitor/) | Nightly payload health monitoring for edge topologies |
+| [edge-ocp-ci-monitor/](edge-ocp-ci-monitor/) | The same payload dashboard enriched by Chai Bot over MCP |
 | [environments/lvm-operator/](environments/lvm-operator/) | Development workspace for the LVM Storage operator |
 
 ## CI Tools

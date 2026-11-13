@@ -1,0 +1,2 @@
+-r ../payload-monitor/requirements.txt
+fastmcp==4.1.8
