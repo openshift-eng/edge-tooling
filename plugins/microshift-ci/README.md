@@ -60,15 +60,15 @@ suggestions for unmatched ones. The suggest/linked/skip decisions are written
 to `<WORKDIR>/bugs/bug-search-<release>.txt` when one release is analyzed, or
 to `<WORKDIR>/report-bug-search.txt` when several releases are analyzed. Bugs
 are filed manually via the prefilled "Create Bug in JIRA" buttons in the HTML
-report. The buttons follow the categorization decisions: they appear only for
-failures categorized as `suggest`; `linked` and `skipped` failures show their
-decision instead. A closed bug is listed only when its summary or description
-names the failure's distinctive terms (version numbers do not count); it is
-shown as possibly related, with the matched terms, and the failure stays
-`suggest` because Jira cannot show whether the fix was in the tested build.
-Closed bugs read from bug-matches files written before this check (for
-example, artifacts from an earlier run) were not context-verified; they show
-"match evidence unavailable" and must not be treated as verified matches.
+report. Every failure has a button, even when bugs were matched or the failure
+was categorized as `linked` or `skip`, so another bug can still be filed;
+those failures also show their decision. A closed bug is listed only when its
+summary or description names the failure's distinctive terms (version numbers
+do not count); it is shown as possibly related, with the matched terms, and the
+failure stays `suggest` because Jira cannot show whether the fix was in the
+tested build. Closed bugs read from bug-matches files written before this check
+(for example, artifacts from an earlier run) were not context-verified; they
+show "match evidence unavailable" and must not be treated as verified matches.
 
 ## Requirements
 

@@ -1297,8 +1297,8 @@ def main_report(report_file, candidates_file, workdir):
 # scripts/tests/test_search_bugs.py. The decisions are consumed by the
 # --report text stage (bug-search-*.txt), by downstream skills reading
 # bug-results-*.json, and by the HTML report (plugins/shared
-# create-report.py), which renders each decision next to the failure and
-# offers the Create Bug button only for suggest decisions.
+# create-report.py), which renders each decision next to the failure. The
+# report's manual Create Bug button does not depend on the decision.
 
 REASON_INFRASTRUCTURE = "Infrastructure failure — not a product bug"
 REASON_NO_BUGS = "No matching existing bugs found — suggest filing a new bug"

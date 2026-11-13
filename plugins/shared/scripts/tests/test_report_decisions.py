@@ -3,8 +3,10 @@
 Covers the Python half of the bug-decision wiring: loading
 bug-results-*.json, attaching decisions to matched candidates, and the
 create-report.py entry point applying (and ignoring) decisions end to
-end. The renderer half (button gating, badges) is covered by the Node
-harness in test_report_filter.js.
+end. The renderer half (badges, and the Create Bug button that every
+failure card offers regardless of decision) is covered by the Node harness in
+test_report_filter.js and test_report_create_bug.js, which
+CreateBugButtonReportTests drives with reports from the real entry point.
 
 Run with: python3 plugins/shared/scripts/tests/test_report_decisions.py
 """
@@ -176,6 +178,113 @@ class CreateReportEndToEndTests(unittest.TestCase):
             # dropped and the candidate must fall back to suggest affordances.
             self.assertNotIn("decision", by_title["image pull timeout"]["bug_match"])
 
+
+def write_create_bug_workdir(workdir):
+    """Write synthetic inputs covering every decision and match state."""
+    (workdir / "jobs").mkdir()
+    (workdir / "bugs").mkdir()
+    job = {"name": "periodic-synth", "url": "https://example.invalid/run/1",
+           "date": "2026-10-28"}
+    titles = ["image pull timeout", "greenboot timeout <b>&</b>", "node ran out of disk",
+              "etcd leader lost", "kubelet crashloop", "registry mirror 503",
+              "unmatched failure"]
+    (workdir / "jobs" / "release-4.20-summary.json").write_text(json.dumps({
+        "total_failed": len(titles), "issues": [
+            {"number": n, "title": title, "severity": "HIGH", "failure_type": "test",
+             "root_cause": "synthetic cause " + str(n), "affected_jobs": [job], "job_count": 1}
+            for n, title in enumerate(titles, 1)]}))
+    (workdir / "jobs" / "prs-summary.json").write_text(json.dumps({
+        "total_failed": 1, "prs": [{"number": 7, "title": "synthetic PR", "failed": 1,
+                                    "issues": [{"number": 1, "title": "image pull timeout",
+                                                "severity": "MEDIUM", "failure_type": "test",
+                                                "affected_jobs": [job], "job_count": 1}]}]}))
+    closed = {"key": "SYNTH-202", "summary": "greenboot timeout earlier", "status": "Closed",
+              "match_evidence": {"matched_terms": ["greenboot", "timeout"],
+                                 "matched_fields": ["summary"], "ignored_terms": []}}
+    (workdir / "bugs" / "bug-matches-4.20.json").write_text(json.dumps({
+        "source": "4.20", "candidates": [
+            {"error_signature": "image pull timeout", "regressions": [],
+             "duplicates": [{"key": "SYNTH-101", "summary": "image pull timeout", "status": "New"}]},
+            {"error_signature": "greenboot timeout <b>&</b>", "duplicates": [], "regressions": [closed]},
+            {"error_signature": "node ran out of disk", "duplicates": [], "regressions": []},
+            {"error_signature": "etcd leader lost", "duplicates": [],
+             "regressions": [{"key": "SYNTH-303", "summary": "etcd leader lost", "status": "Verified"}]},
+            {"error_signature": "kubelet crashloop", "regressions": [],
+             "duplicates": [{"key": "SYNTH-505", "summary": "kubelet crashloop", "status": "Open"}]},
+            {"error_signature": "registry mirror 503", "duplicates": [], "regressions": []},
+        ]}))
+    (workdir / "bugs" / "bug-results-4.20.json").write_text(json.dumps({
+        "mode": "search", "results": [
+            {"error_signature": "image pull timeout", "action": "linked", "jira_key": "SYNTH-101",
+             "skip_category": "", "reason": "Linked to existing bug SYNTH-101"},
+            {"error_signature": "greenboot timeout <b>&</b>", "action": "suggest", "jira_key": "",
+             "skip_category": "", "reason": "Possibly related to closed SYNTH-202"},
+            {"error_signature": "node ran out of disk", "action": "skip", "jira_key": "",
+             "skip_category": "infrastructure", "reason": "Infrastructure failure — not a product bug"},
+            {"error_signature": "etcd leader lost", "action": "skip", "jira_key": "",
+             "skip_category": "stale_regression", "reason": "Stale failure predating fix for SYNTH-303"},
+            {"error_signature": "registry mirror 503", "action": "linked", "jira_key": "SYNTH-404",
+             "skip_category": "", "reason": "Linked to existing bug SYNTH-404"},
+        ]}))
+
+
+def decision_action(issue):
+    return ((issue.get("bug_match") or {}).get("decision") or {}).get("action", "none")
+
+
+class CreateBugButtonReportTests(unittest.TestCase):
+    """Every rendered failure card of a configured component offers manual filing."""
+
+    def render(self, reports):
+        with tempfile.TemporaryDirectory() as tmp:
+            renderer = Path(tmp) / "renderer.js"
+            renderer.write_text(REPORT.JS)
+            probe = Path(tmp) / "probe.html"
+            probe.write_text(REPORT.generate_html("Probe", {}, [], None, None, STAMP))
+            return subprocess.run(
+                ["node", str(Path(__file__).with_name("test_report_filter.js")), str(renderer), "",
+                 "", str(probe)]
+                + [f"--create-bug-report={report}" for report in reports],
+                capture_output=True, text=True, check=False, timeout=120)
+
+    def test_entry_point_cards_offer_create_bug_for_every_decision(self):
+        expected = ["linked", "suggest", "skip", "skip", "none", "linked", "none"]
+        with tempfile.TemporaryDirectory() as tmp:
+            reports = []
+            for component in ("microshift", "lvm-operator"):
+                workdir = Path(tmp) / component
+                workdir.mkdir()
+                write_create_bug_workdir(workdir)
+                subprocess.run(
+                    [sys.executable, str(SCRIPTS / "create-report.py"), "--component", component,
+                     "--workdir", str(workdir), "4.20"],
+                    capture_output=True, text=True, check=True)
+                report = workdir / f"report-{component}-ci-doctor.html"
+                data = payload(report.read_text())
+                self.assertEqual(data["jira_cfg"], REPORT.COMPONENT_JIRA_CREATE[component])
+                actions = [decision_action(issue) for issue in data["releases_data"]["4.20"]["issues"]]
+                self.assertEqual(actions, expected)
+                self.assertEqual([decision_action(issue) for issue in data["pr_data"]["prs"][0]["issues"]],
+                                 ["linked"])
+                reports.append(report)
+            # Same cards, already matched and categorized, without a Jira create configuration.
+            unconfigured = json.loads(json.dumps(data))
+            missing = Path(tmp) / "missing-config.html"
+            missing.write_text(REPORT.generate_html(
+                "No Config", unconfigured["releases_data"], [], unconfigured["pr_data"],
+                None, STAMP, jira_cfg=None))
+            reports.append(missing)
+            result = self.render(reports)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r"PASS Create Bug button: \d+ match/decision states")
+        cards = len(expected) + 1
+        decisions = ",".join(expected + ["linked"])
+        for title in ("MicroShift", "LVMS"):
+            self.assertIn(f"PASS Create Bug report {title}: {cards} cards, {cards} buttons; "
+                          f"decisions {decisions}", result.stdout)
+        self.assertIn(f"PASS Create Bug report No Config: {cards} cards, 0 buttons; "
+                      f"decisions {decisions}", result.stdout)
+        print("\n".join(line for line in result.stdout.splitlines() if "Create Bug" in line))
 
 if __name__ == "__main__":
     unittest.main()
