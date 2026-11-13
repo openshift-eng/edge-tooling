@@ -13,6 +13,7 @@ _validate_results, so a passing run (exit 0) also proves the byte contract
 consumed by --report is satisfied.
 """
 
+import contextlib
 import importlib.util
 import io
 import json
@@ -725,6 +726,176 @@ class ClosedMatchContextTests(unittest.TestCase):
                 self.assertEqual(self.find(sig, hit, queries=queries)["regressions"], [])
                 self.assertFalse(any("status in (Closed, Verified)" in jql
                                      for jql, _ in queries))
+
+
+class ClosedSearchPaginationTests(unittest.TestCase):
+    """Closed-bug matches read every result page and fail closed."""
+
+    SIG = "toolchain download timed out in tools/pkg-build/build-rpm.sh"
+
+    @staticmethod
+    def filler(count):
+        return [_closed_issue(f"SYNTH-{1000 + i}", f"unrelated closed bug {i}")
+                for i in range(count)]
+
+    @staticmethod
+    def qualifying():
+        return _closed_issue(
+            "SYNTH-51", "toolchain download timed out",
+            _adf("tools/pkg-build/build-rpm.sh: toolchain download timed out"))
+
+    def test_production_defaults_use_paginated_search(self):
+        search_fn, search_all_fn = _search_bugs._resolve_search_fns()
+        self.assertIs(search_fn, _search_bugs.jira_search.search)
+        self.assertIs(search_all_fn, _search_bugs.jira_search.search_all)
+
+    def test_qualifying_closed_hit_beyond_first_page_is_kept(self):
+        page_queries, all_queries = [], []
+
+        def search_fn(jql, **kwargs):
+            page_queries.append((jql, kwargs.get("max_results")))
+            return []
+
+        def search_all_fn(jql, fields):
+            all_queries.append((jql, fields))
+            return self.filler(50) + [self.qualifying()]
+
+        result = _search_bugs.find_jira_bugs_for_candidate(
+            {"error_signature": self.SIG}, search_fn=search_fn,
+            search_all_fn=search_all_fn)
+        self.assertEqual([r["key"] for r in result["regressions"]], ["SYNTH-51"])
+        self.assertEqual(len(all_queries), 1)
+        self.assertIn("status in (Closed, Verified)", all_queries[0][0])
+        self.assertIn("description", all_queries[0][1].split(","))
+        # Open-bug duplicate queries stay on bounded single pages.
+        self.assertTrue(page_queries)
+        self.assertFalse(any("status in (Closed, Verified)" in jql
+                             for jql, _ in page_queries))
+        self.assertTrue(all(limit in (5, 50) for _, limit in page_queries))
+
+    def test_closed_search_failure_propagates(self):
+        def search_all_fn(jql, fields):
+            raise _search_bugs.jira_search.JiraSearchError("incomplete result")
+
+        with self.assertRaises(_search_bugs.jira_search.JiraSearchError):
+            _search_bugs.find_jira_bugs_for_candidate(
+                {"error_signature": self.SIG},
+                search_fn=lambda jql, **kwargs: [], search_all_fn=search_all_fn)
+
+    def test_source_search_threads_search_all_to_closed_matches(self):
+        all_queries = []
+
+        def search_all_fn(jql, fields):
+            all_queries.append(jql)
+            if "status in (Closed, Verified)" in jql:
+                return self.filler(50) + [self.qualifying()]
+            return []
+
+        result = _search_bugs.find_jira_bugs_for_source(
+            {"source": "4.22", "candidates": [{"error_signature": self.SIG}]},
+            search_fn=lambda jql, **kwargs: [], include_open_bugs=True,
+            search_all_fn=search_all_fn)
+        self.assertEqual(
+            [r["key"] for r in result["candidates"][0]["regressions"]],
+            ["SYNTH-51"])
+        self.assertEqual(
+            sum("status in (Closed, Verified)" in q for q in all_queries), 1)
+        self.assertEqual(result["open_bugs"], [])
+
+
+class _JiraResponse:
+    def __init__(self, data):
+        self.body = json.dumps(data).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self.body
+
+
+class ClosedSearchCliTests(unittest.TestCase):
+    """--pipeline reads closed matches through the real paginated client.
+
+    Only urlopen is faked: main(), jira_search.search_all and _request run
+    unchanged, so the CLI path and the pagination/error checks are covered.
+    """
+
+    SIG = ClosedSearchPaginationTests.SIG
+
+    def setUp(self):
+        self.addCleanup(_search_bugs.configure_component,
+                        _search_bugs.DEFAULT_COMPONENT)
+        env = mock.patch.dict(os.environ, {"JIRA_USERNAME": "user",
+                                           "JIRA_API_TOKEN": "token"})
+        env.start()
+        self.addCleanup(env.stop)
+        self.requests = []
+
+    def run_pipeline(self, workdir, component, closed_pages):
+        jobs = Path(workdir) / "jobs"
+        jobs.mkdir()
+        (jobs / "release-4.22-job-0-1.json").write_text(json.dumps([{
+            "severity": 3, "stack_layer": "test", "step_name": "build",
+            "error_signature": self.SIG, "root_cause": "rc",
+            "raw_error": self.SIG, "infrastructure_failure": False,
+            "job_url": "https://prow.example/1", "job_name": "periodic-build",
+            "release": "4.22", "remediation": "", "finished": "2026-09-01"}]))
+
+        def urlopen(request, timeout=None):
+            payload = json.loads(request.data)
+            self.requests.append(payload)
+            if "status in (Closed, Verified)" in payload["jql"]:
+                return _JiraResponse(closed_pages[payload.get("nextPageToken")])
+            return _JiraResponse({"issues": [], "isLast": True})
+
+        argv = [str(SCRIPT), "--component", component, "--pipeline", "4.22",
+                "--workdir", workdir]
+        with mock.patch.object(_search_bugs.jira_search.urllib.request,
+                               "urlopen", urlopen), \
+                mock.patch.object(sys, "argv", argv), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            _search_bugs.main()
+
+    def test_pipeline_reads_closed_results_past_first_page(self):
+        pages = {
+            None: {"issues": ClosedSearchPaginationTests.filler(50),
+                   "isLast": False, "nextPageToken": "page-2"},
+            "page-2": {"issues": [ClosedSearchPaginationTests.qualifying()],
+                       "isLast": True},
+        }
+        for component in ("microshift", "lvm-operator"):
+            with self.subTest(component=component), \
+                    tempfile.TemporaryDirectory() as workdir:
+                self.requests = []
+                self.run_pipeline(workdir, component, pages)
+                bugs = Path(workdir) / "bugs"
+                matches = json.loads((bugs / "bug-matches-4.22.json").read_text())
+                regressions = matches["candidates"][0]["regressions"]
+                self.assertEqual([r["key"] for r in regressions], ["SYNTH-51"])
+                self.assertIn("match_evidence", regressions[0])
+                closed = [r for r in self.requests
+                          if "status in (Closed, Verified)" in r["jql"]]
+                self.assertEqual([r.get("nextPageToken") for r in closed],
+                                 [None, "page-2"])
+                self.assertTrue(all(r["maxResults"] == 50 for r in closed))
+                report = (bugs / "bug-search-4.22.txt").read_text()
+                self.assertIn("SYNTH-51 [Closed] (matched:", report)
+
+    def test_incomplete_closed_pagination_fails_without_publishing(self):
+        pages = {None: {"issues": [ClosedSearchPaginationTests.qualifying()],
+                        "isLast": False}}
+        with tempfile.TemporaryDirectory() as workdir:
+            with self.assertRaisesRegex(
+                    _search_bugs.jira_search.JiraSearchError, "nextPageToken"):
+                self.run_pipeline(workdir, "microshift", pages)
+            bugs = Path(workdir) / "bugs"
+            self.assertFalse((bugs / "bug-matches-4.22.json").exists())
+            self.assertFalse((bugs / "bug-results-4.22.json").exists())
 
 
 class ClosedMatchReportTests(unittest.TestCase):

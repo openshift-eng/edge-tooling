@@ -338,14 +338,40 @@ def match_closed_issue_context(issue, context_terms, ignored_terms=()):
     }
 
 
-def find_jira_bugs_for_candidate(cand, search_fn=None):
+def _resolve_search_fns(search_fn=None, search_all_fn=None):
+    """Return (search_fn, search_all_fn), defaulting to the Jira client.
+
+    search_fn returns one bounded page (open-bug duplicate queries);
+    search_all_fn returns a complete paginated result (closed-bug matches and
+    the open-bug inventory). The production default, jira_search.search_all,
+    is bounded (page_size 50, max_pages 200, max_issues 10000) and raises
+    JiraSearchError when a result is incomplete or exceeds a bound, so an
+    incomplete search is never presented as complete. Only a caller that
+    injects search_fn alone (a test harness) gets a single-page stand-in.
+    """
+    if search_all_fn is None:
+        if search_fn is None:
+            search_all_fn = jira_search.search_all
+        else:
+            injected = search_fn
+
+            def single_page(jql, fields):
+                return injected(jql, fields=fields, max_results=50)
+
+            search_all_fn = single_page
+    if search_fn is None:
+        search_fn = jira_search.search
+    return search_fn, search_all_fn
+
+
+def find_jira_bugs_for_candidate(cand, search_fn=None, search_all_fn=None):
     """Search Jira for bugs matching one candidate's keywords and test IDs.
 
     Returns {duplicates: [...], regressions: [...]}.
-    Uses injectable search_fn for testability (defaults to jira_search.search).
+    Uses injectable search_fn/search_all_fn for testability (see
+    _resolve_search_fns for the production defaults).
     """
-    if search_fn is None:
-        search_fn = jira_search.search
+    search_fn, search_all_fn = _resolve_search_fns(search_fn, search_all_fn)
 
     error_signature = cand.get("error_signature", "")
     test_ids = extract_test_ids(error_signature)
@@ -410,11 +436,11 @@ def find_jira_bugs_for_candidate(cand, search_fn=None):
 
     return {
         "duplicates": accepted(open_hits),
-        "regressions": _find_closed_context_matches(error_signature, search_fn),
+        "regressions": _find_closed_context_matches(error_signature, search_all_fn),
     }
 
 
-def _find_closed_context_matches(error_signature, search_fn):
+def _find_closed_context_matches(error_signature, search_all_fn):
     """Return closed bugs that share the candidate's failure context.
 
     Retrieval ANDs the required context terms (see required_context_terms);
@@ -423,14 +449,17 @@ def _find_closed_context_matches(error_signature, search_fn):
     match_closed_issue_context and kept with its match_evidence, which the
     merge, categorize and report stages carry through. Without two context
     terms nothing can be verified, so no query is made.
+
+    Every result page is read (search_all_fn): the local check can reject
+    the most recently updated hits and keep a later one. A pagination
+    failure or an exceeded bound propagates as JiraSearchError.
     """
     context_terms, ignored_terms = extract_context_terms(error_signature)
     required = required_context_terms(context_terms)
     if not required:
         return []
     jql = build_search_jql_closed_match_keywords(required)
-    issues = search_fn(jql, fields="summary,status,assignee,updated,description",
-                       max_results=50)
+    issues = search_all_fn(jql, fields="summary,status,assignee,updated,description")
     matches = {}
     for issue in issues:
         key = issue.get("key")
@@ -452,22 +481,15 @@ def find_jira_bugs_for_source(candidates_data, search_fn=None,
     Each candidate gets {error_signature, severity, failure_type, step_name,
     affected_jobs, duplicates, regressions}.
     """
-    injected_search = search_fn is not None
-    if search_fn is None:
-        search_fn = jira_search.search
-    if search_all_fn is None:
-        if injected_search:
-            search_all_fn = lambda jql, fields: search_fn(
-                jql, fields=fields, max_results=50)
-        else:
-            search_all_fn = jira_search.search_all
+    search_fn, search_all_fn = _resolve_search_fns(search_fn, search_all_fn)
 
     source = candidates_data.get("source", "")
     candidates = candidates_data.get("candidates", [])
 
     result_candidates = []
     for cand in candidates:
-        search_result = find_jira_bugs_for_candidate(cand, search_fn=search_fn)
+        search_result = find_jira_bugs_for_candidate(
+            cand, search_fn=search_fn, search_all_fn=search_all_fn)
         result_candidates.append({
             "error_signature": cand.get("error_signature", ""),
             "severity": cand.get("severity"),

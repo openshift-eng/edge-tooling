@@ -66,6 +66,9 @@ decision instead. A closed bug is listed only when its summary or description
 names the failure's distinctive terms (version numbers do not count); it is
 shown as possibly related, with the matched terms, and the failure stays
 `suggest` because Jira cannot show whether the fix was in the tested build.
+Closed bugs read from bug-matches files written before this check (for
+example, artifacts from an earlier run) were not context-verified; they show
+"match evidence unavailable" and must not be treated as verified matches.
 
 ## Requirements
 
