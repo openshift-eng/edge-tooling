@@ -183,21 +183,25 @@ def write_create_bug_workdir(workdir):
     """Write synthetic inputs covering every decision and match state."""
     (workdir / "jobs").mkdir()
     (workdir / "bugs").mkdir()
-    job = {"name": "periodic-synth", "url": "https://example.invalid/run/1",
-           "date": "2026-10-28"}
     titles = ["image pull timeout", "greenboot timeout <b>&</b>", "node ran out of disk",
               "etcd leader lost", "kubelet crashloop", "registry mirror 503",
               "unmatched failure"]
+
+    def issues(severity, cause, job_name, run_url):
+        job = {"name": job_name, "url": run_url, "date": "2026-10-28"}
+        return [{"number": n, "title": title, "severity": severity, "failure_type": "test",
+                 "root_cause": f"{cause} {n}", "affected_jobs": [job], "job_count": 1}
+                for n, title in enumerate(titles, 1)]
+
     (workdir / "jobs" / "release-4.20-summary.json").write_text(json.dumps({
-        "total_failed": len(titles), "issues": [
-            {"number": n, "title": title, "severity": "HIGH", "failure_type": "test",
-             "root_cause": "synthetic cause " + str(n), "affected_jobs": [job], "job_count": 1}
-            for n, title in enumerate(titles, 1)]}))
+        "total_failed": len(titles),
+        "issues": issues("HIGH", "synthetic cause", "periodic-synth", "https://example.invalid/run/1")}))
+    # The PR carries the same failures, so every state also renders on a PR card.
     (workdir / "jobs" / "prs-summary.json").write_text(json.dumps({
-        "total_failed": 1, "prs": [{"number": 7, "title": "synthetic PR", "failed": 1,
-                                    "issues": [{"number": 1, "title": "image pull timeout",
-                                                "severity": "MEDIUM", "failure_type": "test",
-                                                "affected_jobs": [job], "job_count": 1}]}]}))
+        "total_failed": len(titles),
+        "prs": [{"number": 7, "title": "synthetic PR", "failed": len(titles),
+                 "issues": issues("MEDIUM", "synthetic PR cause", "pull-synth",
+                                  "https://example.invalid/pr-run/1")}]}))
     closed = {"key": "SYNTH-202", "summary": "greenboot timeout earlier", "status": "Closed",
               "match_evidence": {"matched_terms": ["greenboot", "timeout"],
                                  "matched_fields": ["summary"], "ignored_terms": []}}
@@ -265,7 +269,7 @@ class CreateBugButtonReportTests(unittest.TestCase):
                 actions = [decision_action(issue) for issue in data["releases_data"]["4.20"]["issues"]]
                 self.assertEqual(actions, expected)
                 self.assertEqual([decision_action(issue) for issue in data["pr_data"]["prs"][0]["issues"]],
-                                 ["linked"])
+                                 expected)
                 reports.append(report)
             # Same cards, already matched and categorized, without a Jira create configuration.
             unconfigured = json.loads(json.dumps(data))
@@ -277,8 +281,8 @@ class CreateBugButtonReportTests(unittest.TestCase):
             result = self.render(reports)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertRegex(result.stdout, r"PASS Create Bug button: \d+ match/decision states")
-        cards = len(expected) + 1
-        decisions = ",".join(expected + ["linked"])
+        cards = 2 * len(expected)  # every state on a release card and on a PR card
+        decisions = ",".join(expected + expected)
         for title in ("MicroShift", "LVMS"):
             self.assertIn(f"PASS Create Bug report {title}: {cards} cards, {cards} buttons; "
                           f"decisions {decisions}", result.stdout)

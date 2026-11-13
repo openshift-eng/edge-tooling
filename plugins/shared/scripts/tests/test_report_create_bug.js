@@ -168,6 +168,13 @@ module.exports = function runCreateBugTests({reportTest, Element, document, rend
             const detail = row.nextElementSibling;
             assert(detail && detail.classList.contains('detail-row'), `${label} #${entry.number}: detail row rendered`);
             const name = `${label} ${entry.title} [${decisionAction(entry)}]`;
+            // the card keeps its original issue details around the bug links
+            assert.equal(row.querySelector('.col-title').textContent, entry.title, name + ': title');
+            const rootCause = detail.querySelector('.root-cause');
+            if (entry.root_cause) assert(rootCause && rootCause.textContent.endsWith(entry.root_cause), name + ': root cause');
+            for (const job of entry.affected_jobs || []) {
+                assert(detail.querySelectorAll('li a').some(link => link.href === job.url && link.textContent === job.name && link.target === '_blank'), name + ': affected job ' + job.name);
+            }
             assertMatchesAndBadge(detail.querySelector('.bug-links'), entry.bug_match, name);
             if (payload.jira_cfg) {
                 const button = assertSingleButton(detail, payload.jira_cfg, entry, name);
