@@ -39,6 +39,7 @@ _ARCHES = ["amd64", "arm64"]
 _CHECKS_ERRATA = [
     "pr_errata_rpms_found",
     "pr_errata_rpms_shipped",
+    "pr_errata_rpms_kcs_indexed",
     "pr_advisory_bootc_stage_found",
     "pr_advisory_bootc_stage_shipped",
     "pr_advisory_bootc_stage_images",
@@ -69,6 +70,7 @@ _CHECKS_LIFECYCLE = [
 _CHECK_SECTIONS = {
     "pr_errata_rpms_found": "Errata (RPMs)",
     "pr_errata_rpms_shipped": "Errata (RPMs)",
+    "pr_errata_rpms_kcs_indexed": "Errata (RPMs)",
     "pr_advisory_bootc_stage_found": "Advisory (Bootc Stage)",
     "pr_advisory_bootc_stage_shipped": "Advisory (Bootc Stage)",
     "pr_advisory_bootc_stage_images": "Advisory (Bootc Stage)",
@@ -127,6 +129,7 @@ def _all_check_ids(version_info):
     """Return the ordered list of check IDs applicable to this version."""
     ids = [
         "pr_errata_rpms_found", "pr_errata_rpms_shipped",
+        "pr_errata_rpms_kcs_indexed",
         "pr_rpms_customer_portal", "pr_rpms_cdn",
     ]
     if _has_bootc(version_info):
@@ -184,24 +187,115 @@ def _parse_hydra_doc(doc):
         "portal_url": portal_url,
         "publication_date": date,
         "synopsis": synopsis,
+        "source": "hydra",
     }
 
 
-def find_rpms_errata(version, minor):
-    """Search Hydra for the RPM errata matching this exact version."""
+def _find_rpms_errata_via_et(version, release_type):
+    """Discover the RPM advisory from the Brew build record in the Errata Tool.
+
+    Hydra's search index lags several days behind advisory publication, so a
+    shipped advisory can be absent from search results. The ET build record is
+    authoritative: it lists the advisories the build belongs to.
+    """
+    if not release_type:
+        return None
+    try:
+        build = brew.get_build_info(version, release_type)
+    except requests.RequestException as exc:
+        logger.debug("Brew lookup failed for %s: %s", version, exc)
+        return None
+    if not build.get("found"):
+        return None
+
+    # A version can map to several builds (e.g. separate el9 and el10 NVRs),
+    # and the advisory may be attached to any of them. Inspect every matching
+    # NVR and only give up once none yields a shipped advisory.
+    for nvr in build.get("nvrs") or [build["nvr"]]:
+        found = _shipped_advisory_for_nvr(nvr)
+        if found is not None:
+            return found
+    return None
+
+
+def _shipped_advisory_for_nvr(nvr):
+    """Return the shipped-advisory info for a single Brew NVR, or None."""
+    data = errata.fetch_build_advisories(nvr)
+    if not data:
+        return None
+
+    # ``released_errata`` is a single advisory object (or null); ``all_errata``
+    # is a list of them. Keep the released advisory whole rather than splitting
+    # its fields, so it can be matched when it is not also in ``all_errata``.
+    candidates = []
+    released = data.get("released_errata")
+    if isinstance(released, dict):
+        candidates.append(released)
+    elif isinstance(released, list):
+        candidates.extend(released)
+    candidates.extend(data.get("all_errata") or [])
+
+    for adv in candidates:
+        if not isinstance(adv, dict):
+            continue
+        name = adv.get("name") or ""
+        if not name or (adv.get("status") or "").upper() != "SHIPPED_LIVE":
+            continue
+        advisory = errata.fetch_advisory(name)
+        if advisory is None:
+            continue
+        logger.info("Found %s via Errata Tool (Hydra index lag)", name)
+        issue_date = (advisory.get("issue_date")
+                      or advisory.get("publish_date") or "")
+        return {
+            "advisory_name": name,
+            "portal_url": f"https://access.redhat.com/errata/{name}",
+            "publication_date": str(issue_date)[:10],
+            "synopsis": advisory.get("synopsis", ""),
+            # Resolved from the Errata Tool because Hydra's KCS search did
+            # not return it — i.e. the advisory is not in the KCS index.
+            "source": "errata_tool",
+        }
+    return None
+
+
+def find_rpms_errata(version, minor, release_type=None, vpn_ok=False):
+    """Find the RPM errata matching this exact version.
+
+    Hydra is tried first (fast, no VPN). When its index has not caught up
+    yet, fall back to the Errata Tool build record if the VPN is available.
+    """
+    hydra_error = None
     try:
         docs = _hydra_search(
             f'"Red Hat build of MicroShift {minor}" documentKind:Errata'
         )
     except (requests.RequestException, json.JSONDecodeError) as e:
         logger.warning("Hydra RPM errata search failed for %s: %s", version, e)
-        return {"error": str(e)}
+        hydra_error = str(e)
+        docs = []
 
     version_pattern = re.compile(rf"\b{re.escape(version)}\b")
     for doc in docs:
         synopsis = doc.get("portal_synopsis", "")
         if version_pattern.search(synopsis):
             return _parse_hydra_doc(doc)
+
+    if vpn_ok:
+        found = _find_rpms_errata_via_et(version, release_type)
+        if found is not None:
+            # The advisory was discovered via the Errata Tool, so RPM discovery
+            # succeeds. But if Hydra's search *errored* (rather than returning
+            # no match), its KCS index could not be consulted — record that
+            # separately under ``hydra_error`` so the KCS-indexing check reports
+            # an unknown status instead of claiming a discoverability gap. Kept
+            # distinct from ``error`` so it does not block RPM discovery.
+            if hydra_error is not None:
+                return {**found, "hydra_error": hydra_error}
+            return found
+
+    if hydra_error is not None:
+        return {"error": hydra_error}
     return None
 
 
@@ -278,6 +372,92 @@ def _check_errata_shipped(check_id, advisory, errata_info, vpn_ok):
     return _fail(check_id, f"Status: {status} — expected SHIPPED_LIVE",
                  [f"Advisory: {advisory_name}",
                   f"Current: {status}"])
+
+
+def _hydra_indexes_advisory(advisory_name):
+    """Return whether Hydra's KCS search can find a specific advisory by name.
+
+    The minor-scoped search in :func:`find_rpms_errata` only inspects the first
+    page of results (``rows=20``, newest first), so an advisory that is genuinely
+    in the KCS index but sorts past that page — e.g. re-verifying an older
+    z-stream whose errata is buried under newer ones — is never surfaced and gets
+    resolved via the Errata Tool instead. A direct by-name query settles whether
+    the advisory is actually indexed, independent of its position.
+
+    Returns True if indexed, False if not, None if the search could not run.
+    """
+    if not advisory_name or advisory_name == "?":
+        return None
+    try:
+        docs = _hydra_search(advisory_name)
+    except (requests.RequestException, json.JSONDecodeError) as exc:
+        logger.debug("Hydra by-name search failed for %s: %s",
+                     advisory_name, exc)
+        return None
+    for doc in docs:
+        uri = doc.get("uri", doc.get("id", ""))
+        synopsis = doc.get("portal_synopsis", "")
+        if advisory_name in uri or advisory_name in synopsis:
+            return True
+    return False
+
+
+def check_rpms_kcs_indexed(check_id, errata_info):
+    """Advisory is discoverable via the public KCS (Hydra) search index.
+
+    KCS backs customer-facing portal search, so an advisory that has
+    shipped but is absent from the KCS index is a real, customer-facing
+    discoverability gap. It is surfaced here on its own — distinct from
+    ``pr_errata_rpms_found`` — so a KCS-index gap never mislabels a
+    correctly-shipped release as "RPMs not found" (which would cascade the
+    downstream shipped/customer_portal/cdn/downloads checks into failure).
+
+    PASS when the advisory came from Hydra's KCS search (it is indexed).
+    FAIL when it was shipped but had to be resolved via the Errata Tool
+    fallback and a direct by-name Hydra lookup still cannot find it (shipped,
+    but not in the KCS index).
+    """
+    if errata_info is None:
+        return _warn(check_id,
+                     "No RPM advisory resolved — cannot check KCS indexing")
+    if "error" in errata_info:
+        return _warn(check_id,
+                     f"Hydra search failed: {errata_info['error']}",
+                     ["Could not determine KCS index status"])
+    name = errata_info.get("advisory_name", "?")
+    if errata_info.get("source") == "hydra":
+        return _pass(check_id, f"{name} is indexed in KCS search")
+
+    # The advisory was resolved via the Errata Tool because Hydra's search
+    # errored, not because it returned no match — so the KCS index could not be
+    # consulted and its status is genuinely unknown, not a confirmed gap.
+    if errata_info.get("hydra_error"):
+        return _warn(check_id,
+                     f"KCS index status unknown for {name} — Hydra search "
+                     f"failed: {errata_info['hydra_error']}",
+                     [f"Advisory: {name}",
+                      "Resolved via the Errata Tool; Hydra could not be "
+                      "queried to confirm KCS indexing"])
+
+    # Resolved via the Errata Tool fallback. The minor-scoped Hydra search only
+    # inspects the first page of results, so confirm the advisory is genuinely
+    # absent — not merely sorted past that page — with a direct by-name lookup
+    # before reporting a discoverability gap.
+    indexed = _hydra_indexes_advisory(name)
+    if indexed:
+        return _pass(check_id, f"{name} is indexed in KCS search",
+                     ["Past the first page of the minor-scoped search; "
+                      "confirmed via a direct by-name lookup"])
+    if indexed is None:
+        return _warn(check_id,
+                     f"Could not confirm KCS index status for {name}",
+                     ["Hydra by-name search did not complete"])
+    return _fail(check_id,
+                 f"{name} shipped but missing from the KCS search index",
+                 [f"Advisory: {name}",
+                  "Resolved via the Errata Tool, not Hydra's KCS search",
+                  "KCS backs customer-facing portal search — the advisory "
+                  "is not yet discoverable there"])
 
 
 def _check_bootc_errata_shipped(errata_info, check_id=None):
@@ -639,8 +819,11 @@ def run_post_release_checks(version_info):
     with ThreadPoolExecutor(max_workers=8) as ex:
         futures = {}
 
-        # Errata searches (Hydra — public internet)
-        rpms_errata_future = ex.submit(find_rpms_errata, version, minor)
+        # Errata searches (Hydra — public internet, ET if the index lags)
+        rpms_errata_future = ex.submit(
+            find_rpms_errata, version, minor,
+            version_info.get("type"), vpn_ok
+        )
         shipment_future = None
         if has_bootc:
             logger.info("Fetching shipment MR for %s...", version)
@@ -718,6 +901,10 @@ def run_post_release_checks(version_info):
             _check_errata_shipped, "pr_errata_rpms_shipped",
             rpms_advisory, rpms_errata_info, vpn_ok
         )] = "pr_errata_rpms_shipped"
+        futures[ex.submit(
+            check_rpms_kcs_indexed, "pr_errata_rpms_kcs_indexed",
+            rpms_errata_info
+        )] = "pr_errata_rpms_kcs_indexed"
 
         # Bootc errata checks (stage + prod from shipment MR)
         if has_bootc:
