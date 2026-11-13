@@ -225,6 +225,10 @@ bash unit_tests/test_request_release-to-art.sh
 ## Requirements
 
 - VPN connection (for Brew RPM checks, advisory reports)
+- Red Hat CA in the system trust store, for the GitLab checks (shipment MR,
+  advisory YAML). Red Hat-managed machines have it; a container or CI image
+  must add it. GitLab requests carry `GITLAB_API_TOKEN`, so TLS is verified
+  and there is no `verify=False` fallback.
 - Kerberos login: `kinit`
 - GitLab API token: `GITLAB_API_TOKEN`
 - Jira API token: `JIRA_API_TOKEN` and `JIRA_USERNAME`

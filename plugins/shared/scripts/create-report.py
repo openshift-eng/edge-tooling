@@ -473,8 +473,9 @@ function createBugUrl(issue, sourceLabel) {
 }
 
 // === Bug links rendering ===
-// Categorization decision (loaded from bug-results-*.json): gates the
-// Create Bug button and is rendered as a badge for linked/skip candidates.
+// Categorization decision (loaded from bug-results-*.json): rendered as a
+// badge for linked/skip candidates, next to the Create Bug button when the
+// component has one; the decision never hides the button.
 function renderDecision(decision) {
     if (decision.action === 'linked' && decision.jira_key) {
         var a = makeLink(JIRA_BASE + '/browse/' + decision.jira_key,
@@ -495,10 +496,10 @@ function renderDecision(decision) {
 function renderBugLinks(parent, bugMatch, issue, sourceLabel) {
     var div = h('div', 'bug-links');
     var decision = bugMatch && bugMatch.decision;
-    // The button follows the categorization decision: only suggest (and
-    // uncategorized) candidates offer manual filing; linked and skipped
-    // candidates show their decision instead.
-    var url = (!decision || decision.action === 'suggest') ? createBugUrl(issue, sourceLabel) : null;
+    // Manual filing is offered for every failure of a component with a Jira
+    // create configuration, whatever the matches or decision: the operator
+    // may still choose to file another bug. The decision only adds a badge.
+    var url = createBugUrl(issue, sourceLabel);
     if (url) {
         var btn = makeLink(url, '+ Create Bug in JIRA', 'bug-tag create-bug-btn', '_blank');
         div.appendChild(btn);
@@ -527,13 +528,18 @@ function renderBugLinks(parent, bugMatch, issue, sourceLabel) {
         });
     }
     if (hasRegs) {
-        div.appendChild(h('strong', '', 'Regressions:')); div.appendChild(document.createElement('br'));
+        // Closed bugs sharing the failure context; whether their fixes were
+        // in the tested code is unknown, so they are not called regressions.
+        div.appendChild(h('strong', '', 'Possibly related closed bugs (fix inclusion unverified):'));
+        div.appendChild(document.createElement('br'));
         bugMatch.regressions.forEach(function(r) {
             var a = makeLink(JIRA_BASE + '/browse/' + r.key, r.key + ' \\u27F2', 'bug-tag bug-tag-regression', '_blank');
             div.appendChild(a);
             var info = ' ' + (r.summary || '') + ' (' + (r.status || '');
             if (r.assignee) info += ', ' + r.assignee;
             info += ')';
+            var terms = (r.match_evidence && r.match_evidence.matched_terms) || [];
+            info += terms.length ? ' \\u2014 matched: ' + terms.join(', ') : ' \\u2014 match evidence unavailable';
             div.appendChild(h('span', 'job-date', info));
             div.appendChild(document.createElement('br'));
         });

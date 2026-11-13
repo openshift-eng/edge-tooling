@@ -12,6 +12,7 @@ import argparse
 import json
 import logging
 import re
+import subprocess
 import sys
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -95,9 +96,19 @@ _SECTION_ORDER = [
 
 _DOCS_RELEASE_NOTES_URL = (
     "https://docs.redhat.com/en/documentation/"
-    "red_hat_build_of_microshift/{minor}/"
+    "red_hat_build_of_microshift/{doc_version}/"
     "html-single/red_hat_build_of_microshift_release_notes/"
 )
+
+
+def _docs_version(minor):
+    """Return the docs.redhat.com version segment for an X.Y stream.
+
+    The first minor of a major is published under the bare major ("5",
+    not "5.0", which returns 404/403); later minors use X.Y ("5.1").
+    """
+    major, _, y = minor.partition(".")
+    return major if y == "0" else minor
 
 
 def _rhel_versions(version_info):
@@ -638,21 +649,20 @@ def check_rpms_cdn(advisory, vpn_ok):
         return _fail(check_id, "No CDN push found",
                      [f"Advisory: {advisory_name}"])
 
-    # The Errata Tool keeps a record of every push attempt, including ones
-    # that failed and were re-pushed. A superseded FAILED record is not a
-    # live failure, so judge CDN delivery by the most recent push (push ids
-    # are monotonic, so the highest id is the latest attempt).
+    # Failed pushes are retried as new jobs, so only the most recent job
+    # (highest ID) reflects the current CDN state.
     latest = max(cdn_pushes, key=lambda p: p.get("id") or 0)
-    status = (latest.get("status") or "").upper()
+    status = (latest.get("status") or "?").upper()
     if status == "COMPLETE":
-        return _pass(check_id,
-                     f"CDN push complete ({len(cdn_pushes)} job(s))",
-                     [f"Advisory: {advisory_name}"])
-    statuses = [p.get("status", "?") for p in cdn_pushes]
-    return _fail(check_id,
-                 f"Latest CDN push not complete: {status or '?'}",
+        details = [f"Advisory: {advisory_name}"]
+        retries = len(cdn_pushes) - 1
+        if retries:
+            details.append(f"Latest of {len(cdn_pushes)} push jobs "
+                           f"({retries} earlier attempt(s))")
+        return _pass(check_id, "CDN push complete", details)
+    return _fail(check_id, f"Latest CDN push not complete: {status}",
                  [f"Advisory: {advisory_name}",
-                  f"Push jobs: {', '.join(statuses)}"])
+                  f"Push job: {latest.get('id', '?')}"])
 
 
 _ERRATA_RPM_RE = re.compile(
@@ -707,27 +717,47 @@ def check_rpms_downloads(errata_info, version_info):
                  [f"URL: {portal_url}"])
 
 
+def _curl_get(url, timeout=15):
+    """GET url with the curl CLI and return (http_status, body).
+
+    docs.redhat.com's bot filter answers 403 to python-requests (and any
+    other non-curl User-Agent) but serves curl, so fetch it with real curl.
+    Raises OSError if curl is missing, RuntimeError if curl itself fails.
+    """
+    marker = "\n__HTTP_STATUS__:"
+    proc = subprocess.run(
+        ["curl", "-sSL", "--max-time", str(timeout),
+         "-w", marker + "%{http_code}", url],
+        capture_output=True, text=True, timeout=timeout + 5, check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or f"curl exit {proc.returncode}")
+    body, _, status = proc.stdout.rpartition(marker)
+    return int(status), body
+
+
 def check_docs_published(version_info):
     """Release notes published on docs.redhat.com with version mentioned."""
     check_id = "pr_docs_published"
     minor = version_info["minor"]
     version = version_info["version"]
-    url = _DOCS_RELEASE_NOTES_URL.format(minor=minor)
+    url = _DOCS_RELEASE_NOTES_URL.format(doc_version=_docs_version(minor))
 
     try:
-        resp = requests.get(url, timeout=15, allow_redirects=True)
-        if resp.status_code != 200:
+        status, body = _curl_get(url)
+        if status != 200:
             return _fail(check_id,
-                         f"Release notes page returned HTTP {resp.status_code}",
+                         f"Release notes page returned HTTP {status}",
                          [f"URL: {url}"])
-        if version in resp.text:
+        if version in body:
             return _pass(check_id, f"Version {version} found in release notes",
                          [f"URL: {url}"])
         return _fail(check_id,
                      f"Release notes page exists but {version} not mentioned",
                      [f"URL: {url}",
                       "The z-stream release notes may not be published yet"])
-    except requests.RequestException as e:
+    except (OSError, RuntimeError, ValueError,
+            subprocess.TimeoutExpired) as e:
         return _warn(check_id, f"Could not reach docs.redhat.com: {e}",
                      [f"URL: {url}"])
 

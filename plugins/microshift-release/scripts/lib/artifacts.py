@@ -5,11 +5,19 @@ import logging
 import os
 import re
 import subprocess
+from urllib.parse import quote, unquote, urlparse
 
 import requests
+import truststore
 import urllib3
 
 logger = logging.getLogger(__name__)
+
+# gitlab.cee.redhat.com chains to a Red Hat internal root that certifi (the
+# requests default bundle) doesn't ship. Use the OS trust store instead, where
+# RH-managed machines already have it, so token-bearing requests keep TLS
+# verification on without per-user REQUESTS_CA_BUNDLE setup.
+truststore.inject_into_ssl()
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -52,12 +60,30 @@ _RHEL_VERSIONS = [9, 10]
 # GitLab internal instance for ocp-shipment-data
 _GITLAB_BASE = "https://gitlab.cee.redhat.com"
 _SHIPMENT_PROJECT_PATH = "hybrid-platforms/art/ocp-shipment-data"
+_GITLAB_TLS_HINT = ("TLS verification failed for gitlab.cee.redhat.com — the "
+                    "Red Hat CA must be in the system trust store "
+                    "(Red Hat-managed machine or CI image with the CA)")
+# Set when a GitLab request fails TLS verification, so callers that only see
+# a None response can report the TLS cause instead of a token problem.
+_gitlab_tls_failed = False
 
 
-def _http_get(url, timeout=15, verify=True, headers=None, proxies=None):
+def _http_get(url, timeout=15, verify=True, headers=None, proxies=None,
+              allow_redirects=True):
     """Perform an HTTP GET, returning the response or raising RequestException."""
     return requests.get(url, timeout=timeout, verify=verify, headers=headers,
-                        allow_redirects=True, proxies=proxies)
+                        allow_redirects=allow_redirects, proxies=proxies)
+
+
+def _redact_url(url):
+    """Return only a URL's path, dropping host, credentials, and query so
+    internal hostnames never reach the logs."""
+    if not url:
+        return url
+    try:
+        return urlparse(url).path or "<redacted-url>"
+    except ValueError:
+        return "<invalid-url>"
 
 
 def validate_nvr_format(nvr, release_type):
@@ -379,13 +405,58 @@ def _gitlab_get(path):
     Returns:
         requests.Response or None on failure.
     """
+    global _gitlab_tls_failed  # noqa: PLW0603
     headers = _gitlab_headers() or {}
     url = f"{_GITLAB_BASE}/api/v4/{path.lstrip('/')}"
     try:
-        return _http_get(url, headers=headers, verify=False, timeout=15)
-    except requests.RequestException as exc:
-        logger.debug("GitLab API request failed for %s: %s", path, exc)
+        # Trusted origin (_GITLAB_BASE); verify TLS and never follow a redirect
+        # that could forward PRIVATE-TOKEN to another host.
+        return _http_get(url, headers=headers, timeout=15,
+                         allow_redirects=False)
+    except requests.exceptions.SSLError as exc:
+        _gitlab_tls_failed = True
+        logger.error("%s: %s", _GITLAB_TLS_HINT, exc)
         return None
+    except requests.RequestException as exc:
+        # Warn, not debug: callers report a None response as "no access",
+        # which hides TLS/network failures behind a misleading token hint.
+        logger.warning("GitLab API request failed for %s: %s", path, exc)
+        return None
+
+
+def _gitlab_raw_to_api_path(web_url):
+    """Convert a GitLab web raw URL to its REST API raw-file path.
+
+    GitLab's web ``/-/raw/<ref>/<file>`` route authenticates via the browser
+    session cookie and ignores the PRIVATE-TOKEN header, so a PAT-based fetch
+    must go through the API ``projects/:id/repository/files/:path/raw?ref=``
+    route instead (the same route _gitlab_get uses successfully elsewhere).
+
+    Returns the API path for _gitlab_get, or None if web_url is not a
+    recognizable GitLab raw URL.
+    """
+    if not web_url:
+        return None
+    try:
+        parsed = urlparse(web_url)
+    except ValueError:
+        return None
+    base = urlparse(_GITLAB_BASE)
+    if (parsed.scheme, parsed.netloc) != (base.scheme, base.netloc):
+        return None
+    marker = "/-/raw/"
+    if marker not in parsed.path:
+        return None
+    project_path, remainder = parsed.path.split(marker, 1)
+    ref, _, file_path = remainder.partition("/")
+    project_path = unquote(project_path.strip("/"))
+    ref, file_path = unquote(ref), unquote(file_path)
+    if not (project_path and ref and file_path):
+        return None
+    enc_project = quote(project_path, safe="")
+    enc_file = quote(file_path, safe="")
+    return (f"projects/{enc_project}/repository/files/{enc_file}"
+            f"/raw?ref={quote(ref, safe='')}")
 
 
 def _get_gitlab_project_id():
@@ -420,11 +491,9 @@ def fetch_shipment_mr(version):
     """
     project_id = _get_gitlab_project_id()
     if project_id is None:
-        return {
-            "found": False,
-            "reason": f"No access to {_SHIPMENT_PROJECT_PATH} — check GITLAB_API_TOKEN permissions",
-            "skipped": True,
-        }
+        reason = (_GITLAB_TLS_HINT if _gitlab_tls_failed else
+                  f"No access to {_SHIPMENT_PROJECT_PATH} — check GITLAB_API_TOKEN permissions")
+        return {"found": False, "reason": reason, "skipped": True}
 
     # Search all MRs (open + merged) filtering by version in title
     search_version = version.replace("-", " ")
@@ -695,20 +764,28 @@ def fetch_advisory_details(advisory_url):
                "containerImage", "sha", "repo"}]} or None on failure.
     """
     import yaml as _yaml  # noqa: PLC0415
+    shown_url = _redact_url(advisory_url)
+    # The web /-/raw/ route ignores PRIVATE-TOKEN and bounces private projects
+    # to the HTML sign-in page, so always fetch via the authenticated API route.
+    api_path = _gitlab_raw_to_api_path(advisory_url)
+    if not api_path:
+        logger.warning("Advisory URL is not a GitLab raw URL: %s", shown_url)
+        return None
+    resp = _gitlab_get(api_path)
+    if resp is None:
+        return None  # _gitlab_get already logged the request failure
+    if resp.status_code != 200:
+        logger.warning("Advisory YAML fetch returned HTTP %d: %s",
+                       resp.status_code, shown_url)
+        return None
     try:
-        resp = _http_get(advisory_url, verify=False, timeout=15)
-        if resp.status_code != 200:
-            logger.warning("Advisory YAML fetch returned HTTP %d: %s",
-                           resp.status_code, advisory_url)
-            return None
         content = _yaml.safe_load(resp.text)
-    except (requests.RequestException, _yaml.YAMLError) as exc:
-        logger.warning("Advisory YAML fetch/parse failed for %s: %s",
-                       advisory_url, exc)
+    except _yaml.YAMLError as exc:
+        logger.warning("Advisory YAML parse failed for %s: %s", shown_url, exc)
         return None
 
     if not isinstance(content, dict):
-        logger.warning("Advisory YAML is not a mapping: %s", advisory_url)
+        logger.warning("Advisory YAML is not a mapping: %s", shown_url)
         return None
     spec = content.get("spec", {})
     raw_images = spec.get("content", {}).get("images", [])

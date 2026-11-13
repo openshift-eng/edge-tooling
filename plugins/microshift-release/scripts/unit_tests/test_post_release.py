@@ -20,6 +20,7 @@ from post_release import (  # noqa: E402
     check_rpms_cdn,
     check_rpms_downloads,
     check_docs_published,
+    _curl_get,
     check_lifecycle_listed,
     check_lifecycle_active,
     format_text_short,
@@ -532,6 +533,26 @@ class TestRpmsCdn(unittest.TestCase):
         self.assertIn("CDN push complete", r["reason"])
 
     @patch("post_release.errata.fetch_push_status")
+    def test_cdn_failed_then_retried(self, mock_push):
+        mock_push.return_value = [
+            {"id": 628034, "target": {"name": "cdn"}, "status": "FAILED"},
+            {"id": 628116, "target": {"name": "cdn"}, "status": "COMPLETE"},
+            {"id": 628042, "target": {"name": "cdn"}, "status": "FAILED"},
+        ]
+        r = check_rpms_cdn(_advisory(), vpn_ok=True)
+        self.assertEqual(r["status"], "PASS")
+
+    @patch("post_release.errata.fetch_push_status")
+    def test_cdn_latest_failed(self, mock_push):
+        mock_push.return_value = [
+            {"id": 1, "target": {"name": "cdn"}, "status": "COMPLETE"},
+            {"id": 2, "target": {"name": "cdn"}, "status": "FAILED"},
+        ]
+        r = check_rpms_cdn(_advisory(), vpn_ok=True)
+        self.assertEqual(r["status"], "FAIL")
+        self.assertIn("FAILED", r["reason"])
+
+    @patch("post_release.errata.fetch_push_status")
     def test_cdn_not_complete(self, mock_push):
         mock_push.return_value = [
             {"target": {"name": "cdn"}, "status": "IN_PROGRESS"},
@@ -550,16 +571,6 @@ class TestRpmsCdn(unittest.TestCase):
         r = check_rpms_cdn(_advisory(), vpn_ok=True)
         self.assertEqual(r["status"], "PASS")
         self.assertIn("CDN push complete", r["reason"])
-
-    @patch("post_release.errata.fetch_push_status")
-    def test_cdn_latest_failed(self, mock_push):
-        # A later push FAILED after an earlier COMPLETE — a real failure.
-        mock_push.return_value = [
-            {"id": 627161, "target": {"name": "cdn"}, "status": "COMPLETE"},
-            {"id": 627163, "target": {"name": "cdn"}, "status": "FAILED"},
-        ]
-        r = check_rpms_cdn(_advisory(), vpn_ok=True)
-        self.assertEqual(r["status"], "FAIL")
 
     @patch("post_release.errata.fetch_push_status")
     def test_no_cdn_push(self, mock_push):
@@ -628,34 +639,59 @@ class TestRpmsDownloads(unittest.TestCase):
 
 
 class TestDocsPublished(unittest.TestCase):
-    @patch("post_release.requests.get")
+    @patch("post_release._curl_get")
     def test_version_found(self, mock_get):
-        mock_get.return_value = MagicMock(status_code=200,
-                                          text="<html>...4.21.7...</html>")
+        mock_get.return_value = (200, "<html>...4.21.7...</html>")
         r = check_docs_published(_version())
         self.assertEqual(r["status"], "PASS")
         self.assertIn("4.21.7", r["reason"])
 
-    @patch("post_release.requests.get")
+    @patch("post_release._curl_get")
     def test_page_exists_version_missing(self, mock_get):
-        mock_get.return_value = MagicMock(status_code=200,
-                                          text="<html>...4.21.5...</html>")
+        mock_get.return_value = (200, "<html>...4.21.5...</html>")
         r = check_docs_published(_version())
         self.assertEqual(r["status"], "FAIL")
         self.assertIn("not mentioned", r["reason"])
 
-    @patch("post_release.requests.get")
+    @patch("post_release._curl_get")
     def test_page_not_found(self, mock_get):
-        mock_get.return_value = MagicMock(status_code=404)
+        mock_get.return_value = (404, "")
         r = check_docs_published(_version())
         self.assertEqual(r["status"], "FAIL")
 
-    @patch("post_release.requests.get")
-    def test_network_error(self, mock_get):
-        import requests
-        mock_get.side_effect = requests.RequestException("DNS failure")
-        r = check_docs_published(_version())
-        self.assertEqual(r["status"], "WARN")
+    @patch("post_release._curl_get")
+    def test_curl_failure(self, mock_get):
+        for exc in (RuntimeError("Could not resolve host"),
+                    FileNotFoundError("curl")):
+            with self.subTest(exc=exc):
+                mock_get.side_effect = exc
+                r = check_docs_published(_version())
+                self.assertEqual(r["status"], "WARN")
+
+    @patch("post_release._curl_get")
+    def test_url_version_segment(self, mock_get):
+        mock_get.return_value = (404, "")
+        for version, segment in (("5.0.0", "/5/"), ("5.0.3", "/5/"),
+                                 ("5.1.0", "/5.1/"), ("4.21.7", "/4.21/")):
+            with self.subTest(version=version):
+                check_docs_published(_version(version))
+                self.assertIn(f"red_hat_build_of_microshift{segment}",
+                              mock_get.call_args[0][0])
+
+
+class TestCurlGet(unittest.TestCase):
+    @patch("post_release.subprocess.run")
+    def test_parses_status_and_body(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="<html>5.0.0</html>\n__HTTP_STATUS__:200")
+        self.assertEqual(_curl_get("https://x"), (200, "<html>5.0.0</html>"))
+
+    @patch("post_release.subprocess.run")
+    def test_curl_error_raises(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=6, stdout="",
+                                          stderr="Could not resolve host")
+        with self.assertRaises(RuntimeError):
+            _curl_get("https://x")
 
 
 # ── Lifecycle ──────────────────────────────────────────────────
