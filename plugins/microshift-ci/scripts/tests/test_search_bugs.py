@@ -167,6 +167,38 @@ class DecisionPolicyTests(unittest.TestCase):
         self.assertIn("USHIFT-500", r["reason"])
         self.assertIn("2026-08-01", r["reason"])
 
+    def test_regression_with_unlisted_jobs_is_indeterminate_suggest(self):
+        """affected_jobs counts jobs that a merge with post-Jira bug-matches
+        inputs (affected_jobs, no jobs) could not list; their finish dates
+        are unknown, so the listed jobs alone must not mark it stale."""
+        cand = _candidate(
+            "old failure",
+            regressions=[{"key": "USHIFT-500", "updated": "2026-08-01"}],
+            finished=["2026-07-01"],  # the only listed job predates the fix
+        )
+        cand["affected_jobs"] = 3
+        r = one(cand)
+        self.assertEqual(r["action"], "suggest")
+        self.assertEqual(r["skip_category"], "")
+        self.assertIn("Potential regression of USHIFT-500", r["reason"])
+
+    def test_regression_without_unlisted_jobs_stays_stale(self):
+        """Only a count above the listed jobs is indeterminate; a missing,
+        equal or lower affected_jobs keeps the dated-jobs decision."""
+        for affected in (None, 0, 1, 2):
+            with self.subTest(affected_jobs=affected):
+                cand = _candidate(
+                    "old failure",
+                    regressions=[{"key": "USHIFT-500", "updated": "2026-08-01"}],
+                    finished=["2026-07-01", "2026-08-01"],
+                )
+                if affected is None:
+                    del cand["affected_jobs"]
+                else:
+                    cand["affected_jobs"] = affected
+                r = one(cand)
+                self.assertEqual(r["skip_category"], "stale_regression")
+
     def test_multiple_regressions_use_most_recent_fix(self):
         """The reference fix is the regression with the latest 'updated' date."""
         regs = [
@@ -781,6 +813,51 @@ class ExactSignatureMergeTests(unittest.TestCase):
                 "verify-assets: stale entries in assets.yaml reference "
                 "deleted files",
             ])
+
+    def test_merge_with_post_jira_matches_does_not_hide_regression(self):
+        """--merge accepts bug-matches files, whose candidates carry
+        affected_jobs but no jobs. Merged with a dated candidate of the same
+        signature, the unlisted jobs keep a closed regression indeterminate."""
+        with tempfile.TemporaryDirectory() as workdir:
+            bugs = Path(workdir) / "bugs"
+            bugs.mkdir()
+            listed = _source_candidate(self.SIG, "test-rpm", [1],
+                                       raw_error=self.RAW)
+            listed["jobs"][0]["finished"] = "2026-07-01"
+            candidates_path = bugs / "bug-candidates-5.1.json"
+            candidates_path.write_text(json.dumps(
+                {"source": "5.1", "candidates": [listed]}))
+            matches_path = bugs / "bug-matches-rebase-release-5.1.json"
+            matches_path.write_text(json.dumps({
+                "source": "rebase-release-5.1",
+                "candidates": [{
+                    "error_signature": self.SIG,
+                    "severity": 5,
+                    "failure_type": "build",
+                    "step_name": "test-rpm",
+                    "affected_jobs": 2,
+                    "duplicates": [],
+                    "regressions": [{"key": "USHIFT-500",
+                                     "updated": "2026-08-01"}],
+                }],
+            }))
+            merged_path = bugs / "bug-candidates-merged-5.1.json"
+            proc = self._run("--merge", str(candidates_path),
+                             str(matches_path), "--output", str(merged_path),
+                             "--workdir", workdir)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            merged = json.loads(merged_path.read_text())["candidates"]
+            self.assertEqual(len(merged), 1)
+            self.assertEqual(merged[0]["affected_jobs"], 3)
+            self.assertEqual(len(merged[0]["jobs"]), 1)
+            proc = self._run("--categorize", str(merged_path),
+                             "--workdir", workdir)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            result = json.loads(
+                (bugs / "bug-results-5.1.json").read_text())["results"][0]
+            self.assertEqual(result["action"], "suggest")
+            self.assertIn("Potential regression of USHIFT-500",
+                          result["reason"])
 
     def test_empty_signature_still_fails_categorize(self):
         with tempfile.TemporaryDirectory() as workdir:

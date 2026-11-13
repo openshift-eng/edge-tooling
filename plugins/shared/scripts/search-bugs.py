@@ -1131,7 +1131,8 @@ def categorize_candidate(candidate):
          against the most recently fixed regression:
            - any job finished after that fix    -> suggest
            - all jobs on/before that fix        -> skip / stale_regression
-           - indeterminate dates                -> suggest (never hide a regression)
+           - indeterminate dates (undated or unlisted jobs)
+                                                -> suggest (never hide a regression)
       4. no duplicates, no regressions          -> suggest
 
     Returns {action, jira_key, skip_category, reason}. Missing
@@ -1174,7 +1175,11 @@ def categorize_candidate(candidate):
         # jobs list: a job with an unknown finish date must not be assumed to
         # predate the fix.
         missing_dates = any(not j.get("finished") for j in jobs)
-        indeterminate = not ref_updated or not jobs or missing_dates
+        # Jobs counted in affected_jobs but not listed (merged from post-Jira
+        # bug-matches inputs, which carry no jobs) have unknown dates too.
+        unlisted_jobs = (candidate.get("affected_jobs") or 0) > len(jobs)
+        indeterminate = (not ref_updated or not jobs or missing_dates
+                         or unlisted_jobs)
         if indeterminate or any(f > ref_updated for f in finished):
             return {
                 "action": "suggest",
