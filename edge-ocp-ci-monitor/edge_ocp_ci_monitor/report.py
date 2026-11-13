@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+from dataclasses import asdict
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
@@ -12,7 +14,13 @@ from payload_monitor.models import MonitorReport
 from payload_monitor.report import generator as payload_report
 
 from .analysis import build_targets
+from .analysis_cards import (
+    _render_analysis_card,
+    _safe_attempt_analyses,
+    patch_analysis_cards,
+)
 from .jira import AGENT_ISSUE_LABEL, suggested_bugs
+from .security import protect_logs, redact_data, redact_token
 
 logger = logging.getLogger(__name__)
 
@@ -24,18 +32,25 @@ _JINJA_ENV = Environment(
     autoescape=True,
 )
 _JINJA_ENV.filters["js_attr"] = payload_report._js_attr
+_JINJA_ENV.filters["safe_attempts"] = _safe_attempt_analyses
 
 
+@protect_logs(lambda *args, **kwargs: os.environ.get("CHAI_MCP_TOKEN", "").strip())
 def generate_html(
     report: MonitorReport, output_path: Path | None = None, *, ai_warnings: list[str] | None = None,
 ) -> str:
     """Render Chai's template overrides with the existing dashboard data and assets."""
+    report = redact_data(report, os.environ.get("CHAI_MCP_TOKEN", "").strip())
     context = payload_report._build_template_context(report)
+    context["sippy_analysis_cards"] = {
+        finding.analysis_key: _render_analysis_card(asdict(finding.deep_analysis), job_name=finding.test_name)
+        for finding in context["priority_sippy"] if finding.deep_analysis
+    }
     templates = Path(__file__).parent / "templates"
     context.update(
         css=(payload_report.TEMPLATES_DIR / "styles.css").read_text() + (templates / "jira_drafts.css").read_text(),
         js=(payload_report.TEMPLATES_DIR / "scripts.js").read_text() + (templates / "jira_drafts.js").read_text(),
-        ai_warnings=ai_warnings or [],
+        ai_warnings=redact_data(ai_warnings or [], os.environ.get("CHAI_MCP_TOKEN", "").strip()),
         jira_draft_label=AGENT_ISSUE_LABEL,
     )
     rendered = _JINJA_ENV.get_template("dashboard.html").render(**context)
@@ -44,6 +59,12 @@ def generate_html(
         output_path.write_text(rendered)
         logger.info("Report written to %s", output_path)
     return rendered
+
+
+@protect_logs(lambda *args, **kwargs: os.environ.get("CHAI_MCP_TOKEN", "").strip())
+def generate_json(report: MonitorReport, output_path: Path) -> None:
+    """Sanitize the report before the shared serializer can write any bytes."""
+    payload_report.generate_json(redact_data(report, os.environ.get("CHAI_MCP_TOKEN", "").strip()), output_path)
 
 
 def merge_analysis_data(report: MonitorReport, data: dict) -> None:
@@ -63,10 +84,11 @@ def merge_analysis_data(report: MonitorReport, data: dict) -> None:
     report.suggested_bugs = suggested_bugs(build_targets(report), data)
 
 
+@protect_logs(lambda *args, **kwargs: os.environ.get("CHAI_MCP_TOKEN", "").strip())
 def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
-    """Reuse compatible analysis-card insertion and label the enrichment as Chai."""
-    payload_report.patch_analysis_html(html_path, analysis_path)
-    content = html_path.read_text()
+    """Insert or replace keyed analysis cards using the edge-owned renderer."""
+    patch_analysis_cards(html_path, analysis_path)
+    content = redact_token(html_path.read_text(), os.environ.get("CHAI_MCP_TOKEN", "").strip())
     content = content.replace(
         '<span style="color:var(--green)">● AI-enriched via Claude</span>',
         '<span style="color:var(--green)">● AI-enriched via Chai</span>',

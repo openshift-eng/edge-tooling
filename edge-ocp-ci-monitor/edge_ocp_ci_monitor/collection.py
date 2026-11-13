@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -30,9 +31,9 @@ from payload_monitor.collectors.release_controller import (
 )
 from payload_monitor.config import Config
 from payload_monitor.models import JobType, MonitorReport
-from payload_monitor.report.generator import generate_json
 
-from .report import generate_html, patch_analysis_html
+from .report import generate_html, generate_json, patch_analysis_html
+from .security import protect_logs, redact_data
 
 
 @dataclass
@@ -41,6 +42,7 @@ class MonitorOutput:
     html_path: Path
 
 
+@protect_logs(lambda *args, **kwargs: os.environ.get("CHAI_MCP_TOKEN", "").strip())
 def collect_report(
     versions, output_path, export_json, verbose, skip_prow, skip_sippy, with_timing,
     payloads, merge_analysis_path,
@@ -180,6 +182,8 @@ def collect_report(
         persistent_threshold=config.persistent_threshold,
         payloads_per_stream=config.payloads_per_stream,
     )
+
+    report = redact_data(report, os.environ.get("CHAI_MCP_TOKEN", "").strip())
 
     # Failure patterns remain data-driven; only Chai can recommend a bug.
     logger.info("Step 4: Analyzing failure patterns...")

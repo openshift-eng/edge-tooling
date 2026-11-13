@@ -1,4 +1,4 @@
-<div class="deep-analysis-card">
+<div class="deep-analysis-card"{% if analysis_prow_url %} data-prow-url="{{ analysis_prow_url }}" data-attempt-count="{{ attempt_count }}"{% endif %}>
   {% if attempt_count is defined and attempt_count > 1 %}
   {% if same_root_cause %}
   <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Analysis covers all {{ attempt_count }} attempts &mdash; same root cause identified</div>
@@ -40,7 +40,7 @@
   <div class="da-field">
     <span class="da-label">Per-Attempt Breakdown:</span>
     <ul style="margin:4px 0 0 20px">
-      {% for aa in attempt_analyses %}
+      {% for aa in attempt_analyses | safe_attempts %}
       <li>
         <a href="{{ aa.prow_url }}" target="_blank">Attempt #{{ loop.index }}</a>
         <span class="badge da-type">{{ aa.failure_type }}</span>

@@ -13,6 +13,10 @@ The original `payload-monitor/` directory remains unmodified, including its CLI,
 
 The tool reads environment variables; it does not create tokens, read Chai server secrets, or automatically load `.env` files. Export variables from your existing local secret configuration before starting it. Never put token values in command arguments, Git, report artifacts or shared terminal logs.
 
+The token is sent only in the `Authorization: Bearer ...` header to the configured HTTPS persona endpoint. Endpoint URLs containing credentials, query parameters, fragments or the token are rejected, and authenticated requests do not follow redirects. Request guards reject credentials in payloads or other headers. Use the exact MCP endpoint URL, including any required trailing slash.
+
+Credential redaction covers application and SDK log messages, arguments and exception tracebacks while the command or MCP call is active, including verbose logging and concurrent requests. Raw and commonly encoded token echoes are removed from prompts, returned analyses, local imports, HTML and JSON exports. Authentication still requires transmitting the header to Chai; the client cannot control how the remote server handles that header.
+
 ## Setup and usage
 
 From this directory:
@@ -26,7 +30,7 @@ python -m pip install -r requirements.txt
 python -m edge_ocp_ci_monitor --payloads 3 --with-timing
 ```
 
-The requirements pin FastMCP to **4.1.8**. To update an existing virtual environment, activate it and rerun `python -m pip install -r requirements.txt`. The client uses FastMCP's `legacy` handshake mode for compatibility with the existing Chai MCP endpoint and progress notifications.
+The standalone requirements pin Requests to **2.34.2**, Jinja2 to **3.1.6**, Click to **8.5.1** and FastMCP to **4.1.8**; they do not inherit the original tool's dependency ranges. To update an existing virtual environment, activate it and rerun `python -m pip install -r requirements.txt`. The client uses FastMCP's `legacy` handshake mode for compatibility with the existing Chai MCP endpoint and progress notifications.
 
 Run the module from this directory with the virtual environment activated. Output paths are relative to the current directory, as with `payload-monitor`.
 
@@ -36,6 +40,8 @@ python -m edge_ocp_ci_monitor --versions 4.19,5.1 --payloads 3 \
 ```
 
 The Chai frontend always collects fresh dashboard data and does not accept `--from-json`. The optional `--json` export remains available for external consumers. Explicit `--merge-analysis` can still patch a compatible externally supplied analysis file into an existing HTML dashboard without starting new MCP investigations. The original `payload-monitor` retains its `--from-json` option.
+
+Analysis-card rendering and local HTML imports are owned by this tool. Imports update existing blocking cards by their Prow URL as well as empty placeholders, preserving unrelated cards. Attempt links are restricted to safe HTTPS URLs in both imported and directly rendered cards. These fixes do not change the original `payload-monitor` renderer.
 
 ## Configuration
 

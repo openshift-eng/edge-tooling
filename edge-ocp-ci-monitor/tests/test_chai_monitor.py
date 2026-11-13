@@ -571,7 +571,7 @@ def test_real_sdk_in_memory_mcp_and_auth_header(monkeypatch):
     monkeypatch.setattr(fastmcp, "Client", connect)
     assert json.loads(asyncio.run(ask_chai(settings(timeout=3), "investigate test"))) == answer()
     assert received == ["investigate test"]
-    assert options[0][0] == settings().url
+    assert options[0][0].url == settings().url
     assert options[0][1]["timeout"] == 3
     assert options[0][1]["mode"] == "legacy"
     request = httpx2.Request("POST", settings().url)
@@ -658,10 +658,6 @@ def test_heartbeat_reports_elapsed_and_last_update_age(monkeypatch, caplog):
 
 
 def test_http_mcp_handshake_and_response(monkeypatch):
-    import fastmcp
-    from fastmcp import Client
-    from fastmcp.client.transports import StreamableHttpTransport
-
     requests = []
 
     async def respond(request):
@@ -688,16 +684,10 @@ def test_http_mcp_handshake_and_response(monkeypatch):
         return httpx2.Response(200, headers={"mcp-session-id": "test-session"},
                               json={"jsonrpc": "2.0", "id": body["id"], "result": result})
 
-    def connect(url, **kwargs):
-        transport = StreamableHttpTransport(
-            url, auth=kwargs["auth"],
-            httpx_client_factory=lambda **options: httpx2.AsyncClient(
-                transport=httpx2.MockTransport(respond), **options,
-            ),
-        )
-        return Client(transport, timeout=kwargs["timeout"], mode=kwargs["mode"])
-
-    monkeypatch.setattr(fastmcp, "Client", connect)
+    real_http_client = httpx2.AsyncClient
+    monkeypatch.setattr(httpx2, "AsyncClient", lambda **options: real_http_client(
+        transport=httpx2.MockTransport(respond), **options,
+    ))
     assert json.loads(asyncio.run(ask_chai(settings(timeout=3), "investigate"))) == answer()
     assert [r["method"] for r in requests[:2]] == ["initialize", "notifications/initialized"]
     call = next(r for r in requests if r["method"] == "tools/call")

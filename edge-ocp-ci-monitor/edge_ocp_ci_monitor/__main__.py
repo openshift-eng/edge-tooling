@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import webbrowser
 from copy import deepcopy
 
 import click
 from payload_monitor import __main__ as payload_cli
-from payload_monitor.report.generator import generate_json
 
 from .analysis import AnalysisResult, Settings, analyze_targets, build_targets
 from .collection import collect_report
-from .report import generate_html, merge_analysis_data
+from .report import generate_html, generate_json, merge_analysis_data
+from .security import protect_logs
 
 logger = logging.getLogger("edge_ocp_ci_monitor")
 
@@ -32,6 +33,7 @@ def _monitor_params():
 @click.option("--ai-concurrency", type=click.IntRange(min=1, max=2), default=2, show_default=True,
               help="Maximum active ask_persona calls: one blocking batch and one Sippy batch.")
 @click.pass_context
+@protect_logs(lambda *args, **kwargs: os.environ.get("CHAI_MCP_TOKEN", "").strip())
 def main(ctx, ai_timeout, ai_concurrency, **options):
     """Edge OCP CI Monitor: the payload dashboard enriched through Chai MCP.
 

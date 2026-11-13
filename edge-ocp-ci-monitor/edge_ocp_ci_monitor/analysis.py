@@ -23,6 +23,7 @@ from payload_monitor.job_health import priority_sippy_findings, sippy_findings
 from payload_monitor.models import JobType, MonitorReport
 
 from .jira import JIRA_SCHEMA, validate_jira
+from .security import protect_logs, redact_token
 
 logger = logging.getLogger(__name__)
 _HEARTBEAT_SECONDS = 30
@@ -58,6 +59,21 @@ class Settings:
     timeout: float = 2700
     concurrency: int = 2
 
+    def __post_init__(self):
+        if not self.token or not self.token.isascii() or any(c.isspace() or not c.isprintable() for c in self.token):
+            raise ValueError("CHAI_MCP_TOKEN must be a nonempty token without whitespace or control characters.")
+        try:
+            parsed = urlparse(self.url)
+            _ = parsed.port
+            valid = (parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.password
+                     and not parsed.query and not parsed.fragment and "\\" not in self.url
+                     and not any(c.isspace() or not c.isprintable() for c in self.url)
+                     and redact_token(self.url, self.token) == self.url)
+        except ValueError:
+            valid = False
+        if not valid:
+            raise ValueError("CHAI_MCP_URL must be an HTTPS persona endpoint without credentials, query or fragment.")
+
     @classmethod
     def from_environment(cls, *, timeout: float, concurrency: int) -> tuple[Settings | None, list[str]]:
         values = {name: os.environ.get(name, "").strip() for name in ("CHAI_MCP_URL", "CHAI_MCP_TOKEN")}
@@ -65,13 +81,9 @@ class Settings:
         if missing:
             return None, [f"Missing environment variable(s): {', '.join(missing)}. Export them and rerun for Chai analysis."]
         try:
-            parsed = urlparse(values["CHAI_MCP_URL"])
-            _ = parsed.port
-        except ValueError:
-            return None, ["CHAI_MCP_URL is malformed; use the full persona MCP URL from Chai's setup."]
-        if parsed.scheme not in {"https", "http"} or not parsed.netloc or parsed.username or parsed.password:
-            return None, ["CHAI_MCP_URL must be an absolute HTTP(S) MCP URL without embedded credentials."]
-        return cls(values["CHAI_MCP_URL"], values["CHAI_MCP_TOKEN"], timeout=timeout, concurrency=concurrency), []
+            return cls(values["CHAI_MCP_URL"], values["CHAI_MCP_TOKEN"], timeout=timeout, concurrency=concurrency), []
+        except ValueError as exc:
+            return None, [str(exc)]
 
 
 class ChaiUnavailable(Exception):
@@ -84,8 +96,7 @@ class InvalidAnalysis(ValueError):
 
 def _safe_detail(text: str, token: str) -> str:
     """Keep actionable diagnostics, excluding credentials and URL parameters."""
-    if token:
-        text = text.replace(token, "[REDACTED]")
+    text = redact_token(text, token)
     text = re.sub(r"(?i)\bBearer\s+[^\s'\"<>]+", "Bearer [REDACTED]", text)
 
     def redact_url(match):
@@ -94,7 +105,7 @@ def _safe_detail(text: str, token: str) -> str:
         value = re.sub(r"(?<=//)[^/\s]*@", "[REDACTED]@", value)
         return re.split(r"[?#]", value, maxsplit=1)[0]
 
-    text = re.sub(r"https?://[^\s'\"<>]+", redact_url, text)
+    text = re.sub(r"https?://[^\s'\"<>]+", redact_url, text, flags=re.IGNORECASE)
     text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
     text = re.sub(r"[\x00-\x1f\x7f]", " ", text)
     return " ".join(text.split())[:800]
@@ -416,6 +427,7 @@ class _BatchProgress:
                         self.category, _duration(now - self.started), _duration(self.settings.timeout), last)
 
 
+@protect_logs(lambda settings, *args, **kwargs: settings.token)
 async def ask_chai(settings: Settings, question: str, *, progress: _BatchProgress | None = None) -> str:
     """Keep the SDK optional so missing MCP dependencies still allow a report."""
     try:
@@ -423,6 +435,7 @@ async def ask_chai(settings: Settings, question: str, *, progress: _BatchProgres
         import httpx2
         from fastmcp import Client
         from fastmcp.client.auth import BearerAuth
+        from fastmcp.client.transports import StreamableHttpTransport
         from fastmcp.exceptions import McpError
     except ImportError as exc:
         install = shlex.join([sys.executable, "-m", "pip", "install", "-r",
@@ -439,6 +452,7 @@ async def ask_chai(settings: Settings, question: str, *, progress: _BatchProgres
             return expected(exc.__cause__)
         return isinstance(exc, (
             httpx2.HTTPError, httpx2.InvalidURL, McpError, OSError, TimeoutError,
+            ChaiUnavailable,
             anyio.BrokenResourceError, anyio.ClosedResourceError, anyio.EndOfStream,
         ))
 
@@ -460,10 +474,27 @@ async def ask_chai(settings: Settings, question: str, *, progress: _BatchProgres
             return f"HTTP {status} {exc.response.reason_phrase}. {hint}"
         return _safe_detail(f"{type(exc).__name__}: {exc}", settings.token)
 
+    async def guard_request(request):
+        if request.url != httpx2.URL(settings.url):
+            raise ChaiUnavailable("Refused an MCP request outside the configured endpoint.")
+        content = (await request.aread()).decode("utf-8", errors="replace")
+        values = [str(request.url), content, *(value for name, value in request.headers.multi_items()
+                                             if name.lower() != "authorization")]
+        if any(redact_token(value, settings.token) != value for value in values):
+            raise ChaiUnavailable("Refused an MCP request containing credentials outside its Authorization header.")
+
+    def http_client(**options):
+        options["follow_redirects"] = False
+        options.setdefault("timeout", httpx2.Timeout(30.0, read=max(300.0, settings.timeout)))
+        options["event_hooks"] = {"request": [guard_request]}
+        return httpx2.AsyncClient(**options)
+
+    question = redact_token(question, settings.token)
+    transport = StreamableHttpTransport(settings.url, httpx_client_factory=http_client)
     try:
         async with asyncio.timeout(settings.timeout):
             async with Client(
-                settings.url, auth=BearerAuth(settings.token), timeout=settings.timeout, mode="legacy",
+                transport, auth=BearerAuth(settings.token), timeout=settings.timeout, mode="legacy",
             ) as client:
                 result = await client.call_tool(
                     "ask_persona", {"question": question}, timeout=settings.timeout,
@@ -477,7 +508,7 @@ async def ask_chai(settings: Settings, question: str, *, progress: _BatchProgres
         raise ChaiUnavailable(
             f"Chai MCP could not complete the request. Reason: {diagnostic(exc)}"
         ) from None
-    text = "\n".join(block.text for block in result.content if block.type == "text")
+    text = redact_token("\n".join(block.text for block in result.content if block.type == "text"), settings.token)
     if result.is_error:
         reason = _safe_detail(text, settings.token) or "Server returned isError=true without an explanation."
         raise ChaiUnavailable(f"Chai refused the MCP tool call. Reason: {reason}")
@@ -488,6 +519,7 @@ async def ask_chai(settings: Settings, question: str, *, progress: _BatchProgres
     return text
 
 
+@protect_logs(lambda targets, settings, *args, **kwargs: settings.token)
 async def analyze_targets(
     targets: dict, settings: Settings, *,
     ask: Callable[[Settings, str], Awaitable[str]] | None = None,
@@ -530,11 +562,12 @@ async def analyze_targets(
                             category, len(batch), settings.timeout / 60, attempt + 1)
                 prompt = build_prompt(batch, sippy=sippy, evidence=evidence, timeout=settings.timeout,
                                       deferred_notes=deferred_notes, final_attempt=bool(attempt))
+                prompt = redact_token(prompt, settings.token)
                 try:
                     async with _BatchProgress(category, settings) as progress, asyncio.timeout(settings.timeout):
                         text = (await ask(settings, prompt) if ask is not None
                                 else await ask_chai(settings, prompt, progress=progress))
-                        response = validate_batch(text, batch, sippy=sippy)
+                        response = validate_batch(redact_token(text, settings.token), batch, sippy=sippy)
                 except TimeoutError:
                     for target in batch:
                         warn(f"Chai {category} batch exceeded the {settings.timeout:g}-second investigation budget.",

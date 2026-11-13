@@ -145,19 +145,19 @@
   <div class="health-row">
     <div class="health-version">{{ stream.version }}</div>
     <div class="health-status {% if blocking_count > 0 %}critical clickable{% elif informing_count > 0 %}warning clickable{% else %}healthy{% endif %}"
-         {% if blocking_count > 0 or informing_count > 0 %}onclick="jumpToFailures('{{ stream.version }}')" title="View all edge failures for {{ stream.version }}"{% endif %}>
+         {% if blocking_count > 0 or informing_count > 0 %}role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" onclick="jumpToFailures('{{ stream.version }}')" title="View all edge failures for {{ stream.version }}"{% endif %}>
       {% if blocking_count > 0 %}Critical{% elif informing_count > 0 %}Warning{% else %}Healthy{% endif %}
     </div>
     <div class="health-counts">
       {% if latest %}
       {% if blocking_count > 0 %}
-      <a class="health-count red clickable" onclick="jumpToFailures('{{ stream.version }}','blocking')" title="View blocking failures for {{ stream.version }}">{{ blocking_count }}</a>
+      <a href="#section-edge-failures" class="health-count red clickable" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" onclick="event.preventDefault();jumpToFailures('{{ stream.version }}','blocking')" title="View blocking failures for {{ stream.version }}">{{ blocking_count }}</a>
       {% else %}
       <span class="health-count">{{ blocking_count }}</span>
       {% endif %}
       <span class="health-count-sep">/</span>
       {% if informing_count > 0 %}
-      <a class="health-count yellow clickable" onclick="jumpToFailures('{{ stream.version }}','informing')" title="View informing failures for {{ stream.version }}">{{ informing_count }}</a>
+      <a href="#section-edge-failures" class="health-count yellow clickable" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" onclick="event.preventDefault();jumpToFailures('{{ stream.version }}','informing')" title="View informing failures for {{ stream.version }}">{{ informing_count }}</a>
       {% else %}
       <span class="health-count">{{ informing_count }}</span>
       {% endif %}
@@ -243,7 +243,7 @@
 <div class="findings-summary">
   <h2 style="border-bottom:none;margin-top:0;padding-bottom:0">Findings Summary</h2>
 
-  {% if ns.total_failures == 0 and ns.regression_count == 0 and ns.component_regression_count == 0 %}
+  {% if ns.total_failures == 0 and ns.regression_count == 0 and ns.component_regression_count == 0 and not retried_successes %}
   <div class="fs-healthy-banner">
     All edge jobs are passing across all monitored payloads. No Sippy job health or component findings detected.
   </div>
@@ -251,7 +251,7 @@
 
   {# Situation bar: compact horizontal summary with real context #}
   <div class="fs-situation-bar">
-    <div class="fs-situation-item {% if blocking_jobs_list %}critical{% endif %}" onclick="jumpToFailures(null,'blocking')" title="View blocking failures">
+    <div class="fs-situation-item {% if blocking_jobs_list %}critical{% endif %}" onclick="jumpToFailures(null,'blocking')" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" title="View blocking failures">
       <span class="fs-situation-count">{{ ns.blocking_failures }}</span>
       <span class="fs-situation-label">blocking</span>
       {% if blocking_jobs_list|length < ns.blocking_failures %}
@@ -261,7 +261,7 @@
       {% endif %}
     </div>
     <div class="fs-situation-sep"></div>
-    <div class="fs-situation-item {% if ns.informing_failures > 0 %}warning{% endif %}" onclick="jumpToFailures(null,'informing')" title="View informing failures">
+    <div class="fs-situation-item {% if ns.informing_failures > 0 %}warning{% endif %}" onclick="jumpToFailures(null,'informing')" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" title="View informing failures">
       <span class="fs-situation-count">{{ ns.informing_failures }}</span>
       <span class="fs-situation-label">informing</span>
       {% if escalation_risks %}
@@ -269,12 +269,12 @@
       {% endif %}
     </div>
     <div class="fs-situation-sep"></div>
-    <div class="fs-situation-item {% if ns.regression_count + ns.component_regression_count > 0 %}critical{% endif %}" onclick="document.getElementById('findings-job-health')?.scrollIntoView({behavior:'smooth'})" title="View Sippy job health and component findings">
+    <div class="fs-situation-item {% if ns.regression_count + ns.component_regression_count > 0 %}critical{% endif %}" onclick="document.getElementById('findings-job-health')?.scrollIntoView({behavior:'smooth'})" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" title="View Sippy job health and component findings">
       <span class="fs-situation-count">{{ ns.regression_count + ns.component_regression_count }}</span>
       <span class="fs-situation-label">health findings</span>
     </div>
     <div class="fs-situation-sep"></div>
-    <div class="fs-situation-item" onclick="document.getElementById('{{ 'findings-critical' if all_regressions else 'section-edge-failures' }}')?.scrollIntoView({behavior:'smooth'})" title="View topologies affected by payload failures or Sippy job findings">
+    <div class="fs-situation-item" onclick="document.getElementById('{{ 'findings-critical' if all_regressions else 'section-edge-failures' }}')?.scrollIntoView({behavior:'smooth'})" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" title="View topologies affected by payload failures or Sippy job findings">
       <div class="fs-situation-topos">
         {% for t in affected_topologies %}
         <span class="badge {{ t | lower }}">{{ t }}</span>
@@ -299,7 +299,7 @@
         <div class="fs-section-title">{{ ns.blocking_failures }} Blocking Failure{{ 's' if ns.blocking_failures != 1 else '' }}{% if blocking_jobs_list|length < ns.blocking_failures %} ({{ blocking_jobs_list|length }} Unique Job{{ 's' if blocking_jobs_list|length != 1 else '' }}){% endif %}</div>
         <div class="fs-section-desc">prevents payload acceptance</div>
       </div>
-      <a class="fs-section-action fs-action-critical" onclick="jumpToFailures(null,'blocking')">Investigate All &#8594;</a>
+      <a href="#section-edge-failures" class="fs-section-action fs-action-critical" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" onclick="event.preventDefault();jumpToFailures(null,'blocking')">Investigate All &#8594;</a>
     </div>
     {# Compact blocking job summary - unique jobs with versions and top failing test #}
     <div class="fs-inline-jobs">
@@ -307,7 +307,7 @@
       {% set fc = failure_counts.get(item.job.name, 0) %}
       {% set versions = blocking_job_versions.get(item.job.name, []) %}
       {% set tests = blocking_job_tests.get(item.job.name, []) %}
-      <div class="fs-blocking-row fs-job-card" onclick="scrollToJob({{ item.job.name | js_attr }})">
+      <div class="fs-blocking-row fs-job-card" onclick="scrollToJob({{ item.job.name | js_attr }})" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}">
         <div class="fs-blocking-main">
           <span class="badge {{ item.job.topology | lower }}">{{ item.job.topology }}</span>
           <span class="fs-blocking-name">{{ item.job.name }}</span>
@@ -378,7 +378,7 @@
             <span class="fs-job-version">{{ r.version }}</span>
             <span>{{ r.current_runs }} runs</span>
             {% if (r.version, r.test_name) in blocking_job_pairs %}
-            <a class="fs-sippy-blocking" onclick="scrollToJob({{ r.test_name | js_attr }})">Also in blocking failures above</a>
+            <a href="#section-edge-failures" class="fs-sippy-blocking" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" onclick="event.preventDefault();scrollToJob({{ r.test_name | js_attr }})">Also in blocking failures above</a>
             {% endif %}
           </div>
           </div>
@@ -405,7 +405,7 @@
     </div>
     <div class="fs-inline-jobs">
       {% for item in retried_successes %}
-      <div class="fs-blocking-row fs-job-card" onclick="scrollToJob({{ item.job.name | js_attr }})">
+      <div class="fs-blocking-row fs-job-card" onclick="scrollToJob({{ item.job.name | js_attr }})" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}">
         <div class="fs-blocking-main">
           <span class="badge {{ item.job.topology | lower }}">{{ item.job.topology }}</span>
           <a class="fs-blocking-name" href="{{ item.job.prow_url }}" target="_blank" onclick="event.stopPropagation()">{{ item.job.name }}</a>
@@ -440,12 +440,12 @@
         <div class="fs-section-title">{{ ns.informing_failures }} Informing Job Failure{{ 's' if ns.informing_failures != 1 else '' }}</div>
         <div class="fs-section-desc">across {{ ns.total_payloads }} payload{{ 's' if ns.total_payloads != 1 else '' }} - not blocking</div>
       </div>
-      <a class="fs-section-action fs-action-warning" onclick="jumpToFailures(null,'informing')">View All &#8594;</a>
+      <a href="#section-edge-failures" class="fs-section-action fs-action-warning" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" onclick="event.preventDefault();jumpToFailures(null,'informing')">View All &#8594;</a>
     </div>
     {% if escalation_risks %}
     <div class="fs-escalation-list">
       {% for er in escalation_risks %}
-      <a class="fs-escalation-item fs-job-card" onclick="scrollToJob({{ er.job_name | js_attr }})">
+      <a href="#section-edge-failures" class="fs-escalation-item fs-job-card" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" onclick="event.preventDefault();scrollToJob({{ er.job_name | js_attr }})">
         <span class="fs-escalation-left">
           <span class="fs-escalation-name">{{ er.job_name }}</span>
           <span class="badge escalation-risk">Unstable</span>
