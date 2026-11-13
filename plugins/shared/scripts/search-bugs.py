@@ -603,6 +603,39 @@ def _merge_groups_by_jira(groups):
     return [group for group, _ in result]
 
 
+def _representative_key(candidate):
+    """Sort key that picks a merged group's representative candidate."""
+    return (candidate["severity"], candidate["affected_jobs"],
+            candidate["error_signature"])
+
+
+def _merge_groups_by_representative_signature(groups):
+    """Merge groups whose representatives share a non-empty error_signature.
+
+    Step-name bucketing keeps fuzzy matches inside one CI step, so the same
+    signature reported in two steps (or by two sources in different steps)
+    ends up as two groups with the same representative signature. Every
+    downstream consumer (categorize, _validate_results, format_report and
+    create-report) keys merged candidates by that signature, so they must be
+    unique. The representative of the union keeps the shared signature,
+    hence one pass suffices. Groups whose representatives already differ are
+    left untouched, and empty signatures never merge so that
+    _validate_results still rejects them.
+    """
+    result = []
+    index_by_sig = {}
+    for group in groups:
+        sig = max(group, key=_representative_key)["error_signature"]
+        if not sig:
+            result.append(list(group))
+        elif sig in index_by_sig:
+            result[index_by_sig[sig]].extend(group)
+        else:
+            index_by_sig[sig] = len(result)
+            result.append(list(group))
+    return result
+
+
 def _load_jira_lookup(workdir, sources=None):
     """Load Jira duplicates/regressions from bug mapping files.
 
@@ -645,6 +678,9 @@ def _load_jira_lookup(workdir, sources=None):
 def merge_candidate_files(filepaths, workdir=None):
     """Merge multiple candidate JSON files with fuzzy dedup and Jira-based dedup.
 
+    Groups left with the same representative error_signature are merged last,
+    so every merged candidate has a unique signature.
+
     Handles both pre-Jira candidate files (keywords, test_ids, jobs)
     and post-Jira bug mapping files (duplicates, regressions).
 
@@ -662,7 +698,10 @@ def merge_candidate_files(filepaths, workdir=None):
         with open(filepath, "r") as f:
             data = json.load(f)
         source = data["source"]
-        sources.append(source)
+        # Several inputs can share a source (e.g. its bug-candidates and
+        # bug-matches files); per-source releases and jobs are emitted once.
+        if source not in sources:
+            sources.append(source)
         for cand in data.get("candidates", []):
             all_candidates.append({**cand, "_source": source})
 
@@ -702,18 +741,37 @@ def merge_candidate_files(filepaths, workdir=None):
     if len(merged_groups) < n_groups_before_jira:
         print(f"Jira-based merge: {n_groups_before_jira} -> {len(merged_groups)} groups", file=sys.stderr)
 
+    # Pass 3: merge groups left with the same representative error_signature
+    # (crosses step-name boundaries; downstream consumers key on it)
+    n_groups_before_signature = len(merged_groups)
+    merged_groups = _merge_groups_by_representative_signature(merged_groups)
+    if len(merged_groups) < n_groups_before_signature:
+        print(f"Same-signature merge: {n_groups_before_signature} -> {len(merged_groups)} groups", file=sys.stderr)
+
     # Build merged candidates from groups
     merged_candidates = []
     for group in merged_groups:
-        rep = max(group, key=lambda c: (c["severity"], c["affected_jobs"], c["error_signature"]))
+        rep = max(group, key=_representative_key)
 
-        # Build releases list (aggregate affected_jobs per source)
+        # Build releases list (aggregate affected_jobs per source). Only the
+        # first occurrence of a job URL within a source is kept and counted,
+        # e.g. when one job reports the same signature in two steps.
         releases_map = {}
         jobs_by_source = {}
+        seen_jobs = set()
         for cand in group:
             src = cand["_source"]
-            releases_map[src] = releases_map.get(src, 0) + cand["affected_jobs"]
-            jobs_by_source.setdefault(src, []).extend(cand.get("jobs", []))
+            source_jobs = jobs_by_source.setdefault(src, [])
+            repeated = 0
+            for job in cand.get("jobs", []):
+                url = job.get("job_url", "")
+                if url:
+                    if (src, url) in seen_jobs:
+                        repeated += 1
+                        continue
+                    seen_jobs.add((src, url))
+                source_jobs.append(job)
+            releases_map[src] = releases_map.get(src, 0) + cand["affected_jobs"] - repeated
         releases = [{"source": s, "affected_jobs": releases_map[s]} for s in sources if s in releases_map]
 
         # Union keywords, test_ids, duplicates, regressions across the group
@@ -742,7 +800,8 @@ def merge_candidate_files(filepaths, workdir=None):
             all_sigs.update(cand.get("merged_signatures", []))
         other_sigs = sorted(all_sigs - {rep["error_signature"]})
 
-        step_names = sorted({c.get("step_name", "") for c in group if c.get("step_name")})
+        step_names = sorted({step for c in group
+                             for step in (c.get("step_name") or "").split(", ") if step})
 
         entry = {
             "error_signature": rep["error_signature"],
@@ -752,7 +811,7 @@ def merge_candidate_files(filepaths, workdir=None):
             "severity": max(c["severity"] for c in group),
             "failure_type": rep.get("failure_type", "test"),
             "step_name": ", ".join(step_names) if step_names else rep.get("step_name", ""),
-            "affected_jobs": sum(c["affected_jobs"] for c in group),
+            "affected_jobs": sum(releases_map.values()),
             "confidence": _best_confidence(group),
             "causal_chain": _best_causal_chain(group),
             "analysis_gaps": rep.get("analysis_gaps", []),
@@ -1075,7 +1134,8 @@ def categorize_candidate(candidate):
          against the most recently fixed regression:
            - any job finished after that fix    -> suggest
            - all jobs on/before that fix        -> skip / stale_regression
-           - indeterminate dates                -> suggest (never hide a regression)
+           - indeterminate dates (undated or unlisted jobs)
+                                                -> suggest (never hide a regression)
       4. no duplicates, no regressions          -> suggest
 
     Returns {action, jira_key, skip_category, reason}. Missing
@@ -1118,7 +1178,11 @@ def categorize_candidate(candidate):
         # jobs list: a job with an unknown finish date must not be assumed to
         # predate the fix.
         missing_dates = any(not j.get("finished") for j in jobs)
-        indeterminate = not ref_updated or not jobs or missing_dates
+        # Jobs counted in affected_jobs but not listed (merged from post-Jira
+        # bug-matches inputs, which carry no jobs) have unknown dates too.
+        unlisted_jobs = (candidate.get("affected_jobs") or 0) > len(jobs)
+        indeterminate = (not ref_updated or not jobs or missing_dates
+                         or unlisted_jobs)
         if indeterminate or any(f > ref_updated for f in finished):
             return {
                 "action": "suggest",
