@@ -75,18 +75,26 @@ If a time range is present instead of explicit versions, query ART Jira for rele
 2. **Query ART Jira** using `mcp__jira__jira_search`:
 
    ```text
-   jql: project = ART AND issuetype = Story AND summary ~ "Release 4." AND duedate >= "{date_from}" AND duedate <= "{date_to}" ORDER BY duedate ASC
+   jql: project = ART AND issuetype = Story AND summary ~ "Release" AND duedate >= "{date_from}" AND duedate <= "{date_to}" ORDER BY duedate ASC
    ```
 
-   Use `limit: 50` to ensure all tickets in the window are returned.
+   Use `limit: 50` to ensure all tickets in the window are returned. If the
+   query returns exactly 50 results, request additional pages until a page
+   returns fewer than the limit, so no in-window release ticket is truncated
+   before the version filter runs.
+   The broad `summary ~ "Release"` match deliberately spans all major
+   versions (4.x, 5.x, and later); the version-format filter in the next
+   step discards non-release stories.
 
-3. **Extract versions** from ticket summaries. ART release tickets use the format `"Release X.Y.Z [YYYY-Mon-DD]"` (e.g., `"Release 4.21.18 [2026-Jun-02]"`). Extract the `X.Y.Z` version from each matching ticket.
+3. **Extract versions** from ticket summaries. ART release tickets use the format `"Release X.Y.Z [YYYY-Mon-DD]"` (e.g., `"Release 4.21.18 [2026-Jun-02]"` or `"Release 5.0.2 [2026-Nov-17]"`). Keep **only** tickets whose summary matches the regex `Release \d+\.\d+\.\d+` and extract the `X.Y.Z` version; ignore non-release stories (e.g., `"Release RHCOS images in Konflux"`).
 
-4. **Filter to 4.14+** only (MicroShift GA'd at 4.14 — older versions have no MicroShift images).
+4. **Filter to MicroShift-supported versions** — keep `4.14+` and every later minor and major, including `5.x` and beyond. MicroShift GA'd at 4.14, so only versions older than 4.14 have no MicroShift images. Concretely, keep a version `X.Y.Z` when `X > 4`, or when `X == 4 AND Y >= 14`.
 
 5. **Pass the resolved versions** as explicit arguments to the script in Step 4.
 
-If no ART tickets are found in the date range, report "No OCP releases scheduled in {range}."
+If no ART tickets are found in the date range — or no tickets remain after the
+version-format and supported-version filters in steps 3–4 — report
+"No OCP releases scheduled in {range}." and stop without running Step 4.
 
 ### Step 3: Query ART Tickets via MCP
 
