@@ -14,6 +14,7 @@ consumed by --report is satisfied.
 """
 
 import importlib.util
+import io
 import json
 import os
 import re
@@ -22,6 +23,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parent.parent / "search-bugs.py"
 
@@ -516,6 +518,292 @@ class JiraMergeTests(unittest.TestCase):
             [self.candidate("b", regressions=["X"])],
         ]
         self.assertEqual(len(_search_bugs._merge_groups_by_jira(groups)), 2)
+
+
+def _source_candidate(sig, step_name, job_ids, raw_error="", root_cause="",
+                      severity=5):
+    """Build a per-source (prepare-stage) candidate, as build_candidates
+    writes it, with one job entry per id in *job_ids*."""
+    return {
+        "error_signature": sig,
+        "root_cause": root_cause,
+        "raw_error": raw_error,
+        "remediation": "",
+        "severity": severity,
+        "failure_type": "build",
+        "step_name": step_name,
+        "affected_jobs": len(job_ids),
+        "confidence": "high",
+        "causal_chain": [],
+        "analysis_gaps": [],
+        "scenarios": [],
+        "keywords": [],
+        "test_ids": [],
+        "jobs": [{"job_name": f"job-{i}",
+                  "job_url": f"https://prow.example/{i}",
+                  "finished": "2026-11-13"} for i in job_ids],
+    }
+
+
+class ExactSignatureMergeTests(unittest.TestCase):
+    """merge_candidate_files must emit unique error_signatures.
+
+    Categorize, _validate_results, format_report and create-report key every
+    merged candidate by its exact error_signature. Prow run
+    2121136260092268544 aborted the bugs stage because one rebase source held
+    the same signature in two CI steps, which the step-bucketed fuzzy merge
+    kept apart.
+    """
+
+    # Signature, steps and job counts observed in that run's
+    # bug-candidates-rebase-release-5.1.json.
+    SIG = ("RPM build fails: OLM kustomization.x86_64.yaml deleted by rebase "
+           "but still referenced in spec")
+    RAW = ("cat: assets/optional/operator-lifecycle-manager/"
+           "kustomization.x86_64.yaml: No such file or directory")
+
+    def _merge(self, files):
+        """Write {source: candidates} files and merge them in order."""
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = []
+            for source, candidates in files:
+                path = Path(tmp) / f"bug-candidates-{source}.json"
+                path.write_text(json.dumps(
+                    {"source": source, "candidates": candidates}))
+                paths.append(str(path))
+            with mock.patch("sys.stderr", new_callable=io.StringIO):
+                return _search_bugs.merge_candidate_files(paths)
+
+    def _observed_rebase_source(self):
+        return [
+            _source_candidate(
+                self.SIG, "openshift-microshift-infra-rpm-install-aws", [1, 2],
+                raw_error=self.RAW,
+                root_cause="rebase PR removed OLM arch-specific kustomization "
+                           "files without updating RPM spec references"),
+            _source_candidate(
+                self.SIG, "test-rpm", [3],
+                raw_error=self.RAW,
+                root_cause="auto-rebase script deleted OLM kustomization "
+                           "overlays without updating RPM spec file"),
+            _source_candidate(
+                "verify-assets: stale entries in assets.yaml reference "
+                "deleted files", "verify-verify", [4], severity=4),
+        ]
+
+    def test_same_source_identical_signature_across_steps_merges(self):
+        merged = self._merge([("rebase-release-5.1",
+                               self._observed_rebase_source())])
+        sigs = [c["error_signature"] for c in merged["candidates"]]
+        self.assertEqual(len(sigs), len(set(sigs)), sigs)
+        self.assertEqual(len(sigs), 2)
+        cand = next(c for c in merged["candidates"]
+                    if c["error_signature"] == self.SIG)
+        self.assertEqual(cand["affected_jobs"], 3)
+        self.assertEqual(sorted(j["job_url"] for j in cand["jobs"]),
+                         [f"https://prow.example/{i}" for i in (1, 2, 3)])
+        self.assertEqual(cand["step_name"],
+                         "openshift-microshift-infra-rpm-install-aws, test-rpm")
+        self.assertEqual(cand["releases"],
+                         [{"source": "rebase-release-5.1", "affected_jobs": 3}])
+        self.assertNotIn("merged_signatures", cand)
+
+    def test_cross_source_identical_signature_across_steps_merges(self):
+        merged = self._merge([
+            ("5.1", [_source_candidate(self.SIG, "e2e-rpm", [10],
+                                       raw_error="spec references missing")]),
+            ("rebase-release-5.1", [_source_candidate(
+                self.SIG, "test-rpm", [11], raw_error=self.RAW)]),
+        ])
+        self.assertEqual(len(merged["candidates"]), 1)
+        cand = merged["candidates"][0]
+        self.assertEqual(cand["affected_jobs"], 2)
+        self.assertEqual(cand["releases"], [
+            {"source": "5.1", "affected_jobs": 1},
+            {"source": "rebase-release-5.1", "affected_jobs": 1},
+        ])
+        self.assertEqual(len(cand["jobs"]), 2)
+
+    def test_member_signature_does_not_absorb_other_group(self):
+        """A signature that is only a fuzzy-merged member elsewhere keeps its
+        own candidate (and categorize decision): representatives differ."""
+        merged = self._merge([("5.1", [
+            _source_candidate("sig X", "step-a", [1], raw_error="boom alpha",
+                              severity=4),
+            _source_candidate("sig Y", "step-a", [2], raw_error="boom alpha"),
+            _source_candidate("sig X", "step-b", [3], raw_error="other"),
+        ])])
+        by_sig = {c["error_signature"]: c for c in merged["candidates"]}
+        self.assertEqual(sorted(by_sig), ["sig X", "sig Y"])
+        self.assertEqual(by_sig["sig Y"]["merged_signatures"], ["sig X"])
+        self.assertEqual(by_sig["sig X"]["affected_jobs"], 1)
+
+    def test_jira_merge_runs_before_same_signature_merge(self):
+        """Groups sharing an open Jira duplicate still merge; the same-signature
+        pass only joins what is left with equal representatives."""
+        dup = [{"key": "USHIFT-1", "updated": "2026-11-01"}]
+        x_a = _source_candidate("sig X", "step-a", [1], raw_error="aaa")
+        x_a["duplicates"] = dup
+        w_c = _source_candidate("sig W", "step-c", [2], raw_error="ccc",
+                                severity=4)
+        w_c["duplicates"] = dup
+        z_b = _source_candidate("sig Z", "step-b", [3], raw_error="boom beta",
+                                severity=4)
+        x_b = _source_candidate("sig X", "step-b", [4], raw_error="boom beta")
+        x_b["duplicates"] = dup
+        merged = self._merge([("5.1", [x_a, w_c, z_b, x_b])])
+        self.assertEqual(len(merged["candidates"]), 1)
+        cand = merged["candidates"][0]
+        self.assertEqual(cand["error_signature"], "sig X")
+        self.assertEqual(cand["merged_signatures"], ["sig W", "sig Z"])
+        self.assertEqual(cand["affected_jobs"], 4)
+
+    def test_representative_merge_unit(self):
+        def c(sig, severity=5):
+            return {"error_signature": sig, "severity": severity,
+                    "affected_jobs": 1}
+        groups = [
+            [c("X")],
+            [c("Y")],
+            [c("X"), c("Z", severity=4)],
+            [c("")],
+            [c("X", severity=4), c("Y", severity=3)],
+            [c("")],
+        ]
+        merged = _search_bugs._merge_groups_by_representative_signature(groups)
+        self.assertEqual(
+            [[m["error_signature"] for m in g] for g in merged],
+            [["X", "X", "Z", "X", "Y"], ["Y"], [""], [""]])
+
+    def test_same_job_in_two_steps_is_counted_once(self):
+        """One job reporting the same signature in two steps is one job."""
+        merged = self._merge([("rebase-release-5.1", [
+            _source_candidate(self.SIG, "rpm-build", [7], raw_error="a"),
+            _source_candidate(self.SIG, "test-rpm", [7, 8], raw_error="b"),
+        ])])
+        self.assertEqual(len(merged["candidates"]), 1)
+        cand = merged["candidates"][0]
+        self.assertEqual(cand["affected_jobs"], 2)
+        self.assertEqual([j["job_url"] for j in cand["jobs"]],
+                         ["https://prow.example/7", "https://prow.example/8"])
+        self.assertEqual(cand["releases"],
+                         [{"source": "rebase-release-5.1", "affected_jobs": 2}])
+
+    def test_joined_step_names_are_not_repeated(self):
+        merged = self._merge([("5.1", [
+            _source_candidate(self.SIG, "rpm-build, test-rpm", [1]),
+            _source_candidate(self.SIG, "test-rpm", [2], raw_error="other"),
+        ])])
+        self.assertEqual(merged["candidates"][0]["step_name"],
+                         "rpm-build, test-rpm")
+
+    def test_same_job_url_in_two_sources_counts_per_source(self):
+        merged = self._merge([
+            ("5.1", [_source_candidate(self.SIG, "rpm-build", [7])]),
+            ("rebase-release-5.1", [_source_candidate(self.SIG, "test-rpm",
+                                                      [7])]),
+        ])
+        cand = merged["candidates"][0]
+        self.assertEqual(cand["releases"], [
+            {"source": "5.1", "affected_jobs": 1},
+            {"source": "rebase-release-5.1", "affected_jobs": 1},
+        ])
+        self.assertEqual(cand["affected_jobs"], 2)
+
+    def test_jobs_without_url_are_not_deduplicated(self):
+        first = _source_candidate(self.SIG, "rpm-build", [1])
+        second = _source_candidate(self.SIG, "test-rpm", [2])
+        for cand in (first, second):
+            del cand["jobs"][0]["job_url"]
+        merged = self._merge([("5.1", [first, second])])
+        cand = merged["candidates"][0]
+        self.assertEqual(cand["affected_jobs"], 2)
+        self.assertEqual(len(cand["jobs"]), 2)
+
+    def test_candidates_without_jobs_keep_affected_jobs(self):
+        """Post-Jira bug-matches candidates carry affected_jobs but no jobs."""
+        first = _source_candidate(self.SIG, "rpm-build", [1, 2])
+        second = _source_candidate(self.SIG, "test-rpm", [3])
+        del first["jobs"], second["jobs"]
+        merged = self._merge([("5.1", [first, second])])
+        self.assertEqual(len(merged["candidates"]), 1)
+        cand = merged["candidates"][0]
+        self.assertEqual(cand["affected_jobs"], 3)
+        self.assertEqual(cand["jobs"], [])
+
+    def test_distinct_signatures_in_different_steps_stay_separate(self):
+        """Only exact signatures cross step buckets; similar ones do not."""
+        merged = self._merge([("5.1", [
+            _source_candidate("RPM build fails: spec references missing file",
+                              "rpm-build", [1], raw_error="missing file"),
+            _source_candidate("RPM build fails: spec references missing files",
+                              "test-rpm", [2], raw_error="missing file"),
+        ])])
+        self.assertEqual(len(merged["candidates"]), 2)
+
+    def test_empty_signatures_are_not_merged(self):
+        """Malformed candidates without a signature are never collapsed into
+        one; they reach categorize unchanged and fail validation there."""
+        merged = self._merge([("5.1", [
+            _source_candidate("", "rpm-build", [1], raw_error="first"),
+            _source_candidate("", "test-rpm", [2], raw_error="second"),
+        ])])
+        self.assertEqual(len(merged["candidates"]), 2)
+
+    def _run(self, *args):
+        return subprocess.run([sys.executable, str(SCRIPT), *args],
+                              capture_output=True, text=True)
+
+    def _merge_and_categorize(self, workdir, candidates):
+        bugs = Path(workdir) / "bugs"
+        bugs.mkdir()
+        source_path = bugs / "bug-candidates-rebase-release-5.1.json"
+        source_path.write_text(json.dumps(
+            {"source": "rebase-release-5.1", "candidates": candidates}))
+        merged_path = bugs / "bug-candidates-merged-rebase-release-5.1.json"
+        proc = self._run("--merge", str(source_path), "--output",
+                         str(merged_path), "--workdir", workdir)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return self._run("--categorize", str(merged_path),
+                         "--workdir", workdir), bugs
+
+    def test_observed_duplicate_signature_categorizes(self):
+        """Reproduces the aborted bugs stage: merge then categorize."""
+        with tempfile.TemporaryDirectory() as workdir:
+            proc, bugs = self._merge_and_categorize(
+                workdir, self._observed_rebase_source())
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            results = json.loads(
+                (bugs / "bug-results-rebase-release-5.1.json").read_text()
+            )["results"]
+            self.assertEqual(sorted(r["error_signature"] for r in results), [
+                self.SIG,
+                "verify-assets: stale entries in assets.yaml reference "
+                "deleted files",
+            ])
+
+    def test_empty_signature_still_fails_categorize(self):
+        with tempfile.TemporaryDirectory() as workdir:
+            proc, _ = self._merge_and_categorize(workdir, [
+                _source_candidate("", "rpm-build", [1], raw_error="first"),
+                _source_candidate("", "test-rpm", [2], raw_error="second"),
+            ])
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("missing error_signature", proc.stderr)
+
+    def test_validator_still_rejects_duplicate_results(self):
+        result = {"error_signature": "a", "action": "suggest", "jira_key": "",
+                  "skip_category": "", "reason": "r"}
+        with self.assertRaises(SystemExit) as ctx, \
+                mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            _search_bugs._validate_results(
+                {"mode": "search", "date": "2026-11-13",
+                 "results": [result, dict(result)]},
+                {"candidates": [{"error_signature": "a"},
+                                {"error_signature": "a"}]})
+        self.assertNotEqual(ctx.exception.code, 0)
+        self.assertIn("results[1]: duplicate error_signature 'a'",
+                      err.getvalue())
 
 
 class PipelineFailureTests(unittest.TestCase):
