@@ -623,7 +623,7 @@ const related = decisionLinks({error_signature: 'greenboot timeout', duplicates:
     {key: 'SYNTH-501', summary: 'earlier occurrence', status: 'Closed', assignee: '', updated: '2026-01-01',
      match_evidence: {matched_terms: ['greenboot', 'timeout'], matched_fields: ['summary'], ignored_terms: []}},
     {key: 'SYNTH-502', summary: 'legacy entry', status: 'Verified', assignee: '', updated: '2026-01-02'},
-], decision: {action: 'suggest', jira_key: '', skip_category: '', reason: 'Possibly related to closed SYNTH-501, SYNTH-502; fix inclusion in the tested code is not established — suggest filing a new bug'}});
+], decision: {action: 'suggest', jira_key: '', skip_category: '', reason: 'Possibly related to closed SYNTH-501, SYNTH-502; fix inclusion in the tested code is not established — review before filing a new bug'}});
 assert(related.querySelector('.create-bug-btn'), 'possibly related keeps the Create Bug button');
 assert(related.textContent.includes('Possibly related closed bugs (fix inclusion unverified):'));
 assert(!related.textContent.includes('Regressions:'), 'closed matches are not labelled regressions');

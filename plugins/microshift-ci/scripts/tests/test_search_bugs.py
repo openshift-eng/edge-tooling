@@ -143,6 +143,8 @@ class DecisionPolicyTests(unittest.TestCase):
     def test_no_bugs_suggests(self):
         r = one(_candidate("brand new failure", finished=["2026-09-01"]))
         self.assertEqual(r["action"], "suggest")
+        self.assertEqual(r["reason"],
+                         "No matching existing bugs found — suggest filing a new bug")
         self.assertEqual(r["jira_key"], "")
         self.assertEqual(r["skip_category"], "")
 
@@ -158,6 +160,7 @@ class DecisionPolicyTests(unittest.TestCase):
         self.assertIn("Possibly related to closed", result["reason"])
         self.assertIn("fix inclusion in the tested code is not established",
                       result["reason"])
+        self.assertIn("review before filing a new bug", result["reason"])
         self.assertNotIn("regression", result["reason"].lower())
         for key in keys:
             self.assertIn(key, result["reason"])

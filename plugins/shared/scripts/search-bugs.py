@@ -1279,7 +1279,7 @@ def main_report(report_file, candidates_file, workdir):
 # offers the Create Bug button only for suggest decisions.
 
 REASON_INFRASTRUCTURE = "Infrastructure failure — not a product bug"
-REASON_NO_BUGS = "No existing bugs found — suggest filing a new bug"
+REASON_NO_BUGS = "No matching existing bugs found — suggest filing a new bug"
 
 
 def categorize_candidate(candidate):
@@ -1291,10 +1291,12 @@ def categorize_candidate(candidate):
       2. open duplicates                        -> linked (first duplicate)
       3. closed bugs matching the failure context, no open duplicates
                                                 -> suggest, reported as
-         possibly related. Jira data cannot show whether a closed bug's fix
-         was in the code a job tested ('updated' moves on any edit), so the
-         match is neither confirmed as a regression nor used to skip the
-         failure as stale, whatever the job finish dates.
+         possibly related for a human to review. The match is a text
+         heuristic, not a root-cause finding, and Jira data cannot show
+         whether a closed bug's fix was in the code a job tested ('updated'
+         moves on any edit), so the match is neither confirmed as a
+         regression nor used to skip the failure as stale, whatever the job
+         finish dates.
       4. no duplicates, no closed matches       -> suggest
 
     Returns {action, jira_key, skip_category, reason}. Missing
@@ -1337,7 +1339,7 @@ def categorize_candidate(candidate):
             "skip_category": "",
             "reason": (f"Possibly related to closed {', '.join(keys) or 'bug'}; "
                        "fix inclusion in the tested code is not established "
-                       "— suggest filing a new bug"),
+                       "— review before filing a new bug"),
         }
 
     # Rule 4: nothing found — draft a new-bug suggestion.
