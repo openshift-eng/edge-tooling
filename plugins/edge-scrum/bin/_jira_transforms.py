@@ -371,7 +371,7 @@ def sprint_day_counts(start, end, today):
     The single definition shared by ``transform-sprints.py`` (Claude Code) and
     ``chai_report.py`` (chai-bot). ``total`` counts the start and end days;
     ``elapsed`` counts today, clamped to ``[0, total]``; ``remaining`` is
-    ``total − elapsed``, so ``elapsed + remaining == total``.
+    ``total - elapsed``, so ``elapsed + remaining == total``.
     """
     total = days_between(start, end)
     elapsed = max(0, min(days_between(start, today), total))

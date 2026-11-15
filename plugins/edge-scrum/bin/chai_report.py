@@ -479,7 +479,7 @@ def refinement_gaps(features, spikes, section, refinement_sprint_closed=False):
     gaps = len(out["missing_refinement_spike"]) + len(out["refinement_spike_overdue"])
     if gaps:
         out["risks"].append({"severity": RED,
-                             "text": f"{tag}: {gaps} of {out['features']} feature(s) without a closed refinement spike"})
+                             "text": f"{tag}: {gaps} of {out['features']} feature(s) with a missing or overdue refinement spike"})
     tp = len(out["missing_test_plan_spike"]) + len(out["test_plan_spike_overdue"])
     if tp:
         out["risks"].append({"severity": YELLOW, "text": f"{tag}: {tp} feature(s) missing a test plan spike"})

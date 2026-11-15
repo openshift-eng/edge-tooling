@@ -597,8 +597,9 @@ def availability_by_sprint(sprints, current, horizon_end, absences, engineer_cou
     if current is None or horizon_end is None:
         return []
     out = []
-    for s in project_sprints(sprints, horizon_end):
-        if s["start"] < current["start"] or s["end"] > max(horizon_end, current["end"]):
+    until = max(horizon_end, current["end"])  # always reach the current sprint
+    for s in project_sprints(sprints, until):
+        if s["start"] < current["start"] or s["end"] > until:
             continue
         out.append({**_sprint_out(s),
                     "availability": sprint_availability(s, absences, engineer_count, window)})

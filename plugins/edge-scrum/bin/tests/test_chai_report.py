@@ -343,7 +343,8 @@ class RefinementGapsTest(unittest.TestCase):
         self.assertIsNone(owners["9.2: create a refinement spike that blocks FEAT-2 in sprint 16"])
         self.assertEqual(owners["9.2: create a test plan spike that blocks FEAT-1"], "Quinn Quality")
         self.assertEqual(owners["9.2: move refinement spike TEST-60 (FEAT-3) to sprint 16"], "Alex Example")
-        self.assertIn("9.2: 2 of 3 feature(s) without a closed refinement spike", [r["text"] for r in out["risks"]])
+        self.assertIn("9.2: 2 of 3 feature(s) with a missing or overdue refinement spike",
+                      [r["text"] for r in out["risks"]])
 
 
 class NoEstimateTest(unittest.TestCase):
@@ -370,6 +371,21 @@ class NoEstimateTest(unittest.TestCase):
         estimated = run_checks.estimate_hidden_scope(features, {"F-1"})
         self.assertEqual(estimated["unpointed_open"], 1)
         self.assertIsNotNone(estimated["estimate_low"])  # Claude Code path unchanged
+
+
+class ProjectionHorizonTest(unittest.TestCase):
+    def test_current_sprint_after_the_branch_cut_sprint_is_still_generated(self):
+        # One board sprint ending 2030-01-28; today falls in a projected sprint
+        # (2030-03-11 .. 2030-04-01) after a release horizon ending 2030-02-18.
+        sprints = sc.board_sprints([{"id": "500", "name": "Test Sprint 10", "state": "closed",
+                                     "originBoardId": BOARD, "start_date": "2030-01-07",
+                                     "end_date": "2030-01-28"}], BOARD)
+        today = D(2030, 3, 12)
+        current = sc.current_sprint(sprints, today)
+        self.assertEqual((current["number"], current["projected"]), (13, True))
+        window = sc.absence_window(None, today, [])
+        out = sc.availability_by_sprint(sprints, current, D(2030, 2, 18), [], 2, window)
+        self.assertEqual([(s["number"], s["availability"]) for s in out], [(13, 1.0)])
 
 
 class AbsenceWindowTest(unittest.TestCase):
