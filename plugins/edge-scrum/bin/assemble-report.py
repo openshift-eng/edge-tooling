@@ -109,7 +109,7 @@ def build_blocks(checks, recs, params):
     elif not hidden_estimated and hidden.get("unpointed_open", 0) > 0:
         # Not estimated: the gap covers pointed work only; count the rest, never size it.
         verdict = (f"**{glyph} {risk} — pointed scope fits with ~{gap} SP to spare; "
-                   f"{plural(hidden['unpointed_open'], 'unpointed item')} not counted.**")
+                   f"{plural(hidden['unpointed_open'] + hidden.get('unpointed_bugs', 0), 'unpointed item')} not counted.**")
     else:
         verdict = f"**{glyph} {risk} — scope fits with {gap} SP to spare.**"
     verdict += (f" {plural(params['remaining_sprints'], 'dev sprint')} left · pencils down S{params['pencils_down']}"

@@ -350,13 +350,13 @@ class NoHiddenScopeEstimateEndToEndTest(unittest.TestCase):
             json.dump(obj, f)
         return path
 
-    def _story(self, key, sp, status="In Progress"):
-        return {"key": key, "summary": "Synthetic story", "type": "Story", "status": status, "sp": sp,
+    def _story(self, key, sp, status="In Progress", type_="Story"):
+        return {"key": key, "summary": "Synthetic story", "type": type_, "status": status, "sp": sp,
                 "assignee": "aexample@example.com", "assignee_display": "Alex Example", "epic_key": "EPIC-1",
                 "priority": "Major", "labels": [], "updated": "2030-01-20", "sprints": [],
                 "flagged": False, "blocked_by": [], "stale": False}
 
-    def _run(self, d, extra):
+    def _run(self, d, extra, extra_stories=()):
         files = {
             "features": self._write(d, "features.json", {"features": [
                 {"key": "OCPSTRAT-9001", "summary": "Synthetic feature", "status": "In Progress", "priority": "Major",
@@ -367,7 +367,7 @@ class NoHiddenScopeEstimateEndToEndTest(unittest.TestCase):
             "stories": self._write(d, "stories.json", {"stories": [
                 self._story("TEST-1", 5), self._story("TEST-2", 0), self._story("TEST-3", 0),
                 self._story("TEST-4", 3, "Closed"), self._story("TEST-5", 5, "Closed"),
-                self._story("TEST-6", 2, "Closed"), self._story("TEST-7", 8, "Closed")]}),
+                self._story("TEST-6", 2, "Closed"), self._story("TEST-7", 8, "Closed"), *extra_stories]}),
             "bugs": self._write(d, "bugs.json", {"bugs": []}),
             "roster": self._write(d, "roster.json", {"members": [
                 {"username": "aexample@example.com", "display_name": "Alex Example", "sp_target": 8}]}),
@@ -400,6 +400,13 @@ class NoHiddenScopeEstimateEndToEndTest(unittest.TestCase):
         self.assertIn("| Scope (pointed) | Capacity | Gap |", report)
         # The gap covers pointed work only: the verdict counts the unpointed stories, never sizes them.
         self.assertIn("pointed scope fits with ~11 SP to spare; 2 unpointed items not counted.", report)
+
+    def test_not_estimated_verdict_counts_unpointed_bugs(self):
+        with tempfile.TemporaryDirectory() as d:
+            checks, report = self._run(d, ["--no-hidden-scope-estimate"],
+                                       extra_stories=[self._story("OCPBUGS-9", 0, type_="Bug")])
+        self.assertEqual(checks["hidden_scope"]["unpointed_bugs"], 1)
+        self.assertIn("pointed scope fits with ~11 SP to spare; 3 unpointed items not counted.", report)
 
     def test_default_run_still_shows_hidden_scope(self):
         with tempfile.TemporaryDirectory() as d:

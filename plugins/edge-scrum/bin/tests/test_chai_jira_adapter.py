@@ -586,8 +586,24 @@ class FieldTest(unittest.TestCase):
     def test_unknown_lines_are_counted_in_a_warning(self):
         out = ad.adapt_fetch({"pages": [{"text": page(["TEST-5"], extra=["Mystery: one | Another: two",
                                                                           "free text"])}]})
-        self.assertIn("ignored 3 unrecognized line(s); labels: Another, Mystery", out["warnings"][0])
+        # Unknown labels are not split on " | " (see test_pipe_inside_a_value_is_not_split).
+        self.assertIn("ignored 2 unrecognized line(s); labels: Mystery", out["warnings"][0])
         self.assertTrue(out["fetch"]["complete"])
+
+    def test_pipe_inside_a_value_is_not_split(self):
+        out = ad.adapt_fetch({"pages": [{"text": page(["TEST-5"], extra=["Description: step one | Note: see docs"])}]})
+        self.assertEqual(out["issues"][0]["description"], "step one | Note: see docs")
+        self.assertEqual(out["warnings"], [])
+        # Known labels still split.
+        self.assertEqual(out["issues"][0]["components"], [{"name": "Component A"}])
+        self.assertEqual(out["issues"][0]["parent"]["key"], "TEST-1")
+
+    def test_empty_fetch_reports_no_skipped_description(self):
+        out = ad.adapt_fetch({"pages": [{"text": SAMPLE_NO_RESULTS, "jql": SAMPLE_NO_RESULTS_JQL}],
+                              "signals": ["description"]})
+        self.assertEqual(out["skipped_signals"], [])
+        some = ad.adapt_fetch({"pages": [{"text": page(["TEST-5"])}], "signals": ["description"]})
+        self.assertEqual(some["skipped_signals"], [ad.SKIPPED_DESCRIPTION])
 
     def test_flagged_is_parsed_when_set(self):
         out = ad.adapt_fetch({"pages": [{"text": page(["TEST-5"], extra=["customfield_10021: Impediment"])}],
@@ -654,6 +670,20 @@ class LinkTest(unittest.TestCase):
                                         "- is blocked by: TEST-42 (Blocks) | status: Won't Fix | u\n"})
         row = transform_sprint_issues.transform_issue(adapted["issues"][0], "2030-02-05")
         self.assertEqual(row["blocked_by"], [])
+
+    def test_phrase_in_summary_does_not_hide_the_real_section(self):
+        text = SAMPLE_GET_ISSUE.replace("[TEST-303] Synthetic docs: final re-assembly",
+                                        "[TEST-303] Clean up linked Jira issues for feature X")
+        links, found = ad.parse_issue_links(text)
+        self.assertTrue(found)
+        self.assertEqual(extract_blocked_by({"issuelinks": links}), ["TEST-152", "TEST-154", "TEST-55"])
+
+    def test_phrase_in_description_with_bullets_adds_no_links(self):
+        text = ("Latest Jira State:\n[TEST-7] Synthetic\nType: Story | Status: To Do | Priority: Major\n"
+                "Description:\nWe track Linked Jira Issues: manually\n"
+                "- is blocked by: TEST-8 (Blocks) | status: To Do | u\n")
+        links, found = ad.parse_issue_links(text)
+        self.assertEqual((links, found), ([], False))
 
     def test_section_ends_at_next_field(self):
         links, _ = ad.parse_issue_links(SAMPLE_GET_ISSUE + "\n- is blocked by: TEST-99 (Blocks) | status: New | u\n")

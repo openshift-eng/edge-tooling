@@ -285,7 +285,7 @@ class TeamLevelOutputTest(unittest.TestCase):
         sprint = cr.sprint_health(clean, SPRINT, "2030-01-29", "capacity", velocity=24, availability=1.0)
         report = cr.build_report(sprint, [])
         self.assertEqual(report["top_post"][1],
-                         "No risks this week: committed 20 SP in 1 issues; capacity 24 SP "
+                         "No risks this week: committed 20 SP in 1 issue; capacity 24 SP "
                          "(velocity 24 × availability 1.00)")
         self.assertEqual(report["top_post"][2], "0 items need action")
         self.assertTrue(report["top_post"][0].startswith("🟢"))
@@ -343,6 +343,7 @@ class RefinementGapsTest(unittest.TestCase):
         self.assertIsNone(owners["9.2: create a refinement spike that blocks FEAT-2 in sprint 16"])
         self.assertEqual(owners["9.2: create a test plan spike that blocks FEAT-1"], "Quinn Quality")
         self.assertEqual(owners["9.2: move refinement spike TEST-60 (FEAT-3) to sprint 16"], "Alex Example")
+        self.assertIn("9.2: 2 of 3 feature(s) without a closed refinement spike", [r["text"] for r in out["risks"]])
 
 
 class NoEstimateTest(unittest.TestCase):
@@ -369,6 +370,15 @@ class NoEstimateTest(unittest.TestCase):
         estimated = run_checks.estimate_hidden_scope(features, {"F-1"})
         self.assertEqual(estimated["unpointed_open"], 1)
         self.assertIsNotNone(estimated["estimate_low"])  # Claude Code path unchanged
+
+
+class AbsenceWindowTest(unittest.TestCase):
+    def test_non_object_window_falls_back_with_a_warning(self):
+        for bad in ("126 days", ["2030-01-01", "2030-03-01"]):
+            out = sc.build_context({"today": "2030-01-29", "board_id": BOARD, "sprints": _sprints(),
+                                    "absences": [], "engineer_count": 2, "absence_window": bad})
+            self.assertIn("ignored absence_window: not an object; using the default window", out["warnings"])
+            self.assertEqual(out["current_sprint_availability"], 1.0)
 
 
 class CurrentSprintCapacityTest(unittest.TestCase):
@@ -447,6 +457,20 @@ class CodeRabbitFixesTest(unittest.TestCase):
         self.assertIn({"what": "sprint capacity", "why": "velocity not measured"}, plain["left_out"])
         self.assertEqual(cr.release_health(checks, {"release": "9.1", "phase": "development"})["left_out"][0]["why"],
                          "velocity not available")
+
+    def test_capacity_line_uses_the_velocity_reason(self):
+        checks = dict(CHECKS, meta=dict(CHECKS["meta"], capacity_basis="roster_fallback"))
+        release = cr.release_health(checks, {"release": "9.1", "phase": "development"},
+                                    velocity_reason="only 2 closed sprint(s) measured, 3 needed")
+        lines = "\n".join(cr._section_lines(dict(release, kind="release-health")))
+        self.assertIn("capacity not available (only 2 closed sprint(s) measured, 3 needed)", lines)
+        self.assertNotIn("velocity not measured", lines)
+
+    def test_mention_matches_case_and_space_insensitively(self):
+        mentions = {"Alex Example": "<@U000TEST1>"}
+        self.assertEqual(cr.mention("alex   EXAMPLE", mentions), "<@U000TEST1>")
+        self.assertEqual(cr.mention("Quinn Quality", mentions), "Quinn Quality")
+        self.assertEqual(cr.mention(None, mentions), "no owner set")
 
     def test_select_sections_accepts_full_scrum_context_results(self):
         sections, missing = cr.select_sections({}, [{"today": "2030-02-01", "release": _window("9.1", "development")}])

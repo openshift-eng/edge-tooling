@@ -16,7 +16,8 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
-from _jira_transforms import DONE_STATUSES_SPRINT, IN_PROGRESS_STATUSES, days_between, is_stale  # noqa: E402
+from _jira_transforms import (  # noqa: E402
+    DONE_STATUSES_SPRINT, IN_PROGRESS_STATUSES, days_between, is_stale, normalize_name)
 from scrum_context import to_date, working_days  # noqa: E402
 
 NOT_PTO_ADJUSTED = "not PTO-adjusted"
@@ -375,6 +376,7 @@ def release_health(checks, section, capacity=None, rank_available=True, velocity
            "scope_sp": scope, "capacity_sp": cap, "capacity_basis": meta.get("capacity_basis"),
            "capacity_label": (capacity or {}).get("label"),
            "effective_sprints": (capacity or {}).get("effective_sprints"),
+           "velocity_reason": velocity_reason,
            "remaining_sprints": meta.get("remaining_sprints"), "velocity": meta.get("team_velocity"),
            "gap_sp": meta.get("gap_sp"),
            # A count, never an SP estimate (decision 0018).
@@ -480,7 +482,7 @@ def refinement_gaps(features, spikes, section, refinement_sprint_closed=False):
     gaps = len(out["missing_refinement_spike"]) + len(out["refinement_spike_overdue"])
     if gaps:
         out["risks"].append({"severity": RED,
-                             "text": f"{tag}: {gaps} of {out['features']} feature(s) without a closed or open refinement spike"})
+                             "text": f"{tag}: {gaps} of {out['features']} feature(s) without a closed refinement spike"})
     tp = len(out["missing_test_plan_spike"]) + len(out["test_plan_spike_overdue"])
     if tp:
         out["risks"].append({"severity": YELLOW, "text": f"{tag}: {tp} feature(s) missing a test plan spike"})
@@ -497,7 +499,8 @@ def mention(owner, mentions):
     """Slack mention for an owner when mapped (``<@U…>``), else the plain name."""
     if not owner:
         return "no owner set"
-    return (mentions or {}).get(owner) or owner
+    key = normalize_name(owner)
+    return next((v for k, v in (mentions or {}).items() if normalize_name(k) == key), None) or owner
 
 
 def _sprint_figures(s):
@@ -506,7 +509,7 @@ def _sprint_figures(s):
         cap = s.get("capacity") or {}
         cap_txt = f"{cap['capacity_sp']:g} SP ({cap['label']})" if cap.get("capacity_sp") is not None \
             else "not available"
-        return f"committed {s['committed_sp']} SP in {s['issues']} issues; capacity {cap_txt}"
+        return f"committed {s['committed_sp']} SP in {s['issues']} issue{'s' if s['issues'] != 1 else ''}; capacity {cap_txt}"
     b = s.get("burndown", {})
     if "expected_done_sp" in b:
         return (f"{b['done_sp']} of {b['total_sp']} SP done, {b['expected_done_sp']:g} expected "
@@ -529,7 +532,8 @@ def _section_lines(sec):
                  if sec.get("effective_sprints") is not None and sec.get("velocity") is not None
                  else f"({sec.get('capacity_label') or sec.get('capacity_basis')})")
               if sec["capacity_sp"] is not None else
-              f"• Scope {sec['scope_sp']} SP; capacity not available (velocity not measured)"),
+              f"• Scope {sec['scope_sp']} SP; capacity not available "
+              f"({sec.get('velocity_reason') or 'velocity not measured'})"),
              f"• Below the cut line: {', '.join(sec['below_cut_line']) or 'none'}",
              f"• Features at risk: {', '.join(sec['features_at_risk']) or 'none'}"]
     if sec.get("unpointed_items"):

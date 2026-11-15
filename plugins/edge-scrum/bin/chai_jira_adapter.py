@@ -94,7 +94,6 @@ _HINT_RE = re.compile(r"^\s*(\.\.\.|…)?\s*More issues match\b", re.I)
 _INVALID_FIELDS_RE = re.compile(r"^Invalid extra_fields entries:\s*(.*?)(?:\.\s+Use\b.*)?\.?$", re.I)
 _UNKNOWN_FIELDS_RE = re.compile(r"^Unknown fields:\s*(.*?)\.?$", re.I)
 _METADATA_RE = re.compile(r"^(Create metadata for\b|Issue types available\b|Requested fields:|\[[^\]]+\]$)", re.I)
-_LINKED_HEADER_RE = re.compile(r"linked jira issues", re.I)
 _LINKED_LINE_RE = re.compile(
     r"^\s*[-*]\s*(?P<wording>[^:|]+?)\s*:\s*(?P<key>" + KEY_PATTERN + r")\s*"
     r"(?:\((?P<type>[^)]*)\))?\s*(?:\|\s*status\s*:\s*(?P<status>[^|]*?)\s*)?(?:\|.*)?$", re.I)
@@ -125,6 +124,9 @@ CUSTOM_FIELDS = {
 IGNORED_FIELDS = {"issuelinks"}  # query_jira prints "(set, but ... cannot render ...)"
 LIST_FIELDS = {"components": "components", "labels": "labels", "fix versions": "fixVersions",
                "fixversions": "fixVersions", "fix version": "fixVersions"}
+# Labels that may share a line with others (`` | ``-separated); see _segments.
+KNOWN_LABELS = (set(PIPE_FIELDS) | CUSTOM_FIELDS | set(LIST_FIELDS)
+                | {"description", "parent", "resolutiondate"} | IGNORED_FIELDS)
 
 # Link wording → (type name, inward wording, outward wording). On issue A,
 # "is blocked by: B" means B is A's inward issue; "blocks: B" its outward one.
@@ -232,7 +234,9 @@ def parse_issue_links(text):
     """
     links, found, inside = [], False, False
     for line in (text or "").splitlines():
-        if _LINKED_HEADER_RE.search(line) and not _LINKED_LINE_RE.match(line):
+        # The section starts only at a standalone "Linked Jira Issues:" header line
+        # (chai-bot prints it on its own line), never at prose containing the phrase.
+        if re.fullmatch(r"[*#>\s]*linked jira issues:?\s*", line, re.I):
             found, inside = True, True
             continue
         if not inside:
@@ -284,10 +288,15 @@ def _split_blocks(text):
 
 
 def _segments(line):
-    """``Label: value | Label: value`` → label matches; one segment when any part has no label."""
+    """``Label: value | Label: value`` → label matches.
+
+    The line is split on `` | `` only when every part's label is a known field
+    label; otherwise it stays one value, so a value containing `` | Note: x``
+    is not cut at the pipe.
+    """
     parts = re.split(r"\s+\|\s+", line.strip())
     matches = [_LABEL_RE.match(p) for p in parts]
-    if len(parts) > 1 and all(matches):
+    if len(parts) > 1 and all(m and m.group(1).strip().lower() in KNOWN_LABELS for m in matches):
         return matches
     m = _LABEL_RE.match(line)
     return [m] if m else [None]
@@ -754,9 +763,10 @@ def adapt_fetch(manifest, roster=None):
 
     # An issue whose sprint value is not whole: its sprint data is incomplete, so
     # nothing that depends on sprints (velocity, activity) is computed from it.
-    sprint_incomplete = [i["key"] for i in issues if i.get("sprint_data_incomplete")]
-    for key in sprint_incomplete:
-        problems.append(f"{key}: {next(i for i in issues if i['key'] == key)['sprint_data_incomplete']}")
+    incomplete_why = {i["key"]: i["sprint_data_incomplete"]
+                      for i in issues if i.get("sprint_data_incomplete")}
+    sprint_incomplete = list(incomplete_why)
+    problems.extend(f"{key}: {why}" for key, why in incomplete_why.items())
     signals = set(manifest.get("signals") or [])
     skipped = []
     # Unset custom fields print no line, so a missing Flagged line means "not
@@ -767,7 +777,7 @@ def adapt_fetch(manifest, roster=None):
     other_rejected = sorted(rejected - {FLAGGED_FIELD})
     if other_rejected:
         problems.append(f"query_jira rejected field(s): {', '.join(other_rejected)}")
-    if "description" in signals and not any("description" in i for i in issues):
+    if "description" in signals and issues and not any("description" in i for i in issues):
         skipped.append(SKIPPED_DESCRIPTION)
     warnings = []
     if unknown_fields:

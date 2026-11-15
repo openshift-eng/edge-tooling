@@ -529,8 +529,9 @@ def availability(absences, engineer_count, start, end):
     return round(max(0.0, 1 - len(off) / total), 2)
 
 
-# Calendar window read for absences when the caller does not pass one: the
-# window the SKILL documents for calendar reads (21 days back, 42 ahead).
+# Fallback when the caller passes no window: 21 days back, 42 ahead — narrower
+# than the 126-day-ahead read the SKILL documents, so an omitted window can
+# only under-report availability, never compute it from absences never read.
 DEFAULT_ABSENCE_DAYS_BEFORE = 21
 DEFAULT_ABSENCE_DAYS_AFTER = 42
 OUTSIDE_CALENDAR_WINDOW = "not available (outside the calendar window read)"
@@ -545,6 +546,9 @@ def absence_window(raw, today, warnings):
     default = (today - dt.timedelta(days=DEFAULT_ABSENCE_DAYS_BEFORE),
                today + dt.timedelta(days=DEFAULT_ABSENCE_DAYS_AFTER))
     if not raw:
+        return default
+    if not isinstance(raw, dict):
+        warnings.append("ignored absence_window: not an object; using the default window")
         return default
     start, start_ok = source_date(raw.get("start"))
     end, end_ok = source_date(raw.get("end"))
