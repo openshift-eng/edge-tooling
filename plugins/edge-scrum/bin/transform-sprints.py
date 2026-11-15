@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from _jira_transforms import (
     extract_sprint_number,
     format_date,
-    days_between,
+    sprint_day_counts,
     load_sprints,
     write_output,
 )
@@ -36,9 +36,7 @@ def build_target_sprint(sprint, today):
     if sprint["start"] is None or sprint["end"] is None:
         return None
 
-    total = days_between(sprint["start"], sprint["end"])
-    elapsed = max(0, min(days_between(sprint["start"], today), total))
-    remaining = max(0, min(days_between(today, sprint["end"]), total))
+    elapsed, remaining, total = sprint_day_counts(sprint["start"], sprint["end"], today)
 
     return {
         "id": sprint["id"],

@@ -365,6 +365,19 @@ def days_between(start, end, inclusive=True):
     return delta + 1 if inclusive else delta
 
 
+def sprint_day_counts(start, end, today):
+    """``(days elapsed, days remaining, total days)`` of a sprint, in calendar days.
+
+    The single definition shared by ``transform-sprints.py`` (Claude Code) and
+    ``chai_report.py`` (chai-bot). ``total`` counts the start and end days;
+    ``elapsed`` counts today, clamped to ``[0, total]``; ``remaining`` is
+    ``total − elapsed``, so ``elapsed + remaining == total``.
+    """
+    total = days_between(start, end)
+    elapsed = max(0, min(days_between(start, today), total))
+    return elapsed, total - elapsed, total
+
+
 def business_days_between(start, end):
     """Business days (Mon-Fri) between start (exclusive) and end (inclusive)."""
     s = parse_date(start)

@@ -17,7 +17,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _jira_transforms import (  # noqa: E402
-    DONE_STATUSES_SPRINT, IN_PROGRESS_STATUSES, days_between, is_stale, normalize_name)
+    DONE_STATUSES_SPRINT, IN_PROGRESS_STATUSES, is_stale, normalize_name, sprint_day_counts)
 from scrum_context import to_date, working_days  # noqa: E402
 
 NOT_PTO_ADJUSTED = "not PTO-adjusted"
@@ -206,11 +206,8 @@ def select_sections(context, windows=()):
 
 
 def _days(sprint, today):
-    """(days elapsed, days remaining, total days) of a sprint, calendar days, as transform-sprints counts them."""
-    start, end = sprint.get("start"), sprint.get("end")
-    total = days_between(start, end)
-    elapsed = max(0, min(days_between(start, today), total))
-    return elapsed, total - elapsed, total
+    """(days elapsed, days remaining, total days): the shared ``sprint_day_counts`` definition."""
+    return sprint_day_counts(sprint.get("start"), sprint.get("end"), today)
 
 
 def _stale(issue, today):
