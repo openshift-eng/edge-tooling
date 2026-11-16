@@ -12,6 +12,7 @@ from post_release import (  # noqa: E402
     _bootc_erratas_from_shipment,
     _check_errata_found,
     _check_errata_shipped,
+    check_rpms_kcs_indexed,
     _check_bootc_errata_shipped,
     check_bootc_errata_images,
     check_bootc_catalog,
@@ -124,6 +125,10 @@ class TestAllCheckIds(unittest.TestCase):
         self.assertIn("pr_errata_rpms_found", ids)
         self.assertIn("pr_errata_rpms_shipped", ids)
 
+    def test_kcs_indexed_always_included(self):
+        ids = _all_check_ids(_version("4.17.3"))
+        self.assertIn("pr_errata_rpms_kcs_indexed", ids)
+
 
 # ── Errata found ───────────────────────────────────────────────
 
@@ -227,6 +232,81 @@ class TestBootcErrataShipped(unittest.TestCase):
     def test_search_error(self):
         r = _check_bootc_errata_shipped({"error": "timeout"})
         self.assertEqual(r["status"], "WARN")
+
+
+# ── KCS (Hydra) search index ──────────────────────────────────
+
+
+class TestRpmsKcsIndexed(unittest.TestCase):
+    """The advisory must be discoverable via the public KCS search index."""
+
+    def test_indexed_via_hydra(self):
+        info = _errata_info()
+        info["source"] = "hydra"
+        r = check_rpms_kcs_indexed("pr_errata_rpms_kcs_indexed", info)
+        self.assertEqual(r["status"], "PASS")
+        self.assertIn("RHBA-2026:12345", r["reason"])
+
+    @patch("post_release.requests.get")
+    def test_shipped_but_not_indexed(self, mock_get):
+        # Resolved only via the Errata Tool fallback and a direct by-name Hydra
+        # lookup still cannot find it → shipped but the KCS index has not caught
+        # up. This is the gap we must report.
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {"response": {"docs": []}},
+        )
+        info = _errata_info(advisory_name="RHSA-2026:91191")
+        info["source"] = "errata_tool"
+        r = check_rpms_kcs_indexed("pr_errata_rpms_kcs_indexed", info)
+        self.assertEqual(r["status"], "FAIL")
+        self.assertIn("RHSA-2026:91191", r["reason"])
+        self.assertIn("KCS", r["reason"])
+
+    @patch("post_release.requests.get")
+    def test_indexed_beyond_first_page(self, mock_get):
+        # The minor-scoped search missed it (so it fell to the Errata Tool),
+        # but a direct by-name Hydra lookup finds it → it IS in the KCS index,
+        # just sorted past the first page. Must not be reported as a gap.
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "response": {
+                    "docs": [{
+                        "uri": ("https://access.redhat.com/errata/"
+                                "RHSA-2026:91191"),
+                        "portal_synopsis": "Red Hat build of MicroShift update",
+                    }]
+                }
+            },
+        )
+        info = _errata_info(advisory_name="RHSA-2026:91191")
+        info["source"] = "errata_tool"
+        r = check_rpms_kcs_indexed("pr_errata_rpms_kcs_indexed", info)
+        self.assertEqual(r["status"], "PASS")
+        self.assertIn("RHSA-2026:91191", r["reason"])
+
+    @patch("post_release.requests.get")
+    def test_by_name_lookup_fails(self, mock_get):
+        # The by-name confirmation lookup errors out → cannot prove the
+        # advisory is absent from the index, so warn rather than fail.
+        import requests
+        mock_get.side_effect = requests.RequestException("timeout")
+        info = _errata_info(advisory_name="RHSA-2026:91191")
+        info["source"] = "errata_tool"
+        r = check_rpms_kcs_indexed("pr_errata_rpms_kcs_indexed", info)
+        self.assertEqual(r["status"], "WARN")
+        self.assertIn("RHSA-2026:91191", r["reason"])
+
+    def test_no_advisory(self):
+        r = check_rpms_kcs_indexed("pr_errata_rpms_kcs_indexed", None)
+        self.assertEqual(r["status"], "WARN")
+
+    def test_hydra_search_failed(self):
+        r = check_rpms_kcs_indexed("pr_errata_rpms_kcs_indexed",
+                                   {"error": "timeout"})
+        self.assertEqual(r["status"], "WARN")
+        self.assertIn("Hydra search failed", r["reason"])
 
 
 # ── Bootc errata ID match ────────────────────────────────
@@ -481,6 +561,18 @@ class TestRpmsCdn(unittest.TestCase):
         self.assertEqual(r["status"], "FAIL")
 
     @patch("post_release.errata.fetch_push_status")
+    def test_cdn_failed_then_repushed(self, mock_push):
+        # An earlier push FAILED and was re-pushed; the later push COMPLETE.
+        # The superseded FAILED record must not fail the check.
+        mock_push.return_value = [
+            {"id": 627159, "target": {"name": "cdn"}, "status": "FAILED"},
+            {"id": 627161, "target": {"name": "cdn"}, "status": "COMPLETE"},
+        ]
+        r = check_rpms_cdn(_advisory(), vpn_ok=True)
+        self.assertEqual(r["status"], "PASS")
+        self.assertIn("CDN push complete", r["reason"])
+
+    @patch("post_release.errata.fetch_push_status")
     def test_no_cdn_push(self, mock_push):
         mock_push.return_value = [
             {"target": {"name": "ftp"}, "status": "COMPLETE"},
@@ -672,6 +764,7 @@ class TestFindRpmsErrata(unittest.TestCase):
         result = find_rpms_errata("4.21.7", "4.21")
         self.assertIsNotNone(result)
         self.assertEqual(result["advisory_name"], "RHBA-2026:12345")
+        self.assertEqual(result["source"], "hydra")
 
     @patch("post_release.requests.get")
     def test_not_found(self, mock_get):
@@ -691,6 +784,203 @@ class TestFindRpmsErrata(unittest.TestCase):
         self.assertIn("timeout", result["error"])
 
 
+# ── Errata Tool fallback (Hydra index lag) ────────────────────
+
+
+def _empty_hydra_response():
+    return MagicMock(status_code=200, json=lambda: {"response": {"docs": []}})
+
+
+class TestFindRpmsErrataViaErrataTool(unittest.TestCase):
+    """Hydra's search index lags; the ET build record is authoritative."""
+
+    _NVR = ("microshift-4.19.53-202610271823.p0.gb3195dc"
+            ".assembly.4.19.53.el9")
+
+    def _et_build_advisories(self, status="SHIPPED_LIVE"):
+        return {
+            "released_errata": None,
+            "all_errata": [
+                {"id": 175922, "name": "RHSA-2026:91191", "status": status},
+            ],
+        }
+
+    @patch("post_release.errata.fetch_advisory")
+    @patch("post_release.errata.fetch_build_advisories")
+    @patch("post_release.brew.get_build_info")
+    @patch("post_release.requests.get")
+    def test_et_fallback_when_hydra_lags(self, mock_get, mock_build,
+                                         mock_advisories, mock_advisory):
+        mock_get.return_value = _empty_hydra_response()
+        mock_build.return_value = {"found": True, "nvr": self._NVR}
+        mock_advisories.return_value = self._et_build_advisories()
+        mock_advisory.return_value = {
+            "issue_date": "2026-10-29 12:00:00",
+            "synopsis": ("Important: Red Hat build of MicroShift 4.19.53 "
+                         "security update"),
+        }
+
+        result = find_rpms_errata("4.19.53", "4.19", "Z", vpn_ok=True)
+
+        self.assertEqual(result["advisory_name"], "RHSA-2026:91191")
+        self.assertEqual(result["publication_date"], "2026-10-29")
+        self.assertEqual(result["source"], "errata_tool")
+        self.assertEqual(
+            result["portal_url"],
+            "https://access.redhat.com/errata/RHSA-2026:91191")
+        mock_build.assert_called_once_with("4.19.53", "Z")
+        mock_advisories.assert_called_once_with(self._NVR)
+
+    @patch("post_release.errata.fetch_advisory")
+    @patch("post_release.errata.fetch_build_advisories")
+    @patch("post_release.brew.get_build_info")
+    @patch("post_release.requests.get")
+    def test_hydra_exception_then_et_success(self, mock_get, mock_build,
+                                             mock_advisories, mock_advisory):
+        # Hydra's search raises (not merely empty), but the ET fallback finds
+        # the advisory. RPM discovery must still succeed, while the Hydra error
+        # is preserved separately so KCS indexing can report an unknown status.
+        import requests as _requests
+        mock_get.side_effect = _requests.RequestException("hydra down")
+        mock_build.return_value = {"found": True, "nvr": self._NVR}
+        mock_advisories.return_value = self._et_build_advisories()
+        mock_advisory.return_value = {
+            "issue_date": "2026-10-29 12:00:00",
+            "synopsis": "Red Hat build of MicroShift 4.19.53 security update",
+        }
+
+        result = find_rpms_errata("4.19.53", "4.19", "Z", vpn_ok=True)
+
+        self.assertEqual(result["advisory_name"], "RHSA-2026:91191")
+        self.assertEqual(result["source"], "errata_tool")
+        # Recorded separately — NOT under "error", so RPM discovery still passes.
+        self.assertNotIn("error", result)
+        self.assertIn("hydra down", result["hydra_error"])
+
+        # RPM discovery passes despite the Hydra error.
+        found = _check_errata_found("pr_errata_rpms_found", "RPMs", result)
+        self.assertEqual(found["status"], "PASS")
+
+        # KCS indexing is unknown (Hydra could not be consulted), not a gap.
+        kcs = check_rpms_kcs_indexed("pr_errata_rpms_kcs_indexed", result)
+        self.assertEqual(kcs["status"], "WARN")
+        self.assertIn("RHSA-2026:91191", kcs["reason"])
+
+    @patch("post_release.errata.fetch_build_advisories")
+    @patch("post_release.requests.get")
+    def test_no_vpn_skips_et_fallback(self, mock_get, mock_advisories):
+        mock_get.return_value = _empty_hydra_response()
+
+        result = find_rpms_errata("4.19.53", "4.19", "Z", vpn_ok=False)
+
+        self.assertIsNone(result)
+        mock_advisories.assert_not_called()
+
+    @patch("post_release.errata.fetch_advisory")
+    @patch("post_release.errata.fetch_build_advisories")
+    @patch("post_release.brew.get_build_info")
+    @patch("post_release.requests.get")
+    def test_hydra_hit_wins_over_et(self, mock_get, mock_build,
+                                    mock_advisories, mock_advisory):
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "response": {
+                    "docs": [{
+                        "portal_synopsis": (
+                            "RHBA-2026:12345 - Red Hat build of MicroShift "
+                            "4.19 update for MicroShift 4.19.53"
+                        ),
+                        "uri": "https://access.redhat.com/errata/RHBA-2026:12345",
+                        "portal_publication_date": "2026-10-20T10:00:00Z",
+                    }]
+                }
+            },
+        )
+
+        result = find_rpms_errata("4.19.53", "4.19", "Z", vpn_ok=True)
+
+        self.assertEqual(result["advisory_name"], "RHBA-2026:12345")
+        mock_build.assert_not_called()
+        mock_advisories.assert_not_called()
+
+    @patch("post_release.errata.fetch_advisory")
+    @patch("post_release.errata.fetch_build_advisories")
+    @patch("post_release.brew.get_build_info")
+    @patch("post_release.requests.get")
+    def test_et_advisory_not_shipped(self, mock_get, mock_build,
+                                     mock_advisories, mock_advisory):
+        mock_get.return_value = _empty_hydra_response()
+        mock_build.return_value = {"found": True, "nvr": self._NVR}
+        mock_advisories.return_value = self._et_build_advisories(
+            status="REL_PREP")
+
+        result = find_rpms_errata("4.19.53", "4.19", "Z", vpn_ok=True)
+
+        self.assertIsNone(result)
+        mock_advisory.assert_not_called()
+
+    @patch("post_release.errata.fetch_build_advisories")
+    @patch("post_release.brew.get_build_info")
+    @patch("post_release.requests.get")
+    def test_et_fallback_no_brew_build(self, mock_get, mock_build,
+                                       mock_advisories):
+        mock_get.return_value = _empty_hydra_response()
+        mock_build.return_value = {"found": False}
+
+        result = find_rpms_errata("4.19.53", "4.19", "Z", vpn_ok=True)
+
+        self.assertIsNone(result)
+        mock_advisories.assert_not_called()
+
+    @patch("post_release.errata.fetch_advisory")
+    @patch("post_release.errata.fetch_build_advisories")
+    @patch("post_release.brew.get_build_info")
+    @patch("post_release.requests.get")
+    def test_et_fallback_released_errata_only(self, mock_get, mock_build,
+                                              mock_advisories, mock_advisory):
+        # The advisory is present only as the single released_errata object,
+        # not in all_errata. It must still be matched (not split into scalars).
+        mock_get.return_value = _empty_hydra_response()
+        mock_build.return_value = {"found": True, "nvr": self._NVR}
+        mock_advisories.return_value = {
+            "released_errata": {
+                "id": 175922, "name": "RHSA-2026:91191",
+                "status": "SHIPPED_LIVE",
+            },
+            "all_errata": [],
+        }
+        mock_advisory.return_value = {"issue_date": "2026-10-29"}
+
+        result = find_rpms_errata("4.19.53", "4.19", "Z", vpn_ok=True)
+
+        self.assertEqual(result["advisory_name"], "RHSA-2026:91191")
+
+    @patch("post_release.errata.fetch_advisory")
+    @patch("post_release.errata.fetch_build_advisories")
+    @patch("post_release.brew.get_build_info")
+    @patch("post_release.requests.get")
+    def test_et_fallback_checks_all_nvrs(self, mock_get, mock_build,
+                                         mock_advisories, mock_advisory):
+        # The advisory is attached to the second matching NVR (e.g. el10),
+        # not the first (el9). Both must be inspected before giving up.
+        nvr_el9 = self._NVR
+        nvr_el10 = self._NVR.replace(".el9", ".el10")
+        mock_get.return_value = _empty_hydra_response()
+        mock_build.return_value = {
+            "found": True, "nvr": nvr_el9, "nvrs": [nvr_el9, nvr_el10],
+        }
+        mock_advisories.side_effect = lambda nvr: (
+            self._et_build_advisories() if nvr == nvr_el10 else None
+        )
+        mock_advisory.return_value = {"issue_date": "2026-10-29"}
+
+        result = find_rpms_errata("4.19.53", "4.19", "Z", vpn_ok=True)
+
+        self.assertEqual(result["advisory_name"], "RHSA-2026:91191")
+        self.assertEqual(
+            [c.args[0] for c in mock_advisories.call_args_list],
+            [nvr_el9, nvr_el10])
 
 
 # ── Formatting ─────────────────────────────────────────────────
