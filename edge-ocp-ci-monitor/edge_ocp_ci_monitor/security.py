@@ -115,7 +115,12 @@ def redact_logs(token: str):
                 record = previous(*args, **kwargs)
                 with _lock:
                     tokens = sorted(_active_tokens, key=len, reverse=True)
-                message = record.getMessage()
+                try:
+                    message = record.getMessage()
+                except Exception:  # noqa: BLE001 - third-party formatting must not break logging callers
+                    # Formatting may invoke third-party __str__ methods. Do
+                    # not retry them or include potentially sensitive args.
+                    message = '<unformattable log message>'
                 exception = ''.join(traceback.format_exception(*record.exc_info)) if record.exc_info else record.exc_text
                 for secret in tokens:
                     message = redact_token(message, secret)
