@@ -1,4 +1,4 @@
-"""Fresh collection orchestration for the Chai monitor using unchanged collector modules."""
+"""Fresh collection orchestration with edge-owned Component Readiness selection."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from payload_monitor.analyzer import (
     _find_escalation_risks,
     _find_recurring_failures,
 )
-from payload_monitor.collectors import component_readiness, prow, sippy, timing
+from payload_monitor.collectors import prow, sippy, timing
 from payload_monitor.collectors.release_controller import (
     collect as collect_payloads,
 )
@@ -32,6 +32,7 @@ from payload_monitor.collectors.release_controller import (
 from payload_monitor.config import Config
 from payload_monitor.models import JobType, MonitorReport
 
+from . import component_readiness
 from .report import generate_html, generate_json, patch_analysis_html
 from .security import protect_logs, redact_data
 
@@ -108,7 +109,7 @@ def collect_report(
 
         if not skip_sippy:
             sippy_future = pool.submit(sippy.collect, config, active_versions)
-            cr_future = pool.submit(component_readiness.collect, active_versions)
+            cr_future = pool.submit(component_readiness.collect)
 
         if with_timing:
             cache_path = Path(config.report_dir) / "timing_cache.json"

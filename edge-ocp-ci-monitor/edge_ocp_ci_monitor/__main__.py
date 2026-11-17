@@ -28,13 +28,9 @@ def _monitor_params():
 
 
 @click.command(name="edge-ocp-ci-monitor", params=_monitor_params())
-@click.option("--ai-timeout", type=click.FloatRange(min=1, max=2700), default=2700, show_default=True,
-              help="Hard timeout in seconds per request, including setup; each category may make one final request.")
-@click.option("--ai-concurrency", type=click.IntRange(min=1, max=2), default=2, show_default=True,
-              help="Maximum active ask_persona calls: one blocking batch and one Sippy batch.")
 @click.pass_context
 @protect_logs(lambda *args, **kwargs: os.environ.get("CHAI_MCP_TOKEN", "").strip())
-def main(ctx, ai_timeout, ai_concurrency, **options):
+def main(ctx, **options):
     """Edge OCP CI Monitor: the payload dashboard enriched through Chai MCP.
 
     Reads CHAI_MCP_URL and CHAI_MCP_TOKEN from the environment. Missing
@@ -52,7 +48,7 @@ def main(ctx, ai_timeout, ai_concurrency, **options):
     for name in ("fastmcp", "httpx", "httpcore", "httpx2", "httpcore2", "mcp"):
         logging.getLogger(name).setLevel(logging.WARNING)
 
-    settings, warnings = Settings.from_environment(timeout=ai_timeout, concurrency=ai_concurrency)
+    settings, warnings = Settings.from_environment()
     for stream in output.report.streams:
         for payload in stream.payloads:
             for job in payload.jobs:

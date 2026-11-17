@@ -26,6 +26,8 @@ from .jira import JIRA_SCHEMA, validate_jira
 from .security import protect_logs, redact_token
 
 logger = logging.getLogger(__name__)
+AI_TIMEOUT_SECONDS = 2700
+AI_CONCURRENCY = 2
 _HEARTBEAT_SECONDS = 30
 
 
@@ -65,8 +67,8 @@ class AnalysisResult:
 class Settings:
     url: str
     token: str = field(repr=False)
-    timeout: float = 2700
-    concurrency: int = 2
+    timeout: float = AI_TIMEOUT_SECONDS
+    concurrency: int = AI_CONCURRENCY
 
     def __post_init__(self):
         if not self.token or not self.token.isascii() or any(c.isspace() or not c.isprintable() for c in self.token):
@@ -84,13 +86,13 @@ class Settings:
             raise ValueError("CHAI_MCP_URL must be an HTTPS persona endpoint without credentials, query or fragment.")
 
     @classmethod
-    def from_environment(cls, *, timeout: float, concurrency: int) -> tuple[Settings | None, list[str]]:
+    def from_environment(cls) -> tuple[Settings | None, list[str]]:
         values = {name: os.environ.get(name, "").strip() for name in ("CHAI_MCP_URL", "CHAI_MCP_TOKEN")}
         missing = [name for name, value in values.items() if not value]
         if missing:
             return None, [f"Missing environment variable(s): {', '.join(missing)}. Export them and rerun for Chai analysis."]
         try:
-            return cls(values["CHAI_MCP_URL"], values["CHAI_MCP_TOKEN"], timeout=timeout, concurrency=concurrency), []
+            return cls(values["CHAI_MCP_URL"], values["CHAI_MCP_TOKEN"]), []
         except ValueError as exc:
             return None, [str(exc)]
 
@@ -179,7 +181,7 @@ _SCHEMA = {
 
 
 def build_prompt(
-    targets: list[dict], *, sippy: bool, evidence: dict, timeout: float = 2700,
+    targets: list[dict], *, sippy: bool, evidence: dict, timeout: float = AI_TIMEOUT_SECONDS,
     deferred_notes: dict | None = None, final_attempt: bool = False,
 ) -> str:
     """Let the persona drive investigation; specify the task and output contract."""
@@ -544,7 +546,7 @@ async def analyze_targets(
 ) -> AnalysisResult:
     """Investigate two categories, with one follow-up each for error-free budget deferrals."""
     result = AnalysisResult(requested=len(targets["blocking_jobs"]) + len(targets["sippy_jobs"]))
-    semaphore = asyncio.Semaphore(min(settings.concurrency, 2))
+    semaphore = asyncio.Semaphore(min(settings.concurrency, AI_CONCURRENCY))
 
     def checkpoint() -> None:
         if on_update is not None:

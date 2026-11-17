@@ -1,6 +1,6 @@
 # Edge OCP CI Monitor
 
-Generate the existing Edge OCP payload dashboard with AI investigations performed by Chai Bot over MCP. The tool imports the unchanged `payload-monitor` collectors, report models, topology filtering, failure intelligence, Sippy selection, Component Readiness and timing insights. Collection orchestration, Chai dashboard templates, rendering, Jira recommendations and in-memory analysis merging live in `edge_ocp_ci_monitor/`. It does not require Claude Code or the Claude marketplace plugins.
+Generate the existing Edge OCP payload dashboard with AI investigations performed by Chai Bot over MCP. The tool reuses the unchanged `payload-monitor` collectors, report models, topology filtering, failure intelligence, Sippy selection and timing insights. Component Readiness uses an edge-owned static lookup and collection orchestration over the unchanged shared response parser. Collection orchestration, Chai dashboard templates, rendering, Jira recommendations and in-memory analysis merging live in `edge_ocp_ci_monitor/`. It does not require Claude Code or the Claude marketplace plugins.
 
 The original `payload-monitor/` directory remains unmodified, including its CLI, renderer, templates and documentation. The existing `edge-ocp-ci` Claude plugin and release repository workflow remain available with their existing defaults while the new entry point is adopted.
 
@@ -34,6 +34,15 @@ The standalone requirements pin Requests to **2.34.2**, Jinja2 to **3.1.6**, Cli
 
 Run the module from this directory with the virtual environment activated. Output paths are relative to the current directory, as with `payload-monitor`.
 
+The **Component Readiness - HA vs Edge Topologies** section collects all exact
+views in the edge-owned `edge_ocp_ci_monitor/component_readiness.py` static lookup, independently of
+`--versions`. The lookup was checked against
+[Sippy's saved views](https://sippy.dptools.openshift.org/api/component_readiness/views)
+on 17 November 2026: SNO for 4.18–4.21, and SNO, TNA and TNF for 4.22, 4.23,
+5.0 and 5.1 (16 comparisons). The collector does not infer view names or query
+the view list at runtime. Payloads and Sippy job health retain their selected
+release scope; `--skip-sippy` still disables both Sippy and Component Readiness.
+
 ```bash
 python -m edge_ocp_ci_monitor --versions 4.19,5.1 --payloads 3 \
   --with-timing --json --output reports/edge-ci.html
@@ -58,22 +67,23 @@ older reports and imports.
 | `CHAI_MCP_URL` | Yes | Full persona URL, such as `https://<host>/personas/openshift_edge_internal/mcp` |
 | `CHAI_MCP_TOKEN` | Yes | Existing bearer token, without the `Bearer` prefix and its separating space |
 
-All existing `payload-monitor` CLI options except `--from-json` are accepted, with two additions:
+All existing `payload-monitor` CLI options except `--from-json` are accepted.
+AI execution limits are fixed constants in `edge_ocp_ci_monitor/analysis.py`:
 
-| Option | Default | Meaning |
+| Constant | Value | Meaning |
 |---|---|---|
-| `--ai-timeout SECONDS` | `2700` | Hard timeout per request, including connection setup; range 1–2700 seconds (45 minutes). Each category may make one final request. |
-| `--ai-concurrency N` | `2` | Maximum active `ask_persona` calls overall; range 1–2 |
+| `AI_TIMEOUT_SECONDS` | `2700` | Hard timeout per request, including connection setup (45 minutes). Each category may make one final request. |
+| `AI_CONCURRENCY` | `2` | Maximum active `ask_persona` calls overall. |
 
-Chai can take several minutes for one answer. The adapter starts with two category batches: one containing the complete selected blocking-job list and one containing the complete selected Sippy job/test-finding list. They run concurrently by default. An empty category makes no call. Each category may make **one final request for budget-deferred targets**, for a maximum of **four `ask_persona` calls per run**, with at most two active calls overall. There are no per-target or format-correction calls.
+Chai can take several minutes for one answer. The adapter starts with two category batches: one containing the complete selected blocking-job list and one containing the complete selected Sippy job/test-finding list. They run concurrently. An empty category makes no call. Each category may make **one final request for budget-deferred targets**, for a maximum of **four `ask_persona` calls per run**, with at most two active calls overall. There are no per-target or format-correction calls.
 
-Each request gets a **45-minute hard timeout** for all its targets. The prompt asks Chai to stop investigating after **40 minutes**, or at an explicit UTC deadline, whichever comes first, and use the remaining five minutes to return valid JSON containing its findings so far. For a custom timeout, the investigation budget is eight ninths of that timeout, reserving one ninth for the response. This is prompt guidance: a blocked tool or model may still reach the hard timeout without returning usable findings.
+Each request gets a **45-minute hard timeout** for all its targets. The prompt asks Chai to stop investigating after **40 minutes**, or at an explicit UTC deadline, whichever comes first, and use the remaining five minutes to return valid JSON containing its findings so far. The investigation budget is eight ninths of the fixed timeout, reserving one ninth for the response. This is prompt guidance: a blocked tool or model may still reach the hard timeout without returning usable findings.
 
 A final request is allowed only when the first response passes validation and has targets explicitly deferred solely because the investigation budget ran out. It receives only those targets, the category's completed findings, and the deferred investigation notes. Chai starts a fresh session for every request; the supplied evidence and notes provide continuity. Any processing, access, missing-evidence or validation error in the first response prevents that category's final request. Hard timeouts and transport failures are not retried. A final response can also defer targets, but this produces warnings and no further request.
 
-With both categories running in parallel, the AI stage can take up to about **90 minutes** if both need a final request, plus connection cleanup and checkpoint rendering; collection adds its own runtime. `--ai-concurrency 1` serializes all requests, potentially taking about **180 minutes**. A run whose initial responses finish all targets still makes only two calls. Set any enclosing terminal, CI step or job timeout accordingly. Existing release step timeouts are not changed by this tool.
+With both categories running in parallel, the AI stage can take up to about **90 minutes** if both need a final request, plus connection cleanup and checkpoint rendering; collection adds its own runtime. A run whose initial responses finish all targets still makes only two calls. Set any enclosing terminal, CI step or job timeout accordingly. Existing release step timeouts are not changed by this tool.
 
-The client timeout does not extend Chai's server-side limits. The checked-in Edge persona inherits a 45-minute cap from `ocp_ai_helpdesk`; other personas may retain Chai's 30-minute default. Use an `--ai-timeout` compatible with the selected persona's cap. At the hard timeout the monitor cancels its wait and closes the MCP client; it cannot retrieve intermediate findings from that session afterward. External work already started may still be running. Chai's per-user limit normally allows two calls, shared with other MCP activity under the same identity. Capacity refusals retain the warning/fallback behavior. Batches are not split to evade limits; an oversized prompt refused by Chai is reported as an unavailable batch.
+The client timeout does not extend Chai's server-side limits. The checked-in Edge persona inherits a 45-minute cap from `ocp_ai_helpdesk`; other personas may retain Chai's 30-minute default and stop before the client's fixed deadline. At the hard timeout the monitor cancels its wait and closes the MCP client; it cannot retrieve intermediate findings from that session afterward. External work already started may still be running. Chai's per-user limit normally allows two calls, shared with other MCP activity under the same identity. Capacity refusals retain the warning/fallback behavior. Batches are not split to evade limits; an oversized prompt refused by Chai is reported as an unavailable batch.
 
 The adapter uses the normal initialized MCP HTTP protocol, keeping long responses open through the SDK. It does not depend on the sandbox-only background task protocol. MCP initialization/discovery traffic is separate from the two `ask_persona` calls.
 

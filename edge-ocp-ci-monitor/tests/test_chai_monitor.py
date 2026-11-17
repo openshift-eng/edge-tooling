@@ -10,21 +10,6 @@ from types import SimpleNamespace
 import httpx2
 import pytest
 from click.testing import CliRunner
-from payload_monitor import __main__ as core
-from payload_monitor.models import (
-    DeepAnalysis,
-    JobResult,
-    JobRun,
-    JobType,
-    MonitorReport,
-    Payload,
-    PayloadStatus,
-    PreviousAttempt,
-    Regression,
-    StreamReport,
-)
-from payload_monitor.report.generator import generate_html, generate_json
-
 from edge_ocp_ci_monitor import __main__ as cli
 from edge_ocp_ci_monitor import analysis, collection
 from edge_ocp_ci_monitor.analysis import (
@@ -39,6 +24,21 @@ from edge_ocp_ci_monitor.analysis import (
     validate_batch,
 )
 from edge_ocp_ci_monitor.report import generate_html as generate_chai_html
+from payload_monitor import __main__ as core
+from payload_monitor.models import (
+    ComponentRegression,
+    DeepAnalysis,
+    JobResult,
+    JobRun,
+    JobType,
+    MonitorReport,
+    Payload,
+    PayloadStatus,
+    PreviousAttempt,
+    Regression,
+    StreamReport,
+)
+from payload_monitor.report.generator import generate_html, generate_json
 
 
 @pytest.fixture
@@ -107,7 +107,7 @@ def test_missing_environment_names_are_reported_without_values(monkeypatch, miss
     names = ("CHAI_MCP_TOKEN", "CHAI_MCP_URL") if missing == "both" else (missing,)
     for name in names:
         monkeypatch.delenv(name)
-    config, warnings = Settings.from_environment(timeout=1800, concurrency=2)
+    config, warnings = Settings.from_environment()
     assert config is None
     assert all(name in warnings[0] for name in names)
     assert "synthetic-secret" not in warnings[0]
@@ -117,7 +117,7 @@ def test_missing_environment_names_are_reported_without_values(monkeypatch, miss
 def test_invalid_url_falls_back(monkeypatch, url):
     monkeypatch.setenv("CHAI_MCP_TOKEN", "synthetic-secret")
     monkeypatch.setenv("CHAI_MCP_URL", url)
-    config, warnings = Settings.from_environment(timeout=1800, concurrency=2)
+    config, warnings = Settings.from_environment()
     assert config is None
     assert "CHAI_MCP_URL" in warnings[0]
 
@@ -847,6 +847,33 @@ def test_cli_fallback_retains_fresh_dashboard_markers_and_sidecars(report, tmp_p
     assert set(tmp_path.iterdir()) == {out, out.with_suffix(".json"), out.with_suffix(".sippy-summary.json")}
 
 
+def test_component_readiness_scope_is_independent_of_selected_payload_versions(
+    collected_report, tmp_path, monkeypatch,
+):
+    monkeypatch.delenv("CHAI_MCP_TOKEN", raising=False)
+    monkeypatch.delenv("CHAI_MCP_URL", raising=False)
+    finding = ComponentRegression(
+        component="arbiter-component", test_name="arbiter-regression", test_suite="s",
+        test_id="arbiter-test", capability="", version="5.1", comparison="TNA",
+    )
+    monkeypatch.setattr(collection.component_readiness, "collect", lambda: [finding])
+    out = tmp_path / "report.html"
+
+    result = CliRunner().invoke(cli.main, [
+        "--versions", "4.19", "--skip-prow", "--json", "--output", str(out),
+    ])
+
+    assert result.exit_code == 0, result.exception
+    data = json.loads(out.with_suffix(".json").read_text())
+    assert [stream["version"] for stream in data["streams"]] == ["4.19"]
+    assert data["component_regressions"][0]["version"] == "5.1"
+    assert data["component_regressions"][0]["comparison"] == "TNA"
+    html = out.read_text()
+    assert 'data-crcomparison="TNA"' in html
+    assert 'data-crversion="5.1"' in html
+    assert "arbiter-regression" in html
+
+
 @pytest.mark.parametrize("available", [True, False])
 @pytest.mark.parametrize("export_json", [True, False])
 def test_cli_enrichment_and_remote_failure(report, collected_report, tmp_path, monkeypatch, available, export_json):
@@ -854,6 +881,8 @@ def test_cli_enrichment_and_remote_failure(report, collected_report, tmp_path, m
     monkeypatch.setenv("CHAI_MCP_URL", "https://chai.example/mcp")
 
     async def ask(config, prompt, **kwargs):
+        assert config.timeout == 2700
+        assert config.concurrency == 2
         if not available:
             raise ChaiUnavailable("Endpoint unavailable.")
         return batch_answer(prompt)
@@ -946,14 +975,15 @@ def test_collected_report_does_not_relabel_stale_analysis_as_chai(report, collec
     assert "AI-enriched via Chai" not in out.read_text()
 
 
-def test_default_timeout_and_invalid_ranges():
-    timeout = next(p for p in cli.main.params if p.name == "ai_timeout")
-    concurrency = next(p for p in cli.main.params if p.name == "ai_concurrency")
-    assert timeout.default == 2700
-    assert concurrency.default == 2
-    assert concurrency.type.convert("2", None, None) == 2
-    assert CliRunner().invoke(cli.main, ["--ai-timeout", "2701"]).exit_code == 2
-    assert CliRunner().invoke(cli.main, ["--ai-concurrency", "3"]).exit_code == 2
+@pytest.mark.parametrize("option,value", [("--ai-timeout", "2700"), ("--ai-concurrency", "2")])
+def test_ai_execution_limits_are_not_cli_options(option, value):
+    runner = CliRunner()
+    help_result = runner.invoke(cli.main, ["--help"])
+    assert help_result.exit_code == 0
+    assert option not in help_result.output
+    rejected = runner.invoke(cli.main, [option, value])
+    assert rejected.exit_code == 2
+    assert "No such option" in rejected.output and option in rejected.output
 
 
 def test_from_json_removed_only_from_chai_cli():
@@ -1322,10 +1352,9 @@ def test_jira_draft_escapes_model_html_without_losing_description(report):
 
 @pytest.mark.parametrize("legacy", [False, True])
 def test_local_analysis_import_removes_prior_jira_drafts(report, tmp_path, legacy):
+    from edge_ocp_ci_monitor.report import merge_analysis_data, patch_analysis_html
     from payload_monitor.collectors.jira import suggest_bug
     from payload_monitor.config import Config
-
-    from edge_ocp_ci_monitor.report import merge_analysis_data, patch_analysis_html
 
     out = tmp_path / "report.html"
     source = tmp_path / "analysis.json"
