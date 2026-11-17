@@ -107,7 +107,14 @@ Output is saved to `.reports/release_planning_{version}_{YYYY-MM-DD}.md`.
 
 ### chai-bot Skills
 
-Playbooks under [`chai/`](chai/) are for the chai-bot coordinator, not Claude Code.
+Playbooks under [`chai/`](chai/) are for the chai-bot coordinator, not Claude Code. Register them with chai-bot from `plugins/edge-scrum/chai/`. They are read-only, ask no questions, use no sub-agents, and run the [`bin/`](bin/) scripts in `sandbox_exec` on data fetched with chai-bot's Jira tools ([`bin/chai_jira_adapter.py`](bin/chai_jira_adapter.py) converts `query_jira` text into the scripts' input).
+
+| Skill | What it does |
+|-------|--------------|
+| [`scrum-context`](chai/scrum-context/SKILL.md) | Current sprint and week, release phases, ceremonies, team availability per sprint |
+| [`sprint-health`](chai/sprint-health/SKILL.md) | Team-level sprint health: capacity mode in week 1, mid-sprint mode after |
+| [`release-health`](chai/release-health/SKILL.md) | One release: refinement and test-plan spike gaps, or capacity vs scope, cut line and features at risk |
+| [`weekly-health-report`](chai/weekly-health-report/SKILL.md) | The weekly report of edge-context decision 0018: 3-line post, details and owner-mentioned actions in the thread |
 
 #### `scrum-context`
 

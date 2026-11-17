@@ -1,6 +1,6 @@
 ---
 name: scrum-context
-description: Read-only coordinator skill that answers "where are we in the sprint and release cycle?" for other chai-bot skills — current sprint, release window and phase, next ceremonies, and next sprint's team availability
+description: Read-only coordinator skill that answers "where are we in the sprint and release cycle?" for other chai-bot skills — current sprint, release window and phase, next ceremonies, and team availability per sprint
 ---
 
 # Scrum Context (chai-bot coordinator)
@@ -33,7 +33,8 @@ ceremonies:            # matched by event title, case-insensitive
 
 # The only roster setting. Default: edge-context people/team-roster.md,
 # keeping roles containing "Software Engineer" or "Software Quality Engineer",
-# at any level (for example Senior or Principal).
+# at any level (for example Senior or Principal), minus anyone listed under
+# "Not counted for sprint capacity".
 # Unset or unreadable → availability is "not available (roster not configured)";
 # every other part of the result still works.
 ROSTER_SOURCE: "openshift-eng/edge-context: people/team-roster.md"
@@ -47,8 +48,10 @@ ROSTER_ROLES: ["Software Engineer", "Software Quality Engineer"]  # "contains" m
 | No argument | Current sprint (name, id, start, end, week 1–3); the release in progress and its phase |
 | A release, e.g. `5.1` | Its window: refinement sprint, development sprints, pencils-down sprint, branch-cut sprint, development sprints remaining, and phase |
 
-Both modes also return the **next ceremony dates** and the **next sprint's team
-availability**.
+Both modes also return the **next ceremony dates**, the **next sprint's team
+availability**, and the availability of the **current sprint and each later
+sprint** up to the latest branch-cut sprint (of the release asked for, or of the
+releases in progress).
 
 Phases: `refinement`, `development`, `pencils-down sprint`, `pre-branch-cut`,
 `not started`, `finished`, `not scheduled yet`.
@@ -117,9 +120,14 @@ whose title matches a ceremony.
   ignores them, so a cancelled ceremony comes back as `null`. The helper relies
   on `status` for cancellation, because it never sees the title. (It still
   accepts a legacy `title` field and checks that for the prefix.)
-- **Absences and holidays:** read `ROSTER_SOURCE` and keep only engineers whose
-  role contains "Software Engineer" or "Software Quality Engineer", at any
-  level. Map each roster engineer to an anonymized id (`p1`, `p2`, …) **outside**
+- **Absences and holidays:** read absences from 21 days before today through
+  126 days after today, and pass that window as `absence_window`. Read
+  `ROSTER_SOURCE` and keep only engineers whose role contains "Software
+  Engineer" or "Software Quality Engineer", at any level. Then drop anyone listed
+  under "Not counted for sprint capacity" in the roster (people who don't take
+  sprint work) **before counting engineers**. `chai_jira_adapter.parse_team_roster`
+  applies both rules if you run it on the roster file alone (never with calendar
+  data). Map each roster engineer to an anonymized id (`p1`, `p2`, …) **outside**
   the sandbox. For each absence entry that belongs to a roster engineer, pass
   `{"person_id", "start", "end"}` (inclusive dates). For a **team-wide or regional
   holiday** that names no single person, add one entry per affected roster
@@ -162,6 +170,7 @@ keys that are not `X.Y`.
   "schedules": {"X.Y": [{"name": "...", "date": "YYYY-MM-DD"}]},
   "events": [{"ceremony": "Sprint Planning", "start": "YYYY-MM-DD", "status": "confirmed"}],
   "absences": [{"person_id": "p1", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}],
+  "absence_window": {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"},
   "engineer_count": 0
 }
 ```
@@ -174,7 +183,11 @@ Omit a key when its source was not available. The helper then returns
 Return the helper output as is. Its keys are `current_sprint` (with `week`),
 `next_sprint`, `release_in_progress` (no argument) or `release` (with an
 argument), `next_ceremonies`, `current_sprint_ceremonies`,
-`next_sprint_availability`, and `warnings`.
+`next_sprint_availability`, `current_sprint_availability`,
+`sprint_availability` (one entry per sprint from the current sprint through the
+latest branch-cut sprint, or the next sprint when no branch cut is known; each
+with `name`, `number`, `start`, `end`, `projected`, `availability`), and
+`warnings`.
 
 `warnings` lists source items skipped for a malformed date, for example
 "skipped sprint 'Sprint 12': bad end date". It never contains the raw value or
@@ -206,9 +219,13 @@ an event title. A malformed `today` is an error, not a warning.
   projects at most **12 sprints** (about 36 weeks) past the last board sprint.
   Beyond that, the current sprint is "not available" and the milestones
   "not scheduled yet"; that usually means the board is stale.
-- **Availability:** `1 − person-days off ÷ person-days` over the next sprint's
+- **Availability:** `1 − person-days off ÷ person-days` over a sprint's
   working days (Mon–Fri, start day through the day before the end day), rounded to
-  2 decimals. Overlapping entries count once per person-day. Team-level only.
+  2 decimals. Overlapping entries count once per person-day. Team-level only. In
+  `sprint_availability`, a sprint whose working days are not all inside
+  `absence_window` is "not available (outside the calendar window read)",
+  since later absences were never seen. Without `absence_window`, the window is
+  21 days before through 42 days after today.
 
 ## Missing sources
 
