@@ -9,11 +9,9 @@ import subprocess
 from copy import deepcopy
 from dataclasses import asdict
 from html.parser import HTMLParser
+from pathlib import Path
 
 import pytest
-from edge_ocp_ci_monitor.analysis import Settings, _BatchProgress
-from edge_ocp_ci_monitor.analysis_cards import _render_analysis_card
-from edge_ocp_ci_monitor.report import generate_html, patch_analysis_html
 from payload_monitor.models import (
     AttemptAnalysis,
     DeepAnalysis,
@@ -28,6 +26,10 @@ from payload_monitor.models import (
     Regression,
     StreamReport,
 )
+
+from edge_ocp_ci_monitor.analysis import Settings, _BatchProgress
+from edge_ocp_ci_monitor.analysis_cards import _render_analysis_card
+from edge_ocp_ci_monitor.report import generate_html, patch_analysis_html
 
 
 @pytest.fixture
@@ -50,6 +52,195 @@ def report():
 
 def diagnosis(cause="Original diagnosis"):
     return DeepAnalysis(root_cause=cause, failure_type="Platform issue", impact="SNO", recommendation="Investigate")
+
+
+@pytest.mark.parametrize("blocking", [True, False])
+def test_tab_counts_use_neutral_badges_regardless_of_blocking_state(report, blocking):
+    if not blocking:
+        report.streams[0].payloads[0].jobs[0].job_type = JobType.INFORMING
+    html = generate_html(report)
+    nav = re.search(r'<nav[^>]*id="dashboard-tabs-nav"[^>]*>(.*?)</nav>', html, re.DOTALL)[1]
+    failures = re.search(r'<button[^>]*id="view-failure-analysis"[^>]*>(.*?)</button>', nav, re.DOTALL)[1]
+    assert 'class="dashboard-count"' in failures
+    assert set(re.findall(r'<span class="([^"]+)">\d+</span>', nav)) == {"dashboard-count"}
+    assert re.search(r'<span[^>]*>2</span>', failures)
+    assert html.count('aria-controls="dashboard-tabs-nav"') == 2
+    assert 'id="view-sippy-health"' in nav
+    assert 'id="view-component-readiness"' not in nav
+    assert 'id="view-timing-insights"' not in nav
+
+
+@pytest.mark.parametrize("reduced_motion", [True, False])
+def test_tab_scroll_controls_follow_overflow_and_motion_preference(reduced_motion):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to exercise tab scrolling")
+    script = Path(__file__).parents[1] / "edge_ocp_ci_monitor/templates/dashboard.js"
+    result = subprocess.run([node, "-e", r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const reduced = JSON.parse(process.argv[2]);
+const callbacks = [], classes = new Set(), clicks = {}, events = {}, calls = [];
+const nav = {
+  scrollWidth: 1000, clientWidth: 400, scrollLeft: 0,
+  addEventListener(type, handler) { events[type] = handler; },
+  scrollBy(options) { calls.push(options); }
+};
+const wrap = {
+  classList: {toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); }},
+  querySelector(selector) { return {addEventListener(type, handler) { clicks[selector] = handler; }}; }
+};
+const document = {
+  addEventListener(type, handler) { callbacks.push(handler); },
+  getElementById(id) { return id === 'dashboard-tabs-wrap' ? wrap : nav; }
+};
+const window = {
+  matchMedia() { return {matches: reduced}; },
+  addEventListener(type, handler) { events[type] = handler; }
+};
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), {document, window});
+callbacks.find(handler => handler.name === 'setupTabScrolling')();
+assert.equal(classes.has('can-scroll-left'), false);
+assert.equal(classes.has('can-scroll-right'), true);
+nav.scrollLeft = 300;
+events.scroll();
+assert.equal(classes.has('can-scroll-left'), true);
+assert.equal(classes.has('can-scroll-right'), true);
+clicks['.tab-scroll-right']();
+clicks['.tab-scroll-left']();
+assert.equal(calls[0].left, 240);
+assert.equal(calls[1].left, -240);
+assert.equal(calls[0].behavior, reduced ? 'auto' : 'smooth');
+assert.equal(calls[1].behavior, reduced ? 'auto' : 'smooth');
+nav.scrollLeft = 600;
+events.scroll();
+assert.equal(classes.has('can-scroll-left'), true);
+assert.equal(classes.has('can-scroll-right'), false);
+nav.clientWidth = 1000;
+nav.scrollLeft = 0;
+events.resize();
+assert.equal(classes.size, 0);
+""", str(script), json.dumps(reduced_motion)], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("mode", ["no-analysis", "inline", "import", "legacy-import"])
+def test_sippy_actions_offer_analysis_or_copyable_question(report, tmp_path, mode):
+    finding = report.streams[0].regressions[0]
+    if mode == "inline":
+        finding.deep_analysis = diagnosis()
+    html_path = tmp_path / "report.html"
+    generate_html(report, html_path)
+    if mode.endswith("import"):
+        if mode == "legacy-import":
+            html = html_path.read_text().replace('<span class="sippy-ask-label">Ask chai-bot: </span>', '')
+            html_path.write_text(html.replace(' id="sippy-analysis-1"', ''))
+        source = tmp_path / "analysis.json"
+        source.write_text(json.dumps({"by_sippy_job": {finding.analysis_key: asdict(diagnosis())}}))
+        patch_analysis_html(html_path, source)
+        patch_analysis_html(html_path, source)
+    html = html_path.read_text()
+    row = re.search(r'<(?:div|details) id="sippy-row-1".*?<!-- /sippy-job -->', html, re.DOTALL)[0]
+    assert finding.triage_url in Links(row).hrefs
+    if mode == "no-analysis":
+        assert 'class="sippy-ask-label">Ask chai-bot: </span>' in row
+        code = re.search(r'<code>(.*?)</code>', row, re.DOTALL)[1]
+        assert code == f"Why is {finding.test_name} unhealthy on {finding.version}? What tests are failing?"
+        assert "Ask chai-bot:" not in code
+        assert "View AI analysis" not in row
+    else:
+        assert row.startswith('<details ')
+        assert row.count("View AI analysis") == 1
+        assert 'aria-controls="sippy-analysis-1"' in row
+        assert 'id="sippy-analysis-1"' in row
+        assert "Ask chai-bot:" not in row
+        assert "cmd-copy-row" not in row
+        assert "What tests are failing?" not in row
+        assert "Original diagnosis" in row
+
+
+def test_sippy_analysis_button_opens_card_without_closing_an_open_card(report):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to exercise the analysis button")
+    report.streams[0].regressions[0].deep_analysis = diagnosis()
+    html = generate_html(report)
+    button = re.search(r'<button[^>]*class="dashboard-button sippy-view-analysis"[^>]*>', html)[0]
+    handler = re.search(r'onclick="([^"]+)"', button)[1]
+    result = subprocess.run([node, "-e", r"""
+const assert = require('node:assert/strict');
+const activate = new Function('event', process.argv[1]);
+for (const initiallyOpen of [false, true]) {
+  const card = {open: initiallyOpen};
+  let prevented = false, stopped = false;
+  const button = {closest(selector) { assert.equal(selector, 'details'); return card; }};
+  activate.call(button, {
+    preventDefault() { prevented = true; },
+    stopPropagation() { stopped = true; }
+  });
+  assert.equal(card.open, true);
+  assert.equal(prevented, true);
+  assert.equal(stopped, true);
+}
+""", handler], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("mode", ["mixed", "sippy-only", "empty"])
+def test_findings_queue_preserves_targets_and_supports_data_only_reports(report, mode):
+    report.escalation_risks = []
+    stream = report.streams[0]
+    if mode == "mixed":
+        other = deepcopy(stream)
+        other.version = "4.20"
+        other.payloads[0].jobs[0].prow_url = "https://prow.example/other-version"
+        other.regressions[0].version = "4.20"
+        report.streams.append(other)
+    elif mode == "sippy-only":
+        stream.payloads = []
+    else:
+        report.streams = []
+
+    html = generate_html(report)
+    references = re.findall(r'data-finding-source="([^"]+)"', html)
+    # Every summary action must lead to its own full record, including data-only Sippy rows.
+    assert len(references) == len(set(references))
+    assert all(f'id="{reference}"' in html for reference in references)
+    sections = {
+        name: re.search(rf'<section[^>]*data-findings-section="{name}"[^>]*>(.*?)</section>', html, re.DOTALL)[1]
+        for name in ("payload", "sippy")
+    }
+    payload_targets = re.findall(r'data-finding-source="([^"]+)"', sections["payload"])
+    sippy_targets = re.findall(r'data-finding-source="([^"]+)"', sections["sippy"])
+    assert all(target.startswith("detail-") for target in payload_targets)
+    assert all(target.startswith("sippy-row-") for target in sippy_targets)
+    assert "Nightly Payload - Failure Analysis" in sections["payload"]
+    assert "Sippy Job Health Status" in sections["sippy"]
+    assert "consecutive" not in sections["sippy"]
+    assert "Selection:" not in sections["sippy"]
+    assert '<details class="queue-selection"' not in html
+    if mode == "mixed":
+        assert sections["payload"].count('<table class="finding-table"') == 1
+        assert sections["sippy"].count('<table class="finding-table"') == 1
+        assert "Current Pass Rate" not in sections["payload"]
+        assert "Recurrence" in sections["payload"]
+        assert "Current Pass Rate" in sections["sippy"]
+        assert len(payload_targets) == 4  # Blocking and informing jobs in both releases.
+        assert len(sippy_targets) == 2
+        assert {"sippy-row-1", "sippy-row-2"} <= set(references)
+        assert html.count('class="finding-job"') == 6
+        assert 'data-finding-kind="informing"' in sections["payload"]
+        assert 'data-finding-kind="informing"' not in sections["sippy"]
+        assert 'id="tab-failure-analysis"' in html
+        assert "https://prow.example/other-version" in html
+    elif mode == "sippy-only":
+        assert references == ["sippy-row-1"]
+        assert 'id="tab-sippy-health"' in html
+    else:
+        assert references == []
+        assert "All edge jobs are passing across all monitored payloads" in html
+        assert 'id="tab-sippy-health"' not in html
 
 
 @pytest.mark.parametrize("scheme", ["http", "HTTP", "hTtP", "https", "HTTPS", "hTtPs"])
@@ -126,6 +317,59 @@ class Links(HTMLParser):
             self.hrefs.append(attrs.get("href"))
         if "onclick" in attrs and tag in ("div", "a"):
             self.interactions.append((tag, attrs))
+
+
+@pytest.mark.parametrize("caller", ["renderer", "blocking-inline", "sippy-inline",
+                                     "blocking-import", "sippy-import"])
+def test_jira_references_are_links_in_every_analysis_rendering_path(report, tmp_path, caller):
+    raw = asdict(diagnosis('See OCPBUGS-123; <img src=x onerror="alert(1)"> & ETCD-9.'))
+    raw.update(
+        impact="Tracks https://redhat.atlassian.net/browse/OCPBUGS-222.",
+        recommendation="Follow [the PHC bug](https://redhat.atlassian.net/browse/OCPBUGS-456) "
+                       "and https://issues.redhat.com/browse/CNF-7.",
+        same_root_cause=False,
+        attempt_analyses=[{**SAFE_ATTEMPT, "root_cause": "Related to OCPBUGS-789."}],
+    )
+    if caller == "renderer":
+        html = _render_analysis_card(raw)
+    else:
+        finding = report.streams[0].regressions[0]
+        job = report.streams[0].payloads[0].jobs[0]
+        if caller.endswith("inline"):
+            analysis = DeepAnalysis(**{**raw, "attempt_analyses": [AttemptAnalysis(**raw["attempt_analyses"][0])]})
+            if caller.startswith("sippy"):
+                finding.deep_analysis = analysis
+            else:
+                job.deep_analysis = analysis
+            html = generate_html(report)
+        else:
+            html_path, source = tmp_path / "report.html", tmp_path / "analysis.json"
+            generate_html(report, html_path)
+            group, key = (("by_sippy_job", finding.analysis_key) if caller.startswith("sippy")
+                          else ("by_prow_url", job.prow_url))
+            source.write_text(json.dumps({group: {key: raw}}))
+            patch_analysis_html(html_path, source)
+            html = html_path.read_text()
+    links = Links(html)
+    for key in ("OCPBUGS-123", "ETCD-9", "OCPBUGS-222", "OCPBUGS-456", "CNF-7", "OCPBUGS-789"):
+        assert links.hrefs.count(f"https://redhat.atlassian.net/browse/{key}") == 1
+    assert "<img " not in html
+    assert "&lt;img " in html
+    assert ">the PHC bug</a>" in html
+    assert "](https://" not in html
+    assert all(anchor.get("rel") == "noopener noreferrer" for anchor in links.anchors
+               if anchor.get("href", "").startswith("https://redhat.atlassian.net/browse/"))
+
+
+def test_jira_links_do_not_trust_html_or_markdown_destinations():
+    raw = asdict(diagnosis('[OCPBUGS-123](javascript:alert(1)) <script>alert(1)</script>'))
+    raw["recommendation"] = '[<img src=x onerror="alert(1)">](https://redhat.atlassian.net/browse/OCPBUGS-456)'
+    html = _render_analysis_card(raw)
+    assert Links(html).hrefs == [
+        "https://redhat.atlassian.net/browse/OCPBUGS-123", "https://redhat.atlassian.net/browse/OCPBUGS-456",
+    ]
+    assert "<script>" not in html
+    assert "<img " not in html
 
 
 @pytest.mark.parametrize("caller", ["renderer", "blocking-inline", "sippy-inline",

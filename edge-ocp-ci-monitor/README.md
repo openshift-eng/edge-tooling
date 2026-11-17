@@ -43,6 +43,14 @@ The Chai frontend always collects fresh dashboard data and does not accept `--fr
 
 Analysis-card rendering and local HTML imports are owned by this tool. Imports update existing blocking cards by their Prow URL as well as empty placeholders, preserving unrelated cards. Attempt links are restricted to safe HTTPS URLs in both imported and directly rendered cards. These fixes do not change the original `payload-monitor` renderer.
 
+Jira issue keys, canonical issue URLs and Jira Markdown links in diagnoses,
+impact, recommendations and per-attempt explanations render as clickable Jira
+links. Recommendation summaries and the details drawer preserve those links.
+Validated new-bug suggestions link to Jira's prefilled review form; unfiled
+proposals never receive invented issue keys. The Chai prompt requests canonical
+Jira Markdown links, while the renderer also supports plain issue keys from
+older reports and imports.
+
 ## Configuration
 
 | Variable | Required for AI | Meaning |
@@ -152,7 +160,31 @@ A completed analysis can include this decision:
 
 Recommended drafts appear at the **bottom of the dashboard, below the tab panels**, as compact cards showing title, affected topology and versions. Clicking a card opens a small dialog with the full description, target versions and the `issue-for-agent` label prefilled. The dialog offers only **Review draft in Jira**, **Gather details with Chai** and **Copy full description**. Gather details reveals a prompt to paste into Chai; copying copies the description alone. Press Esc or click outside to close the dialog. The monitor always adds this label, independently of Chai's output. The Jira link carries the title, full description, `labels=issue-for-agent` and repeated `customfield_10855` Target Version IDs, rather than substituting Fix Versions. It only opens Jira's creation form; filing remains a manual action. Jira Cloud may ignore legacy creation-link defaults ([Atlassian's documented limitations](https://confluence.atlassian.com/jirakb/how-to-create-issues-using-direct-html-links-in-jira-159474.html)); the dashboard always retains the complete draft in its dialog and a Copy full description button.
 
-Equivalent recommendations with the same title and topology are combined across batches and releases, retaining their descriptions and target versions. If a later batch finds an existing bug for that job, the earlier draft is removed. Full JSON exports include the resulting drafts under `suggested_bugs`. The local `--merge-analysis` operation patches analysis cards and removes prior bug suggestions, since an HTML-only import cannot revalidate their Jira decisions against fresh targets. It does not generate new bug recommendations from an external file. The original `payload-monitor` Jira suggestion behavior is unchanged.
+Equivalent recommendations with the same title and topology are combined across batches and releases, retaining their descriptions and target versions. If a later batch finds an existing bug for that job, the earlier draft is removed. Rejected Jira drafts retain their valid failure diagnosis and produce terminal diagnostics without a dashboard warning banner. Full JSON exports include the resulting drafts under `suggested_bugs`. The local `--merge-analysis` operation patches analysis cards and removes prior bug suggestions, since an HTML-only import cannot revalidate their Jira decisions against fresh targets. It does not generate new bug recommendations from an external file. The original `payload-monitor` Jira suggestion behavior is unchanged.
+
+## Dashboard navigation
+
+Report notes and resource links stay at the top, followed by the always-visible
+health overview and compact Findings Summary counts. Overview separates
+Nightly Payload - Failure Analysis (blocking and informing failures, recurrence
+and retry history) from Sippy Job Health Status (the worst five qualifying Sippy
+findings and their always-visible selection rationale). Each list has its own
+search; payload failures also have independent type filters and expansion.
+Both use their original names and values. Select a job for its metadata, unchanged
+Chai analysis and attempt history; separate tabs retain the complete failure,
+Sippy, component and optional timing views. Recommendations come directly from
+Chai's analysis; incident titles and severities are not synthesized. Validated
+bug drafts retain their original preview dialog below the findings views.
+The active tab uses blue text and an inset underline. All tab counts use the
+same neutral gray badge styling. On narrow screens, fade-backed
+arrow buttons appear at the edges where more tabs can be scrolled into view;
+scrolling respects the reduced-motion preference.
+Summary and detail filters use pill-shaped buttons with blue selected states,
+inline labels and wrapping controls on smaller screens.
+In Sippy's Action column, analyzed jobs offer the Sippy link and **View AI
+analysis** to open their card. Other jobs show **Ask chai-bot:** before the
+copyable question; clicking the question or Copy excludes that label. Local
+analysis imports update these actions when a card becomes available.
 
 ## Dashboard without AI
 

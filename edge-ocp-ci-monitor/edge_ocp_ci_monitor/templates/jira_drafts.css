@@ -67,3 +67,6 @@
 .jira-draft-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .jira-draft-actions .create-btn { margin: 0; }
 .jira-draft-feedback { min-height: 1.5em; margin-top: 8px; font-size: 12px; color: var(--text-muted); }
+.jira-empty-state { padding: 14px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.jira-empty-state strong { font-size: 14px; font-weight: 500; }
+.jira-empty-state p { margin-top: 6px; color: var(--text-muted); font-size: 12px; }

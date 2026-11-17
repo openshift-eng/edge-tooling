@@ -12,7 +12,7 @@
   {% endif %}
   <div class="da-field">
     <span class="da-label da-label-highlight">Root Cause:</span>
-    <span>{{ root_cause }}</span>
+    <span>{{ root_cause | jira_links }}</span>
   </div>
   <div class="da-field">
     <span class="da-label da-label-highlight">Failure Type:</span>
@@ -20,7 +20,7 @@
   </div>
   <div class="da-field">
     <span class="da-label da-label-highlight">Impact:</span>
-    <span>{{ impact }}</span>
+    <span>{{ impact | jira_links }}</span>
   </div>
   {% if suspect_prs %}
   <div class="da-field">
@@ -34,7 +34,7 @@
   {% endif %}
   <div class="da-field da-recommendation">
     <span class="da-label">Recommendation:</span>
-    <span>{{ recommendation }}</span>
+    <span>{{ recommendation | jira_links }}{% for draft in jira_drafts | default([]) %}<a class="da-jira-draft-link" href="{{ draft.url }}" target="_blank" rel="noopener noreferrer">Review proposed bug in Jira: {{ draft.title }}</a>{% endfor %}</span>
   </div>
   {% if not same_root_cause and attempt_analyses %}
   <div class="da-field">
@@ -44,7 +44,7 @@
       <li>
         <a href="{{ aa.prow_url }}" target="_blank">Attempt #{{ loop.index }}</a>
         <span class="badge da-type">{{ aa.failure_type }}</span>
-        {{ aa.root_cause }}
+        {{ aa.root_cause | jira_links }}
       </li>
       {% endfor %}
     </ul>

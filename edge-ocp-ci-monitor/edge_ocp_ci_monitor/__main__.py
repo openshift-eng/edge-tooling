@@ -63,7 +63,7 @@ def main(ctx, ai_timeout, ai_concurrency, **options):
 
     def save_report(partial: AnalysisResult, *, in_progress: bool = False) -> None:
         merge_analysis_data(output.report, partial.data)
-        current_warnings = list(partial.warnings)
+        current_warnings = partial.dashboard_warnings
         if in_progress and partial.completed < partial.requested:
             current_warnings.append(
                 f"Chai analysis is in progress ({partial.completed}/{partial.requested} targets completed). "

@@ -10,20 +10,6 @@ from types import SimpleNamespace
 import httpx2
 import pytest
 from click.testing import CliRunner
-from edge_ocp_ci_monitor import __main__ as cli
-from edge_ocp_ci_monitor import analysis, collection
-from edge_ocp_ci_monitor.analysis import (
-    ChaiUnavailable,
-    InvalidAnalysis,
-    Settings,
-    analyze_targets,
-    ask_chai,
-    build_prompt,
-    build_targets,
-    validate_analysis,
-    validate_batch,
-)
-from edge_ocp_ci_monitor.report import generate_html as generate_chai_html
 from payload_monitor import __main__ as core
 from payload_monitor.models import (
     DeepAnalysis,
@@ -38,6 +24,21 @@ from payload_monitor.models import (
     StreamReport,
 )
 from payload_monitor.report.generator import generate_html, generate_json
+
+from edge_ocp_ci_monitor import __main__ as cli
+from edge_ocp_ci_monitor import analysis, collection
+from edge_ocp_ci_monitor.analysis import (
+    ChaiUnavailable,
+    InvalidAnalysis,
+    Settings,
+    analyze_targets,
+    ask_chai,
+    build_prompt,
+    build_targets,
+    validate_analysis,
+    validate_batch,
+)
+from edge_ocp_ci_monitor.report import generate_html as generate_chai_html
 
 
 @pytest.fixture
@@ -992,6 +993,12 @@ def test_chai_renderer_leaves_original_rendering_and_exports_intact(report, tmp_
     assert "&lt;missing evidence&gt;" in chai_html
     assert "use Claude directly" not in chai_html
     assert not chai_path.with_suffix(".ai-targets.json").exists()
+    assert chai_html.index('class="report-notes"') < chai_html.index('class="health-section"')
+    assert chai_html.index('class="health-section"') < chai_html.index('id="findings-title"')
+    assert chai_html.index('id="findings-title"') < chai_html.index('class="findings-summary"')
+    assert 'id="tab-failure-analysis" role="tabpanel"' in chai_html
+    assert 'id="tab-sippy-health" role="tabpanel"' in chai_html
+    assert 'id="finding-drawer"' in chai_html
 
     legacy_path = tmp_path / "legacy.html"
     legacy_html = generate_html(report, legacy_path)
@@ -1059,6 +1066,8 @@ def test_jira_prompt_requires_read_only_duplicate_check_and_edge_scope(report):
                         "two node arbiter", "Single Node OpenShift", "never invent IDs",
                         "low pass rate or blocking/persistent status alone"):
         assert requirement in prompt
+    assert "[OCPBUGS-123](https://redhat.atlassian.net/browse/OCPBUGS-123)" in prompt
+    assert "Never invent an issue key or URL for an unfiled proposal" in prompt
 
 
 @pytest.mark.parametrize("sippy", [False, True])
@@ -1099,6 +1108,9 @@ def test_chai_recommended_draft_prefills_bottom_section_and_jira_link(report, si
     assert bug.full_description in unescape(html)
     assert 'value="4.19.0"' in html
     assert 'class="jira-draft-labels" type="text" value="issue-for-agent" readonly' in html
+    recommendation = html.split('<div class="da-field da-recommendation">', 1)[1].split('</div>', 1)[0]
+    assert bug.create_url in unescape(recommendation)
+    assert "Review proposed bug in Jira" in recommendation
 
 
 @pytest.mark.parametrize("decision", [
@@ -1118,7 +1130,11 @@ def test_no_draft_without_explicit_recommendation(report, decision):
     assert result.completed == 2 and not result.warnings
     merge_analysis_data(report, result.data)
     assert not report.suggested_bugs
-    assert 'id="section-suggested-bugs"' not in generate_chai_html(report)
+    html = generate_chai_html(report)
+    assert 'id="section-suggested-bugs"' in html
+    assert "No new bugs recommended for this run." in html
+    assert 'class="jira-draft-summary"' not in html
+    assert "Review draft in Jira" not in html
 
 
 @pytest.mark.parametrize("decision", [
@@ -1145,8 +1161,39 @@ def test_invalid_jira_decisions_preserve_diagnosis_but_never_show_draft(report, 
     result = asyncio.run(analyze_targets(build_targets(report), settings(), ask=ask))
     assert result.completed == 2
     assert result.warnings
+    assert not result.dashboard_warnings
     merge_analysis_data(report, result.data)
     assert report.streams[0].payloads[0].jobs[0].deep_analysis.root_cause == answer()["root_cause"]
+    assert not report.suggested_bugs
+
+
+@pytest.mark.parametrize("analysis_failure", [False, True])
+def test_cli_rejected_jira_draft_has_no_banner_but_analysis_failures_do(
+    report, collected_report, tmp_path, monkeypatch, caplog, analysis_failure,
+):
+    monkeypatch.setenv("CHAI_MCP_TOKEN", "synthetic-secret")
+    monkeypatch.setenv("CHAI_MCP_URL", "https://chai.example/mcp")
+
+    async def ask(config, prompt, **kwargs):
+        if "analysis_key" not in prompt_targets(prompt)[0]:
+            if analysis_failure:
+                raise ChaiUnavailable("Endpoint unavailable.")
+            return batch_answer(prompt)
+        return batch_answer(prompt, jira=jira_decision(existing_bugs=["OCPBUGS-123"]))
+
+    monkeypatch.setattr("edge_ocp_ci_monitor.analysis.ask_chai", ask)
+    out = tmp_path / "report.html"
+    with caplog.at_level(logging.WARNING, logger="edge_ocp_ci_monitor"):
+        result = CliRunner().invoke(cli.main, ["--skip-prow", "--output", str(out)])
+    assert result.exit_code == 0, result.exception
+    html = out.read_text()
+    reason = "Chai recommended a new bug without ruling out existing bugs."
+    assert reason in caplog.text
+    assert reason not in html
+    assert ('id="chai-analysis-warning"' in html) == analysis_failure
+    assert ("Endpoint unavailable." in html) == analysis_failure
+    assert answer()["root_cause"] in html
+    assert report.streams[0].regressions[0].deep_analysis
     assert not report.suggested_bugs
 
 
@@ -1239,7 +1286,10 @@ def test_collection_without_chai_never_suggests_threshold_based_bugs(collected_r
     out = tmp_path / "report.html"
     result = CliRunner().invoke(cli.main, ["--skip-prow", "--output", str(out), "--json"])
     assert result.exit_code == 0, result.exception
-    assert 'id="section-suggested-bugs"' not in out.read_text()
+    html = out.read_text()
+    assert "No new bugs recommended for this run." in html
+    assert "Chai analysis is incomplete or unavailable." in html
+    assert 'class="jira-draft-summary"' not in html
     assert json.loads(out.with_suffix(".json").read_text())["suggested_bugs"] == []
     assert collected_report.streams[0].payloads[0].jobs[0].job_type == JobType.BLOCKING
 
@@ -1272,9 +1322,10 @@ def test_jira_draft_escapes_model_html_without_losing_description(report):
 
 @pytest.mark.parametrize("legacy", [False, True])
 def test_local_analysis_import_removes_prior_jira_drafts(report, tmp_path, legacy):
-    from edge_ocp_ci_monitor.report import merge_analysis_data, patch_analysis_html
     from payload_monitor.collectors.jira import suggest_bug
     from payload_monitor.config import Config
+
+    from edge_ocp_ci_monitor.report import merge_analysis_data, patch_analysis_html
 
     out = tmp_path / "report.html"
     source = tmp_path / "analysis.json"
@@ -1315,7 +1366,7 @@ def test_jira_drafts_have_compact_cards_and_independent_dialogs(report):
     ]
     html = generate_chai_html(report)
     summaries = re.findall(r'<button[^>]*class="jira-draft-summary"[^>]*>(.*?)</button>', html, re.DOTALL)
-    dialogs = re.findall(r'<dialog([^>]*)>(.*?)</dialog>', html, re.DOTALL)
+    dialogs = re.findall(r'<dialog([^>]*class="jira-draft-dialog"[^>]*)>(.*?)</dialog>', html, re.DOTALL)
     assert len(summaries) == len(dialogs) == 3
     for index, (topology, summary, (attributes, dialog)) in enumerate(zip(
         ("SNO", "TNA", "TNF"), summaries, dialogs, strict=True,

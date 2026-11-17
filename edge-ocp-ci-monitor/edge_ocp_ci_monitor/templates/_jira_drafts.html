@@ -1,9 +1,9 @@
-{% if report.suggested_bugs %}
 <section id="section-suggested-bugs" aria-labelledby="jira-drafts-title">
   <h2 id="jira-drafts-title">Chai-recommended New Bugs</h2>
+  {% if report.suggested_bugs %}
   <p class="meta">Chai recommends these drafts after checking for existing bugs. Scope: SNO, two node fencing (TNF), and two node arbiter (TNA). Review the evidence and fields before filing. No issue has been created.</p>
   {% for bug in report.suggested_bugs %}
-  <article class="suggest-card jira-draft">
+  <article class="suggest-card jira-draft" data-job-name="{{ bug.job_name }}" data-prow-url="{{ bug.prow_url }}">
     <button type="button" class="jira-draft-summary" aria-haspopup="dialog" aria-controls="jira-draft-{{ loop.index }}">
       <span class="jira-draft-heading">
         <span class="title">{{ bug.title }}</span>
@@ -47,5 +47,13 @@ Gather evidence and reproduction details, check for an existing Jira bug, and re
     </dialog>
   </article>
   {% endfor %}
+  {% else %}
+  <div class="jira-empty-state" role="status">
+    <strong>No new bugs recommended for this run.</strong>
+    <p>No validated new-bug drafts were produced. Existing issues may still be referenced in the job analyses.</p>
+    {% if ai_warnings %}
+    <p>Chai analysis is incomplete or unavailable. Review the warnings above; additional findings may still need manual investigation.</p>
+    {% endif %}
+  </div>
+  {% endif %}
 </section>
-{% endif %}

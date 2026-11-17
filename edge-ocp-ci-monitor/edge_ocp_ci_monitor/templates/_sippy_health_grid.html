@@ -12,6 +12,7 @@
   </div>
   {% for r in all_regressions %}
   {% set has_analysis = r.analysis_key in sippy_analysis_cards %}
+  {% set analysis_id = 'sippy-analysis-' ~ loop.index %}
   {% set row_tag = 'details' if has_analysis else 'div' %}
   {% set summary_tag = 'summary' if has_analysis else 'div' %}
   <{{ row_tag }} id="sippy-row-{{ loop.index }}" class="regression-row failure-row" data-sippy-key="{{ r.analysis_key }}" data-job-name="{{ r.test_name }}" data-regtopology="{{ r.topology }}" data-regversion="{{ r.version }}" data-row-index="{{ loop.index }}">
@@ -27,14 +28,19 @@
       <span class="sippy-cell-action">
         <a href="{{ r.triage_url }}" target="_blank" onclick="event.stopPropagation()">Sippy &#8599;</a>
         {% if r.jira_bug %}<a href="https://issues.redhat.com/browse/{{ r.jira_bug }}" target="_blank" onclick="event.stopPropagation()">{{ r.jira_bug }}</a>{% endif %}
+        {% if has_analysis %}
+        {% include "_sippy_analysis_button.html" %}
+        {% else %}
         <span class="cmd-copy-row">
+          <span class="sippy-ask-label">Ask chai-bot: </span>
           <code>Why is {{ r.test_name }} unhealthy on {{ r.version }}? What tests are failing?</code>
           <button class="copy-btn" onclick="event.stopPropagation();copyCommand(this)" title="Copy to clipboard">Copy</button>
         </span>
+        {% endif %}
       </span>
     </{{ summary_tag }}><!-- /sippy-job-summary -->
     {% if r.analysis_key in sippy_analysis_ids %}
-    <div class="content sippy-job-analysis"{% if not has_analysis %} hidden{% endif %}>
+    <div class="content sippy-job-analysis"{% if not has_analysis %} hidden{% endif %} id="{{ analysis_id }}">
       <div class="sippy-analysis" data-sippy-key="{{ r.analysis_key }}">{% if has_analysis %}{{ sippy_analysis_cards[r.analysis_key] | safe }}{% endif %}</div><!-- /sippy-analysis -->
     </div>
     {% endif %}

@@ -21,19 +21,19 @@
   <style>{{ css | safe }}</style>
 </head>
 <body>
+<div class="dashboard-shell">
 
 <div class="header">
   <div>
     <h1>Edge OCP CI Monitor</h1>
     <div class="meta">SNO / TNA / TNF topology health across OpenShift nightly payloads</div>
-    <div class="meta"><a href="https://github.com/openshift-eng/edge-context/blob/main/roles/ocp-payload-manager.md" target="_blank">Review the Edge CI Payload Manager Responsibilities</a></div>
+    <nav class="header-resources" aria-label="Project resources"><a href="https://github.com/openshift-eng/edge-context/blob/main/roles/ocp-payload-manager.md" target="_blank" rel="noopener noreferrer">Review the Edge CI Payload Manager Responsibilities ↗</a><a href="https://github.com/openshift-eng/edge-tooling" target="_blank" rel="noopener noreferrer">View source on GitHub ↗</a></nav>
   </div>
-  <div style="text-align:right">
+  <div class="header-meta">
     <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle color theme" title="Toggle light/dark theme">
       <span class="theme-icon-sun" aria-hidden="true">☀︎</span>
       <span class="theme-icon-moon" aria-hidden="true">☾</span>
     </button>
-    <div class="meta"><a href="https://github.com/openshift-eng/edge-tooling" target="_blank" style="color:var(--text-muted)">View source on GitHub ↗</a></div>
     <div class="meta">Generated: {{ report.generated_at }}</div>
     {% set has_ai = [] %}{% set has_blocking = [] %}{% for item in all_failing %}{% if item.job.deep_analysis %}{% if has_ai.append(1) %}{% endif %}{% endif %}{% if item.job.job_type.value == "blocking" %}{% if has_blocking.append(1) %}{% endif %}{% endif %}{% endfor %}
     {% if has_ai or sippy_analysis_cards %}
@@ -53,17 +53,7 @@
   </div>
 </div>
 
-<!-- Tab Navigation -->
-<div class="tab-bar">
-  <button class="tab-btn active" data-tab="payload-health">Payload Health</button>
-  {% if timing_html %}
-  <button class="tab-btn" data-tab="timing-insights">Timing Insights</button>
-  {% endif %}
-</div>
-
-<!-- Tab: Payload Health -->
-<div class="tab-panel active" id="tab-payload-health">
-
+<section class="report-notes" aria-label="Report notes">
 {% if ai_warnings %}
 <div class="warning-banner" role="status" id="chai-analysis-warning">
   <strong>Chai AI analysis unavailable or incomplete.</strong> Collected dashboard data remains available.
@@ -124,6 +114,8 @@
 </div>
 {% endif %}
 
+</section>
+<section class="health-section" aria-label="Edge OCP Jobs Health Overview">
 <!-- Edge OCP Jobs Health Overview -->
 <h2 style="margin-top:0">Edge OCP Jobs Health Overview</h2>
 <div class="health-overview">
@@ -229,6 +221,7 @@
   </div>
 </div>
 
+</section>
 <!-- Findings Summary -->
 {% set ns = namespace(
   total_failures=all_failing|length,
@@ -240,8 +233,10 @@
   component_regression_count=component_regressions|length
 ) %}
 
+<section class="summary-overview" aria-labelledby="findings-title">
+<h2 id="findings-title">Findings Summary</h2>
 <div class="findings-summary">
-  <h2 style="border-bottom:none;margin-top:0;padding-bottom:0">Findings Summary</h2>
+
 
   {% if ns.total_failures == 0 and ns.regression_count == 0 and ns.component_regression_count == 0 and not retried_successes %}
   <div class="fs-healthy-banner">
@@ -269,12 +264,12 @@
       {% endif %}
     </div>
     <div class="fs-situation-sep"></div>
-    <div class="fs-situation-item {% if ns.regression_count + ns.component_regression_count > 0 %}critical{% endif %}" onclick="document.getElementById('findings-job-health')?.scrollIntoView({behavior:'smooth'})" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" title="View Sippy job health and component findings">
+    <div class="fs-situation-item {% if ns.regression_count + ns.component_regression_count > 0 %}critical{% endif %}" onclick="showDashboardView('{{ 'sippy-health' if all_regressions else 'component-readiness' }}')" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" title="View Sippy job health and component findings">
       <span class="fs-situation-count">{{ ns.regression_count + ns.component_regression_count }}</span>
       <span class="fs-situation-label">health findings</span>
     </div>
     <div class="fs-situation-sep"></div>
-    <div class="fs-situation-item" onclick="document.getElementById('{{ 'findings-critical' if all_regressions else 'section-edge-failures' }}')?.scrollIntoView({behavior:'smooth'})" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" title="View topologies affected by payload failures or Sippy job findings">
+    <div class="fs-situation-item" onclick="showDashboardView('payload-health')" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" title="View topologies affected by payload failures or Sippy job findings">
       <div class="fs-situation-topos">
         {% for t in affected_topologies %}
         <span class="badge {{ t | lower }}">{{ t }}</span>
@@ -287,212 +282,61 @@
     </div>
   </div>
 
-  {# One critical block, with separate blocking and Sippy groups. #}
-  {% if ns.blocking_failures > 0 or ns.regression_count > 0 or ns.component_regression_count > 0 %}
-  <div class="fs-section fs-section-critical" id="findings-critical">
-  {% if ns.blocking_failures > 0 %}
-  <section class="fs-critical-group" id="findings-blocking" aria-label="Blocking failures">
-    <div class="fs-section-header">
-      <div class="fs-severity-icon fs-icon-critical" title="Critical - requires immediate action">!</div>
-      <div class="fs-section-content">
-        <div class="fs-priority-label">Critical - Immediate Action Required</div>
-        <div class="fs-section-title">{{ ns.blocking_failures }} Blocking Failure{{ 's' if ns.blocking_failures != 1 else '' }}{% if blocking_jobs_list|length < ns.blocking_failures %} ({{ blocking_jobs_list|length }} Unique Job{{ 's' if blocking_jobs_list|length != 1 else '' }}){% endif %}</div>
-        <div class="fs-section-desc">prevents payload acceptance</div>
-      </div>
-      <a href="#section-edge-failures" class="fs-section-action fs-action-critical" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" onclick="event.preventDefault();jumpToFailures(null,'blocking')">Investigate All &#8594;</a>
-    </div>
-    {# Compact blocking job summary - unique jobs with versions and top failing test #}
-    <div class="fs-inline-jobs">
-      {% for item in blocking_jobs_list %}
-      {% set fc = failure_counts.get(item.job.name, 0) %}
-      {% set versions = blocking_job_versions.get(item.job.name, []) %}
-      {% set tests = blocking_job_tests.get(item.job.name, []) %}
-      <div class="fs-blocking-row fs-job-card" onclick="scrollToJob({{ item.job.name | js_attr }})" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}">
-        <div class="fs-blocking-main">
-          <span class="badge {{ item.job.topology | lower }}">{{ item.job.topology }}</span>
-          <span class="fs-blocking-name">{{ item.job.name }}</span>
-          {% if fc >= recurring_threshold %}
-          <span class="badge {% if fc >= persistent_threshold %}persistent{% else %}recurring{% endif %}">{{ fc }}x</span>
-          {% endif %}
-          <span class="fs-blocking-versions">{{ versions | join(', ') }}</span>
-        </div>
-        {% if tests %}
-        <div class="fs-blocking-test">
-          <span class="fs-blocking-test-label">failing:</span>
-          <span class="fs-blocking-test-name">{{ tests[0] }}</span>
-          {% if tests | length > 1 %}
-          <span class="fs-blocking-test-more">+{{ tests | length - 1 }} more</span>
-          {% endif %}
-        </div>
-        {% endif %}
-      </div>
-      {% endfor %}
-    </div>
-    {# AI analysis sub-items injected here by JS #}
-    <div id="ai-highlights-container"></div>
-  </section>
-  {% endif %}
-
-  {# CRITICAL: Job health findings follow current blocking failures. #}
-  {% if ns.regression_count > 0 or ns.component_regression_count > 0 %}
-  <section class="fs-critical-group" id="findings-job-health" aria-label="Sippy Job regression">
-    <div class="fs-section-header">
-      <div class="fs-severity-icon fs-icon-critical" title="Critical - investigate job health findings">!</div>
-      <div class="fs-section-content">
-        <div class="fs-priority-label">Critical - Investigation Required</div>
-        <div class="fs-section-title">Sippy Job regression</div>
-        <div class="fs-section-desc">
-          {% if ns.regression_count > 0 %}{{ ns.regression_count }} Sippy job finding{{ 's' if ns.regression_count != 1 else '' }}{% endif %}
-          {% if ns.regression_count > 0 and ns.component_regression_count > 0 %} &middot; {% endif %}
-          {% if ns.component_regression_count > 0 %}{{ ns.component_regression_count }} component regression{{ 's' if ns.component_regression_count != 1 else '' }} (edge vs HA){% endif %}
-        </div>
-      </div>
-      <div class="fs-section-actions">
-        {% if ns.regression_count > 0 %}
-        <a class="fs-section-action fs-action-critical" href="#section-sippy-regressions">Triage Sippy &#8594;</a>
-        {% endif %}
-        {% if ns.component_regression_count > 0 %}
-        <a class="fs-section-action fs-action-critical" href="#section-component-readiness">Review Components &#8594;</a>
-        {% endif %}
-      </div>
-    </div>
-    {% if priority_sippy %}
-    <div class="fs-sippy-findings">
-      <div class="fs-sippy-heading">Worst {{ priority_sippy|length }} of {{ priority_sippy_count }} Sippy jobs needing attention</div>
-      <p class="fs-section-desc">Historical job pass rates; these findings do not determine payload blocking status.</p>
-      <div class="fs-sippy-legend">
-        <strong>Selection:</strong> relative pass-rate drop &gt;50%, or current pass rate &lt;50%, even if flat or improving.
-        Relative change = (current &minus; previous) / previous &times; 100; unavailable when previous is 0%.
-        Ranked by lowest current rate first, then largest relative drop.
-      </div>
-      <ul class="fs-sippy-list" role="list">
-        {% for r in priority_sippy %}
-        <li data-analysis-id="{{ sippy_analysis_ids[r.analysis_key] }}">
-          <div class="fs-job-card fs-sippy-summary">
-          <div class="fs-sippy-job"><a href="{{ r.triage_url }}" target="_blank">{{ r.test_name }}</a></div>
-          <div class="fs-sippy-rates">
-            <span class="fs-sippy-current">Current pass rate <strong>{{ "%.1f" | format(r.sample_pass_rate) }}%</strong></span>
-          </div>
-          <div class="fs-sippy-details">
-            <span class="badge {{ r.topology | lower }}">{{ r.topology }}</span>
-            <span class="fs-job-version">{{ r.version }}</span>
-            <span>{{ r.current_runs }} runs</span>
-            {% if (r.version, r.test_name) in blocking_job_pairs %}
-            <a href="#section-edge-failures" class="fs-sippy-blocking" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" onclick="event.preventDefault();scrollToJob({{ r.test_name | js_attr }})">Also in blocking failures above</a>
-            {% endif %}
-          </div>
-          </div>
-        </li>
-        {% endfor %}
-      </ul>
-    </div>
-    {% endif %}
-  </section>
-  {% endif %}
-  </div>
-  {% endif %}
-
-  {# RETRIED: Blocking jobs that passed only after retry - flaky but not blocking #}
-  {% if retried_successes %}
-  <div class="fs-section fs-section-retried">
-    <div class="fs-section-header">
-      <div class="fs-severity-icon fs-icon-retried" title="Blocking jobs that needed a retry to pass">&#8635;</div>
-      <div class="fs-section-content">
-        <div class="fs-priority-label">Warning - Passed After Retry</div>
-        <div class="fs-section-title">{{ retried_successes|length }} Blocking Job{{ 's' if retried_successes|length != 1 else '' }} Succeeded on Retry</div>
-        <div class="fs-section-desc">first attempt failed - may indicate flakiness or transient infrastructure issues</div>
-      </div>
-    </div>
-    <div class="fs-inline-jobs">
-      {% for item in retried_successes %}
-      <div class="fs-blocking-row fs-job-card" onclick="scrollToJob({{ item.job.name | js_attr }})" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}">
-        <div class="fs-blocking-main">
-          <span class="badge {{ item.job.topology | lower }}">{{ item.job.topology }}</span>
-          <a class="fs-blocking-name" href="{{ item.job.prow_url }}" target="_blank" onclick="event.stopPropagation()">{{ item.job.name }}</a>
-          <span class="badge green">Succeeded</span>
-          <span class="fs-blocking-versions">{{ item.version }}</span>
-        </div>
-        <div class="fs-blocking-test" style="font-size:12px">
-          <span style="color:var(--text-muted)">Payload:</span>
-          <a href="{{ item.payload_url }}" target="_blank" style="font-size:12px">{{ item.payload_tag }}</a>
-          &middot;
-          {% if item.job.previous_attempts %}
-          <span style="color:var(--text-muted)">Attempt #1:</span>
-          <a href="{{ item.job.previous_attempts[0].prow_url }}" target="_blank" style="font-size:12px">Prow</a>
-          &middot;
-          {% endif %}
-          <span style="color:var(--text-muted)">Attempt #{{ item.job.previous_attempts|length + 1 }}:</span>
-          <a href="{{ item.job.prow_url }}" target="_blank" style="font-size:12px">Prow</a>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-  </div>
-  {% endif %}
-
-  {# WARNING: Informing failures - surface escalation risks by name #}
-  {% if ns.informing_failures > 0 %}
-  <div class="fs-section fs-section-warning">
-    <div class="fs-section-header">
-      <div class="fs-severity-icon fs-icon-warning" title="Warning - monitor for stability">&#9650;</div>
-      <div class="fs-section-content">
-        <div class="fs-priority-label">Warning - Monitor for Stability</div>
-        <div class="fs-section-title">{{ ns.informing_failures }} Informing Job Failure{{ 's' if ns.informing_failures != 1 else '' }}</div>
-        <div class="fs-section-desc">across {{ ns.total_payloads }} payload{{ 's' if ns.total_payloads != 1 else '' }} - not blocking</div>
-      </div>
-      <a href="#section-edge-failures" class="fs-section-action fs-action-warning" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" onclick="event.preventDefault();jumpToFailures(null,'informing')">View All &#8594;</a>
-    </div>
-    {% if escalation_risks %}
-    <div class="fs-escalation-list">
-      {% for er in escalation_risks %}
-      <a href="#section-edge-failures" class="fs-escalation-item fs-job-card" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" onclick="event.preventDefault();scrollToJob({{ er.job_name | js_attr }})">
-        <span class="fs-escalation-left">
-          <span class="fs-escalation-name">{{ er.job_name }}</span>
-          <span class="badge escalation-risk">Unstable</span>
-          <span class="badge {{ er.topology | lower }}">{{ er.topology }}</span>
-          <span class="fs-job-version">{{ er.version }}</span>
-        </span>
-        <span class="fs-escalation-streak">{{ er.consecutive_failures }}x consecutive</span>
-      </a>
-      {% endfor %}
-    </div>
-    {% endif %}
-  </div>
-  {% endif %}
-
-
-
   {% endif %}
 </div>
-
+</section>
+<div class="dashboard-tabs-wrap" id="dashboard-tabs-wrap">
+  <button class="tab-scroll-btn tab-scroll-left" type="button" aria-label="Scroll tabs left" aria-controls="dashboard-tabs-nav"><span class="tab-scroll-icon" aria-hidden="true">&#8249;</span></button>
+<nav class="tab-bar dashboard-tabs" id="dashboard-tabs-nav" role="tablist" aria-label="Dashboard views">
+  <button class="tab-btn dashboard-tab active" id="view-payload-health" data-tab="payload-health" role="tab" aria-selected="true" aria-controls="tab-payload-health" type="button">Overview</button>
+  <button class="tab-btn dashboard-tab" id="view-failure-analysis" data-tab="failure-analysis" role="tab" aria-selected="false" aria-controls="tab-failure-analysis" type="button">Failure Analysis <span class="dashboard-count">{{ all_failing|length }}</span></button>
+  {% if all_regressions %}<button class="tab-btn dashboard-tab" id="view-sippy-health" data-tab="sippy-health" role="tab" aria-selected="false" aria-controls="tab-sippy-health" type="button">Sippy Job Health Status <span class="dashboard-count">{{ all_regressions|length }}</span></button>{% endif %}
+  {% if component_regressions %}<button class="tab-btn dashboard-tab" id="view-component-readiness" data-tab="component-readiness" role="tab" aria-selected="false" aria-controls="tab-component-readiness" type="button">Component Readiness <span class="dashboard-count">{{ component_regressions|length }}</span></button>{% endif %}
+  {% if timing_html %}<button class="tab-btn dashboard-tab" id="view-timing-insights" data-tab="timing-insights" role="tab" aria-selected="false" aria-controls="tab-timing-insights" type="button">Timing Insights</button>{% endif %}
+</nav>
+  <button class="tab-scroll-btn tab-scroll-right" type="button" aria-label="Scroll tabs right" aria-controls="dashboard-tabs-nav"><span class="tab-scroll-icon" aria-hidden="true">&#8250;</span></button>
+</div>
+<main>
+<div class="tab-panel active" id="tab-payload-health" role="tabpanel" aria-labelledby="view-payload-health">
+{% include "_findings_queue.html" %}
+</div><!-- /tab-payload-health -->
+<div class="tab-panel" id="tab-failure-analysis" role="tabpanel" aria-labelledby="view-failure-analysis">
 <!-- Failure Analysis -->
 <h2 id="section-edge-failures">Nightly Payload - Failure Analysis <span style="font-weight:normal;color:var(--text-muted);font-size:13px">(<span id="visible-count">{{ all_failing | length }}</span> total)</span></h2>
 
 {% if all_failing %}
 <div class="filters">
+  <div class="filter-group" role="group" aria-label="Filter payload failures by topology">
   <span class="filter-label">Topology:</span>
   <button class="filter-btn active" data-group="topology" data-value="all">All</button>
   {% for topo in topologies %}
   <button class="filter-btn" data-group="topology" data-value="{{ topo }}">{{ topo }}</button>
   {% endfor %}
+  </div>
 
+  <div class="filter-group" role="group" aria-label="Filter payload failures by type">
   <span class="filter-label">Type:</span>
   <button class="filter-btn active" data-group="jobtype" data-value="all">All</button>
   <button class="filter-btn" data-group="jobtype" data-value="blocking">Blocking</button>
   <button class="filter-btn" data-group="jobtype" data-value="informing">Informing</button>
+  </div>
 
+  <div class="filter-group" role="group" aria-label="Filter payload failures by version">
   <span class="filter-label">Version:</span>
   <button class="filter-btn active" data-group="version" data-value="all">All</button>
   {% for v in versions %}
   <button class="filter-btn" data-group="version" data-value="{{ v }}">{{ v }}</button>
   {% endfor %}
+  </div>
 
+  <div class="filter-group" role="group" aria-label="Filter payload failures by status">
   <span class="filter-label">Status:</span>
   <button class="filter-btn active" data-group="status" data-value="all">All</button>
   <button class="filter-btn" data-group="status" data-value="persistent">Persistent</button>
   <button class="filter-btn" data-group="status" data-value="recurring">Recurring</button>
   <button class="filter-btn" data-group="status" data-value="unstable">Unstable</button>
   <button class="filter-btn" data-group="status" data-value="ai-analyzed">AI Analyzed</button>
+  </div>
 </div>
 
 <div class="badge-legend">
@@ -539,6 +383,7 @@
     {% set impact = da.impact %}
     {% set suspect_prs = da.suspect_prs %}
     {% set recommendation = da.recommendation %}
+    {% set jira_drafts = jira_drafts_by_job.get(detail.job.name, []) %}
     {% set same_root_cause = da.same_root_cause %}
     {% set attempt_analyses = da.attempt_analyses %}
     {% set attempt_count = detail.job.previous_attempts|length + 1 %}
@@ -642,22 +487,28 @@
 <div class="empty-state">No failing edge jobs found across monitored payloads.</div>
 {% endif %}
 
+</div>
+{% if all_regressions %}<div class="tab-panel" id="tab-sippy-health" role="tabpanel" aria-labelledby="view-sippy-health">
 <!-- Sippy Regressions -->
 {% if all_regressions %}
 <h2 id="section-sippy-regressions">Sippy Job Health Status</h2>
 <div class="meta" style="margin-bottom:8px">Source: <a href="https://sippy.dptools.openshift.org" target="_blank">Sippy Jobs</a> - jobs with negative net improvement or current pass rate below 50%, with at least 3 current runs. Investigation actions are available for each job.</div>
 <div class="filters">
+  <div class="filter-group" role="group" aria-label="Filter Sippy findings by topology">
   <span class="filter-label">Topology:</span>
   <button class="filter-btn active" data-group="regtopology" data-value="all">All</button>
   {% for topo in reg_topologies %}
   <button class="filter-btn" data-group="regtopology" data-value="{{ topo }}">{{ topo }}</button>
   {% endfor %}
+  </div>
 
+  <div class="filter-group" role="group" aria-label="Filter Sippy findings by version">
   <span class="filter-label">Version:</span>
   <button class="filter-btn active" data-group="regversion" data-value="all">All</button>
   {% for v in reg_versions %}
   <button class="filter-btn" data-group="regversion" data-value="{{ v }}">{{ v }}</button>
   {% endfor %}
+  </div>
 </div>
 {% include "_sippy_health_grid.html" %}
 {% if all_regressions|length > 5 %}
@@ -666,6 +517,8 @@
 {% endif %}
 
 
+</div>{% endif %}
+{% if component_regressions %}<div class="tab-panel" id="tab-component-readiness" role="tabpanel" aria-labelledby="view-component-readiness">
 <!-- Component Readiness: HA vs Edge Topologies -->
 {% if component_regressions %}
 <h2 id="section-component-readiness">Component Readiness - HA vs Edge Topologies</h2>
@@ -674,24 +527,30 @@
 </div>
 <div class="filters" id="cr-filters">
   {% if cr_comparisons | length > 1 %}
+  <div class="filter-group" role="group" aria-label="Filter component readiness by comparison">
   <span class="filter-label">Comparison:</span>
   <button class="filter-btn active" data-group="crcomparison" data-value="all">All</button>
   {% for c in cr_comparisons %}
   <button class="filter-btn" data-group="crcomparison" data-value="{{ c }}">{{ c }}</button>
   {% endfor %}
+  </div>
   {% endif %}
 
+  <div class="filter-group" role="group" aria-label="Filter component readiness by platform">
   <span class="filter-label">Platform:</span>
   <button class="filter-btn active" data-group="crplatform" data-value="all">All</button>
   {% for p in cr_platforms %}
   <button class="filter-btn" data-group="crplatform" data-value="{{ p }}">{{ p }}</button>
   {% endfor %}
+  </div>
 
+  <div class="filter-group" role="group" aria-label="Filter component readiness by version">
   <span class="filter-label">Version:</span>
   <button class="filter-btn active" data-group="crversion" data-value="all">All</button>
   {% for v in cr_versions %}
   <button class="filter-btn" data-group="crversion" data-value="{{ v }}">{{ v }}</button>
   {% endfor %}
+  </div>
 </div>
 
 <div class="table-wrapper">
@@ -759,17 +618,17 @@
 {% endif %}
 {% endif %}
 
-</div><!-- /tab-payload-health -->
+</div>{% endif %}
 
-<!-- Tab: Timing Insights -->
 {% if timing_html %}
-<div class="tab-panel" id="tab-timing-insights">
+<div class="tab-panel" id="tab-timing-insights" role="tabpanel" aria-labelledby="view-timing-insights">
 {{ timing_html | safe }}
 </div>
 {% endif %}
-
 {% include "_jira_drafts.html" %}
-
+</main>
+{% include "_finding_drawer.html" %}
+</div>
 <script>{{ js | safe }}</script>
 </body>
 </html>

@@ -11,12 +11,40 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from jinja2 import Environment, FileSystemLoader
+from markupsafe import Markup, escape
 from payload_monitor.report.generator import _load_json
 
+from .jira import JIRA_BASE
 from .security import redact_data, redact_token
 
 logger = logging.getLogger(__name__)
 _JINJA_ENV = Environment(loader=FileSystemLoader(str(Path(__file__).parent / "templates")), autoescape=True)
+
+_JIRA_KEY = r"[A-Z][A-Z0-9_]*-\d+"
+_JIRA_URL = rf"https://(?:redhat\.atlassian\.net|issues\.redhat\.com)/browse/(?P<url_key>{_JIRA_KEY})(?![\w-])"
+_JIRA_REFERENCE = re.compile(
+    rf"\[(?P<label>[^\]\n]+)\]\({_JIRA_URL}\)"
+    rf"|(?P<url>https://(?:redhat\.atlassian\.net|issues\.redhat\.com)/browse/"
+    rf"(?P<bare_url_key>{_JIRA_KEY})(?![\w-]))"
+    rf"|(?<![\w/-])(?P<key>{_JIRA_KEY})(?![\w-])"
+)
+
+
+def _jira_links(value: str) -> Markup:
+    """Escape analysis text, linking only issue references to canonical Jira URLs."""
+    value = str(value)
+    parts = []
+    end = 0
+    for match in _JIRA_REFERENCE.finditer(value):
+        parts.append(escape(value[end:match.start()]))
+        key = match['url_key'] or match['bare_url_key'] or match['key']
+        label = match['label'] or key
+        parts.append(Markup('<a href="{}" target="_blank" rel="noopener noreferrer">{}</a>').format(
+            f"{JIRA_BASE}/browse/{key}", label,
+        ))
+        end = match.end()
+    parts.append(escape(value[end:]))
+    return Markup('').join(parts)
 
 
 def _safe_urls(urls: list[str]) -> list[str]:
@@ -44,9 +72,12 @@ def _safe_attempt_analyses(attempts) -> list:
 
 
 _JINJA_ENV.filters["safe_attempts"] = _safe_attempt_analyses
+_JINJA_ENV.filters["jira_links"] = _jira_links
 
 
-def _render_analysis_card(da: dict, attempt_count: int = 1, job_name: str = "", *, prow_url: str = "") -> str:
+def _render_analysis_card(
+    da: dict, attempt_count: int = 1, job_name: str = "", *, prow_url: str = "", jira_drafts: list | None = None,
+) -> str:
     """Render an AI analysis card as an HTML string."""
     template = _JINJA_ENV.get_template("_analysis_card.html")
     return template.render(
@@ -60,6 +91,7 @@ def _render_analysis_card(da: dict, attempt_count: int = 1, job_name: str = "", 
         attempt_count=attempt_count,
         job_name=job_name,
         analysis_prow_url=prow_url,
+        jira_drafts=[draft for draft in (jira_drafts or []) if _safe_urls([draft['url']])],
     )
 
 
@@ -196,13 +228,38 @@ def patch_analysis_cards(html_path: Path, analysis_path: Path) -> None:
         row = row.replace('<div ', '<details ', 1)
         row = row.replace('<div class="sippy-job-summary">', '<summary>', 1)
         row = row.replace('</div><!-- /sippy-job-summary -->', '</summary><!-- /sippy-job-summary -->', 1)
-        row = row.replace('<div class="content sippy-job-analysis" hidden>', '<div class="content sippy-job-analysis">', 1)
+        row = row.replace('<div class="content sippy-job-analysis" hidden', '<div class="content sippy-job-analysis"', 1)
         return row.removesuffix('</div><!-- /sippy-job -->') + '</details><!-- /sippy-job -->'
 
     content = re.sub(
         r'(<div id="sippy-row-\d+"[^>]*data-sippy-key="([^"]*)"[^>]*>)'
         r'.*?</div><!-- /sippy-job -->',
         _enable_sippy_row, content, flags=re.DOTALL,
+    )
+
+    def _update_sippy_action(m: re.Match) -> str:
+        row = m[0]
+        if html_mod.unescape(m['key']) not in patched_sippy_keys:
+            return row
+        analysis_id = f"sippy-analysis-{m['index']}"
+        row = re.sub(
+            r'(<div class="content sippy-job-analysis")([^>]*)(>)',
+            lambda content: (content[0] if ' id="' in content[2] else
+                             f'{content[1]}{content[2]} id="{analysis_id}">'),
+            row, count=1,
+        )
+        button = _JINJA_ENV.get_template("_sippy_analysis_button.html").render(analysis_id=analysis_id)
+        return re.sub(
+            r'(<span class="sippy-cell-action">.*?)<span class="cmd-copy-row">'
+            r'(?:\s*<span class="sippy-ask-label">.*?</span>)?.*?</span>',
+            lambda action: action[1] + button,
+            row, count=1, flags=re.DOTALL,
+        )
+
+    content = re.sub(
+        r'<details id="sippy-row-(?P<index>\d+)"[^>]*data-sippy-key="(?P<key>[^"]*)"[^>]*>'
+        r'.*?</details><!-- /sippy-job -->',
+        _update_sippy_action, content, flags=re.DOTALL,
     )
 
     def _insert_badge(m: re.Match) -> str:

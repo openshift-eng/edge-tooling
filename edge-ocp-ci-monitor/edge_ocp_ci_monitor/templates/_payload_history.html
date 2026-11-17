@@ -1,0 +1,67 @@
+  {# RETRIED: Blocking jobs that passed only after retry - flaky but not blocking #}
+  {% if retried_successes %}
+  <div class="fs-section fs-section-retried">
+    <div class="fs-section-header">
+      <div class="fs-severity-icon fs-icon-retried" title="Blocking jobs that needed a retry to pass">&#8635;</div>
+      <div class="fs-section-content">
+        <div class="fs-priority-label">Warning - Passed After Retry</div>
+        <div class="fs-section-title">{{ retried_successes|length }} Blocking Job{{ 's' if retried_successes|length != 1 else '' }} Succeeded on Retry</div>
+        <div class="fs-section-desc">first attempt failed - may indicate flakiness or transient infrastructure issues</div>
+      </div>
+    </div>
+    <div class="fs-inline-jobs">
+      {% for item in retried_successes %}
+      <div class="fs-blocking-row fs-job-card" onclick="scrollToJob({{ item.job.name | js_attr }})" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}">
+        <div class="fs-blocking-main">
+          <span class="badge {{ item.job.topology | lower }}">{{ item.job.topology }}</span>
+          <a class="fs-blocking-name" href="{{ item.job.prow_url }}" target="_blank" onclick="event.stopPropagation()">{{ item.job.name }}</a>
+          <span class="badge green">Succeeded</span>
+          <span class="fs-blocking-versions">{{ item.version }}</span>
+        </div>
+        <div class="fs-blocking-test" style="font-size:12px">
+          <span style="color:var(--text-muted)">Payload:</span>
+          <a href="{{ item.payload_url }}" target="_blank" style="font-size:12px">{{ item.payload_tag }}</a>
+          &middot;
+          {% if item.job.previous_attempts %}
+          <span style="color:var(--text-muted)">Attempt #1:</span>
+          <a href="{{ item.job.previous_attempts[0].prow_url }}" target="_blank" style="font-size:12px">Prow</a>
+          &middot;
+          {% endif %}
+          <span style="color:var(--text-muted)">Attempt #{{ item.job.previous_attempts|length + 1 }}:</span>
+          <a href="{{ item.job.prow_url }}" target="_blank" style="font-size:12px">Prow</a>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# WARNING: Informing failures - surface escalation risks by name #}
+  {% if escalation_risks %}
+  <div class="fs-section fs-section-warning">
+    <div class="fs-section-header">
+      <div class="fs-severity-icon fs-icon-warning" title="Warning - monitor for stability">&#9650;</div>
+      <div class="fs-section-content">
+        <div class="fs-priority-label">Warning - Monitor for Stability</div>
+        <div class="fs-section-title">{{ ns.informing_failures }} Informing Job Failure{{ 's' if ns.informing_failures != 1 else '' }}</div>
+        <div class="fs-section-desc">across {{ ns.total_payloads }} payload{{ 's' if ns.total_payloads != 1 else '' }} - not blocking</div>
+      </div>
+      <a href="#section-edge-failures" class="fs-section-action fs-action-warning" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" onclick="event.preventDefault();jumpToFailures(null,'informing')">View All &#8594;</a>
+    </div>
+    {% if escalation_risks %}
+    <div class="fs-escalation-list">
+      {% for er in escalation_risks %}
+      <a href="#section-edge-failures" class="fs-escalation-item fs-job-card" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" onclick="event.preventDefault();scrollToJob({{ er.job_name | js_attr }})">
+        <span class="fs-escalation-left">
+          <span class="fs-escalation-name">{{ er.job_name }}</span>
+          <span class="badge escalation-risk">Unstable</span>
+          <span class="badge {{ er.topology | lower }}">{{ er.topology }}</span>
+          <span class="fs-job-version">{{ er.version }}</span>
+        </span>
+        <span class="fs-escalation-streak">{{ er.consecutive_failures }}x consecutive</span>
+      </a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}

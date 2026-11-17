@@ -15,8 +15,10 @@ from payload_monitor.report import generator as payload_report
 
 from .analysis import build_targets
 from .analysis_cards import (
+    _jira_links,
     _render_analysis_card,
     _safe_attempt_analyses,
+    _safe_urls,
     patch_analysis_cards,
 )
 from .jira import AGENT_ISSUE_LABEL, suggested_bugs
@@ -33,6 +35,7 @@ _JINJA_ENV = Environment(
 )
 _JINJA_ENV.filters["js_attr"] = payload_report._js_attr
 _JINJA_ENV.filters["safe_attempts"] = _safe_attempt_analyses
+_JINJA_ENV.filters["jira_links"] = _jira_links
 
 
 @protect_logs(lambda *args, **kwargs: os.environ.get("CHAI_MCP_TOKEN", "").strip())
@@ -42,14 +45,26 @@ def generate_html(
     """Render Chai's template overrides with the existing dashboard data and assets."""
     report = redact_data(report, os.environ.get("CHAI_MCP_TOKEN", "").strip())
     context = payload_report._build_template_context(report)
+    jira_drafts_by_job = {}
+    for bug in report.suggested_bugs:
+        if _safe_urls([bug.create_url]):
+            jira_drafts_by_job.setdefault(bug.job_name, []).append({"title": bug.title, "url": bug.create_url})
+    context["jira_drafts_by_job"] = jira_drafts_by_job
     context["sippy_analysis_cards"] = {
-        finding.analysis_key: _render_analysis_card(asdict(finding.deep_analysis), job_name=finding.test_name)
+        finding.analysis_key: _render_analysis_card(
+            asdict(finding.deep_analysis), job_name=finding.test_name,
+            jira_drafts=jira_drafts_by_job.get(finding.test_name, []),
+        )
         for finding in context["priority_sippy"] if finding.deep_analysis
     }
     templates = Path(__file__).parent / "templates"
     context.update(
-        css=(payload_report.TEMPLATES_DIR / "styles.css").read_text() + (templates / "jira_drafts.css").read_text(),
-        js=(payload_report.TEMPLATES_DIR / "scripts.js").read_text() + (templates / "jira_drafts.js").read_text(),
+        css="\n".join(path.read_text() for path in (
+            payload_report.TEMPLATES_DIR / "styles.css", templates / "jira_drafts.css", templates / "dashboard.css",
+        )),
+        js="\n".join(path.read_text() for path in (
+            payload_report.TEMPLATES_DIR / "scripts.js", templates / "jira_drafts.js", templates / "dashboard.js",
+        )),
         ai_warnings=redact_data(ai_warnings or [], os.environ.get("CHAI_MCP_TOKEN", "").strip()),
         jira_draft_label=AGENT_ISSUE_LABEL,
     )

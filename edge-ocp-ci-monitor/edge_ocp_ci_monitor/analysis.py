@@ -33,13 +33,22 @@ _HEARTBEAT_SECONDS = 30
 class AnalysisResult:
     data: dict = field(default_factory=lambda: {"by_prow_url": {}, "by_sippy_job": {}})
     warnings: list[str] = field(default_factory=list)
+    log_only_warnings: list[str] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
     requested: int = 0
     completed: int = 0
 
-    def warn(self, reason: str, *, target: str) -> None:
+    def warn(self, reason: str, *, target: str, log_only: bool = False) -> None:
         self.reasons.append(reason)
-        self.warnings.append(f"{target}: {reason}")
+        warning = f"{target}: {reason}"
+        self.warnings.append(warning)
+        if log_only:
+            self.log_only_warnings.append(warning)
+
+    @property
+    def dashboard_warnings(self) -> list[str]:
+        """Show analysis failures without banners for suppressed Jira drafts."""
+        return [warning for warning in self.warnings if warning not in self.log_only_warnings]
 
     @property
     def reason_counts(self) -> dict[str, int]:
@@ -206,7 +215,12 @@ def build_prompt(
         task + " Explain why each job and its tests failed, distinguish the root cause from "
         "downstream failures, and recommend next steps. Include evidence links and flag "
         "anything uncertain. Reuse evidence for repeated runs. Investigate without making changes."
-        " Use Jira read-only: never create, edit, comment on or transition an issue. "
+        " Whenever root_cause, impact, recommendation or an attempt's root_cause mentions an existing Jira issue, "
+        "include its canonical Markdown link, for example "
+        "[OCPBUGS-123](https://redhat.atlassian.net/browse/OCPBUGS-123). "
+        "Keep existing_bugs as plain issue keys. Never invent an issue key or URL for an unfiled proposal; "
+        "refer to it as a proposed bug draft for human review. "
+        "Use Jira read-only: never create, edit, comment on or transition an issue. "
         "For each finding, search Jira for existing bugs covering the diagnosed root cause, including "
         "known_existing_bugs and relevant resolved bugs. Record search_status, the queries and results "
         "in search_summary, and matching issue keys in existing_bugs. If access fails or the search is "
@@ -328,6 +342,7 @@ class BatchResult:
     accepted: dict = field(default_factory=dict)
     errors: dict = field(default_factory=dict)
     deferred: dict = field(default_factory=dict)
+    log_only_errors: set[str] = field(default_factory=set)
 
 
 def validate_batch(text: str, targets: list[dict], *, sippy: bool) -> BatchResult:
@@ -378,7 +393,9 @@ def validate_batch(text: str, targets: list[dict], *, sippy: bool) -> BatchResul
             except ValueError as exc:
                 # Keep a useful diagnosis even when its filing recommendation
                 # is incomplete or unsafe to display as a new-bug draft.
-                errors[f"{key} Jira"] = str(exc)
+                warning_key = f"{key} Jira"
+                errors[warning_key] = str(exc)
+                result.log_only_errors.add(warning_key)
                 raw = entries[key]["jira"]
                 if isinstance(raw, dict):
                     try:
@@ -543,10 +560,11 @@ async def analyze_targets(
         key_field = "analysis_key" if sippy else "prow_url"
         deferred_notes = {}
 
-        def warn(reason: str, key: str) -> None:
+        def warn(reason: str, key: str, *, log_only: bool = False) -> None:
             if key in deferred_notes:
                 reason += " Previous investigation notes: " + deferred_notes[key]["notes"]
-            result.warn(_safe_detail(reason, settings.token), target=_safe_detail(key, settings.token))
+            result.warn(_safe_detail(reason, settings.token), target=_safe_detail(key, settings.token),
+                        log_only=log_only)
 
         for attempt in range(2):
             async with semaphore:
@@ -582,7 +600,7 @@ async def analyze_targets(
                 result.data[group].update(response.accepted)
                 result.completed += len(response.accepted)
                 for key, reason in response.errors.items():
-                    warn(reason, key)
+                    warn(reason, key, log_only=key in response.log_only_errors)
                 retry = bool(response.deferred) and not response.errors and attempt == 0
                 if not retry:
                     for key, item in response.deferred.items():
