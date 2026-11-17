@@ -1,0 +1,8 @@
+{
+  "name": "edge-contribution",
+  "description": "Cross-workstream contribution reporting for OpenShift Edge managers — team allocation heatmap, executive summary, and CSV export — reporting workstreams touched per person and people per workstream, derived from Jira and GitHub activity",
+  "version": "0.5.0",
+  "author": { "name": "copejon" },
+  "homepage": "https://github.com/openshift-eng/edge-tooling",
+  "license": "Apache-2.0"
+}
