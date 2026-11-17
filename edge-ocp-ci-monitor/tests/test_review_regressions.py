@@ -54,6 +54,187 @@ def diagnosis(cause="Original diagnosis"):
     return DeepAnalysis(root_cause=cause, failure_type="Platform issue", impact="SNO", recommendation="Investigate")
 
 
+@pytest.mark.parametrize("merged", [False, True])
+def test_drafts_follow_producing_targets_through_rendering_and_drawer(report, tmp_path, merged):
+    from payload_monitor.report.generator import load_json
+
+    from edge_ocp_ci_monitor.analysis import build_targets
+    from edge_ocp_ci_monitor.report import generate_json, merge_analysis_data
+
+    other = deepcopy(report.streams[0])
+    other.version = other.regressions[0].version = "4.20"
+    other.payloads[0].jobs[0].prow_url = "https://prow.example/another-run"
+    report.streams.append(other)
+    data = {"by_prow_url": {}, "by_sippy_job": {}}
+    expected = {}
+    for category, group, field, prefix in (
+        ("blocking_jobs", "by_prow_url", "prow_url", "prow"),
+        ("sippy_jobs", "by_sippy_job", "analysis_key", "sippy"),
+    ):
+        for target in build_targets(report)[category]:
+            key = f"{prefix}:{target[field]}"
+            title = "Shared diagnosis" if merged else key
+            expected[key] = title
+            versions = target.get("versions", [target["version"]])
+            data[group][target[field]] = {
+                **asdict(diagnosis()),
+                "jira": {
+                    "search_status": "checked", "search_summary": "No duplicate found", "existing_bugs": [],
+                    "new_bug": {"title": title, "description": "Evidence for " + key,
+                                "target_versions": [{"name": version + ".0", "id": "123"}
+                                                    for version in versions]},
+                },
+            }
+    merge_analysis_data(report, data)
+    assert len(report.suggested_bugs) == (1 if merged else 4)
+    assert {key for bug in report.suggested_bugs for key in bug.analysis_keys} == set(expected)
+    path = tmp_path / "report.json"
+    generate_json(report, path)
+    restored = load_json(path)
+    assert [bug.analysis_keys for bug in restored.suggested_bugs] == [
+        bug.analysis_keys for bug in report.suggested_bugs
+    ]
+    html = generate_html(restored)
+
+    class Cards(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.sources = []
+            self.drafts = []
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if "data-analysis-key" in attrs:
+                self.sources.append(attrs)
+            if "jira-draft" in attrs.get("class", "").split():
+                self.drafts.append(attrs)
+
+    cards = Cards()
+    cards.feed(html)
+    for source in cards.sources:
+        key = source["data-analysis-key"]
+        row = html.split(f'id="{source["id"]}"', 1)[1].split("</details>", 1)[0]
+        actual = [url for url in Links(row).hrefs if "CreateIssue!default.jspa" in url]
+        draft = next((bug for bug in restored.suggested_bugs if key in bug.analysis_keys), None)
+        assert actual == ([draft.create_url] if draft else [])
+        if draft:
+            assert draft.title == expected[key]
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to exercise the finding drawer")
+    script = Path(__file__).parents[1] / "edge_ocp_ci_monitor/templates/dashboard.js"
+    result = subprocess.run([node, "-e", r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const input = JSON.parse(process.argv[2]);
+function element() {
+  return {
+    dataset: {}, events: {}, hidden: false,
+    classList: {contains() { return false; }, toggle() {}},
+    querySelector() { return null; }, querySelectorAll() { return []; }, closest() { return null; },
+    addEventListener(type, handler) { this.events[type] = handler; },
+    replaceChildren() {}, appendChild() {}, append() {}, focus() {}
+  };
+}
+function dataset(attrs) {
+  return Object.fromEntries(Object.entries(attrs).filter(([key]) => key.startsWith('data-'))
+    .map(([key, value]) => [key.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase()), value]));
+}
+const elements = {}, callbacks = [];
+const sources = input.sources.map(attrs => {
+  const source = element();
+  source.dataset = dataset(attrs);
+  source.classList.contains = name => attrs.class.split(' ').includes(name);
+  elements[attrs.id] = source;
+  return source;
+});
+let opened;
+const drafts = input.drafts.map((attrs, index) => ({
+  dataset: dataset(attrs), querySelector() { return {click() { opened = index; }}; }
+}));
+const rows = input.sources.map(attrs => {
+  const row = element();
+  row.dataset.findingSource = attrs.id;
+  row.querySelector = () => element();
+  return row;
+});
+const document = {
+  addEventListener(type, handler) { callbacks.push(handler); },
+  getElementById(id) { return elements[id] ||= element(); },
+  createElement: element, createTextNode: element,
+  querySelectorAll(selector) {
+    if (selector === '[data-finding-source]') return rows;
+    if (selector === '.jira-draft') return drafts;
+    return [];
+  }
+};
+const drawer = document.getElementById('finding-drawer');
+drawer.showModal = () => {};
+drawer.close = () => drawer.events.close();
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), {
+  document, window: {location: {hash: ''}}
+});
+callbacks.find(handler => handler.name !== 'setupTabScrolling')();
+rows.forEach((row, index) => {
+  row.events.click({target: {closest() { return null; }}});
+  const key = sources[index].dataset.analysisKey;
+  const expected = drafts.findIndex(draft => JSON.parse(draft.dataset.analysisKeys).includes(key));
+  const action = document.getElementById('finding-drawer-bug');
+  assert.equal(action.hidden, expected === -1);
+  if (expected !== -1) {
+    action.events.click();
+    assert.equal(opened, expected, key);
+  }
+});
+""", str(script), json.dumps({"sources": cards.sources, "drafts": cards.drafts})],
+        capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("destination", ["failed-row", "previous-attempt", "current-run"])
+def test_retry_success_card_opens_reachable_evidence_for_click_and_keyboard(report, destination):
+    retry = deepcopy(report.streams[0].payloads[0].jobs[0])
+    retry.result = JobResult.SUCCESS
+    retry.prow_url = "https://prow.example/passed?a=1&b=2"
+    if destination != "failed-row":
+        report.streams[0].payloads[0].jobs = []
+    if destination == "current-run":
+        retry.previous_attempts = []
+    report.streams[0].payloads[0].jobs.append(retry)
+    action = next(attrs for _, attrs in Links(generate_html(report)).interactions
+                  if "fs-blocking-row" in attrs.get("class", ""))
+    expected = retry.name if destination == "failed-row" else (
+        retry.previous_attempts[0].prow_url if retry.previous_attempts else retry.prow_url
+    )
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to exercise retry card navigation")
+    result = subprocess.run([node, "-e", r"""
+const assert = require('node:assert/strict');
+const action = JSON.parse(process.argv[1]), expected = process.argv[2], mode = process.argv[3];
+const destinations = [];
+const click = new Function('event', 'window', 'scrollToJob', action.onclick);
+const control = {closest() { return null; }, click() {
+  click({target: control}, {open(url, target, features) {
+    assert.notEqual(mode, 'failed-row');
+    assert.equal(target, '_blank');
+    assert.equal(features, 'noopener,noreferrer');
+    destinations.push(url);
+  }}, name => { assert.equal(mode, 'failed-row'); destinations.push(name); });
+}};
+control.click();
+const keydown = new Function('event', action.onkeydown);
+for (const key of ['Enter', ' ']) {
+  keydown.call(control, {target: control, key, preventDefault() {}});
+}
+assert.deepEqual(destinations, [expected, expected, expected]);
+click({target: {closest() { return {}; }}}, {}, () => { throw Error('nested link intercepted'); });
+""", json.dumps(action), expected, destination], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize("blocking", [True, False])
 def test_tab_counts_use_neutral_badges_regardless_of_blocking_state(report, blocking):
     if not blocking:

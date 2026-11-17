@@ -363,7 +363,7 @@
 {% if _fc >= recurring_threshold and _fc < persistent_threshold %}{% if _statuses.append('recurring') %}{% endif %}{% endif %}
 {% if detail.job.name in escalation_risk_jobs %}{% if _statuses.append('unstable') %}{% endif %}{% endif %}
 {% if detail.job.deep_analysis %}{% if _statuses.append('ai-analyzed') %}{% endif %}{% endif %}
-<details id="detail-{{ loop.index }}" class="detail-row failure-row" data-topology="{{ detail.job.topology }}" data-jobtype="{{ detail.job.job_type.value }}" data-version="{{ detail.version }}" data-status="{{ _statuses | join(' ') }}" data-row-index="{{ loop.index }}" data-prow-url="{{ detail.job.prow_url }}" data-job-name="{{ detail.job.name }}">
+<details id="detail-{{ loop.index }}" class="detail-row failure-row" data-analysis-key="prow:{{ detail.job.prow_url }}" data-topology="{{ detail.job.topology }}" data-jobtype="{{ detail.job.job_type.value }}" data-version="{{ detail.version }}" data-status="{{ _statuses | join(' ') }}" data-row-index="{{ loop.index }}" data-prow-url="{{ detail.job.prow_url }}" data-job-name="{{ detail.job.name }}">
   <summary>
     <span class="detail-cell-job" title="{{ detail.job.name }}">{{ detail.job.name }}{% if detail.job.deep_analysis %}<span class="badge ai-analyzed">AI Analyzed</span>{% endif %}{% set also_in = cross_topology.get(detail.job.name, []) %}{% if also_in %}<span class="cross-topo-hint" title="Also failing in other topologies">{% for t in also_in %}<span class="badge {{ t|lower }}">{{ t }}</span>{% endfor %}</span>{% endif %}</span>
     <span class="detail-cell-version">{{ detail.version }}</span>
@@ -383,7 +383,7 @@
     {% set impact = da.impact %}
     {% set suspect_prs = da.suspect_prs %}
     {% set recommendation = da.recommendation %}
-    {% set jira_drafts = jira_drafts_by_job.get(detail.job.name, []) %}
+    {% set jira_drafts = jira_drafts_by_target.get('prow:' ~ detail.job.prow_url, []) %}
     {% set same_root_cause = da.same_root_cause %}
     {% set attempt_analyses = da.attempt_analyses %}
     {% set attempt_count = detail.job.previous_attempts|length + 1 %}

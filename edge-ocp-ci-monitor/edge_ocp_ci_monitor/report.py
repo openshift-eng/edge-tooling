@@ -45,15 +45,16 @@ def generate_html(
     """Render Chai's template overrides with the existing dashboard data and assets."""
     report = redact_data(report, os.environ.get("CHAI_MCP_TOKEN", "").strip())
     context = payload_report._build_template_context(report)
-    jira_drafts_by_job = {}
+    jira_drafts_by_target = {}
     for bug in report.suggested_bugs:
         if _safe_urls([bug.create_url]):
-            jira_drafts_by_job.setdefault(bug.job_name, []).append({"title": bug.title, "url": bug.create_url})
-    context["jira_drafts_by_job"] = jira_drafts_by_job
+            for key in bug.analysis_keys or [f"prow:{bug.prow_url}"]:
+                jira_drafts_by_target.setdefault(key, []).append({"title": bug.title, "url": bug.create_url})
+    context["jira_drafts_by_target"] = jira_drafts_by_target
     context["sippy_analysis_cards"] = {
         finding.analysis_key: _render_analysis_card(
             asdict(finding.deep_analysis), job_name=finding.test_name,
-            jira_drafts=jira_drafts_by_job.get(finding.test_name, []),
+            jira_drafts=jira_drafts_by_target.get(f"sippy:{finding.analysis_key}", []),
         )
         for finding in context["priority_sippy"] if finding.deep_analysis
     }

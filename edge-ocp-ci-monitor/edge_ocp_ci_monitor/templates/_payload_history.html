@@ -11,7 +11,9 @@
     </div>
     <div class="fs-inline-jobs">
       {% for item in retried_successes %}
-      <div class="fs-blocking-row fs-job-card" onclick="scrollToJob({{ item.job.name | js_attr }})" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}">
+      {% set has_failed_row = item.job.name in all_failing | map(attribute='job.name') | list %}
+      {% set retry_url = item.job.previous_attempts[0].prow_url if item.job.previous_attempts else item.job.prow_url %}
+      <div class="fs-blocking-row fs-job-card" onclick="if(event.target.closest('a'))return;{% if has_failed_row %}scrollToJob({{ item.job.name | js_attr }}){% else %}window.open({{ retry_url | js_attr }}, '_blank', 'noopener,noreferrer'){% endif %}" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}">
         <div class="fs-blocking-main">
           <span class="badge {{ item.job.topology | lower }}">{{ item.job.topology }}</span>
           <a class="fs-blocking-name" href="{{ item.job.prow_url }}" target="_blank" onclick="event.stopPropagation()">{{ item.job.name }}</a>

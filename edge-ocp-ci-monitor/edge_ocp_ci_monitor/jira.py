@@ -88,11 +88,12 @@ def suggested_bugs(targets: dict, data: dict) -> list[SuggestedBug]:
             if decision and decision["existing_bugs"]:
                 covered_jobs.add(name)
             if decision and decision["new_bug"] and entry.get("failure_type") != "Analysis error":
-                decisions.append((name, target, decision))
+                source_key = f"{'prow' if category == 'blocking_jobs' else 'sippy'}:{target[key]}"
+                decisions.append((name, target, decision, source_key))
 
     drafts = {}
     config = Config()
-    for name, target, decision in decisions:
+    for name, target, decision, source_key in decisions:
         if name in covered_jobs:
             continue
         draft = decision["new_bug"]
@@ -104,6 +105,8 @@ def suggested_bugs(targets: dict, data: dict) -> list[SuggestedBug]:
                 job_name=name, topology=topology, prow_url=target.get("prow_url", target.get("triage_url", "")),
             ), {})
         bug, versions = drafts[signature]
+        if source_key not in bug.analysis_keys:
+            bug.analysis_keys.append(source_key)
         if draft["description"] not in bug.full_description:
             bug.full_description += "\n\nAdditional Chai investigation:\n" + draft["description"]
             bug.description = bug.full_description

@@ -203,8 +203,7 @@ document.addEventListener('DOMContentLoaded', function() {
     links.appendChild(full);
     // Drafts remain in their original cards so their form styling and controls survive.
     draftCard = Array.from(document.querySelectorAll('.jira-draft')).find(card =>
-      card.dataset.jobName === source.dataset.jobName &&
-      (!blocking || card.dataset.prowUrl === source.dataset.prowUrl));
+      JSON.parse(card.dataset.analysisKeys).includes(source.dataset.analysisKey));
     document.getElementById('finding-drawer-bug').hidden = !draftCard;
     selectDrawer('summary');
     drawer.showModal();
