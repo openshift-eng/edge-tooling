@@ -395,10 +395,7 @@ fi
 
 # Slack Notification
 if ${SKIP_SLACK} || ${ART_CREATED} || ${RESEND_SLACK}; then
-  # The release-artists group handle is intentionally not referenced: the group
-  # asks not to have its handle used in #forum-ocp-art/#forum-ocp-release, and a
-  # routine build request is not an escalation. The ${ART_KEY} link, the forum
-  # channel the webhook posts to, and the cc'd people carry the actionable signal.
+  # The release-artists handle is intentionally omitted: the group asks it not be used in those forums, and a routine build request is not an escalation.
   ALL_USERS="$(echo "${DEFAULT_CC_USER_IDS} ${SLACK_CC_USER_IDS:-}" | tr ' ' '\n' | grep -v '^$' | sort -u)"
   CC_STR=""
   while IFS= read -r uid; do
@@ -406,8 +403,7 @@ if ${SKIP_SLACK} || ${ART_CREATED} || ${RESEND_SLACK}; then
     CC_STR+="<@${uid}> "
   done <<< "${ALL_USERS}"
 
-  # Shared tail for both the webhook message and the --skip-slack copy-paste text;
-  # they differ only in how the ART ticket is linked (Slack markup vs bare URL).
+  # Shared tail; MSG and MSG_HUMAN differ only in how the ART ticket is linked (Slack markup vs bare URL).
   REQUEST_TAIL="requesting MicroShift ${VERSION} builds (due date ${ART_DUE_HUMAN}). Please help create RPMs and bootc images, thanks!"
   MSG="Hi, I've opened <${JIRA_BASE_URL}/browse/${ART_KEY}|${ART_KEY}> ${REQUEST_TAIL}"
   MSG+=$'\nReason: '"${REASON}"
@@ -415,9 +411,7 @@ if ${SKIP_SLACK} || ${ART_CREATED} || ${RESEND_SLACK}; then
   reject_webhook_in_text "${MSG}"
 
   if ${SKIP_SLACK}; then
-    # Slack's <url|text>/<@id> markup only renders when delivered via the
-    # API/webhook. For manual copy-paste, emit plain text with a bare URL (Slack
-    # auto-links it).
+    # For manual copy-paste, emit plain text with a bare URL (Slack's <url|text>/<@id> markup only renders via the API/webhook).
     MSG_HUMAN="Hi, I've opened ${ART_KEY} (${JIRA_BASE_URL}/browse/${ART_KEY}) ${REQUEST_TAIL}"
     MSG_HUMAN+=$'\nReason: '"${REASON}"
     log "Slack notification skipped (--skip-slack). Paste this into Slack:"
