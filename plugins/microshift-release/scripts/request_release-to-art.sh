@@ -395,7 +395,6 @@ fi
 
 # Slack Notification
 if ${SKIP_SLACK} || ${ART_CREATED} || ${RESEND_SLACK}; then
-  # The release-artists handle is intentionally omitted: the group asks it not be used in those forums, and a routine build request is not an escalation.
   ALL_USERS="$(echo "${DEFAULT_CC_USER_IDS} ${SLACK_CC_USER_IDS:-}" | tr ' ' '\n' | grep -v '^$' | sort -u)"
   CC_STR=""
   while IFS= read -r uid; do
@@ -403,7 +402,6 @@ if ${SKIP_SLACK} || ${ART_CREATED} || ${RESEND_SLACK}; then
     CC_STR+="<@${uid}> "
   done <<< "${ALL_USERS}"
 
-  # Shared tail; MSG and MSG_HUMAN differ only in how the ART ticket is linked (Slack markup vs bare URL).
   REQUEST_TAIL="requesting MicroShift ${VERSION} builds (due date ${ART_DUE_HUMAN}). Please help create RPMs and bootc images, thanks!"
   MSG="Hi, I've opened <${JIRA_BASE_URL}/browse/${ART_KEY}|${ART_KEY}> ${REQUEST_TAIL}"
   MSG+=$'\nReason: '"${REASON}"
