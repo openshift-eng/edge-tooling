@@ -97,7 +97,7 @@ version first and reuse matches to avoid duplicates.
    the real version, due date, ART key/link and reason:
 
    ```text
-   Hello, @release-artists I've opened <ART_KEY> (<ART_URL>) requesting MicroShift X.Y.Z builds (due date <ART_DUE_DATE>). Please help create RPMs and bootc images, thanks!
+   Hi, I've opened <ART_KEY> (<ART_URL>) requesting MicroShift X.Y.Z builds (due date <ART_DUE_DATE>). Please help create RPMs and bootc images, thanks!
    Reason: <TEXT>
    cc @Pablo Acevedo @Rama kasturi @AlejandroGullon @Tami Love
    ```

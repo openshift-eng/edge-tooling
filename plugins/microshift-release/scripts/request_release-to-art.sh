@@ -395,11 +395,10 @@ fi
 
 # Slack Notification
 if ${SKIP_SLACK} || ${ART_CREATED} || ${RESEND_SLACK}; then
-  # Channel policy (#forum-ocp-art): do not ping @release-artists except for
-  # escalations. A routine build request is not an escalation, so reference the
-  # group as plain text (which does not notify them) rather than a <!subteam^...>
-  # mention. The ${ART_KEY} link and cc'd people carry the actionable signal.
-  GROUP="@release-artists"
+  # The release-artists group handle is intentionally not referenced: the group
+  # asks not to have its handle used in #forum-ocp-art/#forum-ocp-release, and a
+  # routine build request is not an escalation. The ${ART_KEY} link, the forum
+  # channel the webhook posts to, and the cc'd people carry the actionable signal.
   ALL_USERS="$(echo "${DEFAULT_CC_USER_IDS} ${SLACK_CC_USER_IDS:-}" | tr ' ' '\n' | grep -v '^$' | sort -u)"
   CC_STR=""
   while IFS= read -r uid; do
@@ -407,16 +406,16 @@ if ${SKIP_SLACK} || ${ART_CREATED} || ${RESEND_SLACK}; then
     CC_STR+="<@${uid}> "
   done <<< "${ALL_USERS}"
 
-  MSG="Hello, ${GROUP} I've opened <${JIRA_BASE_URL}/browse/${ART_KEY}|${ART_KEY}> requesting MicroShift ${VERSION} builds (due date ${ART_DUE_HUMAN}). Please help create RPMs and bootc images, thanks!"
+  MSG="Hi, I've opened <${JIRA_BASE_URL}/browse/${ART_KEY}|${ART_KEY}> requesting MicroShift ${VERSION} builds (due date ${ART_DUE_HUMAN}). Please help create RPMs and bootc images, thanks!"
   MSG+=$'\nReason: '"${REASON}"
   [[ -n "${CC_STR}" ]] && MSG+=$'\ncc '"${CC_STR% }"
   reject_webhook_in_text "${MSG}"
 
   if ${SKIP_SLACK}; then
     # Slack's <url|text>/<@id> markup only renders when delivered via the
-    # API/webhook. For manual copy-paste, emit plain text: a bare URL (Slack
-    # auto-links it) and a plain @release-artists (not pinged, per channel policy).
-    MSG_HUMAN="Hello, @release-artists I've opened ${ART_KEY} (${JIRA_BASE_URL}/browse/${ART_KEY}) requesting MicroShift ${VERSION} builds (due date ${ART_DUE_HUMAN}). Please help create RPMs and bootc images, thanks!"
+    # API/webhook. For manual copy-paste, emit plain text with a bare URL (Slack
+    # auto-links it).
+    MSG_HUMAN="Hi, I've opened ${ART_KEY} (${JIRA_BASE_URL}/browse/${ART_KEY}) requesting MicroShift ${VERSION} builds (due date ${ART_DUE_HUMAN}). Please help create RPMs and bootc images, thanks!"
     MSG_HUMAN+=$'\nReason: '"${REASON}"
     log "Slack notification skipped (--skip-slack). Paste this into Slack:"
     printf '%s\n' "----- 8< ----- Slack message ----- 8< -----" "${MSG_HUMAN}" "----- 8< ----------------------- 8< -----" >&2
