@@ -406,7 +406,10 @@ if ${SKIP_SLACK} || ${ART_CREATED} || ${RESEND_SLACK}; then
     CC_STR+="<@${uid}> "
   done <<< "${ALL_USERS}"
 
-  MSG="Hi, I've opened <${JIRA_BASE_URL}/browse/${ART_KEY}|${ART_KEY}> requesting MicroShift ${VERSION} builds (due date ${ART_DUE_HUMAN}). Please help create RPMs and bootc images, thanks!"
+  # Shared tail for both the webhook message and the --skip-slack copy-paste text;
+  # they differ only in how the ART ticket is linked (Slack markup vs bare URL).
+  REQUEST_TAIL="requesting MicroShift ${VERSION} builds (due date ${ART_DUE_HUMAN}). Please help create RPMs and bootc images, thanks!"
+  MSG="Hi, I've opened <${JIRA_BASE_URL}/browse/${ART_KEY}|${ART_KEY}> ${REQUEST_TAIL}"
   MSG+=$'\nReason: '"${REASON}"
   [[ -n "${CC_STR}" ]] && MSG+=$'\ncc '"${CC_STR% }"
   reject_webhook_in_text "${MSG}"
@@ -415,7 +418,7 @@ if ${SKIP_SLACK} || ${ART_CREATED} || ${RESEND_SLACK}; then
     # Slack's <url|text>/<@id> markup only renders when delivered via the
     # API/webhook. For manual copy-paste, emit plain text with a bare URL (Slack
     # auto-links it).
-    MSG_HUMAN="Hi, I've opened ${ART_KEY} (${JIRA_BASE_URL}/browse/${ART_KEY}) requesting MicroShift ${VERSION} builds (due date ${ART_DUE_HUMAN}). Please help create RPMs and bootc images, thanks!"
+    MSG_HUMAN="Hi, I've opened ${ART_KEY} (${JIRA_BASE_URL}/browse/${ART_KEY}) ${REQUEST_TAIL}"
     MSG_HUMAN+=$'\nReason: '"${REASON}"
     log "Slack notification skipped (--skip-slack). Paste this into Slack:"
     printf '%s\n' "----- 8< ----- Slack message ----- 8< -----" "${MSG_HUMAN}" "----- 8< ----------------------- 8< -----" >&2
