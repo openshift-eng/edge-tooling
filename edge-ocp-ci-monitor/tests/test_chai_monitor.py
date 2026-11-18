@@ -10,20 +10,6 @@ from types import SimpleNamespace
 import httpx2
 import pytest
 from click.testing import CliRunner
-from edge_ocp_ci_monitor import __main__ as cli
-from edge_ocp_ci_monitor import analysis, collection
-from edge_ocp_ci_monitor.analysis import (
-    ChaiUnavailable,
-    InvalidAnalysis,
-    Settings,
-    analyze_targets,
-    ask_chai,
-    build_prompt,
-    build_targets,
-    validate_analysis,
-    validate_batch,
-)
-from edge_ocp_ci_monitor.report import generate_html as generate_chai_html
 from payload_monitor import __main__ as core
 from payload_monitor.models import (
     ComponentRegression,
@@ -39,6 +25,21 @@ from payload_monitor.models import (
     StreamReport,
 )
 from payload_monitor.report.generator import generate_html, generate_json
+
+from edge_ocp_ci_monitor import __main__ as cli
+from edge_ocp_ci_monitor import analysis, collection
+from edge_ocp_ci_monitor.analysis import (
+    ChaiUnavailable,
+    InvalidAnalysis,
+    Settings,
+    analyze_targets,
+    ask_chai,
+    build_prompt,
+    build_targets,
+    validate_analysis,
+    validate_batch,
+)
+from edge_ocp_ci_monitor.report import generate_html as generate_chai_html
 
 
 @pytest.fixture
@@ -1352,9 +1353,10 @@ def test_jira_draft_escapes_model_html_without_losing_description(report):
 
 @pytest.mark.parametrize("legacy", [False, True])
 def test_local_analysis_import_removes_prior_jira_drafts(report, tmp_path, legacy):
-    from edge_ocp_ci_monitor.report import merge_analysis_data, patch_analysis_html
     from payload_monitor.collectors.jira import suggest_bug
     from payload_monitor.config import Config
+
+    from edge_ocp_ci_monitor.report import merge_analysis_data, patch_analysis_html
 
     out = tmp_path / "report.html"
     source = tmp_path / "analysis.json"

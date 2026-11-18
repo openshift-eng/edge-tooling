@@ -21,12 +21,15 @@ logger = logging.getLogger(__name__)
 _JINJA_ENV = Environment(loader=FileSystemLoader(str(Path(__file__).parent / "templates")), autoescape=True)
 
 _JIRA_KEY = r"[A-Z][A-Z0-9_]*-\d+"
+# Bare identifiers need an explicit CI-project prefix to avoid linking SHA-256, etc.
+# Explicit Jira URLs and Markdown destinations retain the general key syntax.
+_PLAIN_JIRA_KEY = r"(?:OCPBUGS|TRT|CNF|ETCD)-\d+"
 _JIRA_URL = rf"https://(?:redhat\.atlassian\.net|issues\.redhat\.com)/browse/(?P<url_key>{_JIRA_KEY})(?![\w-])"
 _JIRA_REFERENCE = re.compile(
     rf"\[(?P<label>[^\]\n]+)\]\({_JIRA_URL}\)"
     rf"|(?P<url>https://(?:redhat\.atlassian\.net|issues\.redhat\.com)/browse/"
     rf"(?P<bare_url_key>{_JIRA_KEY})(?![\w-]))"
-    rf"|(?<![\w/-])(?P<key>{_JIRA_KEY})(?![\w-])"
+    rf"|(?<![\w/-])(?P<key>{_PLAIN_JIRA_KEY})(?![\w-])"
 )
 
 
@@ -141,6 +144,38 @@ class _AnalysisCardSpans(HTMLParser):
     def handle_startendtag(self, tag, attrs):
         self.handle_starttag(tag, attrs)
         self.handle_endtag(tag)
+
+
+class _JiraDraftLinkSpans(HTMLParser):
+    """Locate draft-action anchors while preserving all surrounding HTML verbatim."""
+
+    def __init__(self, content: str):
+        super().__init__(convert_charrefs=True)
+        self.content = content
+        self.offsets = [0, *(m.end() for m in re.finditer("\n", content))]
+        self.start = None
+        self.spans = []
+        self.feed(content)
+
+    def _offset(self):
+        line, column = self.getpos()
+        return self.offsets[line - 1] + column
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "a" and "da-jira-draft-link" in (dict(attrs).get("class") or "").split():
+            self.start = self._offset()
+
+    def handle_endtag(self, tag):
+        if tag == "a" and self.start is not None:
+            self.spans.append((self.start, self.content.index(">", self._offset()) + 1))
+            self.start = None
+
+
+def remove_jira_draft_links(content: str) -> str:
+    """Remove stale draft actions from every card after an HTML-only import."""
+    for start, end in reversed(_JiraDraftLinkSpans(content).spans):
+        content = content[:start] + content[end:]
+    return content
 
 
 def patch_analysis_cards(html_path: Path, analysis_path: Path) -> None:

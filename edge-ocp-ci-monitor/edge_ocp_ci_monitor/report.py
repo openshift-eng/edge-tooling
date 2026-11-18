@@ -20,6 +20,7 @@ from .analysis_cards import (
     _safe_attempt_analyses,
     _safe_urls,
     patch_analysis_cards,
+    remove_jira_draft_links,
 )
 from .jira import AGENT_ISSUE_LABEL, suggested_bugs
 from .security import protect_logs, redact_data, redact_token
@@ -110,7 +111,8 @@ def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
         '<span style="color:var(--green)">● AI-enriched via Chai</span>',
     )
     # HTML-only imports have no fresh targets or validated Jira decisions.
-    # Remove older heuristic links and any drafts whose evidence is replaced.
+    # Remove all draft actions, including cards for jobs absent from this import.
+    content = remove_jira_draft_links(content)
     content = re.sub(r'<div class="inline-create-bug">.*?</div>', "", content, flags=re.DOTALL)
     start = content.find("<!-- Suggested Bugs -->")
     end = content.find('</div><!-- /tab-payload-health -->', start)

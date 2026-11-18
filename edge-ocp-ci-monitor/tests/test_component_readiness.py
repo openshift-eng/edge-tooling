@@ -2,10 +2,11 @@
 
 from unittest.mock import patch
 
-from edge_ocp_ci_monitor import component_readiness as cr
-from edge_ocp_ci_monitor.report import generate_html
 from payload_monitor.collectors import component_readiness as shared_cr
 from payload_monitor.models import ComponentRegression, MonitorReport
+
+from edge_ocp_ci_monitor import component_readiness as cr
+from edge_ocp_ci_monitor.report import generate_html
 
 
 @patch.object(shared_cr, "_session")
