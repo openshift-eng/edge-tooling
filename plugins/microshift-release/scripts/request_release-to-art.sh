@@ -74,7 +74,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 ${SKIP_SLACK} && ${RESEND_SLACK} && die "--skip-slack and --resend-slack are mutually exclusive"
-reject_webhook_in_text "${JIRA_BASE_URL} ${ARGS[*]} ${REASON} ${SLACK_ART_GROUP_ID:-} ${SLACK_CC_USER_IDS:-}"
+reject_webhook_in_text "${JIRA_BASE_URL} ${ARGS[*]} ${REASON} ${SLACK_CC_USER_IDS:-}"
 
 [[ ${#ARGS[@]} -eq 3 ]] || die "Expected 3 args: <VERSION> <ART_DUE_DATE> <RELEASE_DATE>"
 VERSION="${ARGS[0]}"
@@ -395,8 +395,11 @@ fi
 
 # Slack Notification
 if ${SKIP_SLACK} || ${ART_CREATED} || ${RESEND_SLACK}; then
-  GROUP="${SLACK_ART_GROUP_ID:+<!subteam^${SLACK_ART_GROUP_ID}|@release-artists>}"
-  GROUP="${GROUP:-@release-artists}"
+  # Channel policy (#forum-ocp-art): do not ping @release-artists except for
+  # escalations. A routine build request is not an escalation, so reference the
+  # group as plain text (which does not notify them) rather than a <!subteam^...>
+  # mention. The ${ART_KEY} link and cc'd people carry the actionable signal.
+  GROUP="@release-artists"
   ALL_USERS="$(echo "${DEFAULT_CC_USER_IDS} ${SLACK_CC_USER_IDS:-}" | tr ' ' '\n' | grep -v '^$' | sort -u)"
   CC_STR=""
   while IFS= read -r uid; do
@@ -410,9 +413,9 @@ if ${SKIP_SLACK} || ${ART_CREATED} || ${RESEND_SLACK}; then
   reject_webhook_in_text "${MSG}"
 
   if ${SKIP_SLACK}; then
-    # Slack's <url|text>/<@id>/<!subteam> markup only renders when delivered via
-    # the API/webhook. For manual copy-paste, emit plain text: a bare URL (Slack
-    # auto-links it) and a literal @release-artists the operator types to mention.
+    # Slack's <url|text>/<@id> markup only renders when delivered via the
+    # API/webhook. For manual copy-paste, emit plain text: a bare URL (Slack
+    # auto-links it) and a plain @release-artists (not pinged, per channel policy).
     MSG_HUMAN="Hello, @release-artists I've opened ${ART_KEY} (${JIRA_BASE_URL}/browse/${ART_KEY}) requesting MicroShift ${VERSION} builds (due date ${ART_DUE_HUMAN}). Please help create RPMs and bootc images, thanks!"
     MSG_HUMAN+=$'\nReason: '"${REASON}"
     log "Slack notification skipped (--skip-slack). Paste this into Slack:"
