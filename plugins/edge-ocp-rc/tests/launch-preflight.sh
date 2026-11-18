@@ -4,9 +4,9 @@ set -euo pipefail
 source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 test_dir="$(mktemp -d)"
 trap 'rm -rf "$test_dir"' EXIT
-mkdir -p "$test_dir/scripts" "$test_dir/jobs" "$test_dir/bin"
+mkdir -p "$test_dir/scripts" "$test_dir/jobs/5.0" "$test_dir/bin"
 cp "$source_dir/scripts/launch.sh" "$test_dir/scripts/launch.sh"
-printf '%s\n' 'periodic-ci-openshift-lvm-operator-release-5.0-nightly-e2e-baremetalds-tnf-lvms-mno-qe-integration-tests' > "$test_dir/jobs/tnf-lvms.txt"
+printf '%s\n' 'periodic-ci-openshift-lvm-operator-release-5.0-nightly-e2e-baremetalds-tnf-lvms-mno-qe-integration-tests' > "$test_dir/jobs/5.0/tnf-lvms.txt"
 
 cat > "$test_dir/bin/curl" <<'EOF'
 #!/usr/bin/env bash
