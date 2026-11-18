@@ -49,7 +49,7 @@ chore(submodule): update two-node-toolbox (abc1234 -> def5678, 5 commits)
 
 ### Shell
 
-- Shebang: `#!/usr/bin/bash`
+- Shebang: `#!/usr/bin/env bash` (portable: finds bash via `$PATH`, works on Linux and macOS, where `/usr/bin/bash` does not exist)
 - `set -euo pipefail`
 - Quote all variables
 - Must pass shellcheck
