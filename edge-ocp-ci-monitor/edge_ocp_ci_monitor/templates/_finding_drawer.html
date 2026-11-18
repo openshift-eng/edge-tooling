@@ -1,0 +1,17 @@
+<dialog id="finding-drawer" class="finding-drawer" aria-labelledby="finding-drawer-title">
+  <div class="drawer-top"><span>JOB DETAILS</span><button type="button" id="finding-drawer-close">Close <span aria-hidden="true">×</span></button></div>
+  <div class="drawer-heading"><div id="finding-drawer-labels"></div><h2 id="finding-drawer-title"></h2><p id="finding-drawer-source"></p></div>
+  <div class="drawer-tabs" role="tablist" aria-label="Job detail views">
+    <button type="button" id="drawer-tab-summary" role="tab" aria-controls="drawer-summary" aria-selected="true" data-drawer-view="summary">Summary</button>
+    <button type="button" id="drawer-tab-analysis" role="tab" aria-controls="drawer-analysis" aria-selected="false" data-drawer-view="analysis">AI Root Cause Analysis</button>
+    <button type="button" id="drawer-tab-attempts" role="tab" aria-controls="drawer-attempts" aria-selected="false" data-drawer-view="attempts">Attempts</button>
+  </div>
+  <div id="drawer-summary" class="drawer-panel" role="tabpanel" aria-labelledby="drawer-tab-summary">
+    <dl id="finding-drawer-facts"></dl>
+    <div id="finding-drawer-recommendation"></div>
+    <div id="finding-drawer-links" class="drawer-links"></div>
+    <div class="drawer-links"><button type="button" class="dashboard-button dashboard-primary" id="finding-drawer-analysis">AI Root Cause Analysis →</button><button type="button" class="dashboard-button" id="finding-drawer-bug" hidden>Bug draft</button></div>
+  </div>
+  <div id="drawer-analysis" class="drawer-panel" role="tabpanel" aria-labelledby="drawer-tab-analysis" hidden></div>
+  <div id="drawer-attempts" class="drawer-panel" role="tabpanel" aria-labelledby="drawer-tab-attempts" hidden></div>
+</dialog>

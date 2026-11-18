@@ -14,6 +14,7 @@ Edge Tooling is a multi-tool deployment and development toolkit for OpenShift an
 | EC2 Watchman | `watchman/` | Automatic EC2 shutdown and weekly Slack reporting |
 | SNO Deploy | `sno-deploy/` | Single Node OpenShift with DU configuration |
 | Payload Monitor | `payload-monitor/` | Nightly payload health monitoring for edge topologies (SNO/TNA/TNF) |
+| Edge OCP CI Monitor | `edge-ocp-ci-monitor/` | Same payload dashboard, with Chai Bot MCP investigations and data-only fallback |
 | CI Tooling | `ci-tooling/` | Sippy Component Readiness and related CI helper CLIs |
 | LVM Operator Environment | `environments/lvm-operator/` | Development workspace template for LVMS |
 | Plugin Marketplace | `plugins/` | Claude Code plugin marketplace for OpenShift/edge workflows |
@@ -27,6 +28,7 @@ Edge Tooling is a multi-tool deployment and development toolkit for OpenShift an
 - Single-node OpenShift → SNO Deploy
 - LVM Operator development → LVM Operator Environment
 - Monitor nightly payload health for edge topologies → Use Payload Monitor
+- Monitor nightly payload health with Chai MCP analysis → Use Edge OCP CI Monitor
 - Component Readiness snapshot (HA vs TNF/TNA/SNO) → CI Tooling (`ci-tooling/readiness-report`)
 - Claude Code plugins for OpenShift/edge → Plugin Marketplace (`/plugin marketplace add openshift-eng/edge-tooling`)
 

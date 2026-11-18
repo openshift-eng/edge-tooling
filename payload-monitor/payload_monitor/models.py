@@ -203,6 +203,8 @@ class SuggestedBug:
     create_url: str = ""
     prow_url: str = ""
     full_description: str = ""
+    # Explicit producing targets, including every target of a merged draft.
+    analysis_keys: list[str] = field(default_factory=list)
 
 
 @dataclass
