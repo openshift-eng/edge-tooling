@@ -210,3 +210,4 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px soli
 .finding-section + .finding-section { margin-top: 16px; }
 .finding-section > .queue-heading { padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 .finding-section > .queue-heading h2 { margin: 0; padding: 0; border: 0; font-size: 18px; }
+.health-status.unavailable { color: var(--text-muted); background: var(--surface-hover); }

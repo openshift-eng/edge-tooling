@@ -356,15 +356,17 @@ document.addEventListener('DOMContentLoaded', function setupPayloadTooltips() {
   document.body.appendChild(tip);
   let active;
   let closeTimer;
+  let tipHovered = false;
 
   function hide() {
     clearTimeout(closeTimer);
     tip.hidden = true;
     active = null;
+    tipHovered = false;
   }
   function position() {
     if (!active) return;
-    const rect = active.getBoundingClientRect();
+    const rect = active.dot.getBoundingClientRect();
     const width = tip.offsetWidth;
     const height = tip.offsetHeight;
     const left = rect.left + rect.width / 2 - width / 2;
@@ -372,7 +374,8 @@ document.addEventListener('DOMContentLoaded', function setupPayloadTooltips() {
     tip.style.left = Math.max(8, Math.min(left, window.innerWidth - width - 8)) + 'px';
     tip.style.top = Math.max(8, Math.min(top, window.innerHeight - height - 8)) + 'px';
   }
-  function scheduleHide() {
+  function scheduleHide(trigger) {
+    if (!trigger || trigger !== active || trigger.hovered || trigger.focused || tipHovered) return;
     clearTimeout(closeTimer);
     closeTimer = setTimeout(hide, 150);
   }
@@ -382,20 +385,21 @@ document.addEventListener('DOMContentLoaded', function setupPayloadTooltips() {
     dot.classList.add('payload-tooltip-ready');
     dot.removeAttribute('title');
     dot.setAttribute('aria-describedby', tip.id);
+    const trigger = {dot, hovered: false, focused: false};
     function show() {
       clearTimeout(closeTimer);
-      active = dot;
+      active = trigger;
       tip.replaceChildren(...source.cloneNode(true).childNodes);
       tip.hidden = false;
       position();
     }
-    dot.addEventListener('mouseenter', show);
-    dot.addEventListener('mouseleave', scheduleHide);
-    dot.addEventListener('focus', show);
-    dot.addEventListener('blur', hide);
+    dot.addEventListener('mouseenter', () => { trigger.hovered = true; show(); });
+    dot.addEventListener('mouseleave', () => { trigger.hovered = false; scheduleHide(trigger); });
+    dot.addEventListener('focus', () => { trigger.focused = true; show(); });
+    dot.addEventListener('blur', () => { trigger.focused = false; scheduleHide(trigger); });
   });
-  tip.addEventListener('mouseenter', () => clearTimeout(closeTimer));
-  tip.addEventListener('mouseleave', scheduleHide);
+  tip.addEventListener('mouseenter', () => { tipHovered = true; clearTimeout(closeTimer); });
+  tip.addEventListener('mouseleave', () => { tipHovered = false; scheduleHide(active); });
   window.addEventListener('resize', position);
   document.addEventListener('scroll', position, true);
   document.addEventListener('keydown', event => { if (event.key === 'Escape') hide(); });

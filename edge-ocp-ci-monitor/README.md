@@ -6,7 +6,9 @@ Generate an HTML dashboard for OpenShift nightly payloads, Sippy job health, and
 
 ### 1. Install
 
-Use Python 3.11 or newer. Local Prow artifact collection requires `gsutil` from the Google Cloud SDK. Use `--skip-prow` to skip that enrichment. See the [Payload Monitor data sources](../payload-monitor/README.md#data-sources).
+Use Python 3.11 or newer. For local Prow artifact collection, install the [Google Cloud CLI](https://docs.cloud.google.com/sdk/docs/install) and make `gcloud` available on `PATH`. The monitor uses `gcloud storage cat` and can use standalone `gsutil` if `gcloud` is unavailable. Use `--skip-prow` to skip local artifact collection.
+
+For public artifacts on an unauthenticated machine, set `CLOUDSDK_AUTH_DISABLE_CREDENTIALS=true` for the monitor command. For protected artifacts, configure Google Cloud CLI credentials with access to the bucket. See [accessing public Cloud Storage data](https://docs.cloud.google.com/storage/docs/access-public-data#command-line).
 
 From the repository root, create and activate a virtual environment and install the dependencies.
 
@@ -45,9 +47,11 @@ Start with **Edge OCP Jobs Health Overview** and **Findings Summary**, then use 
 
 Component Readiness queries the saved views listed in the repository. With no `--versions` filter it queries all 16 configured comparisons. Releases 4.18 through 4.21 have SNO comparisons, and 4.22, 4.23, 5.0 and 5.1 have SNO, TNA and TNF comparisons. For example, `--versions 5.1` queries the three 5.1 views. See the [Component Readiness lookup](edge_ocp_ci_monitor/component_readiness.py).
 
+A release with no collected terminal payloads shows **Unavailable**. The Component Readiness tab distinguishes a successful check with no regressions from unavailable views, and the data collection errors identify the affected views.
+
 ### Review a Jira draft
 
-Look for **Chai-recommended New Bugs** below the tabs. Select a draft to review its description, topology, Target Versions, and `issue-for-agent` label. **Review draft in Jira** opens the creation form for you to review and submit manually. Check the prefilled fields in Jira. The dashboard keeps the full description available through **Copy full description**, and **Gather details with Chai** gives you a prompt to continue investigating.
+Look for **Chai-recommended New Bugs** below the tabs. Select a draft to review its description, topology, Target Versions, and `issue-for-agent` label. **Review draft in Jira** opens the creation form for you to review and submit manually. Check the prefilled fields in Jira. Filing with `issue-for-agent` can start Chai’s Auto Jira Solve workflow and lead to a pull request. **Copy full description** keeps the full text available, and **Gather details with Chai** gives you a prompt to continue investigating.
 
 Drafts require an explicit Chai recommendation for an SNO (Single Node OpenShift), TNA (two-node arbiter), or TNF (two-node fencing) failure. The prompt requires a duplicate search, an evidence-based reason to file, and verified OCPBUGS Target Version names and IDs for the affected release. A matching issue or incomplete search suppresses the draft. Recurrence and pass-rate thresholds inform triage. Chai is asked to use Jira read-only.
 
@@ -94,7 +98,7 @@ python -m edge_ocp_ci_monitor --merge-analysis reports/investigations.json \
   --output reports/edge-ci.html
 ```
 
-The import accepts analysis maps named `by_prow_url` and `by_sippy_job`, keyed by the exact latest Prow URL and the exact Sippy `analysis_key` respectively. See the [analysis fields below](#mcp-response-contract). The import can replace existing cards and clears all Jira drafts and draft actions because it has no fresh targets against which to validate them. Only the HTML is updated. For regenerating HTML from a full data export, use the separate Payload Monitor command with `--from-json`. See the [Payload Monitor CLI reference](../payload-monitor/README.md#cli-reference).
+The import accepts analysis maps named `by_prow_url` and `by_sippy_job`, keyed by the exact latest Prow URL and the exact Sippy `analysis_key` respectively. See the [analysis fields below](#mcp-response-contract). When at least one card matches, the import clears Jira drafts and draft actions because the imported analysis can change the diagnosis. It also updates the incomplete-analysis warning when the report tracks which targets still need analysis. An import with zero matching cards leaves the report untouched. Only the HTML is updated. For regenerating HTML from a full data export, use the separate Payload Monitor command with `--from-json`. See the [Payload Monitor CLI reference](../payload-monitor/README.md#cli-reference).
 
 ## Chai scope, timing, and troubleshooting
 

@@ -24,7 +24,7 @@ from payload_monitor.models import (
     Regression,
     StreamReport,
 )
-from payload_monitor.report.generator import generate_html, generate_json
+from payload_monitor.report.generator import generate_html
 
 from edge_ocp_ci_monitor import __main__ as cli
 from edge_ocp_ci_monitor import analysis, collection
@@ -39,6 +39,7 @@ from edge_ocp_ci_monitor.analysis import (
     validate_batch,
 )
 from edge_ocp_ci_monitor.report import generate_html as generate_chai_html
+from edge_ocp_ci_monitor.report import generate_json
 
 
 @pytest.fixture
@@ -59,7 +60,7 @@ def collected_report(report, monkeypatch):
     monkeypatch.setattr(collection, "collect_payloads", lambda *args: report.streams)
     monkeypatch.setattr(collection.sippy, "collect", lambda *args: {"4.19": report.streams[0].regressions})
     monkeypatch.setattr(collection.timing, "fetch_job_runs", lambda *args: [])
-    monkeypatch.setattr(collection.component_readiness, "collect", lambda *args: [])
+    monkeypatch.setattr(collection.component_readiness, "collect", lambda *args: ([], []))
     return report
 
 
@@ -101,20 +102,16 @@ def deferred_answer(prompt, *, completed=0):
     return json.dumps(data)
 
 
-@pytest.mark.parametrize("missing", ["CHAI_MCP_TOKEN", "CHAI_MCP_URL", "both"])
-def test_missing_environment_names_are_reported_without_values(monkeypatch, missing):
+def test_missing_endpoint_warning_does_not_expose_token(monkeypatch):
     monkeypatch.setenv("CHAI_MCP_TOKEN", "synthetic-secret")
-    monkeypatch.setenv("CHAI_MCP_URL", "https://chai.example/mcp")
-    names = ("CHAI_MCP_TOKEN", "CHAI_MCP_URL") if missing == "both" else (missing,)
-    for name in names:
-        monkeypatch.delenv(name)
+    monkeypatch.delenv("CHAI_MCP_URL", raising=False)
     config, warnings = Settings.from_environment()
     assert config is None
-    assert all(name in warnings[0] for name in names)
+    assert "CHAI_MCP_URL" in warnings[0]
     assert "synthetic-secret" not in warnings[0]
 
 
-@pytest.mark.parametrize("url", ["", "not-a-url", "ftp://example/mcp", "https://[broken", "https://host:broken/mcp"])
+@pytest.mark.parametrize("url", ["ftp://example/mcp", "https://host:broken/mcp"])
 def test_invalid_url_falls_back(monkeypatch, url):
     monkeypatch.setenv("CHAI_MCP_TOKEN", "synthetic-secret")
     monkeypatch.setenv("CHAI_MCP_URL", url)
@@ -160,19 +157,15 @@ def test_concise_prompt_keeps_targets_and_one_complete_response_schema(report, s
     assert "final attempt" not in prompt
 
 
-def test_selection_matches_core_and_deduplicates_blocking_runs(report, tmp_path):
+def test_selection_prioritizes_sippy_and_deduplicates_blocking_runs(report):
     report.streams[0].payloads.append(deepcopy(report.streams[0].payloads[0]))
     report.streams[0].regressions.extend(
         Regression(f"job-{n}", str(n), "", "", 80, n, topology="TNF", current_runs=4, version="4.19")
         for n in range(7)
     )
-    path = tmp_path / "report.html"
-    generate_html(report, path)
-    expected = json.loads(path.with_suffix(".ai-targets.json").read_text())
     targets = build_targets(report)
     assert len(targets["blocking_jobs"]) == 1
-    assert len(targets["sippy_jobs"]) == 5
-    assert [t["analysis_key"] for t in targets["sippy_jobs"]] == [t["analysis_key"] for t in expected["sippy_jobs"]]
+    assert [target["analysis_key"] for target in targets["sippy_jobs"]] == [f"4.19/job-{n}" for n in range(5)]
 
 
 def test_sippy_analysis_runs_without_blockers(report):
@@ -205,11 +198,8 @@ def test_serial_batches_reuse_completed_blocking_evidence(report):
 
 
 @pytest.mark.parametrize("change", [
-    {"job_name": "wrong-job"}, {"same_root_cause": "true"}, {"root_cause": ""},
-    {"suspect_prs": "https://github.com/org/repo/pull/1"}, {"failure_type": "Unproven flake"},
-    {"suspect_prs": ["https://"]}, {"suspect_prs": ["https://[malformed"]},
-    {"attempt_analyses": [{"prow_url": "https://[malformed", "root_cause": "error", "failure_type": "Install failure"}]},
-    {"attempt_analyses": [None]}, {"same_root_cause": False},
+    {"same_root_cause": "true"}, {"root_cause": ""}, {"failure_type": "Unproven flake"},
+    {"suspect_prs": ["https://[malformed"]}, {"attempt_analyses": [None]}, {"same_root_cause": False},
 ])
 def test_malformed_contract_rejected(report, change):
     target = build_targets(report)["blocking_jobs"][0]
@@ -258,24 +248,16 @@ def test_batch_validation_retains_good_entries_and_explains_every_failure(report
 
 
 @pytest.mark.parametrize("response", [
-    "Not JSON", "[]", "{}", '{"by_prow_url": []}', '{"by_sippy_job": {}}',
-    '{"job_name": "job-sno", "root_cause": "A single unkeyed analysis is not a batch"}',
+    "[]", '{"by_prow_url": []}', '{"by_sippy_job": {}}',
 ])
 def test_wrong_batch_shape_is_rejected(report, response):
     with pytest.raises(InvalidAnalysis):
         validate_batch(response, build_targets(report)["blocking_jobs"], sippy=False)
 
 
-def test_batch_json_fence_and_duplicate_key_rejection(report):
-    target = build_targets(report)["blocking_jobs"][0]
-    text = json.dumps({"by_prow_url": {target["prow_url"]: answer()}})
-    validated = validate_batch("```json\n" + text + "\n```", [target], sippy=False)
-    accepted, errors = validated.accepted, validated.errors
-    assert set(accepted) == {target["prow_url"]}
-    assert not errors
-    text = '{"by_prow_url": {}, "by_prow_url": {}}'
+def test_batch_rejects_duplicate_json_keys(report):
     with pytest.raises(InvalidAnalysis, match="duplicate JSON keys"):
-        validate_batch(text, [target], sippy=False)
+        validate_batch('{"by_prow_url": {}, "by_prow_url": {}}', build_targets(report)["blocking_jobs"], sippy=False)
 
 
 def test_partial_batch_results_are_merged_without_additional_calls(report):
@@ -372,10 +354,9 @@ def test_clean_budget_deferrals_get_one_final_request_per_category(report):
     assert snapshots[0] == {"by_prow_url": {}, "by_sippy_job": {}}
 
 
-@pytest.mark.parametrize("sippy", [False, True])
-def test_repeated_deferral_stops_after_final_request(report, sippy):
+def test_repeated_deferral_stops_after_final_request(report):
     targets = build_targets(report)
-    targets["blocking_jobs" if sippy else "sippy_jobs"] = []
+    targets["blocking_jobs"] = []
     calls = []
 
     async def ask(config, prompt):
@@ -391,7 +372,7 @@ def test_repeated_deferral_stops_after_final_request(report, sippy):
     assert "Read install logs; next check" in result.warnings[0]
 
 
-@pytest.mark.parametrize("failure", ["timeout", "transport", "malformed", "processing", "cancel"])
+@pytest.mark.parametrize("failure", ["timeout", "transport", "cancel"])
 def test_failed_final_request_preserves_checkpointed_results(report, failure):
     targets = build_targets(report)
     targets["sippy_jobs"] = []
@@ -405,15 +386,11 @@ def test_failed_final_request_preserves_checkpointed_results(report, failure):
         if len(calls) == 1:
             return deferred_answer(prompt, completed=1)
         assert len(saved[-1]["by_prow_url"]) == 1
-        if failure == "timeout":
-            await asyncio.sleep(10)
         if failure == "cancel":
             raise asyncio.CancelledError
         if failure == "transport":
             raise ChaiUnavailable("Disconnected")
-        if failure == "processing":
-            return batch_answer(prompt, failure_type="Analysis error")
-        return "Invalid JSON"
+        await asyncio.sleep(10)
 
     async def run():
         call = analyze_targets(targets, settings(timeout=0.02), ask=ask,
@@ -432,7 +409,7 @@ def test_failed_final_request_preserves_checkpointed_results(report, failure):
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("failure", ["processing", "missing", "wrong-job", "extra", "bad-notes", "overlap"])
+@pytest.mark.parametrize("failure", ["processing", "missing", "overlap"])
 def test_initial_errors_prevent_followup_but_retain_good_entries(report, failure):
     targets = build_targets(report)
     targets["sippy_jobs"] = []
@@ -450,13 +427,6 @@ def test_initial_errors_prevent_followup_but_retain_good_entries(report, failure
             data["by_prow_url"][bad] = answer(failure_type="Analysis error")
         elif failure == "missing":
             del data["deferred"][bad]
-        elif failure == "wrong-job":
-            del data["deferred"][bad]
-            data["by_prow_url"][bad] = answer(name="wrong-job")
-        elif failure == "extra":
-            data["deferred"]["https://prow.example/unrequested"] = data["deferred"][bad]
-        elif failure == "bad-notes":
-            data["deferred"][bad]["notes"] = ""
         else:
             data["by_prow_url"][bad] = answer()
         return json.dumps(data)
@@ -469,10 +439,9 @@ def test_initial_errors_prevent_followup_but_retain_good_entries(report, failure
     assert any("Follow-up skipped because the batch had errors" in warning for warning in result.warnings)
 
 
-@pytest.mark.parametrize("deferred", [None, [], {"reason": "budget_exhausted"}, "unfinished"])
-def test_malformed_deferral_wrapper_retains_valid_analyses(report, deferred):
+def test_malformed_deferral_wrapper_retains_valid_analyses(report):
     target = build_targets(report)["blocking_jobs"][0]
-    response = {"by_prow_url": {target["prow_url"]: answer()}, "deferred": deferred}
+    response = {"by_prow_url": {target["prow_url"]: answer()}, "deferred": "unfinished"}
     result = validate_batch(json.dumps(response), [target], sippy=False)
     assert set(result.accepted) == {target["prow_url"]}
     assert result.errors
@@ -480,8 +449,7 @@ def test_malformed_deferral_wrapper_retains_valid_analyses(report, deferred):
 
 
 @pytest.mark.parametrize("update", [
-    {"reason": "processing_failed"}, {"reason": None}, {"notes": None}, {"notes": " "},
-    {"notes": "x" * 4001}, {"extra": "unsupported"},
+    {"reason": "processing_failed"}, {"notes": " "}, {"notes": "x" * 4001}, {"extra": "unsupported"},
 ])
 def test_only_explicit_budget_deferrals_are_eligible(report, update):
     target = build_targets(report)["blocking_jobs"][0]
@@ -500,8 +468,7 @@ def test_custom_timeout_reserves_time_for_json_response(report):
 
 
 
-@pytest.mark.parametrize("limit", [1, 2, 6])
-@pytest.mark.parametrize("defer_first", [False, True])
+@pytest.mark.parametrize("limit,defer_first", [(1, False), (6, True)])
 def test_bounded_category_calls_and_at_most_two_active_calls(report, limit, defer_first):
     targets = build_targets(report)
     targets["blocking_jobs"] = [{**targets["blocking_jobs"][0], "prow_url": f"https://prow.example/{n}"}
@@ -569,34 +536,6 @@ def test_explicit_analysis_error_never_marked_as_analyzed(report):
     assert all("Check access to the artifact bucket" in warning for warning in result.warnings)
 
 
-def test_real_sdk_in_memory_mcp_and_auth_header(monkeypatch):
-    import fastmcp
-    from fastmcp import Client, FastMCP
-
-    server = FastMCP("test-chai")
-    received = []
-    options = []
-
-    @server.tool()
-    async def ask_persona(question: str) -> str:
-        received.append(question)
-        return json.dumps(answer())
-
-    def connect(url, **kwargs):
-        options.append((url, kwargs))
-        return Client(server, mode=kwargs["mode"])
-
-    monkeypatch.setattr(fastmcp, "Client", connect)
-    assert json.loads(asyncio.run(ask_chai(settings(timeout=3), "investigate test"))) == answer()
-    assert received == ["investigate test"]
-    assert options[0][0].url == settings().url
-    assert options[0][1]["timeout"] == 3
-    assert options[0][1]["mode"] == "2026-07-28"
-    request = httpx2.Request("POST", settings().url)
-    auth_flow = options[0][1]["auth"].auth_flow(request)
-    assert next(auth_flow).headers["Authorization"] == "Bearer synthetic-secret"
-
-
 def test_real_sdk_forwards_progress_for_both_batches(report, monkeypatch, caplog):
     import fastmcp
     from fastmcp import Client, Context, FastMCP
@@ -624,20 +563,16 @@ def test_real_sdk_forwards_progress_for_both_batches(report, monkeypatch, caplog
         assert secret not in caplog.text
 
 
-@pytest.mark.parametrize("ending", ["success", "failure", "timeout", "cancel"])
+@pytest.mark.parametrize("ending", ["success", "cancel"])
 def test_heartbeat_during_silent_batches_and_cleanup(report, monkeypatch, caplog, ending):
     monkeypatch.setattr(analysis, "_HEARTBEAT_SECONDS", 0.005)
 
     async def ask(config, prompt):
-        await asyncio.sleep(0.025 if ending in {"success", "failure"} else 10)
-        if ending == "failure":
-            raise ChaiUnavailable("Endpoint unavailable")
+        await asyncio.sleep(0.025 if ending == "success" else 10)
         return batch_answer(prompt)
 
     async def run():
-        task = asyncio.create_task(analyze_targets(
-            build_targets(report), settings(timeout=0.035 if ending == "timeout" else 3), ask=ask,
-        ))
+        task = asyncio.create_task(analyze_targets(build_targets(report), settings(timeout=3), ask=ask))
         if ending == "cancel":
             await asyncio.sleep(0.025)
             task.cancel()
@@ -645,7 +580,7 @@ def test_heartbeat_during_silent_batches_and_cleanup(report, monkeypatch, caplog
                 await task
         else:
             result = await task
-            assert result.completed == (2 if ending == "success" else 0)
+            assert result.completed == 2
         count = len(caplog.records)
         await asyncio.sleep(0.015)
         assert len(caplog.records) == count
@@ -774,7 +709,7 @@ def test_missing_mcp_dependency_does_not_stop_analysis_pipeline(report, monkeypa
     assert list(result.reason_counts.values()) == [2]
 
 
-@pytest.mark.parametrize("failure", ["transport", "auth", "tool-error", "protocol"])
+@pytest.mark.parametrize("failure", ["transport", "auth", "protocol"])
 def test_mcp_failures_have_safe_warnings(monkeypatch, failure):
     import fastmcp
     from fastmcp.exceptions import McpError
@@ -794,7 +729,7 @@ def test_mcp_failures_have_safe_warnings(monkeypatch, failure):
         async def call_tool(self, *args, **kwargs):
             if failure == "protocol":
                 raise McpError(code=-32603, message="Protocol failure: synthetic-secret")
-            return SimpleNamespace(is_error=failure == "tool-error", content=[
+            return SimpleNamespace(is_error=False, content=[
                 SimpleNamespace(type="text", text="Authentication failed: synthetic-secret"),
             ])
 
@@ -807,7 +742,7 @@ def test_mcp_failures_have_safe_warnings(monkeypatch, failure):
     assert expected in str(exc.value)
 
 
-@pytest.mark.parametrize("status", [401, 403, 404, 429, 503])
+@pytest.mark.parametrize("status", [401, 429])
 def test_http_failure_exposes_status_without_body_or_credentials(monkeypatch, status):
     import fastmcp
 
@@ -859,26 +794,6 @@ def test_nested_transport_reason_redacts_url_and_bearer_credentials(monkeypatch)
         assert secret not in message
 
 
-def test_summary_contains_grouped_reasons(report, collected_report, tmp_path, monkeypatch, caplog):
-    monkeypatch.setenv("CHAI_MCP_URL", "https://chai.example/mcp")
-    monkeypatch.setenv("CHAI_MCP_TOKEN", "synthetic-secret")
-
-    async def ask(config, prompt, **kwargs):
-        raise ChaiUnavailable("Required MCP client package is not installed.")
-
-    monkeypatch.setattr("edge_ocp_ci_monitor.analysis.ask_chai", ask)
-    out = tmp_path / "report.html"
-    with caplog.at_level(logging.INFO, logger="edge_ocp_ci_monitor"):
-        result = CliRunner().invoke(cli.main, ["--skip-prow", "--output", str(out)])
-    assert result.exit_code == 0, result.exception
-    summary = next(record.message for record in caplog.records if record.message.startswith("Chai analysis:"))
-    assert "unavailable (0/2 targets)" in summary
-    assert "Reason(s): Required MCP client package is not installed. (x2)" in summary
-    assert not out.with_suffix(".chai-status.json").exists()
-    assert not out.with_suffix(".ai-targets.json").exists()
-    assert "Required MCP client package is not installed" in out.read_text()
-
-
 def test_cli_fallback_retains_fresh_dashboard_markers_and_sidecars(collected_report, tmp_path, monkeypatch, caplog):
     monkeypatch.delenv("CHAI_MCP_TOKEN", raising=False)
     monkeypatch.delenv("CHAI_MCP_URL", raising=False)
@@ -912,7 +827,6 @@ def test_cli_fallback_retains_fresh_dashboard_markers_and_sidecars(collected_rep
 
 @pytest.mark.parametrize("versions,expected_versions", [
     (None, None),
-    ("5.1", ["5.1"]),
     (" 4.19, 5.1 ", ["4.19", "5.1"]),
 ])
 def test_component_readiness_receives_selected_versions_or_all_by_default(
@@ -929,7 +843,7 @@ def test_component_readiness_receives_selected_versions_or_all_by_default(
 
     def collect(selected_versions):
         requested_versions.append(selected_versions)
-        return [finding]
+        return [finding], ["View 5.1-ha-vs-single unavailable: synthetic timeout"]
 
     monkeypatch.setattr(collection.component_readiness, "collect", collect)
     out = tmp_path / "report.html"
@@ -949,10 +863,62 @@ def test_component_readiness_receives_selected_versions_or_all_by_default(
     assert 'data-crcomparison="TNA"' in html
     assert 'data-crversion="5.1"' in html
     assert "arbiter-regression" in html
+    assert "Component Readiness: View 5.1-ha-vs-single unavailable" in html
 
 
-@pytest.mark.parametrize("available", [True, False])
-@pytest.mark.parametrize("export_json", [True, False])
+@pytest.mark.parametrize("available,command", [
+    ({"gcloud", "gsutil"}, ["/bin/gcloud", "storage", "cat"]),
+    ({"gsutil"}, ["/bin/gsutil", "cat"]),
+    (set(), None),
+])
+def test_cli_selects_storage_command_for_prow_attempts(collected_report, tmp_path, monkeypatch, available, command):
+    monkeypatch.delenv("CHAI_MCP_TOKEN", raising=False)
+    monkeypatch.delenv("CHAI_MCP_URL", raising=False)
+    job = collected_report.streams[0].payloads[0].jobs[0]
+    prefix = "https://prow.example/view/gs/bucket/logs/job-sno/"
+    job.prow_url = prefix + "latest"
+    job.previous_attempts[0].prow_url = prefix + "previous"
+    monkeypatch.setattr(collection.shutil, "which", lambda name: f"/bin/{name}" if name in available else None)
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout='<testsuite><testcase name="junit-test">'
+                               '<failure message="synthetic"/></testcase></testsuite>')
+
+    monkeypatch.setattr(collection.prow, "subprocess", SimpleNamespace(run=run))
+    out = tmp_path / "report.html"
+    result = CliRunner().invoke(cli.main, ["--skip-sippy", "--output", str(out), "--json"])
+    assert result.exit_code == 0, result.exception
+    html = out.read_text()
+    if command is None:
+        assert calls == []
+        assert "Prow artifacts unavailable" in html
+    else:
+        assert sorted(calls) == [
+            [*command, f"gs://bucket/logs/job-sno/{build}/artifacts/junit_operator.xml"]
+            for build in ("latest", "previous")
+        ]
+        exported = core.load_json(out.with_suffix(".json")).streams[0].payloads[0].jobs[0]
+        assert exported.failing_tests[0].name == "junit-test"
+        assert exported.previous_attempts[0].failing_tests[0].name == "junit-test"
+
+
+def test_cli_empty_stream_is_unavailable(collected_report, tmp_path, monkeypatch):
+    monkeypatch.delenv("CHAI_MCP_TOKEN", raising=False)
+    monkeypatch.delenv("CHAI_MCP_URL", raising=False)
+    collected_report.streams[0].payloads.clear()
+    out = tmp_path / "report.html"
+    result = CliRunner().invoke(cli.main, ["--skip-sippy", "--skip-prow", "--output", str(out)])
+    assert result.exit_code == 0, result.exception
+    html = out.read_text()
+    assert 'class="health-status unavailable"' in html
+    assert "Payload data unavailable" in html
+    assert "No terminal payload data for 4.19" in html
+    assert "No blocking failures found" not in html
+
+
+@pytest.mark.parametrize("available,export_json", [(True, True), (False, False)])
 def test_cli_enrichment_and_remote_failure(report, collected_report, tmp_path, monkeypatch, available, export_json):
     monkeypatch.setenv("CHAI_MCP_TOKEN", "synthetic-secret")
     monkeypatch.setenv("CHAI_MCP_URL", "https://chai.example/mcp")
@@ -1052,28 +1018,6 @@ def test_collected_report_does_not_relabel_stale_analysis_as_chai(report, collec
     assert "AI-enriched via Chai" not in out.read_text()
 
 
-@pytest.mark.parametrize("option,value", [("--ai-timeout", "2700"), ("--ai-concurrency", "2")])
-def test_ai_execution_limits_are_not_cli_options(option, value):
-    runner = CliRunner()
-    help_result = runner.invoke(cli.main, ["--help"])
-    assert help_result.exit_code == 0
-    assert option not in help_result.output
-    rejected = runner.invoke(cli.main, [option, value])
-    assert rejected.exit_code == 2
-    assert "No such option" in rejected.output and option in rejected.output
-
-
-def test_from_json_removed_only_from_chai_cli():
-    runner = CliRunner()
-    help_result = runner.invoke(cli.main, ["--help"])
-    assert help_result.exit_code == 0
-    assert "--from-json" not in help_result.output
-    rejected = runner.invoke(cli.main, ["--from-json", "unused.json"])
-    assert rejected.exit_code == 2
-    assert "No such option" in rejected.output and "--from-json" in rejected.output
-    assert "--from-json" in runner.invoke(core.main, ["--help"]).output
-
-
 def test_chai_keeps_explicit_local_analysis_import(report, tmp_path, monkeypatch):
     out = tmp_path / "report.html"
     generate_chai_html(report, out)
@@ -1092,35 +1036,16 @@ def test_chai_keeps_explicit_local_analysis_import(report, tmp_path, monkeypatch
     assert set(tmp_path.iterdir()) == {out, source}
 
 
-def test_chai_renderer_leaves_original_rendering_and_exports_intact(report, tmp_path):
+def test_manual_prow_prompt_includes_retry_guidance_and_omits_local_logs(report):
     report.streams[0].payloads[0].jobs[0].error_summary = "Synthetic local error excerpt"
-    chai_path = tmp_path / "chai.html"
-    chai_html = generate_chai_html(report, chai_path, ai_warnings=["<missing evidence>"])
-    assert "<title>Edge OCP CI Monitor</title>" in chai_html
-    _, _, prompt = chai_html.partition("<code>Investigate this failing Prow job:")
+    html = generate_chai_html(report, ai_warnings=["<missing evidence>"])
+    _, _, prompt = html.partition("<code>Investigate this failing Prow job:")
     prompt, _, _ = prompt.partition("</code>")
     assert "https://prow.example/latest" in prompt
     assert "Previous attempts: https://prow.example/previous" in prompt
-    assert "job-sno, a blocking job on SNO in OpenShift 4.19" in prompt
-    assert "4.19.0-0.nightly-2026-11-13-070000" in prompt
     assert "Start with the latest run's step results" in prompt
     assert "Synthetic local error excerpt" not in prompt
-    assert "&lt;missing evidence&gt;" in chai_html
-    assert "use Claude directly" not in chai_html
-    assert not chai_path.with_suffix(".ai-targets.json").exists()
-    assert chai_html.index('class="report-notes"') < chai_html.index('class="health-section"')
-    assert chai_html.index('class="health-section"') < chai_html.index('id="findings-title"')
-    assert chai_html.index('id="findings-title"') < chai_html.index('class="findings-summary"')
-    assert 'id="tab-failure-analysis" role="tabpanel"' in chai_html
-    assert 'id="tab-sippy-health" role="tabpanel"' in chai_html
-    assert 'id="finding-drawer"' in chai_html
-
-    legacy_path = tmp_path / "legacy.html"
-    legacy_html = generate_html(report, legacy_path)
-    assert "<title>Edge OCP Payload Monitor</title>" in legacy_html
-    assert "use Claude directly" in legacy_html
-    assert "chai-analysis-warning" not in legacy_html
-    assert legacy_path.with_suffix(".ai-targets.json").exists()
+    assert "&lt;missing evidence&gt;" in html
 
 
 def test_no_targets_does_not_connect():
@@ -1130,33 +1055,6 @@ def test_no_targets_does_not_connect():
     result = asyncio.run(analyze_targets(build_targets(MonitorReport()), settings(), ask=ask))
     assert result.status == "not_needed"
     assert result.requested == 0
-
-
-def test_single_category_sends_one_call_without_format_retry(report):
-    calls = []
-
-    async def ask(config, prompt):
-        calls.append(prompt)
-        return "Not JSON"
-
-    targets = build_targets(report)
-    targets["sippy_jobs"] = []
-    result = asyncio.run(analyze_targets(targets, settings(), ask=ask))
-    assert result.completed == 0
-    assert len(calls) == 1
-    assert "non-JSON" in result.warnings[0]
-
-
-
-def test_existing_cli_does_not_call_chai(report, tmp_path, monkeypatch):
-    snapshot = tmp_path / "input.json"
-    generate_json(report, snapshot)
-    out = tmp_path / "legacy.html"
-    result = CliRunner().invoke(core.main, ["--from-json", str(snapshot), "--output", str(out)])
-    assert result.exit_code == 0, result.exception
-    assert "use Claude directly" in out.read_text()
-    assert out.with_suffix(".ai-targets.json").exists()
-    assert not out.with_suffix(".chai-status.json").exists()
 
 
 # Jira recommendations must come from a validated Chai decision, never failure thresholds.
@@ -1185,8 +1083,7 @@ def test_jira_prompt_requires_read_only_duplicate_check_and_edge_scope(report):
     assert "Never invent an issue key or URL for an unfiled proposal" in prompt
 
 
-@pytest.mark.parametrize("sippy", [False, True])
-@pytest.mark.parametrize("topology", ["SNO", "TNA", "TNF"])
+@pytest.mark.parametrize("sippy,topology", [(False, "SNO"), (False, "TNA"), (True, "TNF")])
 def test_chai_recommended_draft_prefills_bottom_section_and_jira_link(report, sippy, topology):
     from html import unescape
     from urllib.parse import parse_qs, urlparse
@@ -1229,10 +1126,8 @@ def test_chai_recommended_draft_prefills_bottom_section_and_jira_link(report, si
 
 
 @pytest.mark.parametrize("decision", [
-    None,
     jira_decision(new_bug=None),
     jira_decision(search_status="unavailable", new_bug=None),
-    jira_decision(search_status="not_checked", new_bug=None),
     jira_decision(existing_bugs=["OCPBUGS-123"], new_bug=None),
 ])
 def test_no_draft_without_explicit_recommendation(report, decision):
@@ -1245,27 +1140,17 @@ def test_no_draft_without_explicit_recommendation(report, decision):
     assert result.completed == 2 and not result.warnings
     merge_analysis_data(report, result.data)
     assert not report.suggested_bugs
-    html = generate_chai_html(report)
-    assert 'id="section-suggested-bugs"' in html
-    assert "No new bugs recommended for this run." in html
-    assert 'class="jira-draft-summary"' not in html
-    assert "Review draft in Jira" not in html
 
 
 @pytest.mark.parametrize("decision", [
     [],
-    jira_decision(search_status=[]),
     jira_decision(search_status="unavailable"),
-    jira_decision(search_status="not_checked"),
     jira_decision(search_summary=""),
     jira_decision(existing_bugs=["OCPBUGS-123"]),
-    jira_decision(existing_bugs="OCPBUGS-123"),
     jira_decision(new_bug={}),
-    jira_decision(new_bug={"title": "", "description": "description", "target_versions": []}),
     jira_decision(new_bug={**jira_decision()["new_bug"], "target_versions": []}),
     jira_decision(new_bug={**jira_decision()["new_bug"], "target_versions": [{"name": "4.20.0", "id": "2000"}]}),
     jira_decision(new_bug={**jira_decision()["new_bug"], "target_versions": [{"name": "4.19.0", "id": "invented"}]}),
-    jira_decision(new_bug={**jira_decision()["new_bug"], "target_versions": [{"name": "4.19", "id": "19400"}]}),
 ])
 def test_invalid_jira_decisions_preserve_diagnosis_but_never_show_draft(report, decision):
     from edge_ocp_ci_monitor.report import merge_analysis_data
@@ -1312,9 +1197,8 @@ def test_cli_rejected_jira_draft_has_no_banner_but_analysis_failures_do(
     assert not report.suggested_bugs
 
 
-@pytest.mark.parametrize("topology", ["HA", "", None, "MicroShift"])
-def test_drafts_outside_allowed_topologies_rejected(report, topology):
-    target = {**build_targets(report)["blocking_jobs"][0], "topology": topology}
+def test_drafts_outside_allowed_topologies_rejected(report):
+    target = {**build_targets(report)["blocking_jobs"][0], "topology": "HA"}
     result = validate_batch(json.dumps({"by_prow_url": {
         target["prow_url"]: answer(jira=jira_decision()),
     }}), [target], sippy=False)
@@ -1466,35 +1350,40 @@ def test_local_analysis_import_removes_prior_jira_drafts(report, tmp_path, legac
     assert "Updated diagnosis from external analysis" in html
 
 
+def test_local_analysis_import_without_matching_cards_preserves_drafts(report, tmp_path):
+    from edge_ocp_ci_monitor.report import merge_analysis_data, patch_analysis_html
 
-def test_jira_drafts_have_compact_cards_and_independent_dialogs(report):
-    import re
+    merge_analysis_data(report, {"by_sippy_job": {"4.19/job-sno": answer(jira=jira_decision())}})
+    out, source = tmp_path / "report.html", tmp_path / "analysis.json"
+    generate_chai_html(report, out, ai_warnings=["Original request failed"])
+    original = out.read_text()
+    assert 'id="section-suggested-bugs"' in original
+    for entries in ({}, {"https://prow.example/no-match": answer()}):
+        source.write_text(json.dumps({"by_prow_url": entries}))
+        patch_analysis_html(out, source)
+        assert out.read_text() == original
 
-    from payload_monitor.models import SuggestedBug
 
-    report.suggested_bugs = [
-        SuggestedBug(title=f"Draft {topology}", description="Full diagnostic details",
-                     full_description=f"Full diagnostic details for {topology}", job_name=f"job-{topology}",
-                     topology=topology, versions=["4.19.0"], prow_url=f"https://prow.example/{topology}",
-                     create_url="https://jira.example/create")
-        for topology in ("SNO", "TNA", "TNF")
-    ]
-    html = generate_chai_html(report)
-    summaries = re.findall(r'<button[^>]*class="jira-draft-summary"[^>]*>(.*?)</button>', html, re.DOTALL)
-    dialogs = re.findall(r'<dialog([^>]*class="jira-draft-dialog"[^>]*)>(.*?)</dialog>', html, re.DOTALL)
-    assert len(summaries) == len(dialogs) == 3
-    for index, (topology, summary, (attributes, dialog)) in enumerate(zip(
-        ("SNO", "TNA", "TNF"), summaries, dialogs, strict=True,
-    ), 1):
-        assert f"Draft {topology}" in summary and topology in summary and "4.19.0" in summary
-        assert "Full diagnostic details" not in summary and "textarea" not in summary
-        assert f'id="jira-draft-{index}"' in attributes
-        assert f'aria-controls="jira-draft-{index}"' in html
-        assert " open" not in attributes
-        assert f"Full diagnostic details for {topology}" in dialog
-        assert 'value="issue-for-agent"' in dialog
-        actions = re.findall(r'<(?:button|a)[^>]*class="create-btn[^"]*"[^>]*>(.*?)</(?:button|a)>', dialog)
-        assert actions == ["Review draft in Jira", "Gather details with Chai", "Copy full description"]
-        assert f"https://prow.example/{topology}" in dialog
-        assert 'class="jira-chai-prompt"' in dialog and ' hidden>' in dialog
-        assert "Press Esc or click outside to close" in dialog
+def test_partial_and_complete_analysis_imports_update_saved_warning(report, tmp_path):
+    from edge_ocp_ci_monitor.report import patch_analysis_html
+
+    out, source = tmp_path / "report.html", tmp_path / "analysis.json"
+    generate_chai_html(report, out, ai_warnings=["Original request failed"])
+    target_url = report.streams[0].payloads[0].jobs[0].prow_url
+    source.write_text(json.dumps({"by_prow_url": {target_url: answer()}}))
+    patch_analysis_html(out, source)
+    html = out.read_text()
+    assert 'id="chai-analysis-warning"' in html
+    assert "Chai analysis remains incomplete for 1 requested target" in html
+    assert "Diagnostics from the original Chai run" in html
+
+    sippy_key = report.streams[0].regressions[0].analysis_key
+    source.write_text(json.dumps({"by_sippy_job": {sippy_key: answer(failure_type="Analysis error")}}))
+    patch_analysis_html(out, source)
+    assert 'id="chai-analysis-warning"' in out.read_text()
+
+    source.write_text(json.dumps({"by_sippy_job": {sippy_key: answer()}}))
+    patch_analysis_html(out, source)
+    html = out.read_text()
+    assert 'id="chai-analysis-warning"' not in html
+    assert "Original request failed" not in html

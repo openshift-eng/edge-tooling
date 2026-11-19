@@ -5,9 +5,11 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 
 from payload_monitor.__main__ import (
@@ -31,7 +33,7 @@ from payload_monitor.collectors.release_controller import (
 )
 from payload_monitor.config import Config
 from payload_monitor.job_health import priority_sippy_findings, sippy_findings
-from payload_monitor.models import JobType, MonitorReport, Regression
+from payload_monitor.models import JobResult, JobType, MonitorReport, Regression
 
 from . import component_readiness
 from .report import generate_html, generate_json, patch_analysis_html
@@ -139,7 +141,9 @@ def collect_report(
 
         empty_streams = [s.version for s in stream_reports if not s.payloads]
         if empty_streams:
-            logger.warning(f"No payload data for versions: {', '.join(empty_streams)}")
+            message = f"No terminal payload data for {', '.join(empty_streams)}"
+            logger.warning("%s", message)
+            data_errors.append(f"Release Controller: {message}")
 
         if not skip_sippy:
             try:
@@ -154,7 +158,8 @@ def collect_report(
                 data_errors.append(f"Sippy: {e}")
 
             try:
-                comp_regs = cr_future.result()
+                comp_regs, cr_errors = cr_future.result()
+                data_errors.extend(f"Component Readiness: {error}" for error in cr_errors)
             except Exception as e:
                 logger.exception("Component Readiness collection failed")
                 data_errors.append(f"Component Readiness: {e}")
@@ -173,13 +178,26 @@ def collect_report(
             logger.info("  Skipping timing collection (use --with-timing to enable)")
 
     # Step 3: Enrich failing jobs with Prow data
-    if not skip_prow:
-        logger.info("Step 3: Fetching Prow artifacts for failing jobs...")
-        for stream in stream_reports:
-            for payload in stream.payloads:
-                prow.enrich_failing_jobs(payload.jobs)
-    else:
+    if skip_prow:
         logger.info("Step 3: Skipping Prow enrichment (--skip-prow)")
+    else:
+        artifact_jobs = [
+            job for stream in stream_reports for payload in stream.payloads for job in payload.jobs
+            if job.topology and ((job.result == JobResult.FAILURE and job.prow_url)
+                                 or any(attempt.prow_url for attempt in job.previous_attempts))
+        ]
+        gcloud = shutil.which("gcloud") if artifact_jobs else None
+        gsutil = shutil.which("gsutil") if artifact_jobs and not gcloud else None
+        if artifact_jobs and (gcloud or gsutil):
+            command = (gcloud, "storage", "cat") if gcloud else (gsutil, "cat")
+            logger.info("Step 3: Fetching Prow artifacts using %s", " ".join(command))
+            fetch_artifact = partial(prow._fetch_gcs_file, command=command)
+            # gcloud storage supports one CLI invocation at a time.
+            prow.enrich_failing_jobs(artifact_jobs, max_workers=1 if gcloud else 4, fetch_artifact=fetch_artifact)
+        elif artifact_jobs:
+            message = "Prow artifacts unavailable. Install the Google Cloud CLI or use --skip-prow."
+            logger.warning("%s", message)
+            data_errors.append(message)
 
     # Build report
     now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")

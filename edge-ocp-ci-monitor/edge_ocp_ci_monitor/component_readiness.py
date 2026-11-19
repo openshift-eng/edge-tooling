@@ -30,7 +30,7 @@ CR_VIEWS = [
 ]
 
 
-def collect(versions: list[str] | None = None) -> list[ComponentRegression]:
+def collect(versions: list[str] | None = None) -> tuple[list[ComponentRegression], list[str]]:
     """Collect saved views for selected versions, or all views when omitted."""
     selected_versions = set(versions) if versions is not None else None
     tasks = [
@@ -38,20 +38,25 @@ def collect(versions: list[str] | None = None) -> list[ComponentRegression]:
         for view_def in CR_VIEWS
         if selected_versions is None or view_def["version"] in selected_versions
     ]
+    errors = []
+    if selected_versions is not None:
+        missing = selected_versions - {version for version, _, _ in tasks}
+        if missing:
+            errors.append(f"No saved views configured for {', '.join(sorted(missing))}")
     if not tasks:
-        return []
+        return [], errors or ["No saved views configured"]
 
     all_regressions = []
     with ThreadPoolExecutor(max_workers=min(len(tasks), 10)) as pool:
         futures = {
-            pool.submit(fetch_component_regressions, v, view, topo): (v, topo)
+            pool.submit(fetch_component_regressions, v, view, topo, raise_on_error=True): view
             for v, view, topo in tasks
         }
         for future in as_completed(futures):
-            v, topo = futures[future]
+            view = futures[future]
             try:
                 all_regressions.extend(future.result())
-            except Exception:
-                logger.exception(f"Failed to fetch component readiness for {v} ({topo})")
-                continue
-    return all_regressions
+            except Exception as exc:
+                logger.exception("Failed to fetch Component Readiness view %s", view)
+                errors.append(f"View {view} unavailable: {exc}")
+    return all_regressions, sorted(errors)

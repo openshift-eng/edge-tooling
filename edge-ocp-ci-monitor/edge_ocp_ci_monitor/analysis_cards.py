@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html as html_mod
+import json
 import logging
 import os
 import re
@@ -178,10 +179,36 @@ def remove_jira_draft_links(content: str) -> str:
     return content
 
 
-def patch_analysis_cards(html_path: Path, analysis_path: Path) -> None:
+def _update_analysis_warning(content: str, resolved: dict[str, set[str]]) -> str:
+    def replace_warning(match: re.Match) -> str:
+        opening, warnings = match.groups()
+        marker = re.search(r' data-pending-analysis="([^"]*)"', opening)
+        message = "The original Chai run reported analysis issues."
+        if marker:
+            pending = json.loads(html_mod.unescape(marker[1]))
+            if any(pending.values()):
+                remaining = {group: sorted(set(keys) - resolved[group]) for group, keys in pending.items()}
+                count = sum(map(len, remaining.values()))
+                if not count:
+                    return ""
+                targets = "target" if count == 1 else "targets"
+                message = f"Chai analysis remains incomplete for {count} requested {targets}."
+                value = html_mod.escape(json.dumps(remaining), quote=True)
+                opening = opening[:marker.start(1)] + value + opening[marker.end(1):]
+        return (f'{opening}\n  <strong>{message}</strong>\n'
+                f'  <details><summary>Diagnostics from the original Chai run</summary>{warnings}</details>\n</div>')
+
+    return re.sub(
+        r'(<div\b[^>]*\bid="chai-analysis-warning"[^>]*>).*?(<ul>.*?</ul>).*?</div>',
+        replace_warning, content, count=1, flags=re.DOTALL,
+    )
+
+
+def patch_analysis_cards(html_path: Path, analysis_path: Path) -> str | None:
     """Patch AI analysis cards directly into an existing HTML report.
 
-    Uses data attributes placed in the template for reliable injection:
+    Return the updated HTML only when at least one card matches. Uses data
+    attributes placed in the template for reliable injection:
     - ``data-prow-url`` on ``.claude-suggestion`` divs marks where cards go
     - ``data-attempt-count`` carries the retry count for scope notes
     - ``data-prow-url`` on ``<details>`` elements identifies where to add badges
@@ -195,7 +222,7 @@ def patch_analysis_cards(html_path: Path, analysis_path: Path) -> None:
     by_sippy_job = data.get("by_sippy_job", {})
     if not by_url and not by_sippy_job:
         logger.info("No analysis entries to patch")
-        return
+        return None
 
     content = redact_token(html_path.read_text(), token)
     patched = 0
@@ -357,22 +384,29 @@ def patch_analysis_cards(html_path: Path, analysis_path: Path) -> None:
 
     content = _details_re.sub(_insert_badge, content)
 
-    # Update header: replace "Data only" status using data attribute
-    if patched > 0:
-        new_status = (
-            '<div class="meta" style="margin-top:4px">'
-            '<span style="color:var(--green)">● AI-enriched via Chai</span>'
-            '</div>'
-        )
-        content = re.sub(
-            r'<div class="meta"[^>]*data-enrichment-status="data-only"[^>]*>.*?</div>',
-            new_status,
-            content,
-            count=1,
-            flags=re.DOTALL,
-        )
+    if not patched:
+        logger.info("No analysis entries matched %s", html_path)
+        return None
 
-    html_path.write_text(content)
+    # Update header: replace "Data only" status using its data attribute.
+    new_status = (
+        '<div class="meta" style="margin-top:4px">'
+        '<span style="color:var(--green)">● AI-enriched via Chai</span>'
+        '</div>'
+    )
+    content = re.sub(
+        r'<div class="meta"[^>]*data-enrichment-status="data-only"[^>]*>.*?</div>',
+        new_status,
+        content,
+        count=1,
+        flags=re.DOTALL,
+    )
+    resolved = {
+        group: {key for key in keys if entries[key].get("failure_type") != "Analysis error"
+                and entries[key].get("root_cause")}
+        for group, keys, entries in (("by_prow_url", patched_urls, by_url), ("by_sippy_job", patched_sippy_keys, by_sippy_job))
+    }
     logger.info(f"Patched {patched} analysis card(s) into {html_path}")
+    return _update_analysis_warning(content, resolved)
 
 

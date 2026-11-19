@@ -24,7 +24,7 @@ from .analysis_cards import (
     remove_jira_draft_links,
 )
 from .jira import AGENT_ISSUE_LABEL, suggested_bugs
-from .security import protect_logs, redact_data, redact_token
+from .security import protect_logs, redact_data
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,11 @@ def generate_html(
     """Render Chai's template overrides with the existing dashboard data and assets."""
     report = redact_data(report, os.environ.get("CHAI_MCP_TOKEN", "").strip())
     context = payload_report._build_template_context(report)
+    context["payload_data_available"] = any(stream.payloads for stream in report.streams)
+    context["payload_data_incomplete"] = not report.streams or any(not stream.payloads for stream in report.streams)
+    context["component_readiness_incomplete"] = any(
+        error.startswith("Component Readiness:") for error in report.data_errors
+    )
     context["overview_blocking"] = _overview_blocking(context["all_failing"])
     context["overview_sippy"] = sorted(context["priority_sippy"], key=lambda finding: finding.latest_failure_ms,
                                        reverse=True)
@@ -78,6 +83,13 @@ def generate_html(
             jira_drafts=jira_drafts_by_target.get(f"sippy:{finding.analysis_key}", []),
         )
         for finding in context["priority_sippy"] if finding.deep_analysis
+    }
+    context["pending_analysis"] = {
+        "by_prow_url": sorted({
+            item["job"].prow_url for item in context["all_failing"]
+            if item["job"].job_type == JobType.BLOCKING and not item["job"].deep_analysis
+        }),
+        "by_sippy_job": [finding.analysis_key for finding in context["priority_sippy"] if not finding.deep_analysis],
     }
     templates = Path(__file__).parent / "templates"
     context.update(
@@ -124,8 +136,9 @@ def merge_analysis_data(report: MonitorReport, data: dict) -> None:
 @protect_logs(lambda *args, **kwargs: os.environ.get("CHAI_MCP_TOKEN", "").strip())
 def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
     """Insert or replace keyed analysis cards using the edge-owned renderer."""
-    patch_analysis_cards(html_path, analysis_path)
-    content = redact_token(html_path.read_text(), os.environ.get("CHAI_MCP_TOKEN", "").strip())
+    content = patch_analysis_cards(html_path, analysis_path)
+    if content is None:
+        return
     content = content.replace(
         '<span style="color:var(--green)">● AI-enriched via Claude</span>',
         '<span style="color:var(--green)">● AI-enriched via Chai</span>',

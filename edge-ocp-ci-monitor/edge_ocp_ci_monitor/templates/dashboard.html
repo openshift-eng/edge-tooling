@@ -45,6 +45,8 @@
       <span style="color:var(--text-muted)">○ Data only</span>
       <span style="margin-left:4px">- run <code style="font-size:12px;color:var(--accent)">python -m edge_ocp_ci_monitor</code> for AI analysis</span>
     </div>
+    {% elif payload_data_incomplete %}
+    <div class="meta" style="margin-top:4px">{{ 'Payload data incomplete' if payload_data_available else 'Payload data unavailable' }}</div>
     {% else %}
     <div class="meta" style="margin-top:4px">
       <span style="color:var(--green)">● No blocking failures found</span>
@@ -55,7 +57,7 @@
 
 <section class="report-notes" aria-label="Report notes">
 {% if ai_warnings %}
-<div class="warning-banner" role="status" id="chai-analysis-warning">
+<div class="warning-banner" role="status" id="chai-analysis-warning" data-pending-analysis="{{ pending_analysis | tojson | forceescape }}">
   <strong>Chai AI analysis unavailable or incomplete.</strong> Collected dashboard data remains available.
   <ul>{% for warning in ai_warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
 </div>
@@ -68,7 +70,7 @@
   <span class="skip-flag">--skip-prow</span> Prow artifact fetching was skipped - Error column, Failing Tests, and Failure Details will be empty.
   {% endif %}
   {% if report.skip_sippy %}
-  <span class="skip-flag">--skip-sippy</span> Sippy job health check was skipped - Sippy Job Health section is not available.
+  <span class="skip-flag">--skip-sippy</span> Sippy job health and Component Readiness were skipped.
   {% endif %}
   {% if report.skip_timing %}
   <span class="skip-flag">Insights</span> Timing insights are disabled by default. Use <code>--with-timing</code> to include install/upgrade timing data.
@@ -136,9 +138,9 @@
   {% set informing_count = stream.total_informing_edge_failures %}
   <div class="health-row">
     <div class="health-version">{{ stream.version }}</div>
-    <div class="health-status {% if blocking_count > 0 %}critical clickable{% elif informing_count > 0 %}warning clickable{% else %}healthy{% endif %}"
+    <div class="health-status {% if not latest %}unavailable{% elif blocking_count > 0 %}critical clickable{% elif informing_count > 0 %}warning clickable{% else %}healthy{% endif %}"
          {% if blocking_count > 0 or informing_count > 0 %}role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" onclick="jumpToFailures('{{ stream.version }}')" title="View all edge failures for {{ stream.version }}"{% endif %}>
-      {% if blocking_count > 0 %}Critical{% elif informing_count > 0 %}Warning{% else %}Healthy{% endif %}
+      {% if not latest %}Unavailable{% elif blocking_count > 0 %}Critical{% elif informing_count > 0 %}Warning{% else %}Healthy{% endif %}
     </div>
     <div class="health-counts">
       {% if latest %}
@@ -166,7 +168,9 @@
       {% endif %}
     </div>
     <div class="health-trend">
-      {% if blocking_count == 0 and informing_count == 0 %}
+      {% if not latest %}
+      <span class="meta" title="No terminal payload data">&mdash;</span>
+      {% elif blocking_count == 0 and informing_count == 0 %}
       <span class="trend-indicator stable" title="No failures">&#9644;</span>
       {% elif view.trend_signal < 2 %}
       <span class="trend-indicator stable" title="Not enough recent failures to establish a trend">&#9644; stable</span>
@@ -275,7 +279,7 @@
   <button class="tab-btn dashboard-tab active" id="view-payload-health" data-tab="payload-health" role="tab" aria-selected="true" aria-controls="tab-payload-health" type="button">Overview</button>
   <button class="tab-btn dashboard-tab" id="view-failure-analysis" data-tab="failure-analysis" role="tab" aria-selected="false" aria-controls="tab-failure-analysis" type="button">Failure Analysis <span class="dashboard-count">{{ all_failing|length }}</span></button>
   {% if all_regressions %}<button class="tab-btn dashboard-tab" id="view-sippy-health" data-tab="sippy-health" role="tab" aria-selected="false" aria-controls="tab-sippy-health" type="button">Sippy Job Health Status <span class="dashboard-count">{{ all_regressions|length }}</span></button>{% endif %}
-  {% if component_regressions %}<button class="tab-btn dashboard-tab" id="view-component-readiness" data-tab="component-readiness" role="tab" aria-selected="false" aria-controls="tab-component-readiness" type="button">Component Readiness <span class="dashboard-count">{{ component_regressions|length }}</span></button>{% endif %}
+  {% if not report.skip_sippy %}<button class="tab-btn dashboard-tab" id="view-component-readiness" data-tab="component-readiness" role="tab" aria-selected="false" aria-controls="tab-component-readiness" type="button">Component Readiness{% if component_regressions %} <span class="dashboard-count">{{ component_regressions|length }}</span>{% endif %}</button>{% endif %}
   {% if timing_html %}<button class="tab-btn dashboard-tab" id="view-timing-insights" data-tab="timing-insights" role="tab" aria-selected="false" aria-controls="tab-timing-insights" type="button">Timing Insights</button>{% endif %}
 </nav>
   <button class="tab-scroll-btn tab-scroll-right" type="button" aria-label="Scroll tabs right" aria-controls="dashboard-tabs-nav"><span class="tab-scroll-icon" aria-hidden="true">&#8250;</span></button>
@@ -473,7 +477,7 @@ Edge OCP CI Monitor finding for {{ detail.job.name }}, a {{ detail.job.job_type.
 <button class="expand-btn" id="expand-details-btn" onclick="expandSection('details')">Show all {{ all_failing | length }} failure details</button>
 {% endif %}
 {% else %}
-<div class="empty-state">No failing edge jobs found across monitored payloads.</div>
+<div class="empty-state">{{ 'No failing edge jobs found in available payload data.' if payload_data_available else 'Payload data unavailable.' }}</div>
 {% endif %}
 
 {% include "_payload_history.html" %}
@@ -508,10 +512,15 @@ Edge OCP CI Monitor finding for {{ detail.job.name }}, a {{ detail.job.job_type.
 
 
 </div>{% endif %}
-{% if component_regressions %}<div class="tab-panel" id="tab-component-readiness" role="tabpanel" aria-labelledby="view-component-readiness">
+{% if not report.skip_sippy %}<div class="tab-panel" id="tab-component-readiness" role="tabpanel" aria-labelledby="view-component-readiness">
 <!-- Component Readiness: HA vs Edge Topologies -->
-{% if component_regressions %}
 <h2 id="section-component-readiness">Component Readiness - HA vs Edge Topologies</h2>
+{% if component_readiness_incomplete %}
+<div class="warning-banner">Component Readiness data is unavailable for one or more views. See the data collection errors above.</div>
+{% elif not component_regressions %}
+<div class="empty-state">No regressions found in the queried Component Readiness views.</div>
+{% endif %}
+{% if component_regressions %}
 <div class="meta" style="margin-bottom:8px">
   Source: <a href="https://sippy.dptools.openshift.org/sippy-ng/component_readiness/main" target="_blank">Sippy Component Readiness</a> - components with statistically significant regressions on edge topologies (SNO, TNA, TNF) compared to HA (Fisher's exact test, 95% confidence). Covers selected versions when specified, or all configured releases by default.
 </div>

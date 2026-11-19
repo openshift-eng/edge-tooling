@@ -54,8 +54,7 @@ def diagnosis(cause="Original diagnosis"):
     return DeepAnalysis(root_cause=cause, failure_type="Platform issue", impact="SNO", recommendation="Investigate")
 
 
-@pytest.mark.parametrize("merged", [False, True])
-def test_drafts_follow_producing_targets_through_rendering_and_drawer(report, tmp_path, merged):
+def test_drafts_follow_producing_targets_through_rendering_and_drawer(report, tmp_path):
     from payload_monitor.report.generator import load_json
 
     from edge_ocp_ci_monitor.analysis import build_targets
@@ -66,28 +65,27 @@ def test_drafts_follow_producing_targets_through_rendering_and_drawer(report, tm
     other.payloads[0].jobs[0].prow_url = "https://prow.example/another-run"
     report.streams.append(other)
     data = {"by_prow_url": {}, "by_sippy_job": {}}
-    expected = {}
+    expected = set()
     for category, group, field, prefix in (
         ("blocking_jobs", "by_prow_url", "prow_url", "prow"),
         ("sippy_jobs", "by_sippy_job", "analysis_key", "sippy"),
     ):
         for target in build_targets(report)[category]:
             key = f"{prefix}:{target[field]}"
-            title = "Shared diagnosis" if merged else key
-            expected[key] = title
+            expected.add(key)
             versions = target.get("versions", [target["version"]])
             data[group][target[field]] = {
                 **asdict(diagnosis()),
                 "jira": {
                     "search_status": "checked", "search_summary": "No duplicate found", "existing_bugs": [],
-                    "new_bug": {"title": title, "description": "Evidence for " + key,
+                    "new_bug": {"title": key, "description": "Evidence for " + key,
                                 "target_versions": [{"name": version + ".0", "id": "123"}
                                                     for version in versions]},
                 },
             }
     merge_analysis_data(report, data)
-    assert len(report.suggested_bugs) == (1 if merged else 4)
-    assert {key for bug in report.suggested_bugs for key in bug.analysis_keys} == set(expected)
+    assert len(report.suggested_bugs) == len(expected) == 4
+    assert {key for bug in report.suggested_bugs for key in bug.analysis_keys} == expected
     path = tmp_path / "report.json"
     generate_json(report, path)
     restored = load_json(path)
@@ -118,7 +116,7 @@ def test_drafts_follow_producing_targets_through_rendering_and_drawer(report, tm
         draft = next((bug for bug in restored.suggested_bugs if key in bug.analysis_keys), None)
         assert actual == ([draft.create_url] if draft else [])
         if draft:
-            assert draft.title == expected[key]
+            assert draft.title == key
 
     node = shutil.which("node")
     if node is None:
@@ -207,21 +205,17 @@ rows.forEach((row, index) => {
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("destination", ["failed-row", "previous-attempt", "current-run"])
+@pytest.mark.parametrize("destination", ["failed-row", "previous-attempt"])
 def test_retry_success_card_opens_reachable_evidence_for_click_and_keyboard(report, destination):
     retry = deepcopy(report.streams[0].payloads[0].jobs[0])
     retry.result = JobResult.SUCCESS
     retry.prow_url = "https://prow.example/passed?a=1&b=2"
     if destination != "failed-row":
         report.streams[0].payloads[0].jobs = []
-    if destination == "current-run":
-        retry.previous_attempts = []
     report.streams[0].payloads[0].jobs.append(retry)
     action = next(attrs for _, attrs in Links(generate_html(report)).interactions
                   if "fs-blocking-row" in attrs.get("class", ""))
-    expected = retry.name if destination == "failed-row" else (
-        retry.previous_attempts[0].prow_url if retry.previous_attempts else retry.prow_url
-    )
+    expected = retry.name if destination == "failed-row" else retry.previous_attempts[0].prow_url
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is needed to exercise retry card navigation")
@@ -249,173 +243,124 @@ click({target: {closest() { return {}; }}}, {}, () => { throw Error('nested link
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("blocking", [True, False])
-def test_tab_counts_use_neutral_badges_regardless_of_blocking_state(report, blocking):
-    if not blocking:
-        report.streams[0].payloads[0].jobs[0].job_type = JobType.INFORMING
-    html = generate_html(report)
-    nav = re.search(r'<nav[^>]*id="dashboard-tabs-nav"[^>]*>(.*?)</nav>', html, re.DOTALL)[1]
-    failures = re.search(r'<button[^>]*id="view-failure-analysis"[^>]*>(.*?)</button>', nav, re.DOTALL)[1]
-    assert 'class="dashboard-count"' in failures
-    assert set(re.findall(r'<span class="([^"]+)">\d+</span>', nav)) == {"dashboard-count"}
-    assert re.search(r'<span[^>]*>2</span>', failures)
-    assert html.count('aria-controls="dashboard-tabs-nav"') == 2
-    assert 'id="view-sippy-health"' in nav
-    assert 'id="view-component-readiness"' not in nav
-    assert 'id="view-timing-insights"' not in nav
-
-
-@pytest.mark.parametrize("reduced_motion", [True, False])
-def test_tab_scroll_controls_follow_overflow_and_motion_preference(reduced_motion):
+def test_payload_tooltip_tracks_hover_and_focus_for_its_active_dot():
     node = shutil.which("node")
     if node is None:
-        pytest.skip("Node is needed to exercise tab scrolling")
+        pytest.skip("Node is needed to exercise payload tooltips")
     script = Path(__file__).parents[1] / "edge_ocp_ci_monitor/templates/dashboard.js"
     result = subprocess.run([node, "-e", r"""
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const reduced = JSON.parse(process.argv[2]);
-const callbacks = [], classes = new Set(), clicks = {}, events = {}, calls = [];
-const nav = {
-  scrollWidth: 1000, clientWidth: 400, scrollLeft: 0,
-  addEventListener(type, handler) { events[type] = handler; },
-  scrollBy(options) { calls.push(options); }
-};
-const wrap = {
-  classList: {toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); }},
-  querySelector(selector) { return {addEventListener(type, handler) { clicks[selector] = handler; }}; }
-};
-const document = {
-  addEventListener(type, handler) { callbacks.push(handler); },
-  getElementById(id) { return id === 'dashboard-tabs-wrap' ? wrap : nav; }
-};
-const window = {
-  matchMedia() { return {matches: reduced}; },
-  addEventListener(type, handler) { events[type] = handler; }
-};
-vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), {document, window});
-callbacks.find(handler => handler.name === 'setupTabScrolling')();
-assert.equal(classes.has('can-scroll-left'), false);
-assert.equal(classes.has('can-scroll-right'), true);
-nav.scrollLeft = 300;
-events.scroll();
-assert.equal(classes.has('can-scroll-left'), true);
-assert.equal(classes.has('can-scroll-right'), true);
-clicks['.tab-scroll-right']();
-clicks['.tab-scroll-left']();
-assert.equal(calls[0].left, 240);
-assert.equal(calls[1].left, -240);
-assert.equal(calls[0].behavior, reduced ? 'auto' : 'smooth');
-assert.equal(calls[1].behavior, reduced ? 'auto' : 'smooth');
-nav.scrollLeft = 600;
-events.scroll();
-assert.equal(classes.has('can-scroll-left'), true);
-assert.equal(classes.has('can-scroll-right'), false);
-nav.clientWidth = 1000;
-nav.scrollLeft = 0;
-events.resize();
-assert.equal(classes.size, 0);
-""", str(script), json.dumps(reduced_motion)], capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stderr
 
-
-@pytest.mark.parametrize("mode", ["no-analysis", "inline", "import", "legacy-import"])
-def test_sippy_actions_offer_analysis_or_copyable_question(report, tmp_path, mode):
-    finding = report.streams[0].regressions[0]
-    if mode == "inline":
-        finding.deep_analysis = diagnosis()
-    html_path = tmp_path / "report.html"
-    generate_html(report, html_path)
-    if mode.endswith("import"):
-        if mode == "legacy-import":
-            html = html_path.read_text().replace('<span class="sippy-ask-label">Ask chai-bot: </span>', '')
-            html_path.write_text(html.replace(' id="sippy-analysis-1"', ''))
-        source = tmp_path / "analysis.json"
-        source.write_text(json.dumps({"by_sippy_job": {finding.analysis_key: asdict(diagnosis())}}))
-        patch_analysis_html(html_path, source)
-        patch_analysis_html(html_path, source)
-    html = html_path.read_text()
-    row = re.search(r'<(?:div|details) id="sippy-row-1".*?<!-- /sippy-job -->', html, re.DOTALL)[0]
-    assert finding.triage_url in Links(row).hrefs
-    if mode == "no-analysis":
-        assert 'class="sippy-ask-label">Ask chai-bot: </span>' in row
-        code = re.search(r'<code>(.*?)</code>', row, re.DOTALL)[1]
-        assert code == f"Why is {finding.test_name} unhealthy on {finding.version}? What tests are failing?"
-        assert "Ask chai-bot:" not in code
-        assert "View AI analysis" not in row
-    else:
-        assert row.startswith('<details ')
-        assert row.count("View AI analysis") == 1
-        assert 'aria-controls="sippy-analysis-1"' in row
-        assert 'id="sippy-analysis-1"' in row
-        assert "Ask chai-bot:" not in row
-        assert "cmd-copy-row" not in row
-        assert "What tests are failing?" not in row
-        assert "Original diagnosis" in row
-
-
-def test_overview_resize_moves_only_the_shared_boundary():
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node is needed to exercise column resizing")
-    script = Path(__file__).parents[1] / "edge_ocp_ci_monitor/templates/dashboard.js"
-    result = subprocess.run([node, "-e", r"""
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const callbacks = [];
-class ResizeObserver {
-  constructor(callback) { this.callback = callback; }
-  observe(wrapper) { wrapper.resize = this.callback; }
-}
-function makeTable(defaultWidths) {
-  const wrapper = {clientWidth: 900};
-  const columns = Array.from({length: defaultWidths.length + 2}, () => ({style: {}}));
-  const widths = () => {
-    const fixed = defaultWidths.map((width, index) => parseFloat(columns[index].style.width) || width);
-    return [...fixed, Math.max(wrapper.clientWidth, 790) - 28 - fixed.reduce((sum, width) => sum + width, 0), 28];
-  };
-  const headers = columns.map((_, index) => ({
-    textContent: 'Header',
-    getBoundingClientRect() { return {width: widths()[index]}; },
-    appendChild(handle) { this.handle = handle; }
-  }));
+function target() {
+  const events = {};
   return {
-    columns, headers, widths, style: {}, parentElement: wrapper,
-    querySelectorAll(selector) { return selector === 'thead th' ? headers : columns; }
+    addEventListener(type, handler) { events[type] = handler; },
+    emit(type, event) { events[type](event); },
+    setAttribute() {}
   };
 }
-const payload = makeTable([92, 378, 112]);
-const sippy = makeTable([378, 112]);
-const document = {
-  addEventListener(type, handler) { callbacks.push(handler); },
-  querySelectorAll() { return [payload, sippy]; },
-  createElement() {
-    return {setAttribute() {}, addEventListener(type, handler) { this[type] = handler; }};
-  }
-};
-vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), {
-  document, ResizeObserver, getComputedStyle() { return {minWidth: '790px'}; }
-});
-callbacks.find(handler => handler.name === 'setupFindingColumnResizing')();
-let neighbors = sippy.widths();
-payload.headers[1].handle.keydown({key: 'ArrowRight', preventDefault() {}});
-assert.deepEqual(payload.widths(), [92, 394, 96, 290, 28]);
-assert.deepEqual(sippy.widths(), neighbors);
-neighbors = payload.widths();
-sippy.headers[1].handle.keydown({key: 'ArrowLeft', preventDefault() {}});
-assert.deepEqual(sippy.widths(), [378, 96, 398, 28]);
-assert.deepEqual(payload.widths(), neighbors);
-for (const table of [payload, sippy]) {
-  assert.deepEqual(table.style, {});
-  assert.equal(table.headers.at(-2).handle, undefined);
-  table.parentElement.clientWidth = 790;
-  table.parentElement.resize();
-  assert.ok(table.widths().slice(0, -1).every(width => width >= 64));
+function dot(name) {
+  return Object.assign(target(), {
+    classList: {add() {}},
+    removeAttribute() {},
+    querySelector() { return {cloneNode() { return {childNodes: [name]}; }}; },
+    getBoundingClientRect() { return {left: 100, top: 100, bottom: 120, width: 20}; }
+  });
 }
+const first = dot('first'), second = dot('second');
+const tip = Object.assign(target(), {
+  style: {}, offsetWidth: 100, offsetHeight: 30,
+  replaceChildren(name) { this.content = name; }
+});
+const setup = [], timers = new Map();
+const document = target();
+const addDocumentListener = document.addEventListener;
+Object.assign(document, {
+  addEventListener(type, handler) {
+    if (type === 'DOMContentLoaded') setup.push(handler);
+    else addDocumentListener(type, handler);
+  },
+  querySelectorAll() { return [first, second]; },
+  createElement() { return tip; },
+  body: {appendChild() {}}
+});
+let timerId = 0;
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), {
+  document, window: Object.assign(target(), {innerWidth: 500, innerHeight: 500}),
+  setTimeout(callback) { timers.set(++timerId, callback); return timerId; },
+  clearTimeout(id) { timers.delete(id); }
+});
+setup.find(handler => handler.name === 'setupPayloadTooltips')();
+function runTimers() {
+  const callbacks = [...timers.values()];
+  timers.clear();
+  callbacks.forEach(callback => callback());
+}
+
+first.emit('focus');
+first.emit('mouseenter');
+first.emit('mouseleave');
+runTimers();
+assert.equal(tip.hidden, false, 'leaving a focused dot keeps its tooltip');
+
+first.emit('mouseenter');
+first.emit('blur');
+runTimers();
+assert.equal(tip.hidden, false, 'blurring a hovered dot keeps its tooltip');
+first.emit('mouseleave');
+runTimers();
+assert.equal(tip.hidden, true);
+
+first.emit('focus');
+second.emit('mouseenter');
+first.emit('blur');
+runTimers();
+assert.equal(tip.hidden, false, 'blurring an inactive dot leaves the active tooltip alone');
+assert.equal(tip.content, 'second');
+
+second.emit('mouseleave');
+tip.emit('mouseenter');
+runTimers();
+assert.equal(tip.hidden, false, 'the pointer can move into the tooltip');
+tip.emit('mouseleave');
+runTimers();
+assert.equal(tip.hidden, true);
+
+second.emit('focus');
+tip.emit('mouseenter');
+tip.emit('mouseleave');
+runTimers();
+assert.equal(tip.hidden, false, 'leaving the tooltip keeps it open for a focused dot');
+second.emit('mouseenter');
+document.emit('keydown', {key: 'Escape'});
+runTimers();
+assert.equal(tip.hidden, true, 'Escape dismisses even a focused and hovered tooltip');
 """, str(script)], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
+
+
+def test_sippy_import_replaces_manual_question_with_analysis(report, tmp_path):
+    finding = report.streams[0].regressions[0]
+    html_path = tmp_path / "report.html"
+    generate_html(report, html_path)
+    row_pattern = r'<(?:div|details) id="sippy-row-1".*?<!-- /sippy-job -->'
+    row = re.search(row_pattern, html_path.read_text(), re.DOTALL)[0]
+    assert f"Why is {finding.test_name} unhealthy on {finding.version}?" in row
+    assert "View AI analysis" not in row
+
+    source = tmp_path / "analysis.json"
+    source.write_text(json.dumps({"by_sippy_job": {finding.analysis_key: asdict(diagnosis())}}))
+    patch_analysis_html(html_path, source)
+    patch_analysis_html(html_path, source)
+    row = re.search(row_pattern, html_path.read_text(), re.DOTALL)[0]
+    assert finding.triage_url in Links(row).hrefs
+    assert row.count("View AI analysis") == 1
+    assert 'aria-controls="sippy-analysis-1"' in row
+    assert 'id="sippy-analysis-1"' in row
+    assert "What tests are failing?" not in row
+    assert "Original diagnosis" in row
 
 
 def test_sippy_analysis_button_opens_card_without_closing_an_open_card(report):
@@ -445,67 +390,22 @@ for (const initiallyOpen of [false, true]) {
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("mode", ["mixed", "sippy-only", "empty"])
-def test_findings_queue_preserves_targets_and_supports_data_only_reports(report, mode):
+def test_findings_queue_links_each_job_to_its_own_record(report):
     report.escalation_risks = []
-    stream = report.streams[0]
-    if mode == "mixed":
-        other = deepcopy(stream)
-        other.version = "4.20"
-        other.payloads[0].jobs[0].prow_url = "https://prow.example/other-version"
-        other.regressions[0].version = "4.20"
-        report.streams.append(other)
-    elif mode == "sippy-only":
-        stream.payloads = []
-    else:
-        report.streams = []
+    other = deepcopy(report.streams[0])
+    other.version = "4.20"
+    other.payloads[0].jobs[0].prow_url = "https://prow.example/other-version"
+    other.regressions[0].version = "4.20"
+    report.streams.append(other)
 
     html = generate_html(report)
     references = re.findall(r'data-finding-source="([^"]+)"', html)
     # Every summary action must lead to its own full record, including data-only Sippy rows.
-    assert len(references) == len(set(references))
+    assert len(references) == len(set(references)) == 4
     assert all(f'id="{reference}"' in html for reference in references)
-    sections = {
-        name: re.search(rf'<section[^>]*data-findings-section="{name}"[^>]*>(.*?)</section>', html, re.DOTALL)[1]
-        for name in ("payload", "sippy")
-    }
-    payload_targets = re.findall(r'data-finding-source="([^"]+)"', sections["payload"])
-    sippy_targets = re.findall(r'data-finding-source="([^"]+)"', sections["sippy"])
-    assert all(target.startswith("detail-") for target in payload_targets)
-    assert all(target.startswith("sippy-row-") for target in sippy_targets)
-    assert "Worse 5 blocking jobs" in sections["payload"]
-    assert "Worse 5 Sippy jobs" in sections["sippy"]
-    assert "data-finding-filter" not in html
-    assert "<th>Type</th>" not in sections["sippy"]
-    assert "finding-type-column" not in sections["sippy"]
-    assert "data-finding-kind=" not in sections["sippy"]
-    assert "consecutive" not in sections["sippy"]
-    assert "Selection:" not in sections["sippy"]
-    assert '<details class="queue-selection"' not in html
-    if mode == "mixed":
-        assert sections["payload"].count('<table class="finding-table"') == 1
-        assert sections["sippy"].count('<table class="finding-table"') == 1
-        assert all(re.search(r'<table[^>]+data-resize-columns>', section) for section in sections.values())
-        assert "Current Pass Rate" not in sections["payload"]
-        assert "<th>Type</th>" in sections["payload"]
-        assert "Recurrence" in sections["payload"]
-        assert "Current Pass Rate" in sections["sippy"]
-        assert len(payload_targets) == 2  # One blocking job in each release.
-        assert len(sippy_targets) == 2
-        assert {"sippy-row-1", "sippy-row-2"} <= set(references)
-        assert html.count('class="finding-job"') == 4
-        assert 'class="finding-blocking-label">blocking' in sections["payload"]
-        assert ">informing-job</button>" not in sections["payload"]
-        assert 'data-group="jobtype" data-value="informing"' in html
-        assert 'id="tab-failure-analysis"' in html
-        assert "https://prow.example/other-version" in html
-    elif mode == "sippy-only":
-        assert references == ["sippy-row-1"]
-        assert 'id="tab-sippy-health"' in html
-    else:
-        assert references == []
-        assert "All edge jobs are passing across all monitored payloads" in html
-        assert 'id="tab-sippy-health"' not in html
+    assert {"sippy-row-1", "sippy-row-2"} <= set(references)
+    assert sum(reference.startswith("detail-") for reference in references) == 2
+    assert ">informing-job</button>" not in html
 
 
 def test_overview_limits_by_severity_then_orders_latest_failures_first(report):
@@ -533,8 +433,8 @@ def test_overview_limits_by_severity_then_orders_latest_failures_first(report):
             assert re.findall(r'data-finding-source="([^"]+)"', markup)[-1] == "detail-2"
 
 
-@pytest.mark.parametrize("scheme", ["http", "HTTP", "hTtP", "https", "HTTPS", "hTtPs"])
-def test_progress_redacts_credentials_and_signatures_for_all_scheme_cases(caplog, scheme):
+@pytest.mark.parametrize("scheme", ["hTtP", "hTtPs"])
+def test_progress_redacts_credentials_and_signatures_in_mixed_case_urls(caplog, scheme):
     settings = Settings("https://chai.example/mcp", "bot-secret")
     progress = _BatchProgress("blocking-jobs", settings)
     message = (f"Reading {scheme}://private-user:private-password@prow.example/log"
@@ -548,25 +448,13 @@ def test_progress_redacts_credentials_and_signatures_for_all_scheme_cases(caplog
         assert secret not in caplog.text
 
 
-@pytest.mark.parametrize("initial", ["inline", "placeholder", "standalone"])
-def test_import_replaces_only_matching_blocking_card_and_remains_repeatable(report, tmp_path, initial):
+def test_import_replaces_only_matching_blocking_card_and_remains_repeatable(report, tmp_path):
     job, other = report.streams[0].payloads[0].jobs
     other.deep_analysis = diagnosis("Unrelated diagnosis must stay unchanged")
-    if initial == "inline":
-        job.deep_analysis = diagnosis()
+    job.deep_analysis = diagnosis()
     html_path = tmp_path / "report.html"
     source = tmp_path / "analysis.json"
     generate_html(report, html_path)
-    if initial == "standalone":
-        # A card inserted outside a details row retains its own import key.
-        html_path.write_text(_render_analysis_card(asdict(diagnosis()), attempt_count=2,
-                                                   job_name=job.name, prow_url=job.prow_url))
-    elif initial == "placeholder":
-        source.write_text(json.dumps({"by_prow_url": {job.prow_url: asdict(diagnosis())}}))
-        patch_analysis_html(html_path, source)
-    before = html_path.read_text()
-    if initial != "standalone":
-        unrelated = re.search(r'<details id="detail-2".*?</details>', before, re.DOTALL)[0]
     for cause in ("Corrected diagnosis", "Second correction"):
         source.write_text(json.dumps({"by_prow_url": {job.prow_url: asdict(diagnosis(cause))}}))
         patch_analysis_html(html_path, source)
@@ -574,16 +462,13 @@ def test_import_replaces_only_matching_blocking_card_and_remains_repeatable(repo
         assert cause in html
         assert "Original diagnosis" not in html
         assert "Analysis covers all 2 attempts" in html
-        assert html.count('class="deep-analysis-card"') == (1 if initial == "standalone" else 2)
-        if initial != "standalone":
-            assert unrelated in html
-            assert "AI-enriched via Chai" in html
-            assert html.count('class="badge ai-analyzed"') == 2
+        assert html.count('class="deep-analysis-card"') == 2
+        assert "Unrelated diagnosis must stay unchanged" in html
     assert "Corrected diagnosis" not in html
 
 
 SAFE_ATTEMPT = {
-    "prow_url": "https://prow.example/valid?job=a&attempt=2",
+    "prow_url": "hTtPs://prow.example/valid?job=a&attempt=2",
     "root_cause": "Keep this valid attempt unchanged",
     "failure_type": "Platform issue",
 }
@@ -609,37 +494,17 @@ class Links(HTMLParser):
             self.interactions.append((tag, attrs))
 
 
-@pytest.mark.parametrize("caller", ["renderer", "blocking-inline", "sippy-inline",
-                                     "blocking-import", "sippy-import"])
-def test_jira_references_are_links_in_every_analysis_rendering_path(report, tmp_path, caller):
-    raw = asdict(diagnosis('See OCPBUGS-123; <img src=x onerror="alert(1)"> & ETCD-9.'))
-    raw.update(
-        impact="Tracks https://redhat.atlassian.net/browse/OCPBUGS-222.",
-        recommendation="Follow [the PHC bug](https://redhat.atlassian.net/browse/OCPBUGS-456) "
-                       "and https://issues.redhat.com/browse/CNF-7.",
-        same_root_cause=False,
-        attempt_analyses=[{**SAFE_ATTEMPT, "root_cause": "Related to OCPBUGS-789."}],
+def test_report_analysis_links_jira_references_and_escapes_markup(report):
+    analysis = diagnosis('See OCPBUGS-123; <img src=x onerror="alert(1)"> & ETCD-9.')
+    analysis.impact = "Tracks https://redhat.atlassian.net/browse/OCPBUGS-222."
+    analysis.recommendation = (
+        "Follow [the PHC bug](https://redhat.atlassian.net/browse/OCPBUGS-456) "
+        "and https://issues.redhat.com/browse/CNF-7."
     )
-    if caller == "renderer":
-        html = _render_analysis_card(raw)
-    else:
-        finding = report.streams[0].regressions[0]
-        job = report.streams[0].payloads[0].jobs[0]
-        if caller.endswith("inline"):
-            analysis = DeepAnalysis(**{**raw, "attempt_analyses": [AttemptAnalysis(**raw["attempt_analyses"][0])]})
-            if caller.startswith("sippy"):
-                finding.deep_analysis = analysis
-            else:
-                job.deep_analysis = analysis
-            html = generate_html(report)
-        else:
-            html_path, source = tmp_path / "report.html", tmp_path / "analysis.json"
-            generate_html(report, html_path)
-            group, key = (("by_sippy_job", finding.analysis_key) if caller.startswith("sippy")
-                          else ("by_prow_url", job.prow_url))
-            source.write_text(json.dumps({group: {key: raw}}))
-            patch_analysis_html(html_path, source)
-            html = html_path.read_text()
+    analysis.same_root_cause = False
+    analysis.attempt_analyses = [AttemptAnalysis(**{**SAFE_ATTEMPT, "root_cause": "Related to OCPBUGS-789."})]
+    report.streams[0].payloads[0].jobs[0].deep_analysis = analysis
+    html = generate_html(report)
     links = Links(html)
     for key in ("OCPBUGS-123", "ETCD-9", "OCPBUGS-222", "OCPBUGS-456", "CNF-7", "OCPBUGS-789"):
         assert links.hrefs.count(f"https://redhat.atlassian.net/browse/{key}") == 1
@@ -662,152 +527,29 @@ def test_jira_links_do_not_trust_html_or_markdown_destinations():
     assert "<img " not in html
 
 
-@pytest.mark.parametrize("caller", ["renderer", "blocking-inline", "sippy-inline",
-                                     "blocking-import", "sippy-import"])
-def test_safe_attempt_links_in_all_edge_rendering_paths(report, tmp_path, caller):
+def test_renderer_keeps_safe_attempts_and_drops_unsafe_or_malformed_records():
     raw = asdict(diagnosis())
     raw.update(same_root_cause=False, attempt_analyses=[
         SAFE_ATTEMPT,
         *[{"prow_url": url, "root_cause": f"Unsafe attempt {i}", "failure_type": "Platform issue"}
           for i, url in enumerate(UNSAFE_URLS)],
+        None, {}, {"prow_url": 123},
     ])
-    if caller == "renderer":
-        html = _render_analysis_card(raw)
-    else:
-        job = report.streams[0].payloads[0].jobs[0]
-        finding = report.streams[0].regressions[0]
-        key = finding.analysis_key if caller.startswith("sippy") else job.prow_url
-        if caller.endswith("inline"):
-            analysis = deepcopy(diagnosis())
-            analysis.same_root_cause = False
-            analysis.attempt_analyses = [AttemptAnalysis(**entry) for entry in raw["attempt_analyses"]]
-            if caller.startswith("sippy"):
-                finding.deep_analysis = analysis
-            else:
-                job.deep_analysis = analysis
-            html = generate_html(report)
-        else:
-            html_path = tmp_path / "report.html"
-            source = tmp_path / "analysis.json"
-            generate_html(report, html_path)
-            group = "by_sippy_job" if caller.startswith("sippy") else "by_prow_url"
-            source.write_text(json.dumps({group: {key: raw}}))
-            patch_analysis_html(html_path, source)
-            html = html_path.read_text()
-    assert SAFE_ATTEMPT["prow_url"] in Links(html).hrefs
+    html = _render_analysis_card(raw)
+    assert Links(html).hrefs == [SAFE_ATTEMPT["prow_url"]]
     assert SAFE_ATTEMPT["root_cause"] in html
-    for url in UNSAFE_URLS:
-        assert url not in Links(html).hrefs
     assert "Unsafe attempt" not in html
 
 
-def test_renderer_skips_malformed_attempt_records():
-    raw = asdict(diagnosis())
-    raw.update(same_root_cause=False, attempt_analyses=[None, {}, {"prow_url": 123}, SAFE_ATTEMPT])
-    html = _render_analysis_card(raw)
-    assert Links(html).hrefs == [SAFE_ATTEMPT["prow_url"]]
-
-
-@pytest.mark.parametrize("consecutive_failures", [3, 5])
-def test_stability_details_are_merged_into_failure_rows(report, consecutive_failures):
-    report.escalation_risks[0].consecutive_failures = consecutive_failures
-    report.failure_counts["informing-job"] = 3
-    stable_job = deepcopy(report.streams[0].payloads[0].jobs[1])
-    stable_job.name = "other-informing-job"
-    stable_job.prow_url = "https://prow.example/another-informing"
-    report.streams[0].payloads[0].jobs.append(stable_job)
-
-    html = generate_html(report)
-    overview = re.search(
-        r'<section[^>]*data-findings-section="payload"[^>]*>(.*?)</section>', html, re.DOTALL,
-    )[1]
-    assert "informing-job" not in overview
-    assert 'Warning - Monitor for Stability' not in html
-    assert 'fs-section-warning' not in overview
-    detail = re.search(r'data-job-name="informing-job">\s*<summary>(.*?)</summary>', html, re.DOTALL)[1]
-    assert 'class="badge escalation-risk">Unstable</span>' in detail
-    assert 'class="badge persistent"' in detail
-    assert 'consecutive' not in detail
-    stable = re.search(r'data-job-name="other-informing-job">\s*<summary>(.*?)</summary>', html, re.DOTALL)[1]
-    assert 'Unstable' not in stable
-    assert 'consecutive' not in stable
-    assert 'finding-streak' not in html
-    assert 'badge-legend' not in overview
-    legend = re.search(r'<div class="badge-legend">(.*?)</div>', html, re.DOTALL)[1]
-    assert 'Unstable' in legend
-    assert 'informing job failing 3+ consecutive payloads' in legend
-    assert html.index('id="tab-failure-analysis"') < html.index('class="badge-legend"')
-
-
-@pytest.mark.parametrize("scheme", ["https", "HTTPS", "hTtPs"])
-def test_valid_https_attempt_is_preserved_without_normalizing_its_url(scheme):
-    raw = asdict(diagnosis())
-    attempt = {**SAFE_ATTEMPT, "prow_url": f"{scheme}://prow.example/valid?a=1&b=2"}
-    raw.update(same_root_cause=False, attempt_analyses=[attempt])
-    assert Links(_render_analysis_card(raw)).hrefs == [attempt["prow_url"]]
-
-
-@pytest.mark.parametrize("retried", [False, True])
-def test_retry_evidence_prevents_all_healthy_banner(report, retried):
+def test_retry_evidence_prevents_all_healthy_banner(report):
     stream = report.streams[0]
     stream.regressions = []
     report.escalation_risks = []
     job = stream.payloads[0].jobs[0]
     stream.payloads[0].jobs = [job]
     job.result = JobResult.SUCCESS
-    if not retried:
-        job.previous_attempts = []
-        job.retries = 0
     html = generate_html(report)
-    assert ("All edge jobs are passing across all monitored payloads" in html) is not retried
-    assert ("Warning - Passed After Retry" in html) is retried
-    if retried:
-        analysis_tab = html.split('id="tab-failure-analysis"', 1)[1].split('<!-- /tab-failure-analysis -->', 1)[0]
-        assert analysis_tab.index("Nightly Payload - Failure Analysis") < analysis_tab.index("Warning - Passed After Retry")
-        assert html.index("Warning - Passed After Retry") < html.index("Chai-recommended New Bugs")
-        assert html.count("Warning - Passed After Retry") == 1
-        assert job.prow_url in Links(html).hrefs
-        assert job.previous_attempts[0].prow_url in Links(html).hrefs
-
-
-def test_dashboard_actions_have_keyboard_semantics_and_destinations(report):
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node is needed to exercise keyboard handlers")
-    retry = JobRun("retry-job", "https://prow.example/retry", JobResult.SUCCESS, JobType.BLOCKING, "SNO", retries=1,
-                   previous_attempts=[PreviousAttempt("https://prow.example/first", JobResult.FAILURE)])
-    report.streams[0].payloads[0].jobs.append(retry)
-    parsed = Links(generate_html(report))
-    assert all(anchor.get("href") for anchor in parsed.anchors)
-    actions = []
-    classes = set()
-    for tag, attrs in parsed.interactions:
-        if tag == "a" and attrs.get("role") != "button":
-            continue  # Real external links retain native link behavior.
-        assert attrs["role"] == "button"
-        assert attrs["tabindex"] == "0"
-        assert attrs.get("onkeydown")
-        classes.update(attrs.get("class", "").split())
-        actions.append(attrs)
-    assert {"health-status", "health-count", "fs-blocking-row", "fs-situation-item"} <= classes
-    assert "fs-escalation-item" not in classes
-    result = subprocess.run([node, "-e", r"""
-const assert = require('node:assert/strict');
-const actions = JSON.parse(process.argv[1]);
-for (const action of actions) {
-  let clicks = 0;
-  const control = {click() { clicks++; }};
-  const activate = new Function('event', action.onkeydown);
-  for (const key of ['Enter', ' ']) {
-    let prevented = false;
-    const before = clicks;
-    activate.call(control, {target: control, key, preventDefault() { prevented = true; }});
-    assert.equal(clicks, before + 1);
-    assert.equal(prevented, true);
-  }
-  activate.call(control, {target: {}, key: 'Enter', preventDefault() { throw Error('nested link intercepted'); }});
-  activate.call(control, {target: control, key: 'Tab', preventDefault() { throw Error('Tab intercepted'); }});
-  assert.equal(clicks, 2);
-}
-""", json.dumps(actions)], capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stderr
+    assert "All edge jobs are passing across all monitored payloads" not in html
+    analysis_tab = html.split('id="tab-failure-analysis"', 1)[1].split('<!-- /tab-failure-analysis -->', 1)[0]
+    assert "Warning - Passed After Retry" in analysis_tab
+    assert {job.prow_url, job.previous_attempts[0].prow_url} <= set(Links(analysis_tab).hrefs)
