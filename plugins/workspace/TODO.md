@@ -25,7 +25,7 @@ Findings from reviews on PR #249 that are worth addressing.
 ## Low
 
 - **`scripts/setup.sh:1`, `tests/test_setup.sh:1` — shebang alignment**
-  Use `#!/usr/bin/bash` to match repo standard (CONTRIBUTING.md).
+  Use `#!/usr/bin/env bash` to match repo standard (CONTRIBUTING.md).
 
 - **`scripts/resume-project.py:308,345` — rename `l` variable (ruff E741)**
   Rename to `ln` in both list comprehensions.
