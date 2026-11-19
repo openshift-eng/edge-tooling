@@ -26,9 +26,12 @@
       <label>Target versions
         <input class="jira-draft-versions" type="text" value="{{ bug.versions | join(', ') }}" readonly>
       </label>
-      <label>Labels
-        <input class="jira-draft-labels" type="text" value="{{ jira_draft_label }}" readonly>
-      </label>
+      <div class="jira-draft-label-field">
+        <label for="jira-draft-labels-{{ loop.index }}">Labels <span class="jira-draft-label-info" aria-hidden="true">ⓘ</span></label>
+        <input class="jira-draft-labels" type="text" value="{{ jira_draft_label }}" readonly
+               id="jira-draft-labels-{{ loop.index }}" aria-describedby="jira-draft-label-help-{{ loop.index }}">
+        <span class="jira-draft-label-tooltip" id="jira-draft-label-help-{{ loop.index }}" role="tooltip">Filing with this label triggers Chai’s Auto Jira Solve workflow, which can open a pull request.</span>
+      </div>
       <div class="jira-draft-actions">
         <a href="{{ bug.create_url }}" target="_blank" rel="noopener noreferrer" class="create-btn">Review draft in Jira</a>
         <button type="button" class="create-btn gather-jira-details" aria-expanded="false" aria-controls="jira-chai-prompt-{{ loop.index }}">Gather details with Chai</button>
