@@ -21,13 +21,12 @@ Run the remaining commands from this directory in the same shell.
 
 ### 2. Generate a dashboard
 
-For Chai investigations, export `CHAI_MCP_URL` and `CHAI_MCP_TOKEN`. Use the full HTTPS MCP endpoint for a persona your existing token can access. The endpoint must serve MCP `2026-07-28`, which Chai enables through its **MCP Tasks** admin setting.
-
+For local Chai investigations, export `CHAI_MCP_URL` and `CHAI_MCP_TOKEN`. Use the full HTTPS MCP endpoint for a persona your existing token can access.
 Replace the example URL and load your existing token into `CHAI_MCP_TOKEN` before exporting it.
 
 ```bash
 export CHAI_MCP_URL='https://<host>/personas/openshift_edge_internal/mcp'
-export CHAI_MCP_TOKEN
+export CHAI_MCP_TOKEN='<token>'
 
 python -m edge_ocp_ci_monitor --payloads 3 --with-timing --open
 ```
