@@ -8,7 +8,7 @@ GCSWEB_BASE="gcs.ci.openshift.org/gcs"
 SIPPY_API="https://sippy.dptools.openshift.org/api/jobs"
 IMAGE_BASE="quay.io/openshift-release-dev/ocp-release"
 ARCH="x86_64"
-DELAY=10
+DELAY="${DELAY:-10}"
 STAGGER=0             # seconds between jobs (0 = use DELAY only)
 WAVE_SIZE=0            # jobs per wave (0 = no wave batching)
 WAVE_DELAY=3600        # seconds to wait between waves (default 1h)
@@ -52,6 +52,15 @@ release_from_job_name() {
     fi
 }
 
+# Extract the version tag from an image reference. The tag follows the last
+# colon in the final path component; stripping from the first colon of the
+# whole reference would mistake a registry port (registry:5000/ocp:4.22.0-rc.0)
+# for the tag separator.
+image_tag() {
+    local component="${1##*/}"
+    printf '%s' "${component#*:}"
+}
+
 detect_release() {
     local version_tag="${1:-}"
 
@@ -60,20 +69,30 @@ detect_release() {
         return
     fi
 
-    # The committed LVMS entry is a seed, not evidence of the user's current
-    # release. In particular it must not choose a release for --refresh.
-    for f in "$JOB_FILE" "$JOB_FILE_Z" "$JOB_FILE_Y"; do
-        if [[ -f "$f" ]]; then
-            local job from_jobs
-            while IFS= read -r job; do
-                from_jobs=$(release_from_job_name "$job")
-                if [[ -n "$from_jobs" ]]; then
-                    echo "$from_jobs"
-                    return
-                fi
-            done < "$f"
-        fi
+    local -a releases=()
+    for d in "$SCRIPT_DIR"/jobs/*/; do
+        [[ -d "$d" ]] || continue
+        # A directory holding only the LVMS seed entry is not evidence of the
+        # user's current release — the seed must not choose a release for
+        # --refresh. Only regular or upgrade lists establish a release.
+        local has_job_lists=false f
+        for f in "$d"/*.txt; do
+            [[ -f "$f" ]] || continue
+            case "$(basename "$f")" in
+                *-lvms.txt) ;;
+                *) has_job_lists=true; break ;;
+            esac
+        done
+        $has_job_lists && releases+=("$(basename "$d")")
     done
+
+    if [[ ${#releases[@]} -eq 1 ]]; then
+        echo "${releases[0]}"
+        return
+    elif [[ ${#releases[@]} -gt 1 ]]; then
+        echo "Error: multiple releases found (${releases[*]}). Provide an explicit version." >&2
+        return 1
+    fi
 
     echo ""
 }
@@ -120,6 +139,9 @@ usage() {
 
     # Original behavior (unchanged):
     echo "  $0 tnf 5.0.0-rc.0 --job all"
+    echo ""
+    echo "Job files are stored under jobs/<release>/ (e.g., jobs/4.22/tnf.txt)."
+    echo "Use scripts/collect.sh to fetch all topologies and releases at once."
     echo ""
     echo "When --initial is provided, z-stream and y-stream upgrade jobs are included."
     echo "Without --initial, upgrade jobs are skipped."
@@ -209,7 +231,7 @@ fi
 
 if [[ -n "$RELEASE_IMAGE" ]] && ! $REFRESH; then
     if [[ "$RELEASE_IMAGE" == "${IMAGE_BASE}:"* ]]; then
-        RELEASE_TAG="${RELEASE_IMAGE#*:}"
+        RELEASE_TAG="$(image_tag "$RELEASE_IMAGE")"
         echo "Verifying image tag: $RELEASE_TAG"
         TAG_EXISTS=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 20 \
              "https://quay.io/api/v1/repository/openshift-release-dev/ocp-release/tag/?specificTag=${RELEASE_TAG}" \
@@ -227,11 +249,62 @@ if [[ -n "$RELEASE_IMAGE" ]] && ! $REFRESH; then
     fi
 fi
 
+# One-time migration: a checkout from before the release-directory layout has
+# flat jobs/*.txt files. Move them into jobs/<release>/ (inferred from each
+# file's job names) so existing checkouts keep working without any manual step.
+# This must also run when release directories already exist: a checkout updated
+# to this layout ships the committed jobs/5.0 LVMS seed, so legacy flat lists
+# would otherwise be ignored forever. Nonconflicting flat files are migrated;
+# a flat file whose destination already exists never overwrites it.
+migrate_flat_job_layout() {
+    local -a flat_files=()
+    local f
+    for f in "$SCRIPT_DIR"/jobs/*.txt; do
+        [[ -f "$f" ]] && flat_files+=("$f")
+    done
+    [[ ${#flat_files[@]} -eq 0 ]] && return 0
+
+    echo "Migrating flat job files to the jobs/<release>/ layout..." >&2
+    local file line job_release dest
+    for file in "${flat_files[@]}"; do
+        job_release=""
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            job_release=$(release_from_job_name "$line")
+            [[ -n "$job_release" ]] && break
+        done < "$file"
+        if [[ -z "$job_release" ]]; then
+            echo "Warning: cannot infer a release for ${file##*/}; leaving it in place." >&2
+            continue
+        fi
+        dest="$SCRIPT_DIR/jobs/$job_release/${file##*/}"
+        if [[ -e "$dest" ]]; then
+            echo "Warning: jobs/$job_release/${file##*/} already exists; keeping it and ignoring the flat ${file##*/}." >&2
+            continue
+        fi
+        mkdir -p "$SCRIPT_DIR/jobs/$job_release"
+        mv "$file" "$dest"
+        echo "  ${file##*/} -> jobs/$job_release/" >&2
+    done
+}
+migrate_flat_job_layout
+
+# Detect release and set up job file paths under jobs/{release}/.
+# --list without a version enumerates every release directory instead, so it
+# must not fail when several releases coexist.
+OCP_RELEASE=""
+if ! $LIST_ONLY || [[ -n "$RELEASE_IMAGE" ]]; then
+    if ! OCP_RELEASE=$(detect_release "$(image_tag "$RELEASE_IMAGE")"); then
+        exit 1
+    fi
+fi
+
 # Sippy-managed topology lists plus a TNF LVMS entry seeded for new lanes.
-JOB_FILE="$SCRIPT_DIR/jobs/${TOPOLOGY}.txt"
-JOB_FILE_LVMS="$SCRIPT_DIR/jobs/${TOPOLOGY}-lvms.txt"
-JOB_FILE_Z="$SCRIPT_DIR/jobs/${TOPOLOGY}-z-stream.txt"
-JOB_FILE_Y="$SCRIPT_DIR/jobs/${TOPOLOGY}-y-stream.txt"
+JOB_DIR="$SCRIPT_DIR/jobs/${OCP_RELEASE}"
+JOB_FILE="$JOB_DIR/${TOPOLOGY}.txt"
+JOB_FILE_LVMS="$JOB_DIR/${TOPOLOGY}-lvms.txt"
+JOB_FILE_Z="$JOB_DIR/${TOPOLOGY}-z-stream.txt"
+JOB_FILE_Y="$JOB_DIR/${TOPOLOGY}-y-stream.txt"
 
 if $REFRESH; then
     SEARCH_TERM=$(sippy_filter_for "$TOPOLOGY")
@@ -241,12 +314,13 @@ if $REFRESH; then
         exit 0
     fi
 
-    OCP_RELEASE=$(detect_release "${RELEASE_IMAGE#*:}")
     if [[ -z "$OCP_RELEASE" ]]; then
         echo "Error: cannot detect OCP release version."
         echo "Provide a version (e.g., ./launch.sh $TOPOLOGY 4.22.0-rc.0 --refresh)"
         exit 1
     fi
+
+    mkdir -p "$JOB_DIR"
 
     SIPPY_FILTER_JSON=$(printf '{"items":[{"columnField":"name","operatorValue":"contains","value":"%s"}],"linkOperator":"and"}' "$SEARCH_TERM")
     ENCODED_FILTER=$(printf '%s' "$SIPPY_FILTER_JSON" | jq -sRr '@uri')
@@ -275,8 +349,10 @@ if $REFRESH; then
         fi
     fi
 
-    # Clear existing files before writing
-    rm -f "$JOB_FILE" "$JOB_FILE_Z" "$JOB_FILE_Y"
+    # Stage beside the destinations so the moves below stay same-filesystem
+    # renames (atomic) even when TMPDIR is on another filesystem.
+    tmp_file=$(mktemp "${JOB_FILE}.XXXXXX") tmp_z=$(mktemp "${JOB_FILE_Z}.XXXXXX") tmp_y=$(mktemp "${JOB_FILE_Y}.XXXXXX")
+    trap 'rm -f "$tmp_file" "$tmp_z" "$tmp_y"' EXIT
 
     # Sort jobs into separate files by type
     echo "$SIPPY_RESPONSE" \
@@ -285,13 +361,16 @@ if $REFRESH; then
         | sort \
         | while IFS= read -r name; do
             if [[ "$name" == *"upgrade-from-stable"* ]]; then
-                echo "$name" >> "$JOB_FILE_Y"
+                echo "$name" >> "$tmp_y"
             elif [[ "$name" == *"-upgrade"* ]]; then
-                echo "$name" >> "$JOB_FILE_Z"
+                echo "$name" >> "$tmp_z"
             else
-                echo "$name" >> "$JOB_FILE"
+                echo "$name" >> "$tmp_file"
             fi
         done
+
+    mv "$tmp_file" "$JOB_FILE"; mv "$tmp_z" "$JOB_FILE_Z"; mv "$tmp_y" "$JOB_FILE_Y"
+    trap - EXIT
 
     JOB_COUNT=$(wc -l < "$JOB_FILE" 2>/dev/null || echo 0)
     Z_COUNT=$(wc -l < "$JOB_FILE_Z" 2>/dev/null || echo 0)
@@ -326,11 +405,11 @@ has_job_files() {
     return 1
 }
 
-if ! has_job_files; then
-    echo "Error: no job files for topology '$TOPOLOGY'"
-    echo "Expected: ${TOPOLOGY}.txt, ${TOPOLOGY}-lvms.txt, ${TOPOLOGY}-z-stream.txt, or ${TOPOLOGY}-y-stream.txt in jobs/"
+if ! $LIST_ONLY && ! has_job_files; then
+    echo "Error: no job files for topology '$TOPOLOGY' (release ${OCP_RELEASE:-unknown})"
+    echo "Expected files in jobs/${OCP_RELEASE:-<release>}/"
     echo ""
-    echo "Run './launch.sh $TOPOLOGY --refresh' to fetch from Sippy"
+    echo "Run './launch.sh $TOPOLOGY <version> --refresh' or './scripts/collect.sh' to fetch from Sippy"
     exit 1
 fi
 
@@ -347,7 +426,7 @@ fi
 
 check_job_release() {
 if ! $LIST_ONLY && [[ -n "$RELEASE_IMAGE" ]]; then
-    REQUESTED_RELEASE=$(echo "${RELEASE_IMAGE#*:}" | grep -oE '^[0-9]+\.[0-9]+' || true)
+    REQUESTED_RELEASE=$(image_tag "$RELEASE_IMAGE" | grep -oE '^[0-9]+\.[0-9]+' || true)
     if [[ "$TOPOLOGY" == "tnf" && "$JOB_FILTER" == "lvms" && -z "$REQUESTED_RELEASE" ]]; then
         echo "Error: cannot determine the payload release for the TNF LVMS lane"
         exit 1
@@ -426,7 +505,30 @@ if ! $LIST_ONLY && [[ -n "$RELEASE_IMAGE" ]]; then
         done
         JOBS_RELEASE="$REQUESTED_RELEASE"
     else
-        JOBS_RELEASE=$(detect_release "")
+        # --job all (or no filter) selects every job, so validate each one's
+        # release the way the pattern branch does. Job files are scoped to the
+        # requested release's directory, but a misplaced entry must still be
+        # caught rather than launched against the wrong payload.
+        for file in "$JOB_FILE" "$JOB_FILE_LVMS" "$JOB_FILE_Z" "$JOB_FILE_Y"; do
+            [[ ! -f "$file" ]] && continue
+            if [[ -z "${INITIAL_IMAGE:-}" && ( "$file" == "$JOB_FILE_Z" || "$file" == "$JOB_FILE_Y" ) ]]; then
+                continue
+            fi
+            while IFS= read -r job; do
+                [[ -z "$job" ]] && continue
+                job_release=$(release_from_job_name "$job")
+                if [[ -n "$job_release" && -n "$REQUESTED_RELEASE" && "$job_release" != "$REQUESTED_RELEASE" ]]; then
+                    # Broad patterns can match a stale LVMS seed alongside
+                    # compatible jobs. Let job_selected report that lane as skipped.
+                    if [[ "$job" == *"-tnf-lvms-mno-qe-integration-tests" ]]; then
+                        continue
+                    fi
+                    echo "Error: selected job '$job' targets $job_release, but you requested $REQUESTED_RELEASE"
+                    exit 1
+                fi
+            done < "$file"
+        done
+        JOBS_RELEASE="$REQUESTED_RELEASE"
     fi
     if [[ -n "$REQUESTED_RELEASE" && -n "$JOBS_RELEASE" && "$REQUESTED_RELEASE" != "$JOBS_RELEASE" ]]; then
         if [[ "$TOPOLOGY" == "tnf" && "$JOB_FILTER" == "lvms" ]]; then
@@ -457,14 +559,34 @@ list_file() {
 }
 
 if $LIST_ONLY; then
-    LINE_NUM=0
-    echo "=== $TOPOLOGY jobs ==="
-    list_file "$JOB_FILE" "$TOPOLOGY"
-    list_file "$JOB_FILE_LVMS" "$TOPOLOGY LVMS"
-    list_file "$JOB_FILE_Z" "$TOPOLOGY z-stream upgrades (--initial required)"
-    list_file "$JOB_FILE_Y" "$TOPOLOGY y-stream upgrades (--initial required)"
-    echo ""
-    echo "Use --job all, --job <number>, --job <n,n,n>, or --job <pattern> to select"
+    if [[ -n "$RELEASE_IMAGE" ]]; then
+        LINE_NUM=0
+        echo "=== $TOPOLOGY jobs (release $OCP_RELEASE) ==="
+        list_file "$JOB_FILE" "$TOPOLOGY"
+        list_file "$JOB_FILE_LVMS" "$TOPOLOGY LVMS"
+        list_file "$JOB_FILE_Z" "$TOPOLOGY z-stream upgrades (--initial required)"
+        list_file "$JOB_FILE_Y" "$TOPOLOGY y-stream upgrades (--initial required)"
+        echo ""
+        echo "Use --job all, --job <number>, --job <n,n,n>, or --job <pattern> to select"
+    else
+        for release_dir in "$SCRIPT_DIR"/jobs/*/; do
+            [[ ! -d "$release_dir" ]] && continue
+            rel=$(basename "$release_dir")
+            rel_file="$release_dir/${TOPOLOGY}.txt"
+            rel_file_lvms="$release_dir/${TOPOLOGY}-lvms.txt"
+            rel_file_z="$release_dir/${TOPOLOGY}-z-stream.txt"
+            rel_file_y="$release_dir/${TOPOLOGY}-y-stream.txt"
+            [[ ! -f "$rel_file" && ! -f "$rel_file_lvms" && ! -f "$rel_file_z" && ! -f "$rel_file_y" ]] && continue
+            LINE_NUM=0
+            echo "=== $TOPOLOGY jobs (release $rel) ==="
+            list_file "$rel_file" "$TOPOLOGY"
+            list_file "$rel_file_lvms" "$TOPOLOGY LVMS"
+            list_file "$rel_file_z" "$TOPOLOGY z-stream upgrades (--initial required)"
+            list_file "$rel_file_y" "$TOPOLOGY y-stream upgrades (--initial required)"
+            echo ""
+        done
+        echo "Use --job all, --job <number>, --job <n,n,n>, or --job <pattern> to select"
+    fi
     exit 0
 fi
 
@@ -479,6 +601,28 @@ if $RELAUNCH_FAILED; then
 
     echo "Scanning previous run: $(basename "$(dirname "$PREV_RUN_DIR")")"
 
+    # The latest run is selected per topology, regardless of release, and a
+    # run directory is shared by every release launched for the topology on
+    # the same day. Scope failure mapping to the requested release's records;
+    # a run holding no record for that release is rejected explicitly so its
+    # failures are never silently dropped from the requested release's list.
+    REQUESTED_RELEASE=$(image_tag "$RELEASE_IMAGE" | grep -oE '^[0-9]+\.[0-9]+' || true)
+    if [[ -n "$REQUESTED_RELEASE" ]]; then
+        matching_records=0
+        for f in "$PREV_RUN_DIR"/gangway_*.json; do
+            [[ ! -e "$f" ]] && continue
+            prev_job=$(jq -r '.[0].JobName // "unknown"' "$f" 2>/dev/null)
+            if [[ $(release_from_job_name "$prev_job") == "$REQUESTED_RELEASE" ]]; then
+                matching_records=$((matching_records + 1))
+            fi
+        done
+        if [[ "$matching_records" -eq 0 ]]; then
+            echo "Error: previous run $(basename "$(dirname "$PREV_RUN_DIR")") holds no $REQUESTED_RELEASE jobs for '$TOPOLOGY'."
+            echo "Re-launch with the payload matching that run."
+            exit 1
+        fi
+    fi
+
     # Build combined job list with continuous numbering (same order as --list and launch)
     COMBINED_JOBS=$(mktemp)
     trap 'rm -f "$COMBINED_JOBS"' EXIT
@@ -491,6 +635,11 @@ if $RELAUNCH_FAILED; then
         [[ ! -e "$f" ]] && continue
         prev_job=$(jq -r '.[0].JobName // "unknown"' "$f" 2>/dev/null)
         prev_url=$(jq -r '.[0].JobURL // "no-url"' "$f" 2>/dev/null)
+        # Records from another release launched into the same run directory
+        # are not part of this payload's job list.
+        if [[ -n "$REQUESTED_RELEASE" && $(release_from_job_name "$prev_job") != "$REQUESTED_RELEASE" ]]; then
+            continue
+        fi
 
         if [[ "$prev_url" != "no-url" && "$prev_url" != "null" ]]; then
             prev_gcs="${prev_url/prow.ci.openshift.org\/view\/gs\//${GCSWEB_BASE}/}"

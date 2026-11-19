@@ -4,11 +4,11 @@ set -euo pipefail
 source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 test_dir="$(mktemp -d)"
 trap 'rm -rf "$test_dir"' EXIT
-mkdir -p "$test_dir/scripts" "$test_dir/jobs" "$test_dir/bin" "$test_dir/runs/demo/tnf"
+mkdir -p "$test_dir/scripts" "$test_dir/jobs/5.0" "$test_dir/bin" "$test_dir/runs/demo/tnf"
 cp "$source_dir/scripts/status.sh" "$test_dir/scripts/status.sh"
 
 job='periodic-ci-openshift-lvm-operator-release-5.0-nightly-e2e-baremetalds-tnf-lvms-mno-qe-integration-tests'
-printf '%s\n' "$job" > "$test_dir/jobs/tnf-lvms.txt"
+printf '%s\n' "$job" > "$test_dir/jobs/5.0/tnf-lvms.txt"
 printf '[{"JobName":"%s","JobURL":"https://prow.ci.openshift.org/view/gs/example"}]\n' "$job" \
     > "$test_dir/runs/demo/tnf/gangway_failed.json"
 

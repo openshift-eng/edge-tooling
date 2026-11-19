@@ -162,11 +162,54 @@ trap 'rm -rf "$RESULTS_DIR"' EXIT
 # Look up a job's number matching launch.sh --list numbering
 job_num_lookup() {
     local topo="$1" target="$2"
-    local n=0
-    for f in "$SCRIPT_DIR/jobs/${topo}.txt" \
-             "$SCRIPT_DIR/jobs/${topo}-lvms.txt" \
-             "$SCRIPT_DIR/jobs/${topo}-z-stream.txt" \
-             "$SCRIPT_DIR/jobs/${topo}-y-stream.txt"; do
+    local release
+    # First (nightly-|release-)<x.y> match preserves the job's release even when
+    # a later segment mentions a version (e.g. the lvm-operator LVMS lane).
+    if [[ "$target" =~ (nightly-|release-)([0-9]+\.[0-9]+) ]]; then
+        release="${BASH_REMATCH[2]}"
+    else
+        release=""
+    fi
+    # A job with neither marker cannot be pinned to a release directory; its
+    # number comes from the flat jobs root, if such a list exists.
+    # Resolve each list file the way launch.sh's migration does: a release-dir
+    # file wins, and the identically named flat jobs/ file is only used when
+    # the release directory has no such file AND the flat file's jobs belong
+    # to that release (migration infers each flat file's destination release
+    # from its first marked job; unmarked jobs never migrate into a release
+    # directory, so their lists must not feed release-pinned numbering). A
+    # checkout upgraded to the release-directory layout that has not run
+    # launch.sh yet still holds its legacy flat lists in jobs/, and the
+    # committed release-dir seeds (e.g. jobs/5.0/tnf-lvms.txt) only cover some
+    # lists — the rest must keep resolving from jobs/ so known job numbers
+    # survive until migration runs.
+    flat_file_matches_release() {
+        local line flat_release
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            if [[ "$line" =~ (nightly-|release-)([0-9]+\.[0-9]+) ]]; then
+                flat_release="${BASH_REMATCH[2]}"
+                [[ "$flat_release" == "$release" ]] && return 0
+                return 1
+            fi
+        done < "$1"
+        return 1
+    }
+    resolve_job_file() {
+        local name="$1"
+        if [[ -n "$release" && -f "$SCRIPT_DIR/jobs/$release/$name" ]]; then
+            echo "$SCRIPT_DIR/jobs/$release/$name"
+        elif [[ -f "$SCRIPT_DIR/jobs/$name" ]] \
+            && { [[ -z "$release" ]] || flat_file_matches_release "$SCRIPT_DIR/jobs/$name"; }; then
+            echo "$SCRIPT_DIR/jobs/$name"
+        fi
+    }
+    local n=0 f
+    for f in "$(resolve_job_file "${topo}.txt")" \
+             "$(resolve_job_file "${topo}-lvms.txt")" \
+             "$(resolve_job_file "${topo}-z-stream.txt")" \
+             "$(resolve_job_file "${topo}-y-stream.txt")"; do
+        [[ -z "$f" ]] && continue
         [[ ! -f "$f" ]] && continue
         while IFS= read -r line; do
             [[ -z "$line" ]] && continue
@@ -177,6 +220,51 @@ job_num_lookup() {
             fi
         done < "$f"
     done
+    # An unmarked job rides into jobs/<release>/ inside a mixed flat list when
+    # migration infers the file's release from its marked jobs. Its number is
+    # then its position in that release directory's lists. Resolve it only when
+    # exactly one release directory claims it; with several candidates there is
+    # no defensible number, so report 0 rather than pick one arbitrarily.
+    if [[ -z "$release" ]]; then
+        local dir found_dir=""
+        for dir in "$SCRIPT_DIR"/jobs/*/; do
+            [[ -d "$dir" ]] || continue
+            for f in "${dir}${topo}.txt" "${dir}${topo}-lvms.txt" \
+                     "${dir}${topo}-z-stream.txt" "${dir}${topo}-y-stream.txt"; do
+                [[ -f "$f" ]] || continue
+                if grep -qxF "$target" "$f"; then
+                    if [[ -n "$found_dir" && "$found_dir" != "$dir" ]]; then
+                        echo "0"
+                        return
+                    fi
+                    found_dir="$dir"
+                fi
+            done
+        done
+        if [[ -n "$found_dir" ]]; then
+            # Count within the effective list for that release — release-dir
+            # files where present, eligible flat files otherwise — so a
+            # partially migrated checkout numbers the job exactly as the
+            # migrated one does.
+            release="$(basename "$found_dir")"
+            n=0
+            for f in "$(resolve_job_file "${topo}.txt")" \
+                     "$(resolve_job_file "${topo}-lvms.txt")" \
+                     "$(resolve_job_file "${topo}-z-stream.txt")" \
+                     "$(resolve_job_file "${topo}-y-stream.txt")"; do
+                [[ -z "$f" ]] && continue
+                [[ ! -f "$f" ]] && continue
+                while IFS= read -r line; do
+                    [[ -z "$line" ]] && continue
+                    n=$((n + 1))
+                    if [[ "$line" == "$target" ]]; then
+                        echo "$n"
+                        return
+                    fi
+                done < "$f"
+            done
+        fi
+    fi
     echo "0"
 }
 

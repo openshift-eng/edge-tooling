@@ -43,10 +43,13 @@ export MY_APPCI_TOKEN="sha256~..."
 ## Quick start
 
 ```bash
-# List available TNF jobs
+# Fetch all job lists from Sippy (all topologies × 4.22, 4.23, 5.0)
+scripts/collect.sh
+
+# List available TNF jobs (all releases)
 scripts/launch.sh tnf --list
 
-# Refresh job lists from Sippy (specify the release on a fresh checkout)
+# Refresh a single topology from Sippy (specify the release on a fresh checkout)
 scripts/launch.sh tnf 5.0.0-rc.5 --refresh
 
 # Launch regular TNF jobs against an RC
@@ -84,17 +87,19 @@ Version tags are expanded automatically: `4.22.0-rc.0` becomes `quay.io/openshif
 ```text
 edge-ocp-rc/
 ├── jobs/
-│   ├── tnf.txt              # Regular TNF jobs
-│   ├── tnf-lvms.txt         # TNF LVMS job, updated by Sippy refresh
-│   ├── tnf-z-stream.txt     # TNF z-stream upgrade jobs
-│   ├── tnf-y-stream.txt     # TNF y-stream upgrade jobs
-│   ├── tna.txt              # Regular TNA jobs
-│   ├── tna-z-stream.txt     # TNA z-stream upgrade jobs
-│   ├── tna-y-stream.txt     # TNA y-stream upgrade jobs
-│   ├── sno.txt              # Regular SNO jobs
-│   ├── sno-z-stream.txt     # SNO z-stream upgrade jobs
-│   └── sno-y-stream.txt     # SNO y-stream upgrade jobs
+│   └── <release>/               # e.g., 4.22/, 4.23/, 5.0/
+│       ├── tnf.txt              # Regular TNF jobs
+│       ├── tnf-lvms.txt         # TNF LVMS job, updated by Sippy refresh
+│       ├── tnf-z-stream.txt     # TNF z-stream upgrade jobs
+│       ├── tnf-y-stream.txt     # TNF y-stream upgrade jobs
+│       ├── tna.txt              # Regular TNA jobs
+│       ├── tna-z-stream.txt     # TNA z-stream upgrade jobs
+│       ├── tna-y-stream.txt     # TNA y-stream upgrade jobs
+│       ├── sno.txt              # Regular SNO jobs
+│       ├── sno-z-stream.txt     # SNO z-stream upgrade jobs
+│       └── sno-y-stream.txt     # SNO y-stream upgrade jobs
 ├── scripts/
+│   ├── collect.sh           # Fetch all topologies × releases from Sippy
 │   ├── launch.sh            # Unified launcher (wraps gangway-cli)
 │   └── status.sh            # Status, logs, and Jira reporting
 ├── skills/
@@ -138,7 +143,9 @@ Before launching, the script verifies:
 
 ### Job files and Sippy refresh
 
-Each topology has up to four job files — one per job type:
+Job files are organized by release under `jobs/<release>/`. Each topology has up to four job files — one per job type:
+
+Checkouts from before this layout had flat `jobs/*.txt` files. On first run the scripts migrate them into `jobs/<release>/` (inferred from each file's job names) — no manual step is needed. Each flat file is migrated independently: a flat file is skipped only when its own destination `jobs/<release>/<name>` already exists, in which case the release-directory file wins and the flat file is ignored with a warning. A flat file whose jobs carry no release marker is left in place. `status.sh` job-number lookups apply the same per-file policy before migration runs, so numbers stay stable across the upgrade.
 
 | File | Type | Description |
 |------|------|-------------|
@@ -149,7 +156,13 @@ Each topology has up to four job files — one per job type:
 
 Each file is a plain list of Prow job names, one per line. No prefixes.
 
-Use `--refresh` to update regular, upgrade, and TNF LVMS job files from Sippy:
+Use `collect.sh` to fetch all topologies and releases at once:
+
+```bash
+scripts/collect.sh                     # Fetches all topologies for every supported release
+```
+
+Or use `--refresh` to update regular, upgrade, and TNF LVMS job files for a single topology:
 
 ```bash
 scripts/launch.sh tnf 5.0.0-rc.5 --refresh # Fresh checkout: choose the release explicitly
@@ -200,7 +213,7 @@ scripts/launch.sh tnf 4.22.0-rc.0 --job all
 scripts/launch.sh tna 4.22.0-rc.0 --initial 4.21.0 --job all
 ```
 
-Jobs are launched sequentially with a 10-second delay between each to avoid rate limiting.
+Jobs are launched sequentially with a 10-second delay between each to avoid rate limiting. Override with `DELAY=30 scripts/launch.sh ...` if Gangway is throttling.
 
 ## status.sh
 
