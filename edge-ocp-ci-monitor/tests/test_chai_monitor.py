@@ -36,7 +36,6 @@ from edge_ocp_ci_monitor.analysis import (
     ask_chai,
     build_prompt,
     build_targets,
-    validate_analysis,
     validate_batch,
 )
 from edge_ocp_ci_monitor.report import generate_html as generate_chai_html
@@ -59,6 +58,7 @@ def collected_report(report, monkeypatch):
     monkeypatch.setattr(collection, "configured_stream_names", lambda config: ["4.19.0-0.nightly"])
     monkeypatch.setattr(collection, "collect_payloads", lambda *args: report.streams)
     monkeypatch.setattr(collection.sippy, "collect", lambda *args: {"4.19": report.streams[0].regressions})
+    monkeypatch.setattr(collection.timing, "fetch_job_runs", lambda *args: [])
     monkeypatch.setattr(collection.component_readiness, "collect", lambda *args: [])
     return report
 
@@ -129,6 +129,7 @@ def test_token_not_in_settings_repr():
 
 @pytest.mark.parametrize("sippy", [False, True])
 def test_concise_prompt_keeps_targets_and_one_complete_response_schema(report, sippy):
+    report.streams[0].payloads[0].jobs[0].error_summary = "Synthetic local error excerpt"
     selected = build_targets(report)["sippy_jobs" if sippy else "blocking_jobs"]
     key = "analysis_key" if sippy else "prow_url"
     targets = [{**selected[0], key: f"{selected[0][key]}-{n}"} for n in range(4)]
@@ -136,6 +137,12 @@ def test_concise_prompt_keeps_targets_and_one_complete_response_schema(report, s
     assert prompt_targets(prompt) == targets
     assert "distinguish the root cause from downstream failures" in prompt
     assert "Include evidence links and flag anything uncertain" in prompt
+    assert "Synthetic local error excerpt" not in prompt
+    assert ("Start with the step results for each exact latest Prow run" in prompt) == (not sippy)
+    if not sippy:
+        assert "Inspect each supplied previous attempt independently" in prompt
+        assert "If the comparison cannot be verified" in prompt
+        assert "Otherwise leave suspect_prs empty" in prompt
     assert "Previously completed investigations" not in prompt
     shape, _ = json.JSONDecoder().raw_decode(prompt.split("Return only JSON in this format:\n", 1)[1])
     group = "by_sippy_job" if sippy else "by_prow_url"
@@ -206,20 +213,29 @@ def test_serial_batches_reuse_completed_blocking_evidence(report):
 ])
 def test_malformed_contract_rejected(report, change):
     target = build_targets(report)["blocking_jobs"][0]
-    with pytest.raises(InvalidAnalysis):
-        validate_analysis(json.dumps(answer(**change)), target, sippy=False)
+    url = target["prow_url"]
+    response = {"by_prow_url": {url: answer(**change)}}
+    result = validate_batch(json.dumps(response), [target], sippy=False)
+    assert not result.accepted
+    assert set(result.errors) == {url}
 
 
 def test_attempt_coverage_and_json_fence(report):
     target = build_targets(report)["blocking_jobs"][0]
+    url = target["prow_url"]
     data = answer(same_root_cause=False, attempt_analyses=[
-        {"prow_url": url, "root_cause": "Different failure", "failure_type": "Install failure"}
-        for url in ["https://prow.example/previous", "https://prow.example/latest"]
+        {"prow_url": attempt_url, "root_cause": "Different failure", "failure_type": "Install failure"}
+        for attempt_url in [*target["previous_attempt_urls"], url]
     ])
-    assert validate_analysis("```json\n" + json.dumps(data) + "\n```", target, sippy=False) == data
+    response = {"by_prow_url": {url: data}}
+    result = validate_batch("```json\n" + json.dumps(response) + "\n```", [target], sippy=False)
+    assert result.accepted == {url: data}
+    assert not result.errors
+
     data["attempt_analyses"].reverse()
-    with pytest.raises(InvalidAnalysis):
-        validate_analysis(json.dumps(data), target, sippy=False)
+    result = validate_batch(json.dumps(response), [target], sippy=False)
+    assert not result.accepted
+    assert "does not cover the requested attempts in order" in result.errors[url]
 
 
 def test_batch_validation_retains_good_entries_and_explains_every_failure(report):
@@ -575,7 +591,7 @@ def test_real_sdk_in_memory_mcp_and_auth_header(monkeypatch):
     assert received == ["investigate test"]
     assert options[0][0].url == settings().url
     assert options[0][1]["timeout"] == 3
-    assert options[0][1]["mode"] == "legacy"
+    assert options[0][1]["mode"] == "2026-07-28"
     request = httpx2.Request("POST", settings().url)
     auth_flow = options[0][1]["auth"].auth_flow(request)
     assert next(auth_flow).headers["Authorization"] == "Bearer synthetic-secret"
@@ -659,42 +675,84 @@ def test_heartbeat_reports_elapsed_and_last_update_age(monkeypatch, caplog):
     assert "elapsed 01:30 / 45:00; last Chai update 01:20 ago" in caplog.text
 
 
-def test_http_mcp_handshake_and_response(monkeypatch):
+@pytest.mark.parametrize("valid_tool_list", [True, False])
+def test_http_mcp_stateless_progress_and_response(monkeypatch, caplog, valid_tool_list):
     requests = []
 
     async def respond(request):
+        assert request.method == "POST"
         assert request.headers["Authorization"] == "Bearer synthetic-secret"
-        if request.method == "GET":
-            return httpx2.Response(405)
-        if request.method == "DELETE":
-            return httpx2.Response(204)
+        assert request.headers["MCP-Protocol-Version"] == "2026-07-28"
+        assert "Mcp-Session-Id" not in request.headers
         body = json.loads(request.content)
         requests.append(body)
-        if "id" not in body:
-            return httpx2.Response(202)
-        if body["method"] == "initialize":
-            result = {"protocolVersion": body["params"]["protocolVersion"],
-                      "capabilities": {"tools": {}}, "serverInfo": {"name": "chai-test", "version": "1"}}
-        elif body["method"] == "tools/list":
-            result = {"tools": [{"name": "ask_persona", "inputSchema": {
+        assert request.headers["Mcp-Method"] == body["method"]
+        meta = body["params"]["_meta"]
+        assert meta["io.modelcontextprotocol/protocolVersion"] == "2026-07-28"
+        result = {
+            "resultType": "complete",
+            "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "chai-test", "version": "1"}},
+        }
+        if body["method"] == "tools/list":
+            if valid_tool_list:
+                result.update(cacheScope="private", ttlMs=300_000)
+            result["tools"] = [{"name": "ask_persona", "inputSchema": {
                 "type": "object", "properties": {"question": {"type": "string"}}, "required": ["question"],
-            }}]}
-        else:
-            assert body["method"] == "tools/call"
-            assert request.headers["mcp-session-id"] == "test-session"
-            result = {"content": [{"type": "text", "text": json.dumps(answer())}], "isError": False}
-        return httpx2.Response(200, headers={"mcp-session-id": "test-session"},
-                              json={"jsonrpc": "2.0", "id": body["id"], "result": result})
+            }}]
+            return httpx2.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": result})
+
+        assert body["method"] == "tools/call"
+        assert request.headers["Mcp-Name"] == body["params"]["name"] == "ask_persona"
+        assert body["params"]["arguments"] == {"question": "investigate"}
+        progress = {"jsonrpc": "2.0", "method": "notifications/progress", "params": {
+            "progressToken": meta["progressToken"], "progress": 1, "message": "Reading artifacts",
+        }}
+        result["content"] = [{"type": "text", "text": json.dumps(answer())}]
+        reply = {"jsonrpc": "2.0", "id": body["id"], "result": result}
+        return httpx2.Response(200, headers={"Content-Type": "text/event-stream"}, text=(
+            ": keepalive\n\n"
+            f"event: message\ndata: {json.dumps(progress)}\n\n"
+            f"event: message\ndata: {json.dumps(reply)}\n\n"
+        ))
 
     real_http_client = httpx2.AsyncClient
     monkeypatch.setattr(httpx2, "AsyncClient", lambda **options: real_http_client(
         transport=httpx2.MockTransport(respond), **options,
     ))
-    assert json.loads(asyncio.run(ask_chai(settings(timeout=3), "investigate"))) == answer()
-    assert [r["method"] for r in requests[:2]] == ["initialize", "notifications/initialized"]
-    call = next(r for r in requests if r["method"] == "tools/call")
-    assert call["params"]["name"] == "ask_persona"
-    assert call["params"]["arguments"] == {"question": "investigate"}
+
+    async def run():
+        config = settings(timeout=3)
+        async with analysis._BatchProgress("blocking-jobs", config) as progress:
+            return await ask_chai(config, "investigate", progress=progress)
+
+    with caplog.at_level(logging.INFO, logger="edge_ocp_ci_monitor"):
+        if valid_tool_list:
+            assert json.loads(asyncio.run(run())) == answer()
+        else:
+            with pytest.raises(ChaiUnavailable, match="Invalid MCP response"):
+                asyncio.run(run())
+    assert [request["method"] for request in requests] == ["tools/call", "tools/list"]
+    assert "Chai [blocking-jobs]: Reading artifacts" in caplog.text
+
+
+def test_http_mcp_unsupported_version_does_not_fall_back(monkeypatch):
+    requests = []
+
+    async def respond(request):
+        body = json.loads(request.content)
+        requests.append(body["method"])
+        return httpx2.Response(400, json={
+            "jsonrpc": "2.0", "id": body["id"],
+            "error": {"code": -32022, "message": "Unsupported protocol version: 2026-07-28"},
+        })
+
+    real_http_client = httpx2.AsyncClient
+    monkeypatch.setattr(httpx2, "AsyncClient", lambda **options: real_http_client(
+        transport=httpx2.MockTransport(respond), **options,
+    ))
+    with pytest.raises(ChaiUnavailable, match="Unsupported protocol version: 2026-07-28"):
+        asyncio.run(ask_chai(settings(timeout=3), "investigate"))
+    assert requests == ["tools/call"]
 
 
 def test_missing_mcp_dependency_does_not_stop_analysis_pipeline(report, monkeypatch):
@@ -821,13 +879,15 @@ def test_summary_contains_grouped_reasons(report, collected_report, tmp_path, mo
     assert "Required MCP client package is not installed" in out.read_text()
 
 
-def test_cli_fallback_retains_fresh_dashboard_markers_and_sidecars(report, tmp_path, monkeypatch, caplog):
+def test_cli_fallback_retains_fresh_dashboard_markers_and_sidecars(collected_report, tmp_path, monkeypatch, caplog):
     monkeypatch.delenv("CHAI_MCP_TOKEN", raising=False)
     monkeypatch.delenv("CHAI_MCP_URL", raising=False)
-    monkeypatch.setattr(collection, "configured_stream_names", lambda config: ["4.19.0-0.nightly"])
-    monkeypatch.setattr(collection, "collect_payloads", lambda *args: report.streams)
-    monkeypatch.setattr(collection.sippy, "collect", lambda *args: {"4.19": report.streams[0].regressions})
-    monkeypatch.setattr(collection.component_readiness, "collect", lambda *args: [])
+    monkeypatch.setattr(collection.timing, "fetch_job_runs", lambda name, version: [
+        {"overall_result": "S", "timestamp": 200_000},
+        {"overall_result": "I", "timestamp": 100_000},
+        {"overall_result": "F", "timestamp": "1970-01-01T00:00:20Z"},
+        {"overall_result": "F", "timestamp": "invalid"},
+    ])
     out = tmp_path / "report.html"
     result = CliRunner().invoke(cli.main, ["--output", str(out), "--skip-prow", "--json"])
     assert result.exit_code == 0, result.exception
@@ -844,12 +904,20 @@ def test_cli_fallback_retains_fresh_dashboard_markers_and_sidecars(report, tmp_p
     assert not out.with_suffix(".analysis.json").exists()
     assert not out.with_suffix(".chai-status.json").exists()
     assert not out.with_suffix(".ai-targets.json").exists()
-    assert json.loads(out.with_suffix(".json").read_text())["streams"][0]["payloads"]
+    snapshot = core.load_json(out.with_suffix(".json"))
+    assert snapshot.streams[0].payloads
+    assert snapshot.streams[0].regressions[0].latest_failure_ms == 100_000
     assert set(tmp_path.iterdir()) == {out, out.with_suffix(".json"), out.with_suffix(".sippy-summary.json")}
 
 
-def test_component_readiness_scope_is_independent_of_selected_payload_versions(
+@pytest.mark.parametrize("versions,expected_versions", [
+    (None, None),
+    ("5.1", ["5.1"]),
+    (" 4.19, 5.1 ", ["4.19", "5.1"]),
+])
+def test_component_readiness_receives_selected_versions_or_all_by_default(
     collected_report, tmp_path, monkeypatch,
+    versions, expected_versions,
 ):
     monkeypatch.delenv("CHAI_MCP_TOKEN", raising=False)
     monkeypatch.delenv("CHAI_MCP_URL", raising=False)
@@ -857,14 +925,22 @@ def test_component_readiness_scope_is_independent_of_selected_payload_versions(
         component="arbiter-component", test_name="arbiter-regression", test_suite="s",
         test_id="arbiter-test", capability="", version="5.1", comparison="TNA",
     )
-    monkeypatch.setattr(collection.component_readiness, "collect", lambda: [finding])
+    requested_versions = []
+
+    def collect(selected_versions):
+        requested_versions.append(selected_versions)
+        return [finding]
+
+    monkeypatch.setattr(collection.component_readiness, "collect", collect)
     out = tmp_path / "report.html"
 
-    result = CliRunner().invoke(cli.main, [
-        "--versions", "4.19", "--skip-prow", "--json", "--output", str(out),
-    ])
+    arguments = ["--skip-prow", "--json", "--output", str(out)]
+    if versions is not None:
+        arguments.extend(["--versions", versions])
+    result = CliRunner().invoke(cli.main, arguments)
 
     assert result.exit_code == 0, result.exception
+    assert requested_versions == [expected_versions]
     data = json.loads(out.with_suffix(".json").read_text())
     assert [stream["version"] for stream in data["streams"]] == ["4.19"]
     assert data["component_regressions"][0]["version"] == "5.1"
@@ -1017,10 +1093,18 @@ def test_chai_keeps_explicit_local_analysis_import(report, tmp_path, monkeypatch
 
 
 def test_chai_renderer_leaves_original_rendering_and_exports_intact(report, tmp_path):
+    report.streams[0].payloads[0].jobs[0].error_summary = "Synthetic local error excerpt"
     chai_path = tmp_path / "chai.html"
     chai_html = generate_chai_html(report, chai_path, ai_warnings=["<missing evidence>"])
     assert "<title>Edge OCP CI Monitor</title>" in chai_html
-    assert "Investigate this failing Prow job:" in chai_html
+    _, _, prompt = chai_html.partition("<code>Investigate this failing Prow job:")
+    prompt, _, _ = prompt.partition("</code>")
+    assert "https://prow.example/latest" in prompt
+    assert "Previous attempts: https://prow.example/previous" in prompt
+    assert "job-sno, a blocking job on SNO in OpenShift 4.19" in prompt
+    assert "4.19.0-0.nightly-2026-11-13-070000" in prompt
+    assert "Start with the latest run's step results" in prompt
+    assert "Synthetic local error excerpt" not in prompt
     assert "&lt;missing evidence&gt;" in chai_html
     assert "use Claude directly" not in chai_html
     assert not chai_path.with_suffix(".ai-targets.json").exists()

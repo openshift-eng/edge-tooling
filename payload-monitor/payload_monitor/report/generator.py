@@ -719,6 +719,7 @@ def load_json(json_path: Path) -> MonitorReport:
                 jira_bug=r.get("jira_bug", ""),
                 current_runs=r.get("current_runs", 0),
                 deep_analysis=_build_deep_analysis(r["deep_analysis"]) if r.get("deep_analysis") else None,
+                latest_failure_ms=r.get("latest_failure_ms", 0),
             ))
 
         streams.append(StreamReport(

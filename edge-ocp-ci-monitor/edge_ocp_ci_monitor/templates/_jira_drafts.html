@@ -3,7 +3,7 @@
   {% if report.suggested_bugs %}
   <p class="meta">Chai recommends these drafts after checking for existing bugs. Scope: SNO, two node fencing (TNF), and two node arbiter (TNA). Review the evidence and fields before filing. No issue has been created.</p>
   {% for bug in report.suggested_bugs %}
-  <article class="suggest-card jira-draft" data-analysis-keys='{{ (bug.analysis_keys or ['prow:' ~ bug.prow_url]) | tojson }}' data-job-name="{{ bug.job_name }}" data-prow-url="{{ bug.prow_url }}">
+  <article class="suggest-card jira-draft" data-analysis-keys='{{ (bug.analysis_keys or ['prow:' ~ bug.prow_url]) | tojson }}'>
     <button type="button" class="jira-draft-summary" aria-haspopup="dialog" aria-controls="jira-draft-{{ loop.index }}">
       <span class="jira-draft-heading">
         <span class="title">{{ bug.title }}</span>

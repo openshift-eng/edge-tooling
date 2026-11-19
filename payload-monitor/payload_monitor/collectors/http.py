@@ -24,6 +24,8 @@ def create_session(
     backoff_factor: float = 0.5,
     status_forcelist: tuple[int, ...] = (429, 500, 502, 503, 504),
     default_timeout: float = 30.0,
+    *,
+    pool_block: bool = False,
 ) -> requests.Session:
     """Create a requests Session with retry/backoff for transient errors."""
     session = TimeoutSession(default_timeout=default_timeout)
@@ -33,7 +35,7 @@ def create_session(
         status_forcelist=status_forcelist,
         allowed_methods=["GET", "POST"],
     )
-    adapter = HTTPAdapter(max_retries=retry)
+    adapter = HTTPAdapter(max_retries=retry, pool_block=pool_block)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session

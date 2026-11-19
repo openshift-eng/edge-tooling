@@ -2,7 +2,9 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 import requests
+from urllib3.exceptions import EmptyPoolError
 
 from payload_monitor.collectors import release_controller as rc
 from payload_monitor.models import (
@@ -323,6 +325,17 @@ class TestCollectStream:
 
 
 class TestCollect:
+    def test_release_requests_wait_when_connection_pool_is_full(self):
+        adapter = rc._session.get_adapter(rc.BASE_URL)
+        pool = adapter.poolmanager.connection_from_url(rc.BASE_URL)
+        connections = [pool._get_conn(timeout=0) for _ in range(pool.pool.maxsize)]
+        try:
+            with pytest.raises(EmptyPoolError):
+                pool._get_conn(timeout=0)
+        finally:
+            for connection in connections:
+                pool._put_conn(connection)
+
     @patch.object(rc, "_collect_stream")
     def test_collect_preserves_order(self, mock_collect, config):
         config.versions = ["4.18", "4.19"]

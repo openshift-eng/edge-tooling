@@ -179,28 +179,23 @@ document.addEventListener('DOMContentLoaded', function() {
     if (previous) attempts.appendChild(clone(previous));
     if (breakdown) attempts.appendChild(clone(breakdown));
     document.getElementById('drawer-tab-attempts').hidden = !previous && !breakdown;
-    const links = document.getElementById('finding-drawer-links');
-    links.replaceChildren();
-    if (blocking) {
-      const link = document.createElement('a');
-      link.href = source.dataset.prowUrl;
-      link.textContent = 'View in Prow';
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      links.appendChild(link);
-    } else {
-      const link = source.querySelector('.sippy-cell-action a');
-      if (link) links.appendChild(clone(link));
+    const actions = document.getElementById('finding-drawer-actions');
+    actions.querySelector('#finding-drawer-external')?.remove();
+    const externalUrl = blocking ? source.dataset.prowUrl : source.querySelector('.sippy-cell-action a')?.getAttribute('href');
+    if (externalUrl) {
+      const external = document.createElement('a');
+      external.id = 'finding-drawer-external';
+      external.className = 'dashboard-button';
+      external.textContent = blocking ? 'View in Prow' : 'View in Sippy';
+      external.href = externalUrl;
+      external.target = '_blank';
+      external.rel = 'noopener noreferrer';
+      actions.appendChild(external);
     }
-    const full = document.createElement('button');
-    full.type = 'button';
-    full.className = 'dashboard-button';
-    full.textContent = 'Open full report view →';
-    full.addEventListener('click', function() {
+    document.getElementById('finding-drawer-full').onclick = function() {
       drawer.close();
       openSource(source);
-    });
-    links.appendChild(full);
+    };
     // Drafts remain in their original cards so their form styling and controls survive.
     draftCard = Array.from(document.querySelectorAll('.jira-draft')).find(card =>
       JSON.parse(card.dataset.analysisKeys).includes(source.dataset.analysisKey));
@@ -246,49 +241,162 @@ document.addEventListener('DOMContentLoaded', function() {
       if (!event.target.closest('a')) openFinding(source, button);
     });
   });
-  document.querySelectorAll('[data-findings-section]').forEach(function(section) {
-    const sectionRows = Array.from(section.querySelectorAll('[data-finding-source]'));
-    const search = section.querySelector('[data-finding-search]');
-    const expand = section.querySelector('[data-finding-expand]');
-    if (!sectionRows.length) return;
-    let filter = 'all';
-    let expanded = false;
-    function filterFindings() {
-      const query = search.value.trim().toLowerCase();
-      let count = 0;
-      let shown = 0;
-      sectionRows.forEach(function(row) {
-        const source = document.getElementById(row.dataset.findingSource);
-        const fields = [source.dataset.jobName, source.dataset.topology || source.dataset.regtopology,
-          source.dataset.version || source.dataset.regversion].join(' ').toLowerCase();
-        const match = (filter === 'all' || filter === row.dataset.findingKind) && fields.includes(query);
-        if (match) count++;
-        row.hidden = !match || (!expanded && count > 5);
-        if (!row.hidden) shown++;
-      });
-      section.querySelector('[data-finding-count]').textContent = 'Showing ' + shown + ' of ' + count + ' jobs';
-      section.querySelector('[data-finding-no-results]').hidden = count !== 0;
-      expand.hidden = count <= 5;
-      expand.textContent = expanded ? 'Show top 5 only' : 'Show all ' + count + ' jobs';
-    }
-    section.querySelectorAll('[data-finding-filter]').forEach(function(button) {
-      button.addEventListener('click', function() {
-        filter = button.dataset.findingFilter;
-        section.querySelectorAll('[data-finding-filter]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
-        filterFindings();
-      });
-    });
-    search.addEventListener('input', filterFindings);
-    expand.addEventListener('click', function() {
-      expanded = !expanded;
-      filterFindings();
-    });
-    filterFindings();
-  });
-
   const target = document.getElementById(window.location.hash.slice(1));
   if (target?.closest('.tab-panel')) {
     if (target.matches('.detail-row, .regression-row')) openSource(target);
     else selectView(target.closest('.tab-panel').id.slice(4));
   }
+});
+
+// Move interior column boundaries while keeping the table and details column anchored.
+document.addEventListener('DOMContentLoaded', function setupFindingColumnResizing() {
+  const minWidth = 64;
+  const keyStep = 16;
+  document.querySelectorAll('.finding-table[data-resize-columns]').forEach(function(table) {
+    const headers = Array.from(table.querySelectorAll('thead th'));
+    const detailsHeader = headers.pop();
+    const columns = Array.from(table.querySelectorAll('colgroup > col')).slice(0, -2);
+    const wrapper = table.parentElement;
+    const minTableWidth = parseFloat(getComputedStyle(table).minWidth);
+    let widthShares;
+
+    function applyWidths() {
+      if (!widthShares || !wrapper.clientWidth) return;
+      const tableWidth = Math.max(wrapper.clientWidth, minTableWidth);
+      const fixedWidth = detailsHeader.getBoundingClientRect().width + minWidth * headers.length;
+      const flexibleWidth = tableWidth - fixedWidth;
+      columns.forEach((column, index) => {
+        column.style.width = minWidth + widthShares[index] * flexibleWidth + 'px';
+      });
+    }
+    new ResizeObserver(applyWidths).observe(wrapper);
+
+    // Recommendation takes the remaining width. Its left edge is the last resize handle.
+    headers.slice(0, -1).forEach(function(header, index) {
+      const handle = document.createElement('span');
+      handle.className = 'col-resizer';
+      handle.tabIndex = 0;
+      handle.setAttribute('role', 'separator');
+      handle.setAttribute('aria-orientation', 'vertical');
+      handle.setAttribute('aria-label', 'Resize ' + header.textContent.trim() + ' column');
+      handle.setAttribute('aria-valuemin', minWidth);
+      header.appendChild(handle);
+
+      const currentWidth = () => header.getBoundingClientRect().width;
+      function describeWidth() {
+        const pixels = Math.max(minWidth, Math.round(currentWidth()));
+        const nextWidth = headers[index + 1].getBoundingClientRect().width;
+        handle.setAttribute('aria-valuemax', Math.max(pixels, Math.round(pixels + nextWidth - minWidth)));
+        handle.setAttribute('aria-valuenow', pixels);
+        handle.setAttribute('aria-valuetext', pixels + ' pixels');
+      }
+      describeWidth();
+      handle.addEventListener('focus', describeWidth);
+
+      function resize(width) {
+        const widths = headers.map(cell => cell.getBoundingClientRect().width);
+        const pairWidth = widths[index] + widths[index + 1];
+        widths[index] = Math.max(minWidth, Math.min(pairWidth - minWidth, width));
+        widths[index + 1] = pairWidth - widths[index];
+        const flexibleWidth = widths.reduce((total, columnWidth) => total + columnWidth - minWidth, 0);
+        widthShares = widths.slice(0, -1).map(columnWidth => (columnWidth - minWidth) / flexibleWidth);
+        applyWidths();
+        describeWidth();
+      }
+
+      handle.addEventListener('pointerdown', function(event) {
+        if (!event.isPrimary || event.button !== 0 || handle.classList.contains('resizing')) return;
+        event.preventDefault();
+        const {pointerId, clientX} = event;
+        const startWidth = currentWidth();
+        const drag = new AbortController();
+        const options = {signal: drag.signal};
+        handle.focus({preventScroll: true});
+        handle.classList.add('resizing');
+        handle.setPointerCapture(pointerId);
+
+        function stopDragging() {
+          drag.abort();
+          handle.classList.remove('resizing');
+        }
+        document.addEventListener('pointermove', function(move) {
+          if (move.pointerId !== pointerId) return;
+          if (move.buttons === 0) {
+            stopDragging();
+            return;
+          }
+          const delta = move.clientX - clientX;
+          if (delta || widthShares) resize(startWidth + delta);
+        }, options);
+        function endDrag(end) {
+          if (end.pointerId === pointerId) stopDragging();
+        }
+        document.addEventListener('pointerup', endDrag, options);
+        document.addEventListener('pointercancel', endDrag, options);
+        window.addEventListener('blur', stopDragging, options);
+      });
+      handle.addEventListener('keydown', function(event) {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+        event.preventDefault();
+        resize(currentWidth() + (event.key === 'ArrowLeft' ? -keyStep : keyStep));
+      });
+    });
+  });
+});
+
+// Render payload details outside the horizontally scrolling health table.
+document.addEventListener('DOMContentLoaded', function setupPayloadTooltips() {
+  const dots = document.querySelectorAll('.health-timeline .timeline-dot');
+  if (!dots.length) return;
+  const tip = document.createElement('div');
+  tip.id = 'payload-history-tooltip';
+  tip.className = 'payload-history-tooltip';
+  tip.setAttribute('role', 'tooltip');
+  tip.hidden = true;
+  document.body.appendChild(tip);
+  let active;
+  let closeTimer;
+
+  function hide() {
+    clearTimeout(closeTimer);
+    tip.hidden = true;
+    active = null;
+  }
+  function position() {
+    if (!active) return;
+    const rect = active.getBoundingClientRect();
+    const width = tip.offsetWidth;
+    const height = tip.offsetHeight;
+    const left = rect.left + rect.width / 2 - width / 2;
+    const top = rect.top >= height + 16 ? rect.top - height - 8 : rect.bottom + 8;
+    tip.style.left = Math.max(8, Math.min(left, window.innerWidth - width - 8)) + 'px';
+    tip.style.top = Math.max(8, Math.min(top, window.innerHeight - height - 8)) + 'px';
+  }
+  function scheduleHide() {
+    clearTimeout(closeTimer);
+    closeTimer = setTimeout(hide, 150);
+  }
+  dots.forEach(function(dot) {
+    const source = dot.querySelector('.tooltip');
+    if (!source) return;
+    dot.classList.add('payload-tooltip-ready');
+    dot.removeAttribute('title');
+    dot.setAttribute('aria-describedby', tip.id);
+    function show() {
+      clearTimeout(closeTimer);
+      active = dot;
+      tip.replaceChildren(...source.cloneNode(true).childNodes);
+      tip.hidden = false;
+      position();
+    }
+    dot.addEventListener('mouseenter', show);
+    dot.addEventListener('mouseleave', scheduleHide);
+    dot.addEventListener('focus', show);
+    dot.addEventListener('blur', hide);
+  });
+  tip.addEventListener('mouseenter', () => clearTimeout(closeTimer));
+  tip.addEventListener('mouseleave', scheduleHide);
+  window.addEventListener('resize', position);
+  document.addEventListener('scroll', position, true);
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') hide(); });
 });

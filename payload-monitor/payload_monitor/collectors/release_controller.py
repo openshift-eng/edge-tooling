@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://amd64.ocp.releases.ci.openshift.org"
 TAGS_URL = f"{BASE_URL}/api/v1/releasestream/{{stream}}/tags"
 RELEASE_URL = f"{BASE_URL}/api/v1/releasestream/{{stream}}/release/{{tag}}"
-_session = create_session()
+# Stream and payload workers share the pool and wait for reusable connections.
+_session = create_session(pool_block=True)
 
 _NIGHTLY_SUFFIX = ".0-0.nightly"
 

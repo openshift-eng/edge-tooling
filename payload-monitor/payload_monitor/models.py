@@ -143,6 +143,7 @@ class Regression:
     jira_bug: str = ""
     current_runs: int = 0
     deep_analysis: Optional[DeepAnalysis] = None
+    latest_failure_ms: int = 0
 
     @property
     def analysis_key(self) -> str:

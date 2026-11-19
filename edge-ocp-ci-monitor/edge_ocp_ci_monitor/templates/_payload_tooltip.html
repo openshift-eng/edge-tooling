@@ -1,0 +1,22 @@
+<span class="payload-tip-heading">
+  <span class="payload-tip-label">Nightly payload</span>
+  <span class="payload-tip-status" data-status="{{ payload.status.value }}">{{ payload.status.value }}</span>
+</span>
+<span class="payload-tip-release">{{ payload.tag }}</span>
+<span class="payload-tip-counts">
+  <span><span class="payload-tip-count"{% if b_fails %} data-severity="blocking"{% endif %}>{{ b_fails | length }}</span> blocking edge failure{{ 's' if b_fails | length != 1 else '' }}</span>
+  <span><span class="payload-tip-count"{% if i_fails %} data-severity="informing"{% endif %}>{{ i_fails | length }}</span> informing edge failure{{ 's' if i_fails | length != 1 else '' }}</span>
+</span>
+{% if b_fails %}
+<span class="payload-tip-section-title">Blocking jobs</span>
+<span class="payload-tip-jobs" role="list">
+  {% for job in b_fails %}
+  <span class="payload-tip-job" role="listitem">
+    <span class="payload-tip-job-name">{{ job.name }}</span>
+    <span class="badge {{ job.topology | lower }} payload-tip-topology">{{ job.topology }}</span>
+  </span>
+  {% endfor %}
+</span>
+{% elif not i_fails %}
+<span class="payload-tip-note">{% if payload.status.value == 'Rejected' %}Rejected for non-edge reasons{% elif payload.status.value == 'Accepted' %}All edge jobs passing{% else %}No edge failures observed{% endif %}</span>
+{% endif %}

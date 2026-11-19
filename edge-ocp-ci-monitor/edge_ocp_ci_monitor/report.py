@@ -5,12 +5,13 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 from payload_monitor.job_health import sippy_findings
-from payload_monitor.models import MonitorReport
+from payload_monitor.models import JobType, MonitorReport
 from payload_monitor.report import generator as payload_report
 
 from .analysis import build_targets
@@ -39,6 +40,22 @@ _JINJA_ENV.filters["safe_attempts"] = _safe_attempt_analyses
 _JINJA_ENV.filters["jira_links"] = _jira_links
 
 
+def _overview_blocking(all_failing: list[dict]) -> list[tuple[int, dict]]:
+    """Select recurring blockers and keep the latest row's full report index."""
+    counts = Counter()
+    latest = {}
+    for index, item in enumerate(all_failing, 1):
+        job = item["job"]
+        if job.job_type != JobType.BLOCKING:
+            continue
+        key = (item["version"], job.name)
+        counts[key] += 1
+        if key not in latest or item["date"] > latest[key][1]["date"]:
+            latest[key] = (index, item)
+    worst = sorted(latest, key=lambda key: (counts[key], latest[key][1]["date"]), reverse=True)[:5]
+    return sorted((latest[key] for key in worst), key=lambda row: row[1]["date"], reverse=True)
+
+
 @protect_logs(lambda *args, **kwargs: os.environ.get("CHAI_MCP_TOKEN", "").strip())
 def generate_html(
     report: MonitorReport, output_path: Path | None = None, *, ai_warnings: list[str] | None = None,
@@ -46,6 +63,9 @@ def generate_html(
     """Render Chai's template overrides with the existing dashboard data and assets."""
     report = redact_data(report, os.environ.get("CHAI_MCP_TOKEN", "").strip())
     context = payload_report._build_template_context(report)
+    context["overview_blocking"] = _overview_blocking(context["all_failing"])
+    context["overview_sippy"] = sorted(context["priority_sippy"], key=lambda finding: finding.latest_failure_ms,
+                                       reverse=True)
     jira_drafts_by_target = {}
     for bug in report.suggested_bugs:
         if _safe_urls([bug.create_url]):

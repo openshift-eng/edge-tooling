@@ -30,7 +30,8 @@ from payload_monitor.collectors.release_controller import (
     version_from_stream,
 )
 from payload_monitor.config import Config
-from payload_monitor.models import JobType, MonitorReport
+from payload_monitor.job_health import priority_sippy_findings, sippy_findings
+from payload_monitor.models import JobType, MonitorReport, Regression
 
 from . import component_readiness
 from .report import generate_html, generate_json, patch_analysis_html
@@ -41,6 +42,18 @@ from .security import protect_logs, redact_data
 class MonitorOutput:
     report: MonitorReport | None
     html_path: Path
+
+
+def _latest_sippy_failure(finding: Regression) -> int:
+    """Return the most recent failed Sippy run's timestamp in milliseconds."""
+    runs = timing.fetch_job_runs(finding.test_name, finding.version)
+    timestamps = (
+        timing._parse_sippy_timestamp(run.get("timestamp"))
+        for run in runs
+        if isinstance(run, dict) and run.get("overall_result") in ("F", "f", "U", "I", "N", "n")
+    )
+    latest = max((timestamp for timestamp in timestamps if timestamp is not None), default=None)
+    return int(latest.timestamp() * 1000) if latest else 0
 
 
 @protect_logs(lambda *args, **kwargs: os.environ.get("CHAI_MCP_TOKEN", "").strip())
@@ -109,7 +122,7 @@ def collect_report(
 
         if not skip_sippy:
             sippy_future = pool.submit(sippy.collect, config, active_versions)
-            cr_future = pool.submit(component_readiness.collect)
+            cr_future = pool.submit(component_readiness.collect, config.versions if versions else None)
 
         if with_timing:
             cache_path = Path(config.report_dir) / "timing_cache.json"
@@ -183,6 +196,12 @@ def collect_report(
         persistent_threshold=config.persistent_threshold,
         payloads_per_stream=config.payloads_per_stream,
     )
+
+    selected_sippy = priority_sippy_findings(sippy_findings(report))[:5]
+    if selected_sippy:
+        with ThreadPoolExecutor(max_workers=len(selected_sippy)) as pool:
+            for finding, timestamp in zip(selected_sippy, pool.map(_latest_sippy_failure, selected_sippy)):
+                finding.latest_failure_ms = timestamp
 
     report = redact_data(report, os.environ.get("CHAI_MCP_TOKEN", "").strip())
 

@@ -147,6 +147,9 @@ const sources = input.sources.map(attrs => {
   const source = element();
   source.dataset = dataset(attrs);
   source.classList.contains = name => attrs.class.split(' ').includes(name);
+  source.querySelector = selector => selector === '.sippy-cell-action a' && source.dataset.sippyKey
+    ? {getAttribute() { return 'https://sippy.example/' + attrs.id; }}
+    : null;
   elements[attrs.id] = source;
   return source;
 });
@@ -173,6 +176,13 @@ const document = {
 const drawer = document.getElementById('finding-drawer');
 drawer.showModal = () => {};
 drawer.close = () => drawer.events.close();
+let external;
+const actions = document.getElementById('finding-drawer-actions');
+actions.querySelector = () => external;
+actions.appendChild = link => {
+  external = link;
+  link.remove = () => { external = undefined; };
+};
 vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), {
   document, window: {location: {hash: ''}}
 });
@@ -180,6 +190,10 @@ callbacks.find(handler => handler.name !== 'setupTabScrolling')();
 rows.forEach((row, index) => {
   row.events.click({target: {closest() { return null; }}});
   const key = sources[index].dataset.analysisKey;
+  const isSippy = key.startsWith('sippy:');
+  assert.equal(external.className, 'dashboard-button');
+  assert.equal(external.textContent, isSippy ? 'View in Sippy' : 'View in Prow');
+  assert.equal(external.href, isSippy ? 'https://sippy.example/' + input.sources[index].id : sources[index].dataset.prowUrl);
   const expected = drafts.findIndex(draft => JSON.parse(draft.dataset.analysisKeys).includes(key));
   const action = document.getElementById('finding-drawer-bug');
   assert.equal(action.hidden, expected === -1);
@@ -341,6 +355,69 @@ def test_sippy_actions_offer_analysis_or_copyable_question(report, tmp_path, mod
         assert "Original diagnosis" in row
 
 
+def test_overview_resize_moves_only_the_shared_boundary():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to exercise column resizing")
+    script = Path(__file__).parents[1] / "edge_ocp_ci_monitor/templates/dashboard.js"
+    result = subprocess.run([node, "-e", r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const callbacks = [];
+class ResizeObserver {
+  constructor(callback) { this.callback = callback; }
+  observe(wrapper) { wrapper.resize = this.callback; }
+}
+function makeTable(defaultWidths) {
+  const wrapper = {clientWidth: 900};
+  const columns = Array.from({length: defaultWidths.length + 2}, () => ({style: {}}));
+  const widths = () => {
+    const fixed = defaultWidths.map((width, index) => parseFloat(columns[index].style.width) || width);
+    return [...fixed, Math.max(wrapper.clientWidth, 790) - 28 - fixed.reduce((sum, width) => sum + width, 0), 28];
+  };
+  const headers = columns.map((_, index) => ({
+    textContent: 'Header',
+    getBoundingClientRect() { return {width: widths()[index]}; },
+    appendChild(handle) { this.handle = handle; }
+  }));
+  return {
+    columns, headers, widths, style: {}, parentElement: wrapper,
+    querySelectorAll(selector) { return selector === 'thead th' ? headers : columns; }
+  };
+}
+const payload = makeTable([92, 378, 112]);
+const sippy = makeTable([378, 112]);
+const document = {
+  addEventListener(type, handler) { callbacks.push(handler); },
+  querySelectorAll() { return [payload, sippy]; },
+  createElement() {
+    return {setAttribute() {}, addEventListener(type, handler) { this[type] = handler; }};
+  }
+};
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), {
+  document, ResizeObserver, getComputedStyle() { return {minWidth: '790px'}; }
+});
+callbacks.find(handler => handler.name === 'setupFindingColumnResizing')();
+let neighbors = sippy.widths();
+payload.headers[1].handle.keydown({key: 'ArrowRight', preventDefault() {}});
+assert.deepEqual(payload.widths(), [92, 394, 96, 290, 28]);
+assert.deepEqual(sippy.widths(), neighbors);
+neighbors = payload.widths();
+sippy.headers[1].handle.keydown({key: 'ArrowLeft', preventDefault() {}});
+assert.deepEqual(sippy.widths(), [378, 96, 398, 28]);
+assert.deepEqual(payload.widths(), neighbors);
+for (const table of [payload, sippy]) {
+  assert.deepEqual(table.style, {});
+  assert.equal(table.headers.at(-2).handle, undefined);
+  table.parentElement.clientWidth = 790;
+  table.parentElement.resize();
+  assert.ok(table.widths().slice(0, -1).every(width => width >= 64));
+}
+""", str(script)], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
 def test_sippy_analysis_button_opens_card_without_closing_an_open_card(report):
     node = shutil.which("node")
     if node is None:
@@ -396,23 +473,30 @@ def test_findings_queue_preserves_targets_and_supports_data_only_reports(report,
     sippy_targets = re.findall(r'data-finding-source="([^"]+)"', sections["sippy"])
     assert all(target.startswith("detail-") for target in payload_targets)
     assert all(target.startswith("sippy-row-") for target in sippy_targets)
-    assert "Nightly Payload - Failure Analysis" in sections["payload"]
-    assert "Sippy Job Health Status" in sections["sippy"]
+    assert "Worse 5 blocking jobs" in sections["payload"]
+    assert "Worse 5 Sippy jobs" in sections["sippy"]
+    assert "data-finding-filter" not in html
+    assert "<th>Type</th>" not in sections["sippy"]
+    assert "finding-type-column" not in sections["sippy"]
+    assert "data-finding-kind=" not in sections["sippy"]
     assert "consecutive" not in sections["sippy"]
     assert "Selection:" not in sections["sippy"]
     assert '<details class="queue-selection"' not in html
     if mode == "mixed":
         assert sections["payload"].count('<table class="finding-table"') == 1
         assert sections["sippy"].count('<table class="finding-table"') == 1
+        assert all(re.search(r'<table[^>]+data-resize-columns>', section) for section in sections.values())
         assert "Current Pass Rate" not in sections["payload"]
+        assert "<th>Type</th>" in sections["payload"]
         assert "Recurrence" in sections["payload"]
         assert "Current Pass Rate" in sections["sippy"]
-        assert len(payload_targets) == 4  # Blocking and informing jobs in both releases.
+        assert len(payload_targets) == 2  # One blocking job in each release.
         assert len(sippy_targets) == 2
         assert {"sippy-row-1", "sippy-row-2"} <= set(references)
-        assert html.count('class="finding-job"') == 6
-        assert 'data-finding-kind="informing"' in sections["payload"]
-        assert 'data-finding-kind="informing"' not in sections["sippy"]
+        assert html.count('class="finding-job"') == 4
+        assert 'class="finding-blocking-label">blocking' in sections["payload"]
+        assert ">informing-job</button>" not in sections["payload"]
+        assert 'data-group="jobtype" data-value="informing"' in html
         assert 'id="tab-failure-analysis"' in html
         assert "https://prow.example/other-version" in html
     elif mode == "sippy-only":
@@ -422,6 +506,31 @@ def test_findings_queue_preserves_targets_and_supports_data_only_reports(report,
         assert references == []
         assert "All edge jobs are passing across all monitored payloads" in html
         assert 'id="tab-sippy-health"' not in html
+
+
+def test_overview_limits_by_severity_then_orders_latest_failures_first(report):
+    stream = report.streams[0]
+    stream.payloads = []
+    for day in range(1, 8):
+        name = "recurring" if day <= 2 else f"blocking-{day}"
+        job = JobRun(name, f"https://prow.example/{day}", JobResult.FAILURE, JobType.BLOCKING, "SNO")
+        tag = f"4.19.0-0.nightly-2026-11-{day:02d}-070000"
+        stream.payloads.append(Payload(tag, stream.stream, stream.version, PayloadStatus.REJECTED, jobs=[job]))
+    stream.regressions = [
+        Regression(f"sippy-{index}", "", "", "", 80, (index + 1) * 5, topology="SNO", current_runs=5,
+                   version=stream.version, latest_failure_ms=timestamp)
+        for index, timestamp in enumerate((200, 500, 400, 0, 600, 1000))
+    ]
+
+    html = generate_html(report)
+    for section, expected in (
+        ("payload", ["blocking-7", "blocking-6", "blocking-5", "blocking-4", "recurring"]),
+        ("sippy", ["sippy-4", "sippy-1", "sippy-2", "sippy-0", "sippy-3"]),
+    ):
+        markup = re.search(rf'<section[^>]*data-findings-section="{section}"[^>]*>(.*?)</section>', html, re.DOTALL)[1]
+        assert re.findall(r'<button[^>]*class="finding-job"[^>]*>([^<]+)</button>', markup) == expected
+        if section == "payload":
+            assert re.findall(r'data-finding-source="([^"]+)"', markup)[-1] == "detail-2"
 
 
 @pytest.mark.parametrize("scheme", ["http", "HTTP", "hTtP", "https", "HTTPS", "hTtPs"])
@@ -599,6 +708,37 @@ def test_renderer_skips_malformed_attempt_records():
     assert Links(html).hrefs == [SAFE_ATTEMPT["prow_url"]]
 
 
+@pytest.mark.parametrize("consecutive_failures", [3, 5])
+def test_stability_details_are_merged_into_failure_rows(report, consecutive_failures):
+    report.escalation_risks[0].consecutive_failures = consecutive_failures
+    report.failure_counts["informing-job"] = 3
+    stable_job = deepcopy(report.streams[0].payloads[0].jobs[1])
+    stable_job.name = "other-informing-job"
+    stable_job.prow_url = "https://prow.example/another-informing"
+    report.streams[0].payloads[0].jobs.append(stable_job)
+
+    html = generate_html(report)
+    overview = re.search(
+        r'<section[^>]*data-findings-section="payload"[^>]*>(.*?)</section>', html, re.DOTALL,
+    )[1]
+    assert "informing-job" not in overview
+    assert 'Warning - Monitor for Stability' not in html
+    assert 'fs-section-warning' not in overview
+    detail = re.search(r'data-job-name="informing-job">\s*<summary>(.*?)</summary>', html, re.DOTALL)[1]
+    assert 'class="badge escalation-risk">Unstable</span>' in detail
+    assert 'class="badge persistent"' in detail
+    assert 'consecutive' not in detail
+    stable = re.search(r'data-job-name="other-informing-job">\s*<summary>(.*?)</summary>', html, re.DOTALL)[1]
+    assert 'Unstable' not in stable
+    assert 'consecutive' not in stable
+    assert 'finding-streak' not in html
+    assert 'badge-legend' not in overview
+    legend = re.search(r'<div class="badge-legend">(.*?)</div>', html, re.DOTALL)[1]
+    assert 'Unstable' in legend
+    assert 'informing job failing 3+ consecutive payloads' in legend
+    assert html.index('id="tab-failure-analysis"') < html.index('class="badge-legend"')
+
+
 @pytest.mark.parametrize("scheme", ["https", "HTTPS", "hTtPs"])
 def test_valid_https_attempt_is_preserved_without_normalizing_its_url(scheme):
     raw = asdict(diagnosis())
@@ -622,6 +762,10 @@ def test_retry_evidence_prevents_all_healthy_banner(report, retried):
     assert ("All edge jobs are passing across all monitored payloads" in html) is not retried
     assert ("Warning - Passed After Retry" in html) is retried
     if retried:
+        analysis_tab = html.split('id="tab-failure-analysis"', 1)[1].split('<!-- /tab-failure-analysis -->', 1)[0]
+        assert analysis_tab.index("Nightly Payload - Failure Analysis") < analysis_tab.index("Warning - Passed After Retry")
+        assert html.index("Warning - Passed After Retry") < html.index("Chai-recommended New Bugs")
+        assert html.count("Warning - Passed After Retry") == 1
         assert job.prow_url in Links(html).hrefs
         assert job.previous_attempts[0].prow_url in Links(html).hrefs
 
@@ -645,7 +789,8 @@ def test_dashboard_actions_have_keyboard_semantics_and_destinations(report):
         assert attrs.get("onkeydown")
         classes.update(attrs.get("class", "").split())
         actions.append(attrs)
-    assert {"health-status", "health-count", "fs-blocking-row", "fs-escalation-item", "fs-situation-item"} <= classes
+    assert {"health-status", "health-count", "fs-blocking-row", "fs-situation-item"} <= classes
+    assert "fs-escalation-item" not in classes
     result = subprocess.run([node, "-e", r"""
 const assert = require('node:assert/strict');
 const actions = JSON.parse(process.argv[1]);

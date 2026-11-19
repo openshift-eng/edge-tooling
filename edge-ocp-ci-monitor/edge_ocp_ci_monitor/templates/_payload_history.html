@@ -37,33 +37,3 @@
     </div>
   </div>
   {% endif %}
-
-  {# WARNING: Informing failures - surface escalation risks by name #}
-  {% if escalation_risks %}
-  <div class="fs-section fs-section-warning">
-    <div class="fs-section-header">
-      <div class="fs-severity-icon fs-icon-warning" title="Warning - monitor for stability">&#9650;</div>
-      <div class="fs-section-content">
-        <div class="fs-priority-label">Warning - Monitor for Stability</div>
-        <div class="fs-section-title">{{ ns.informing_failures }} Informing Job Failure{{ 's' if ns.informing_failures != 1 else '' }}</div>
-        <div class="fs-section-desc">across {{ ns.total_payloads }} payload{{ 's' if ns.total_payloads != 1 else '' }} - not blocking</div>
-      </div>
-      <a href="#section-edge-failures" class="fs-section-action fs-action-warning" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" onclick="event.preventDefault();jumpToFailures(null,'informing')">View All &#8594;</a>
-    </div>
-    {% if escalation_risks %}
-    <div class="fs-escalation-list">
-      {% for er in escalation_risks %}
-      <a href="#section-edge-failures" class="fs-escalation-item fs-job-card" role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" onclick="event.preventDefault();scrollToJob({{ er.job_name | js_attr }})">
-        <span class="fs-escalation-left">
-          <span class="fs-escalation-name">{{ er.job_name }}</span>
-          <span class="badge escalation-risk">Unstable</span>
-          <span class="badge {{ er.topology | lower }}">{{ er.topology }}</span>
-          <span class="fs-job-version">{{ er.version }}</span>
-        </span>
-        <span class="fs-escalation-streak">{{ er.consecutive_failures }}x consecutive</span>
-      </a>
-      {% endfor %}
-    </div>
-    {% endif %}
-  </div>
-  {% endif %}
