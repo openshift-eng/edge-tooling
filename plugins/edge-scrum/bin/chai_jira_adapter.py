@@ -22,6 +22,7 @@ unset custom field prints no line at all::
         Type: Story | Status: Code Review | Priority: Major | Assignee: <name> | Reporter: <name> | Resolution: Done
         Created: 2030-01-02 | Updated: 2030-01-06 | Resolved: 2030-01-06
         Components: <name> | Labels: a, b | Fix Versions: x | Parent: KEY-100
+        URL: <browse link>
         customfield_10020: <name> (id N, <state>, board B, start <iso>, end <iso>, completed <iso>); <name> (...)
         customfield_10028: <story points>
         customfield_<id>: <value>
@@ -121,7 +122,8 @@ CUSTOM_FIELDS = {
     "customfield_10018",  # Parent Link
     "customfield_10021",  # Flagged (no line when unset; skipped signal when rejected)
 }
-IGNORED_FIELDS = {"issuelinks"}  # query_jira prints "(set, but ... cannot render ...)"
+# issuelinks: query_jira prints "(set, but ... cannot render ...)"; url: the issue's browse link.
+IGNORED_FIELDS = {"issuelinks", "url"}
 LIST_FIELDS = {"components": "components", "labels": "labels", "fix versions": "fixVersions",
                "fixversions": "fixVersions", "fix version": "fixVersions"}
 # Labels that may share a line with others (`` | ``-separated); see _segments.

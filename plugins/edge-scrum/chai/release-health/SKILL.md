@@ -1,6 +1,6 @@
 ---
 name: release-health
-description: Read-only coordinator skill that reports team-level health for one release in its current phase — refinement and test-plan spike gaps in the refinement sprint; capacity vs scope, cut line and features at risk from development through pre-branch-cut
+description: Read-only coordinator skill that reports team-level health for one release in its current phase — refinement and test-plan spike gaps in the refinement sprint; capacity vs scope, cut line and features at risk from development through pre-branch-cut — plus the epic Target Version and QA Contact flags of decision 0024
 ---
 
 # Release Health (chai-bot coordinator)
@@ -214,11 +214,75 @@ Capacity vs scope, cut line and features at risk, with release-planning's
    `ABOVE_GUIDELINE` flags are dropped; roster drift becomes a count with its SP,
    listed as left out. No prompt about roster drift.
 
-### 5. Return the result
+### 5. Epic Target Version and QA Contact (decision 0024)
+
+Flags for active OCPEDGE epics with a parent (edge-context decision 0024). They
+do not depend on the release: the weekly report runs this step **once**, not
+once per release section. Epic statuses use the exact law 04 names: **active**
+epics are To Do, In Progress, Dev Complete, Testing and Release Pending (not
+New or Planning, which are still being refined, and not Closed).
+
+1. **Active epics with a parent**, paged by key until complete (see Jira paging):
+   `project = OCPEDGE AND issuetype = Epic AND status in ("To Do", "In Progress", "Dev Complete", "Testing", "Release Pending") AND parent is not EMPTY`
+   — fields `summary, status, assignee, parent, customfield_10855,
+   customfield_10470`. Adapt with `adapt_fetch` (name `epics`).
+2. **Their parents**, by key, in batches of up to 40 distinct parent keys (so
+   each batch fits on one page):
+   `key in (<parent keys>)` — fields `summary, issuetype, status,
+   customfield_10855, customfield_10470`. Adapt each batch with `adapt_fetch`
+   and keep the keys it asked for: `{"keys": [<keys sent>], "result": <adapted>}`.
+   If a batch call fails or its fetch is incomplete (for example a JQL error
+   naming a key you cannot see), query that batch's keys again one at a time
+   (`key = <KEY>`), each as its own `{"keys": [<KEY>], ...}` entry; a key that
+   still fails is recorded as `{"keys": [<KEY>], "error": "<the reason given>"}`.
+3. `gaps = chai_report.epic_field_gaps(epics, parent_batches, previous_flagged)`
+   flags active epics only (any other status returned is ignored). Each
+   problem has a label, in full words:
+   - **"no Target Version"** (all active epics);
+   - **"no QA Contact"** (all active epics; `unassigned_jira` counts as none);
+   - **"Target Version ≠ feature"** (To Do and In Progress only, and only when
+     the parent has a Target Version): the epic's version is not among the
+     parent's version names (a parent with two versions matches either); the
+     owner decides: retarget, split or keep? From Dev Complete on, finished work
+     keeps its release;
+   - **"feature closed"** / **"feature in backlog"** (all active epics): the
+     parent is Closed or in Backlog;
+   - **"no assignee"** (all active epics): the epic goes on the **Scrum
+     Master's** line, as team-level action items do.
+
+   `previous_flagged` is the previous report's flagged epic keys, if the
+   persona's memory holds them; otherwise pass `None` and no epic is marked new.
+   Never reconstruct the previous set. If the persona can keep memory, store
+   `gaps["flagged_keys"]` after posting, for next week, **only when
+   `gaps["complete"]` is true** (a failed or partial run would make next
+   week's returning flags look new).
+
+   An empty field prints no line, so a missing line is an empty field.
+4. Parents that could not be read (restricted, deleted, no permission, a failed
+   or cut-off page) are never guessed: those epics skip the two checks that need
+   the parent, and the result lists them as left out with the reason. An
+   incomplete epic fetch computes nothing; the rest of the report is unaffected.
+
+The flags are one thread reply with **one line per owner** (the epic's
+assignee, or the Scrum Master for epics with no assignee):
+`• <owner>: OCPEDGE-1234 (no Target Version, no QA Contact), OCPEDGE-5678 (feature closed)`
+— full issue keys and labels only, no summaries, versions or parent keys.
+Within a line, epics with the most problems come first, then by key; 🆕 marks
+an epic not flagged in the previous report (only when `previous_flagged` was
+given). Owners with the most epics come first. The first line is
+`*Epic fields* (N epics: X no Target Version, Y no QA Contact, Z Target
+Version ≠ feature, W feature closed or in backlog, V no assignee)` with zero
+counts left out, followed by `Key: "Target Version ≠ feature" = retarget, split
+or keep?` when that label appears. At most 10 owner lines, then "+N more
+owner(s)" (their epics are under "Left out"). Nothing flagged → no reply at
+all. The flags are informational: they never change the top post's colour,
+risk line or action count.
+
+### 6. Return the result
 
 Return the section dict (with `kind`: `refinement` or `release-health`) to the
 caller. Run on its own (for example in a DM), reply with
-`chai_report.build_report(None, [section], left_out, mentions)`.
+`chai_report.build_report(None, [section], left_out, mentions, epic_gaps=gaps)`.
 
 Release testing (EC/RC validation after branch cut, decision 0017) is out of scope.
 
@@ -231,5 +295,7 @@ Release testing (EC/RC validation after branch cut, decision 0017) is out of sco
 | Features did not fit on one rank-ordered page | Cut line left out; scope and risk still reported |
 | Velocity | Scope only; capacity, cut line and features at risk left out |
 | A remaining sprint's availability | That sprint not adjusted, labelled "not PTO-adjusted" |
+| Open-epic fetch incomplete | No epic flags; "Epic Target Version and QA Contact checks" left out with the reason |
+| An epic's parent not readable | That epic skips the Target Version and parent status checks; left out with the reason |
 
 Never fill a gap from memory or by estimating.

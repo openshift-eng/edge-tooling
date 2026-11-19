@@ -113,7 +113,7 @@ Playbooks under [`chai/`](chai/) are for the chai-bot coordinator, not Claude Co
 |-------|--------------|
 | [`scrum-context`](chai/scrum-context/SKILL.md) | Current sprint and week, release phases, ceremonies, team availability per sprint |
 | [`sprint-health`](chai/sprint-health/SKILL.md) | Team-level sprint health: capacity mode in week 1, mid-sprint mode after |
-| [`release-health`](chai/release-health/SKILL.md) | One release: refinement and test-plan spike gaps, or capacity vs scope, cut line and features at risk |
+| [`release-health`](chai/release-health/SKILL.md) | One release: refinement and test-plan spike gaps, or capacity vs scope, cut line and features at risk; epic Target Version and QA Contact flags (decision 0024) |
 | [`weekly-health-report`](chai/weekly-health-report/SKILL.md) | The weekly report of edge-context decision 0018: 3-line post, details and owner-mentioned actions in the thread |
 
 #### `scrum-context`

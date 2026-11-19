@@ -489,6 +489,284 @@ def refinement_gaps(features, spikes, section, refinement_sprint_closed=False):
     return out
 
 
+# ---------------------------------------------------------------- epic Target Version and QA Contact
+
+EPIC_FIELDS = "epic-fields"
+EPIC_LINE_LIMIT = 10  # owner lines in the epic section
+# Parent statuses flagged by decision 0024, by their exact OCPSTRAT names.
+PARENT_FLAGGED_STATUSES = ("Backlog", "Closed")
+# Epic statuses, by their exact law 04 names (decision 0024): active epics are
+# "To Do" through "Release Pending" (refinement done, not Closed; New and
+# Planning are still being refined). Drift is flagged only before work is done.
+ACTIVE_EPIC_STATUSES = ("To Do", "In Progress", "Dev Complete", "Testing", "Release Pending")
+DRIFT_EPIC_STATUSES = ("To Do", "In Progress")
+NO_QA_CONTACT = ("unassigned_jira",)  # placeholder account used for "no QA Contact"
+DRIFT_LABEL = "Target Version \u2260 feature"  # the epic's Target Version differs from its parent's
+DRIFT_QUESTION = "retarget, split or keep?"
+# (check id, label in the section header), in the order labels are listed for an epic.
+EPIC_CHECKS = (
+    ("no_target_version", "no Target Version"),
+    ("no_qa_contact", "no QA Contact"),
+    ("target_version_differs", DRIFT_LABEL),
+    ("parent_backlog_or_closed", "feature closed or in backlog"),
+)
+# Not a decision 0024 check, but listed with the epic; the epic goes on the Scrum Master's line.
+NO_ASSIGNEE = ("no_assignee", "no assignee")
+_EPIC_SECTION = "Epic Target Version and QA Contact checks"
+
+
+def _text(value):
+    """A field value as stripped text: a dict's ``name`` / ``display_name`` /
+    ``displayName`` / ``value``, a plain string; None when empty or unreadable."""
+    if isinstance(value, dict):
+        value = next((value.get(k) for k in ("name", "display_name", "displayName", "value")
+                      if isinstance(value.get(k), str) and value.get(k).strip()), None)
+    if not isinstance(value, str) or not value.strip() or value.strip() in ("None", "Unassigned"):
+        return None
+    return value.strip()
+
+
+def _versions(value):
+    """Target Version names: from the adapter's ``[{"name": ...}]`` list, a list of
+    strings, or a comma-separated string. A missing field is an empty list."""
+    if isinstance(value, str):
+        value = value.split(",")
+    if not isinstance(value, list):
+        value = [value] if isinstance(value, dict) else []
+    return [name for name in (_text(v) for v in value) if name]
+
+
+def _qa_contact(issue):
+    """QA Contact display name, or None when unset or the ``unassigned_jira`` placeholder."""
+    name = _text(issue.get("customfield_10470"))
+    return None if name is None or name.casefold() in NO_QA_CONTACT else name
+
+
+def _status_is(issue, *names):
+    """Whether the issue's status is one of ``names`` (case-insensitive)."""
+    status = _text(issue.get("status"))
+    return status is not None and status.casefold() in {n.casefold() for n in names}
+
+
+def _issues_of(fetch):
+    """``(issues, problem, rejected)`` from an ``adapt_fetch`` result.
+
+    ``problem`` is None when the fetch is complete. ``rejected`` counts the
+    records that are not a dict or have no string ``key``: they are skipped, the
+    valid ones are still returned.
+    """
+    if not isinstance(fetch, dict):
+        return [], "result not readable", 0
+    status = fetch.get("fetch")
+    if not isinstance(status, dict) or not isinstance(fetch.get("issues"), list):
+        return [], "fetch status missing", 0
+    if not status.get("complete"):
+        problems = status.get("problems")
+        why = "; ".join(str(p) for p in problems) if isinstance(problems, list) and problems else None
+        return [], f"fetch incomplete ({why or 'reason not given'})", 0
+    issues = [i for i in fetch["issues"] if isinstance(i, dict) and isinstance(i.get("key"), str)]
+    return issues, None, len(fetch["issues"]) - len(issues)
+
+
+def _read_parents(parent_batches):
+    """Parent issues by key, and the reason each unreadable requested key was not read.
+
+    Each batch is ``{"keys": [requested keys], "result": adapt_fetch output}`` or
+    ``{"keys": [...], "error": "<why>"}``. A failed or incomplete batch makes all
+    its keys unread; a requested key a complete batch did not return is unread
+    (restricted, deleted or no permission).
+    """
+    parents, unread = {}, {}
+    if isinstance(parent_batches, dict):
+        parent_batches = [parent_batches]
+    if not isinstance(parent_batches, (list, tuple)):
+        return parents, unread, "parent results not readable"
+    for batch in parent_batches:
+        if not isinstance(batch, dict):
+            continue
+        keys = [k for k in batch.get("keys") or [] if isinstance(k, str)] \
+            if isinstance(batch.get("keys"), list) else []
+        if batch.get("error"):
+            unread.update({k: f"query failed ({batch['error']})" for k in keys})
+            continue
+        issues, problem, _ = _issues_of(batch.get("result"))  # a rejected record's key stays unread
+        if problem:
+            unread.update({k: problem for k in keys})
+            continue
+        parents.update({i["key"]: i for i in issues})
+        unread.update({k: "not returned by Jira (restricted, deleted or no permission)"
+                       for k in keys if k not in parents})
+    for key in parents:
+        unread.pop(key, None)  # read in another batch
+    return parents, unread, None
+
+
+def epic_field_gaps(epics, parent_batches=(), previous_flagged=None):
+    """Decision 0024 flags for active OCPEDGE epics with a parent.
+
+    ``epics`` is the ``adapt_fetch`` output of the active-epics query (fields
+    summary, status, assignee, parent, Target Version ``customfield_10855``, QA
+    Contact ``customfield_10470``); ``parent_batches`` holds the parent lookups
+    (see :func:`_read_parents`). Only active epics are checked
+    (:data:`ACTIVE_EPIC_STATUSES`: To Do through Release Pending; New, Planning
+    and Closed are ignored):
+
+    1. ``target_version_differs`` — To Do or In Progress only, and only when the
+       parent has a Target Version: the epic's Target Version is not among the
+       parent's (a parent with several versions matches any of them). From Dev
+       Complete on, finished work keeps its release.
+    2. ``no_target_version`` — any active epic with no Target Version.
+    3. ``no_qa_contact`` — any active epic with no QA Contact
+       (``unassigned_jira`` counts as none).
+    4. ``parent_backlog_or_closed`` — any active epic whose parent is in Backlog
+       or Closed.
+
+    An active epic with no assignee also gets ``no_assignee`` and goes on the
+    Scrum Master's line (``build_report``'s ``team_owner``).
+
+    ``checks`` keeps each check's items (counts). ``epics`` merges them into one
+    entry per flagged epic (``key``, ``summary``, ``owner``, ``problems``: labels
+    in check order, ``new``), sorted by number of problems (most first), then
+    key. ``previous_flagged`` is the previous report's flagged epic keys, from
+    persona memory: when given, ``new`` marks epics not in it (🆕); when None,
+    ``new`` is None and no marker is shown. ``flagged_keys`` is this run's set,
+    to store for next time, but only when ``complete`` is True: every epic was
+    read and checked (no failed or cut-off fetch, no unreadable parent or
+    record). An incomplete set stored as last week's would mark returning flags
+    🆕; ``[]`` from a complete run with no flags is a valid set.
+
+    An epic whose parent could not be read skips the checks that need the
+    parent (1 and 4) and is listed as left out with the reason. An incomplete epic fetch computes nothing. Never
+    raises on malformed input: what cannot be read is left out.
+
+    Informational: ``risks`` and ``actions`` stay empty, so the flags never change
+    the report's colour, risk line or action count; the count is in the section
+    header only.
+    """
+    out = {"kind": EPIC_FIELDS, "epics_checked": 0, "flagged": 0,
+           "checks": {cid: [] for cid, _ in EPIC_CHECKS + (NO_ASSIGNEE,)}, "epics": [], "flagged_keys": [], "complete": False,
+           "risks": [], "actions": [], "left_out": []}
+    issues, problem, rejected = _issues_of(epics)
+    if problem:
+        out["left_out"].append({"what": _EPIC_SECTION, "why": f"open-epic {problem}"})
+        return out
+    parents, unread, parents_problem = _read_parents(parent_batches)
+    no_parent, skipped = [], {}
+    for epic in issues:
+        if not _status_is(epic, *ACTIVE_EPIC_STATUSES):
+            continue
+        parent_key = _text(epic.get("parent")) if not isinstance(epic.get("parent"), dict) \
+            else _text(epic["parent"].get("key"))
+        if not parent_key:
+            no_parent.append(epic["key"])
+            continue
+        out["epics_checked"] += 1
+        parent = parents.get(parent_key)
+        versions, owner = _versions(epic.get("customfield_10855")), _owner_of(epic)
+        p_versions = _versions(parent.get("customfield_10855")) if parent else []
+        base = {"key": epic["key"], "summary": _text(epic.get("summary")) or "", "owner": owner}
+        if not versions:
+            out["checks"]["no_target_version"].append(dict(base, detail="no Target Version"))
+        if parent is None:
+            skipped.setdefault(parent_key, []).append(epic["key"])
+        # A parent with no Target Version is not drift (nothing to differ from).
+        if (parent and versions and p_versions and _status_is(epic, *DRIFT_EPIC_STATUSES)
+                and any(v not in p_versions for v in versions)):
+            out["checks"]["target_version_differs"].append(dict(base, detail=DRIFT_LABEL))
+        if _qa_contact(epic) is None:
+            out["checks"]["no_qa_contact"].append(dict(base, detail="no QA Contact"))
+        if parent and _status_is(parent, *PARENT_FLAGGED_STATUSES):
+            closed = _status_is(parent, "Closed")
+            out["checks"]["parent_backlog_or_closed"].append(
+                dict(base, detail="feature closed" if closed else "feature in backlog"))
+        if owner is None:
+            out["checks"][NO_ASSIGNEE[0]].append(dict(base, detail=NO_ASSIGNEE[1]))
+    by_key = {}
+    for cid, _ in EPIC_CHECKS + (NO_ASSIGNEE,):
+        out["checks"][cid].sort(key=lambda i: _key_number(i["key"]))
+        for item in out["checks"][cid]:
+            entry = by_key.setdefault(item["key"], {"key": item["key"], "summary": item["summary"],
+                                                    "owner": item["owner"], "problems": [], "new": None})
+            entry["problems"].append(item["detail"])
+    previous = ({k for k in previous_flagged if isinstance(k, str)}
+                if isinstance(previous_flagged, (list, tuple, set, frozenset)) else None)
+    for entry in by_key.values():
+        entry["new"] = None if previous is None else entry["key"] not in previous
+    out["epics"] = sorted(by_key.values(), key=lambda e: (-len(e["problems"]), _key_number(e["key"])))
+    out["flagged"] = len(out["epics"])
+    out["flagged_keys"] = sorted(by_key, key=_key_number)
+    by_reason = {}
+    for key in sorted(skipped, key=_key_number):
+        why = unread.get(key) or parents_problem or "not fetched"
+        by_reason.setdefault(why, []).append(key)
+    for why, keys in by_reason.items():
+        count = sum(len(skipped[k]) for k in keys)
+        out["left_out"].append({"what": f"Target Version and parent status checks for {count} epic(s) "
+                                        f"under {', '.join(keys)}",
+                                "why": f"parent could not be read: {why}"})
+    if no_parent:
+        out["left_out"].append({"what": f"{len(no_parent)} epic(s) returned without a parent",
+                                "why": "not checked: " + ", ".join(sorted(no_parent, key=_key_number))})
+    if rejected:
+        out["left_out"].append({"what": f"{rejected} epic record(s) could not be read",
+                                "why": "not an issue record or no issue key; not checked"})
+    out["complete"] = not (skipped or no_parent or rejected)
+    return out
+
+
+def _owner_of(issue):
+    """An adapted issue's assignee display name, or None when unassigned."""
+    return _text(issue.get("assignee"))
+
+
+def _key_number(key):
+    """Sort key for an issue key: (project, number); ``(key, 0)`` when the suffix is
+    not a plain decimal number (``isdigit`` alone accepts "²", which ``int`` rejects)."""
+    project, _, num = str(key).rpartition("-")
+    if num.isdecimal():
+        try:
+            return (project, int(num))
+        except ValueError:
+            pass
+    return (str(key), 0)
+
+
+def _epic_section(sec, mentions, team_owner=None):
+    """``(lines, left_out)`` for the epic section: one line per owner, capped.
+
+    Header: counts per check (zero counts omitted) and the key for
+    "Target Version ≠ feature". Each owner line lists that owner's epics as
+    ``KEY (label, label)``, most problems first, then key; 🆕 marks an epic
+    not flagged last time (only when the previous set was known). An epic with
+    no assignee goes on the Scrum Master's line (``team_owner``), else under
+    "no owner set". Owners are sorted by number of epics; after 10 owner lines,
+    "+N more owner(s)" and their epics go to Left out.
+    """
+    counts = [f"{len(sec['checks'][cid])} {label}" for cid, label in EPIC_CHECKS + (NO_ASSIGNEE,)
+              if sec["checks"].get(cid)]
+    n = sec["flagged"]
+    head = f"*Epic fields* ({n} epic{'s' if n != 1 else ''}: {', '.join(counts)})"
+    if sec["checks"].get("target_version_differs"):
+        head += f'. Key: "{DRIFT_LABEL}" = {DRIFT_QUESTION}'
+    groups = {}
+    for e in sec["epics"]:  # already sorted by number of problems, then key
+        groups.setdefault(e["owner"] or team_owner, []).append(e)
+    owners = sorted(groups, key=lambda o: (-len(groups[o]), o is None, str(o or "").casefold()))
+
+    def items(owner):
+        return ", ".join(f"{'🆕 ' if e.get('new') else ''}{e['key']} ({', '.join(e['problems'])})"
+                         for e in groups[owner])
+
+    lines = [head] + [f"• {mention(o, mentions)}: {items(o)}" for o in owners[:EPIC_LINE_LIMIT]]
+    rest = owners[EPIC_LINE_LIMIT:]
+    left_out = []
+    if rest:
+        lines.append(f"• +{len(rest)} more owner(s) (listed under Left out)")
+        left_out.append({"what": f"{len(rest)} more owner(s) over the {EPIC_LINE_LIMIT}-line limit",
+                         "why": "; ".join(f"{mention(o, mentions)}: {items(o)}" for o in rest)})
+    return lines, left_out
+
+
 # ---------------------------------------------------------------- report
 
 
@@ -556,7 +834,7 @@ def _sprint_lines(s):
     return lines
 
 
-def build_report(sprint, sections, missing=(), mentions=None, team_owner=None):
+def build_report(sprint, sections, missing=(), mentions=None, team_owner=None, epic_gaps=None):
     """Assemble the Slack post: a 3-line top post and thread replies.
 
     ``sprint`` is :func:`sprint_health` output (or None when it could not be
@@ -564,7 +842,12 @@ def build_report(sprint, sections, missing=(), mentions=None, team_owner=None):
     outputs (``kind`` set); ``missing`` lists ``{"what", "why"}`` left out.
     ``mentions`` maps an owner display name to a Slack mention. ``team_owner``
     (the Scrum Master) owns team-level actions such as re-planning; without it
-    they keep "no owner set". Returns
+    they keep "no owner set". ``epic_gaps`` is :func:`epic_field_gaps` output:
+    its flags get one reply after the release sections (none when nothing is
+    flagged), one line per owner tagging them (the Scrum Master, ``team_owner``,
+    for epics with no assignee); what it left out joins
+    "Left out". It is informational: it never changes the top post (colour,
+    risk line, action count). A malformed value is left out, never raised. Returns
     ``{"top_post": [3 lines], "replies": [...], "action_count": N}``.
     """
     left_out_sprint = []
@@ -574,11 +857,22 @@ def build_report(sprint, sections, missing=(), mentions=None, team_owner=None):
     if any("risks" not in p for p in parts):
         raise ValueError("build_report needs sprint_health / release_health / refinement_gaps results, "
                          "not select_sections descriptors")
+    epic_lines, epic_left_out = [], []
+    if epic_gaps is not None:
+        try:
+            if epic_gaps.get("kind") != EPIC_FIELDS:
+                raise TypeError("not an epic_field_gaps result")
+            epic_lines, capped = (_epic_section(epic_gaps, mentions, team_owner) if epic_gaps["flagged"]
+                                  else ([], []))
+            epic_left_out = [{"what": str(x["what"]), "why": str(x["why"])} for x in epic_gaps["left_out"]] + capped
+        except (AttributeError, KeyError, TypeError, ValueError):
+            epic_lines, epic_left_out = [], [{"what": _EPIC_SECTION, "why": "result not readable"}]
     risks = [r for p in parts for r in p["risks"]]
     actions = [dict(a, owner=team_owner) if a.get("team") and not a.get("owner") and team_owner else a
                for p in parts for a in p["actions"]]
     left_out = list(missing) + left_out_sprint + [x for p in parts for x in p.get("left_out", [])]
     status = RED if any(r["severity"] == RED for r in risks) else YELLOW if risks or left_out else GREEN
+    left_out += epic_left_out  # listed, but informational: not part of the colour
     where = []
     if sprint:
         where.append(f"{sprint['sprint']} (week {sprint['week']}, {sprint['mode']})")
@@ -595,6 +889,8 @@ def build_report(sprint, sections, missing=(), mentions=None, team_owner=None):
         replies.append("\n".join(_sprint_lines(sprint)))
     for sec in sections:
         replies.append("\n".join(_section_lines(sec)))
+    if epic_lines:
+        replies.append("\n".join(epic_lines))
     if actions:
         replies.append("\n".join(["*Action items*"] + [
             f"{n}. {a['text']} (owner: {mention(a['owner'], mentions)})" for n, a in enumerate(actions, 1)]))

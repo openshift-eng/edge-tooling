@@ -17,7 +17,7 @@ uses no sub-agents.
 |------|----------|
 | `scrum-context` skill | Current sprint and week, releases in progress, phases, availability |
 | `sprint-health` skill | Sprint section (capacity or mid-sprint mode) |
-| `release-health` skill | One release section per release in progress |
+| `release-health` skill | One release section per release in progress; the epic Target Version and QA Contact flags (once per report) |
 | Slack user lookup by email (as the persona does) | Owner mentions |
 | Slack post | The top post and its thread replies |
 | `sandbox_exec` (Python) | `plugins/edge-scrum/bin/chai_report.py` and the scripts the skills use |
@@ -113,21 +113,46 @@ window and phase already read). Collect the **computed** results
 any section it returns as missing to `missing`. `select_sections` only chooses
 sections: never pass its descriptors to `build_report`.
 
+Then run release-health's **epic Target Version and QA Contact** step (step 5,
+decision 0024) **once** for the report, whatever the number of release
+sections: `gaps = chai_report.epic_field_gaps(epics, parent_batches,
+previous_flagged)`. `previous_flagged` is last week's `gaps["flagged_keys"]`
+from persona memory, or `None` when memory doesn't have it (then no epic is
+marked 🆕). If its fetches fail, the result lists what was left out and why;
+every other section is posted as usual.
+
 ### 5. Owner mentions
 
 Each action item names its owner: the SME (feature-level items), the QE Lead
-(test plan spikes), or the assignee (sprint issues). Team-level items (re-plan
-or re-scope the sprint) belong to the **Scrum Master**:
+(test plan spikes), or the assignee (sprint issues). Each flagged epic names its
+assignee; an epic with no assignee names the Scrum Master. Team-level items
+(re-plan or re-scope the sprint) belong to the **Scrum Master**:
 `chai_jira_adapter.find_scrum_master(team_roster_md, scrum_master_md)` reads it
 from a roster row whose role contains "Scrum Master", or a
 `Current Scrum Master: <name>` line in edge-context `roles/scrum-master.md`.
-When neither names one, those items keep "no owner set". For each distinct owner:
+When neither names one, those items keep "no owner set". Collect the owners to
+look up in the sandbox. Team-level items carry no owner until `build_report`
+gives them the Scrum Master, and the same goes for epics with no assignee, so
+add the Scrum Master yourself. `gaps["epics"]` is the list of flagged epics
+(one entry per epic):
 
-1. Find the owner in `ROSTER_SOURCE` by display name
-   (`parse_team_roster(...)["contacts"]`, matched case- and space-insensitively).
-2. Their Rover ID is the last part of the profile link; email = `<Rover ID>@redhat.com`.
+```python
+parts = ([sprint] if sprint else []) + computed
+owners = {a["owner"] for part in parts for a in part["actions"] if a.get("owner")}
+owners |= {epic["owner"] for epic in gaps["epics"] if epic["owner"]}
+if scrum_master:
+    owners.add(scrum_master)
+```
+
+An empty epic result adds no owner; an owner of several epics counts once. For
+each owner:
+
+1. Find the owner's row in `parse_team_roster(...)["contacts"]` by
+   `display_name`, matched case- and space-insensitively.
+2. The row's `email` is `<Rover ID>@redhat.com`, taken from its Rover profile
+   link (None when the row has no link).
 3. Look up the Slack user by that email; the mention is `<@USER_ID>`.
-4. No roster row, no Rover link, or no Slack user → the name, without a mention.
+4. No roster row, no email, or no Slack user → the name, without a mention.
 
 Pass the result as `mentions = {display name: "<@USER_ID>"}`. Whether a mention
 pings follows the platform's **Allow Mentions** setting for that person; the
@@ -136,15 +161,20 @@ report does not decide it. Do this lookup outside the sandbox.
 ### 6. Build and post
 
 ```python
-report = chai_report.build_report(sprint, computed, missing, mentions, team_owner=scrum_master)
+report = chai_report.build_report(sprint, computed, missing, mentions, team_owner=scrum_master,
+                                  epic_gaps=gaps)
 ```
 
 - **Top post** = `report["top_post"]`, exactly three lines: status and where we
   are; the biggest risk (or "No risks this week" with the sprint figures);
   "N items need action".
 - **Thread replies** = `report["replies"]`, in order: sprint health, one reply per
-  release section, action items (each with its owner), and "Left out" (missing
-  sections and signals, with reasons).
+  release section, the epic Target Version and QA Contact flags (only when any
+  epic is flagged; counts per check in its first line, then one line per
+  owner, at most 10 owners; informational, so it never changes the top post),
+  action items (each with its owner), and "Left out" (missing sections and
+  signals, with reasons). After posting, store `gaps["flagged_keys"]` in
+  persona memory if the persona keeps memory, for next week's 🆕 markers.
 
 Post the top post to the channel, then each reply in its thread. Run from a DM
 (validation or an extra run requested by a task manager), reply in the DM
@@ -153,12 +183,13 @@ instead of the channel.
 ## Rules
 
 - **Team level only.** No per-person load, SP or PTO. A name appears only as the
-  owner of one action item.
+  owner of one action item or one epic flag.
 - **Never estimate.** If a source is missing or a fetch is incomplete, post what is
   complete and list what was left out and why (for example
   "9.2 release section: no Product Pages schedule yet"). No figure is computed
   from an incomplete fetch.
 - **Nothing to flag** → the top post says "No risks this week" with the sprint
-  figures, and "0 items need action".
+  figures, and "0 items need action". Epic flags are informational and don't
+  change this.
 - **Read-only** in Jira. Release testing (EC/RC validation, decision 0017) is out
   of scope.
