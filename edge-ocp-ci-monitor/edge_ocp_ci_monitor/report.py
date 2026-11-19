@@ -34,6 +34,8 @@ _JINJA_ENV = Environment(
         str(payload_report.TEMPLATES_DIR),
     ]),
     autoescape=True,
+    # A checkpoint can run long after the Python renderer was loaded.
+    auto_reload=False,
 )
 _JINJA_ENV.filters["js_attr"] = payload_report._js_attr
 _JINJA_ENV.filters["safe_attempts"] = _safe_attempt_analyses
@@ -84,12 +86,12 @@ def generate_html(
         )
         for finding in context["priority_sippy"] if finding.deep_analysis
     }
-    context["pending_analysis"] = {
-        "by_prow_url": sorted({
-            item["job"].prow_url for item in context["all_failing"]
-            if item["job"].job_type == JobType.BLOCKING and not item["job"].deep_analysis
-        }),
-        "by_sippy_job": [finding.analysis_key for finding in context["priority_sippy"] if not finding.deep_analysis],
+    blocking_jobs = [item["job"] for item in context["all_failing"] if item["job"].job_type == JobType.BLOCKING]
+    prow_status = dict.fromkeys((job.prow_url for job in blocking_jobs), True)
+    prow_status.update({job.prow_url: False for job in blocking_jobs if not job.deep_analysis})
+    context["analysis_status"] = {
+        "by_prow_url": prow_status,
+        "by_sippy_job": {finding.analysis_key: bool(finding.deep_analysis) for finding in context["priority_sippy"]},
     }
     templates = Path(__file__).parent / "templates"
     context.update(

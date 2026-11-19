@@ -8,7 +8,7 @@ Generate an HTML dashboard for OpenShift nightly payloads, Sippy job health, and
 
 Use Python 3.11 or newer. For local Prow artifact collection, install the [Google Cloud CLI](https://docs.cloud.google.com/sdk/docs/install) and make `gcloud` available on `PATH`. The monitor uses `gcloud storage cat` and can use standalone `gsutil` if `gcloud` is unavailable. Use `--skip-prow` to skip local artifact collection.
 
-For public artifacts on an unauthenticated machine, set `CLOUDSDK_AUTH_DISABLE_CREDENTIALS=true` for the monitor command. For protected artifacts, configure Google Cloud CLI credentials with access to the bucket. See [accessing public Cloud Storage data](https://docs.cloud.google.com/storage/docs/access-public-data#command-line).
+When using `gcloud` on an unauthenticated machine, set `CLOUDSDK_AUTH_DISABLE_CREDENTIALS=true` for the monitor command only when reading public artifacts. For protected artifacts, [authenticate `gcloud`](https://docs.cloud.google.com/sdk/docs/authenticate) with access to the bucket. If the monitor uses standalone `gsutil`, [configure `gsutil` credentials](https://docs.cloud.google.com/storage/docs/gsutil_install#setting-up-credentials-to-access-protected-data) with access to the bucket.
 
 From the repository root, create and activate a virtual environment and install the dependencies.
 
@@ -98,7 +98,7 @@ python -m edge_ocp_ci_monitor --merge-analysis reports/investigations.json \
   --output reports/edge-ci.html
 ```
 
-The import accepts analysis maps named `by_prow_url` and `by_sippy_job`, keyed by the exact latest Prow URL and the exact Sippy `analysis_key` respectively. See the [analysis fields below](#mcp-response-contract). When at least one card matches, the import clears Jira drafts and draft actions because the imported analysis can change the diagnosis. It also updates the incomplete-analysis warning when the report tracks which targets still need analysis. An import with zero matching cards leaves the report untouched. Only the HTML is updated. For regenerating HTML from a full data export, use the separate Payload Monitor command with `--from-json`. See the [Payload Monitor CLI reference](../payload-monitor/README.md#cli-reference).
+The import accepts analysis maps named `by_prow_url` and `by_sippy_job`, keyed by the exact latest Prow URL and the exact Sippy `analysis_key` respectively. The Sippy row must also contain an analysis placeholder or an existing analysis card. See the [analysis fields below](#mcp-response-contract). When at least one card matches, the import clears Jira drafts and draft actions because the imported analysis can change the diagnosis. It also updates the incomplete-analysis warning when the report tracks which targets still need analysis. An import with zero matching cards leaves the report untouched. Only the HTML is updated. For regenerating HTML from a full data export, use the separate Payload Monitor command with `--from-json`. See the [Payload Monitor CLI reference](../payload-monitor/README.md#cli-reference).
 
 ## Chai scope, timing, and troubleshooting
 

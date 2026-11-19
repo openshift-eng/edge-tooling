@@ -56,10 +56,12 @@
 </div>
 
 <section class="report-notes" aria-label="Report notes">
+{% if analysis_status is defined or ai_warnings %}
+<div{% if analysis_status is defined %} data-analysis-status="{{ analysis_status | tojson | forceescape }}"{% elif pending_analysis is defined %} data-pending-analysis="{{ pending_analysis | tojson | forceescape }}"{% endif %}{% if ai_warnings %} class="warning-banner" role="status" id="chai-analysis-warning"{% else %} hidden{% endif %}>
 {% if ai_warnings %}
-<div class="warning-banner" role="status" id="chai-analysis-warning" data-pending-analysis="{{ pending_analysis | tojson | forceescape }}">
   <strong>Chai AI analysis unavailable or incomplete.</strong> Collected dashboard data remains available.
   <ul>{% for warning in ai_warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+{% endif %}
 </div>
 {% endif %}
 

@@ -179,7 +179,7 @@ def remove_jira_draft_links(content: str) -> str:
     return content
 
 
-def _update_analysis_warning(content: str, resolved: dict[str, set[str]]) -> str:
+def _update_legacy_analysis_warning(content: str, resolved: dict[str, set[str]]) -> str:
     def replace_warning(match: re.Match) -> str:
         opening, warnings = match.groups()
         marker = re.search(r' data-pending-analysis="([^"]*)"', opening)
@@ -202,6 +202,41 @@ def _update_analysis_warning(content: str, resolved: dict[str, set[str]]) -> str
         r'(<div\b[^>]*\bid="chai-analysis-warning"[^>]*>).*?(<ul>.*?</ul>).*?</div>',
         replace_warning, content, count=1, flags=re.DOTALL,
     )
+
+
+def _update_analysis_warning(content: str, replacements: dict[str, dict[str, bool]]) -> str:
+    def replace_warning(match: re.Match) -> str:
+        state = json.loads(html_mod.unescape(match["state"]))
+        had_pending = any(not complete for group in state.values() for complete in group.values())
+        for group, statuses in state.items():
+            updates = replacements[group]
+            statuses.update({key: updates[key] for key in statuses.keys() & updates.keys()})
+
+        metadata = html_mod.escape(json.dumps(state), quote=True)
+        count = sum(not complete for group in state.values() for complete in group.values())
+        warnings = re.search(r"<ul>.*?</ul>", match["body"], re.DOTALL)
+        if not count and (had_pending or not warnings):
+            return f'<div data-analysis-status="{metadata}" hidden></div>'
+
+        message = "The original Chai run reported analysis issues."
+        if count:
+            targets = "target" if count == 1 else "targets"
+            message = f"Chai analysis remains incomplete for {count} requested {targets}."
+        diagnostics = (
+            f'<details><summary>Diagnostics from the original Chai run</summary>{warnings[0]}</details>'
+            if warnings else ""
+        )
+        return (f'<div data-analysis-status="{metadata}" class="warning-banner" role="status" '
+                f'id="chai-analysis-warning"><strong>{message}</strong>{diagnostics}</div>')
+
+    content, updated = re.subn(
+        r'<div data-analysis-status="(?P<state>[^"]*)"[^>]*>(?P<body>.*?)</div>',
+        replace_warning, content, count=1, flags=re.DOTALL,
+    )
+    if updated:
+        return content
+    resolved = {group: {key for key, complete in statuses.items() if complete} for group, statuses in replacements.items()}
+    return _update_legacy_analysis_warning(content, resolved)
 
 
 def patch_analysis_cards(html_path: Path, analysis_path: Path) -> str | None:
@@ -401,12 +436,12 @@ def patch_analysis_cards(html_path: Path, analysis_path: Path) -> str | None:
         count=1,
         flags=re.DOTALL,
     )
-    resolved = {
-        group: {key for key in keys if entries[key].get("failure_type") != "Analysis error"
-                and entries[key].get("root_cause")}
+    replacements = {
+        group: {key: bool(entries[key].get("root_cause")) and entries[key].get("failure_type") != "Analysis error"
+                for key in keys}
         for group, keys, entries in (("by_prow_url", patched_urls, by_url), ("by_sippy_job", patched_sippy_keys, by_sippy_job))
     }
     logger.info(f"Patched {patched} analysis card(s) into {html_path}")
-    return _update_analysis_warning(content, resolved)
+    return _update_analysis_warning(content, replacements)
 
 

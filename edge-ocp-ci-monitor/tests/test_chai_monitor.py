@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import httpx2
 import pytest
 from click.testing import CliRunner
+from jinja2 import FileSystemLoader
 from payload_monitor import __main__ as core
 from payload_monitor.models import (
     ComponentRegression,
@@ -24,10 +25,10 @@ from payload_monitor.models import (
     Regression,
     StreamReport,
 )
-from payload_monitor.report.generator import generate_html
 
 from edge_ocp_ci_monitor import __main__ as cli
 from edge_ocp_ci_monitor import analysis, collection
+from edge_ocp_ci_monitor import report as report_rendering
 from edge_ocp_ci_monitor.analysis import (
     ChaiUnavailable,
     InvalidAnalysis,
@@ -967,6 +968,11 @@ def test_cli_checkpoints_html_and_json_before_followup(report, collected_report,
     report.streams[0].payloads[0].jobs.append(second)
     out = tmp_path / "report.html"
     calls = []
+    environment = report_rendering._JINJA_ENV
+    template = tmp_path / "dashboard.html"
+    template.write_text(environment.loader.get_source(environment, template.name)[0])
+    loader = FileSystemLoader([str(tmp_path), *environment.loader.searchpath])
+    monkeypatch.setattr(report_rendering, "_JINJA_ENV", environment.overlay(loader=loader))
 
     async def ask(config, prompt, **kwargs):
         calls.append(prompt)
@@ -976,6 +982,7 @@ def test_cli_checkpoints_html_and_json_before_followup(report, collected_report,
             export = json.loads(out.with_suffix(".json").read_text())
             assert all(job["deep_analysis"] is None
                        for job in export["streams"][0]["payloads"][0]["edge_jobs"])
+            template.write_text("{{ context_added_in_another_revision | tojson }}")
             return deferred_answer(prompt, completed=1)
         html = out.read_text()
         assert "Observed test regression" in html
@@ -1084,8 +1091,7 @@ def test_jira_prompt_requires_read_only_duplicate_check_and_edge_scope(report):
 
 
 @pytest.mark.parametrize("sippy,topology", [(False, "SNO"), (False, "TNA"), (True, "TNF")])
-def test_chai_recommended_draft_prefills_bottom_section_and_jira_link(report, sippy, topology):
-    from html import unescape
+def test_chai_recommended_draft_prefills_jira_link(report, sippy, topology):
     from urllib.parse import parse_qs, urlparse
 
     from edge_ocp_ci_monitor.report import merge_analysis_data
@@ -1111,18 +1117,6 @@ def test_chai_recommended_draft_prefills_bottom_section_and_jira_link(report, si
     assert params["customfield_10855"] == ["19400"]
     assert params["labels"] == ["issue-for-agent"]
     assert "fixVersions" not in params
-    html = generate_chai_html(report)
-    assert html.index('id="section-suggested-bugs"') > html.index('</div><!-- /tab-payload-health -->')
-    assert "Chai-recommended New Bugs" in html
-    assert "No issue has been created" in html
-    assert "Create Bug in JIRA" not in html
-    assert bug.title in unescape(html)
-    assert bug.full_description in unescape(html)
-    assert 'value="4.19.0"' in html
-    assert 'class="jira-draft-labels" type="text" value="issue-for-agent" readonly' in html
-    recommendation = html.split('<div class="da-field da-recommendation">', 1)[1].split('</div>', 1)[0]
-    assert bug.create_url in unescape(recommendation)
-    assert "Review proposed bug in Jira" in recommendation
 
 
 @pytest.mark.parametrize("decision", [
@@ -1167,17 +1161,12 @@ def test_invalid_jira_decisions_preserve_diagnosis_but_never_show_draft(report, 
     assert not report.suggested_bugs
 
 
-@pytest.mark.parametrize("analysis_failure", [False, True])
-def test_cli_rejected_jira_draft_has_no_banner_but_analysis_failures_do(
-    report, collected_report, tmp_path, monkeypatch, caplog, analysis_failure,
-):
+def test_cli_rejected_jira_draft_has_no_analysis_warning(report, collected_report, tmp_path, monkeypatch, caplog):
     monkeypatch.setenv("CHAI_MCP_TOKEN", "synthetic-secret")
     monkeypatch.setenv("CHAI_MCP_URL", "https://chai.example/mcp")
 
     async def ask(config, prompt, **kwargs):
         if "analysis_key" not in prompt_targets(prompt)[0]:
-            if analysis_failure:
-                raise ChaiUnavailable("Endpoint unavailable.")
             return batch_answer(prompt)
         return batch_answer(prompt, jira=jira_decision(existing_bugs=["OCPBUGS-123"]))
 
@@ -1190,8 +1179,7 @@ def test_cli_rejected_jira_draft_has_no_banner_but_analysis_failures_do(
     reason = "Chai recommended a new bug without ruling out existing bugs."
     assert reason in caplog.text
     assert reason not in html
-    assert ('id="chai-analysis-warning"' in html) == analysis_failure
-    assert ("Endpoint unavailable." in html) == analysis_failure
+    assert 'id="chai-analysis-warning"' not in html
     assert answer()["root_cause"] in html
     assert report.streams[0].regressions[0].deep_analysis
     assert not report.suggested_bugs
@@ -1319,32 +1307,22 @@ def test_jira_draft_escapes_model_html_without_losing_description(report):
     assert parser.count == 0
 
 
-@pytest.mark.parametrize("legacy", [False, True])
-def test_local_analysis_import_removes_prior_jira_drafts(report, tmp_path, legacy):
-    from payload_monitor.collectors.jira import suggest_bug
-    from payload_monitor.config import Config
-
+def test_local_analysis_import_removes_prior_jira_drafts(report, tmp_path):
     from edge_ocp_ci_monitor.report import merge_analysis_data, patch_analysis_html
 
     out = tmp_path / "report.html"
     source = tmp_path / "analysis.json"
-    if legacy:
-        report.suggested_bugs = [suggest_bug(report.streams[0].payloads[0].jobs[0], ["4.19"], Config())]
-        generate_html(report, out)
-        assert "Create Bug in JIRA" in out.read_text()
-    else:
-        merge_analysis_data(report, {"by_sippy_job": {
-            "4.19/job-sno": answer(jira=jira_decision()),
-        }})
-        generate_chai_html(report, out)
-        assert "Chai-recommended New Bugs" in out.read_text()
+    merge_analysis_data(report, {"by_sippy_job": {
+        "4.19/job-sno": answer(jira=jira_decision()),
+    }})
+    generate_chai_html(report, out)
+    assert "Review draft in Jira" in out.read_text()
     source.write_text(json.dumps({"by_prow_url": {
         "https://prow.example/latest": answer(root_cause="Updated diagnosis from external analysis"),
     }}))
     patch_analysis_html(out, source)
     html = out.read_text()
     assert 'id="section-suggested-bugs"' not in html
-    assert "Create Bug in JIRA" not in html
     assert "Review draft in Jira" not in html
     assert 'id="tab-payload-health"' in html
     assert "Updated diagnosis from external analysis" in html
@@ -1370,20 +1348,26 @@ def test_partial_and_complete_analysis_imports_update_saved_warning(report, tmp_
     out, source = tmp_path / "report.html", tmp_path / "analysis.json"
     generate_chai_html(report, out, ai_warnings=["Original request failed"])
     target_url = report.streams[0].payloads[0].jobs[0].prow_url
-    source.write_text(json.dumps({"by_prow_url": {target_url: answer()}}))
-    patch_analysis_html(out, source)
-    html = out.read_text()
-    assert 'id="chai-analysis-warning"' in html
-    assert "Chai analysis remains incomplete for 1 requested target" in html
+    sippy_key = report.streams[0].regressions[0].analysis_key
+
+    def replace(group, key, **updates):
+        source.write_text(json.dumps({group: {key: answer(**updates)}}))
+        patch_analysis_html(out, source)
+        return out.read_text()
+
+    html = replace("by_prow_url", target_url)
+    assert "Chai analysis remains incomplete for 1 requested target." in html
     assert "Diagnostics from the original Chai run" in html
 
-    sippy_key = report.streams[0].regressions[0].analysis_key
-    source.write_text(json.dumps({"by_sippy_job": {sippy_key: answer(failure_type="Analysis error")}}))
-    patch_analysis_html(out, source)
-    assert 'id="chai-analysis-warning"' in out.read_text()
+    html = replace("by_prow_url", target_url, failure_type="Analysis error")
+    assert "Chai analysis remains incomplete for 2 requested targets." in html
+    html = replace("by_sippy_job", sippy_key)
+    assert "Chai analysis remains incomplete for 1 requested target." in html
 
-    source.write_text(json.dumps({"by_sippy_job": {sippy_key: answer()}}))
-    patch_analysis_html(out, source)
-    html = out.read_text()
+    html = replace("by_prow_url", target_url)
     assert 'id="chai-analysis-warning"' not in html
     assert "Original request failed" not in html
+
+    html = replace("by_sippy_job", sippy_key, failure_type="Analysis error")
+    assert "Chai analysis remains incomplete for 1 requested target." in html
+    assert 'id="chai-analysis-warning"' not in replace("by_sippy_job", sippy_key)

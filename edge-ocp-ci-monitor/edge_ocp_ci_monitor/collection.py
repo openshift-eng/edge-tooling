@@ -9,7 +9,6 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from functools import partial
 from pathlib import Path
 
 from payload_monitor.__main__ import (
@@ -23,7 +22,7 @@ from payload_monitor.analyzer import (
     _find_escalation_risks,
     _find_recurring_failures,
 )
-from payload_monitor.collectors import prow, sippy, timing
+from payload_monitor.collectors import sippy, timing
 from payload_monitor.collectors.release_controller import (
     collect as collect_payloads,
 )
@@ -35,7 +34,7 @@ from payload_monitor.config import Config
 from payload_monitor.job_health import priority_sippy_findings, sippy_findings
 from payload_monitor.models import JobResult, JobType, MonitorReport, Regression
 
-from . import component_readiness
+from . import component_readiness, prow
 from .report import generate_html, generate_json, patch_analysis_html
 from .security import protect_logs, redact_data
 
@@ -191,9 +190,8 @@ def collect_report(
         if artifact_jobs and (gcloud or gsutil):
             command = (gcloud, "storage", "cat") if gcloud else (gsutil, "cat")
             logger.info("Step 3: Fetching Prow artifacts using %s", " ".join(command))
-            fetch_artifact = partial(prow._fetch_gcs_file, command=command)
             # gcloud storage supports one CLI invocation at a time.
-            prow.enrich_failing_jobs(artifact_jobs, max_workers=1 if gcloud else 4, fetch_artifact=fetch_artifact)
+            prow.enrich_failing_jobs(artifact_jobs, command=command, max_workers=1 if gcloud else 4)
         elif artifact_jobs:
             message = "Prow artifacts unavailable. Install the Google Cloud CLI or use --skip-prow."
             logger.warning("%s", message)

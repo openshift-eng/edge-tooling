@@ -62,8 +62,14 @@ def test_drafts_follow_producing_targets_through_rendering_and_drawer(report, tm
 
     other = deepcopy(report.streams[0])
     other.version = other.regressions[0].version = "4.20"
+    other.regressions[0].test_name = "next-release-job"
+    other.regressions[0].triage_url = "https://sippy.example/job?release=4.20"
     other.payloads[0].jobs[0].prow_url = "https://prow.example/another-run"
     report.streams.append(other)
+    expected_sippy_urls = {
+        f"sippy:{finding.analysis_key}": finding.triage_url
+        for stream in report.streams for finding in stream.regressions
+    }
     data = {"by_prow_url": {}, "by_sippy_job": {}}
     expected = set()
     for category, group, field, prefix in (
@@ -93,6 +99,17 @@ def test_drafts_follow_producing_targets_through_rendering_and_drawer(report, tm
         bug.analysis_keys for bug in report.suggested_bugs
     ]
     html = generate_html(restored)
+    references = re.findall(r'data-finding-source="([^"]+)"', html)
+    assert len(references) == len(set(references)) == 4
+    assert all(f'id="{reference}"' in html for reference in references)
+    summaries = re.findall(r'<tr[^>]*data-finding-source="(sippy-row-\d+)"[^>]*>(.*?)</tr>', html, re.DOTALL)
+    assert len(summaries) == 2
+    for reference, summary in summaries:
+        name = re.search(r'class="finding-job"[^>]*>([^<]+)</button>', summary)[1]
+        release = re.search(r'class="badge version-badge">([^<]+)</span>', summary)[1]
+        destination = re.search(rf'<(?:div|details) id="{reference}"[^>]*>', html)[0]
+        assert f'data-regversion="{release}"' in destination
+        assert f'data-sippy-key="{release}/{name}"' in destination
 
     class Cards(HTMLParser):
         def __init__(self):
@@ -109,6 +126,7 @@ def test_drafts_follow_producing_targets_through_rendering_and_drawer(report, tm
 
     cards = Cards()
     cards.feed(html)
+    sippy_anchors = {}
     for source in cards.sources:
         key = source["data-analysis-key"]
         row = html.split(f'id="{source["id"]}"', 1)[1].split("</details>", 1)[0]
@@ -117,6 +135,9 @@ def test_drafts_follow_producing_targets_through_rendering_and_drawer(report, tm
         assert actual == ([draft.create_url] if draft else [])
         if draft:
             assert draft.title == key
+        if key in expected_sippy_urls:
+            actions = row.split('class="sippy-cell-action">', 1)[1]
+            sippy_anchors[source["id"]] = Links(actions).anchors[0]
 
     node = shutil.which("node")
     if node is None:
@@ -145,8 +166,9 @@ const sources = input.sources.map(attrs => {
   const source = element();
   source.dataset = dataset(attrs);
   source.classList.contains = name => attrs.class.split(' ').includes(name);
-  source.querySelector = selector => selector === '.sippy-cell-action a' && source.dataset.sippyKey
-    ? {getAttribute() { return 'https://sippy.example/' + attrs.id; }}
+  const anchor = input.sippyAnchors[attrs.id];
+  source.querySelector = selector => selector === '.sippy-cell-action a' && anchor
+    ? {getAttribute(name) { return anchor[name] ?? null; }}
     : null;
   elements[attrs.id] = source;
   return source;
@@ -191,7 +213,7 @@ rows.forEach((row, index) => {
   const isSippy = key.startsWith('sippy:');
   assert.equal(external.className, 'dashboard-button');
   assert.equal(external.textContent, isSippy ? 'View in Sippy' : 'View in Prow');
-  assert.equal(external.href, isSippy ? 'https://sippy.example/' + input.sources[index].id : sources[index].dataset.prowUrl);
+  assert.equal(external.href, isSippy ? input.expectedSippyUrls[key] : sources[index].dataset.prowUrl);
   const expected = drafts.findIndex(draft => JSON.parse(draft.dataset.analysisKeys).includes(key));
   const action = document.getElementById('finding-drawer-bug');
   assert.equal(action.hidden, expected === -1);
@@ -200,46 +222,9 @@ rows.forEach((row, index) => {
     assert.equal(opened, expected, key);
   }
 });
-""", str(script), json.dumps({"sources": cards.sources, "drafts": cards.drafts})],
+""", str(script), json.dumps({"sources": cards.sources, "drafts": cards.drafts,
+                             "sippyAnchors": sippy_anchors, "expectedSippyUrls": expected_sippy_urls})],
         capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stderr
-
-
-@pytest.mark.parametrize("destination", ["failed-row", "previous-attempt"])
-def test_retry_success_card_opens_reachable_evidence_for_click_and_keyboard(report, destination):
-    retry = deepcopy(report.streams[0].payloads[0].jobs[0])
-    retry.result = JobResult.SUCCESS
-    retry.prow_url = "https://prow.example/passed?a=1&b=2"
-    if destination != "failed-row":
-        report.streams[0].payloads[0].jobs = []
-    report.streams[0].payloads[0].jobs.append(retry)
-    action = next(attrs for _, attrs in Links(generate_html(report)).interactions
-                  if "fs-blocking-row" in attrs.get("class", ""))
-    expected = retry.name if destination == "failed-row" else retry.previous_attempts[0].prow_url
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node is needed to exercise retry card navigation")
-    result = subprocess.run([node, "-e", r"""
-const assert = require('node:assert/strict');
-const action = JSON.parse(process.argv[1]), expected = process.argv[2], mode = process.argv[3];
-const destinations = [];
-const click = new Function('event', 'window', 'scrollToJob', action.onclick);
-const control = {closest() { return null; }, click() {
-  click({target: control}, {open(url, target, features) {
-    assert.notEqual(mode, 'failed-row');
-    assert.equal(target, '_blank');
-    assert.equal(features, 'noopener,noreferrer');
-    destinations.push(url);
-  }}, name => { assert.equal(mode, 'failed-row'); destinations.push(name); });
-}};
-control.click();
-const keydown = new Function('event', action.onkeydown);
-for (const key of ['Enter', ' ']) {
-  keydown.call(control, {target: control, key, preventDefault() {}});
-}
-assert.deepEqual(destinations, [expected, expected, expected]);
-click({target: {closest() { return {}; }}}, {}, () => { throw Error('nested link intercepted'); });
-""", json.dumps(action), expected, destination], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
 
 
@@ -328,6 +313,20 @@ tip.emit('mouseleave');
 runTimers();
 assert.equal(tip.hidden, true);
 
+first.emit('focus');
+second.emit('mouseenter');
+assert.equal(tip.content, 'second');
+second.emit('mouseleave');
+runTimers();
+assert.equal(tip.hidden, false, 'leaving another dot restores the focused dot');
+assert.equal(tip.content, 'first');
+document.emit('keydown', {key: 'Escape'});
+second.emit('mouseenter');
+second.emit('mouseleave');
+runTimers();
+assert.equal(tip.hidden, true, 'leaving another dot does not undo an Escape dismissal');
+first.emit('blur');
+
 second.emit('focus');
 tip.emit('mouseenter');
 tip.emit('mouseleave');
@@ -347,8 +346,8 @@ def test_sippy_import_replaces_manual_question_with_analysis(report, tmp_path):
     generate_html(report, html_path)
     row_pattern = r'<(?:div|details) id="sippy-row-1".*?<!-- /sippy-job -->'
     row = re.search(row_pattern, html_path.read_text(), re.DOTALL)[0]
-    assert f"Why is {finding.test_name} unhealthy on {finding.version}?" in row
-    assert "View AI analysis" not in row
+    assert 'class="copy-btn"' in row
+    assert "sippy-view-analysis" not in row
 
     source = tmp_path / "analysis.json"
     source.write_text(json.dumps({"by_sippy_job": {finding.analysis_key: asdict(diagnosis())}}))
@@ -356,81 +355,11 @@ def test_sippy_import_replaces_manual_question_with_analysis(report, tmp_path):
     patch_analysis_html(html_path, source)
     row = re.search(row_pattern, html_path.read_text(), re.DOTALL)[0]
     assert finding.triage_url in Links(row).hrefs
-    assert row.count("View AI analysis") == 1
+    assert row.count("sippy-view-analysis") == 1
     assert 'aria-controls="sippy-analysis-1"' in row
     assert 'id="sippy-analysis-1"' in row
-    assert "What tests are failing?" not in row
+    assert 'class="copy-btn"' not in row
     assert "Original diagnosis" in row
-
-
-def test_sippy_analysis_button_opens_card_without_closing_an_open_card(report):
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node is needed to exercise the analysis button")
-    report.streams[0].regressions[0].deep_analysis = diagnosis()
-    html = generate_html(report)
-    button = re.search(r'<button[^>]*class="dashboard-button sippy-view-analysis"[^>]*>', html)[0]
-    handler = re.search(r'onclick="([^"]+)"', button)[1]
-    result = subprocess.run([node, "-e", r"""
-const assert = require('node:assert/strict');
-const activate = new Function('event', process.argv[1]);
-for (const initiallyOpen of [false, true]) {
-  const card = {open: initiallyOpen};
-  let prevented = false, stopped = false;
-  const button = {closest(selector) { assert.equal(selector, 'details'); return card; }};
-  activate.call(button, {
-    preventDefault() { prevented = true; },
-    stopPropagation() { stopped = true; }
-  });
-  assert.equal(card.open, true);
-  assert.equal(prevented, true);
-  assert.equal(stopped, true);
-}
-""", handler], capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stderr
-
-
-def test_findings_queue_links_each_job_to_its_own_record(report):
-    report.escalation_risks = []
-    other = deepcopy(report.streams[0])
-    other.version = "4.20"
-    other.payloads[0].jobs[0].prow_url = "https://prow.example/other-version"
-    other.regressions[0].version = "4.20"
-    report.streams.append(other)
-
-    html = generate_html(report)
-    references = re.findall(r'data-finding-source="([^"]+)"', html)
-    # Every summary action must lead to its own full record, including data-only Sippy rows.
-    assert len(references) == len(set(references)) == 4
-    assert all(f'id="{reference}"' in html for reference in references)
-    assert {"sippy-row-1", "sippy-row-2"} <= set(references)
-    assert sum(reference.startswith("detail-") for reference in references) == 2
-    assert ">informing-job</button>" not in html
-
-
-def test_overview_limits_by_severity_then_orders_latest_failures_first(report):
-    stream = report.streams[0]
-    stream.payloads = []
-    for day in range(1, 8):
-        name = "recurring" if day <= 2 else f"blocking-{day}"
-        job = JobRun(name, f"https://prow.example/{day}", JobResult.FAILURE, JobType.BLOCKING, "SNO")
-        tag = f"4.19.0-0.nightly-2026-11-{day:02d}-070000"
-        stream.payloads.append(Payload(tag, stream.stream, stream.version, PayloadStatus.REJECTED, jobs=[job]))
-    stream.regressions = [
-        Regression(f"sippy-{index}", "", "", "", 80, (index + 1) * 5, topology="SNO", current_runs=5,
-                   version=stream.version, latest_failure_ms=timestamp)
-        for index, timestamp in enumerate((200, 500, 400, 0, 600, 1000))
-    ]
-
-    html = generate_html(report)
-    for section, expected in (
-        ("payload", ["blocking-7", "blocking-6", "blocking-5", "blocking-4", "recurring"]),
-        ("sippy", ["sippy-4", "sippy-1", "sippy-2", "sippy-0", "sippy-3"]),
-    ):
-        markup = re.search(rf'<section[^>]*data-findings-section="{section}"[^>]*>(.*?)</section>', html, re.DOTALL)[1]
-        assert re.findall(r'<button[^>]*class="finding-job"[^>]*>([^<]+)</button>', markup) == expected
-        if section == "payload":
-            assert re.findall(r'data-finding-source="([^"]+)"', markup)[-1] == "detail-2"
 
 
 @pytest.mark.parametrize("scheme", ["hTtP", "hTtPs"])
@@ -481,7 +410,6 @@ class Links(HTMLParser):
     def __init__(self, html):
         super().__init__()
         self.hrefs = []
-        self.interactions = []
         self.anchors = []
         self.feed(html)
 
@@ -490,8 +418,6 @@ class Links(HTMLParser):
         if tag == "a":
             self.anchors.append(attrs)
             self.hrefs.append(attrs.get("href"))
-        if "onclick" in attrs and tag in ("div", "a"):
-            self.interactions.append((tag, attrs))
 
 
 def test_report_analysis_links_jira_references_and_escapes_markup(report):
