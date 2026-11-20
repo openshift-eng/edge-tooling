@@ -10,6 +10,7 @@ from datetime import datetime, date, timedelta
 
 # --- Status Constants ---
 
+# "Done" is defensive: the OCPEDGE and USHIFT workflows have no Done status (law 07: Closed).
 DONE_STATUSES_SPRINT = {"Done", "Closed", "Verified"}
 DONE_STATUSES_OCPBUGS = {"Closed", "Verified"}
 DONE_STATUSES_BLOCKER = {"Closed", "Verified", "Done", "Won't Fix"}

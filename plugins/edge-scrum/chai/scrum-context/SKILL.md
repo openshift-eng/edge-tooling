@@ -56,6 +56,22 @@ releases in progress).
 Phases: `refinement`, `development`, `pencils-down sprint`, `pre-branch-cut`,
 `not started`, `finished`, `not scheduled yet`.
 
+The weekly report uses them automatically, never by prompt:
+
+| From scrum-context | Weekly report shows |
+|---|---|
+| `week` 1 | sprint reply in capacity mode |
+| `week` 2 | sprint reply in mid-sprint mode |
+| `week` 3 (the sprint's last week) | mid-sprint mode plus the sprint-end view |
+| phase `refinement` (the refinement sprint, all three weeks) | refinement checks for every non-Closed Feature targeting that release (week 1: "no refinement spike" as one count) |
+| phase `development`, `pencils-down sprint`, `pre-branch-cut` | release checks (scope vs capacity, schedule, blocks, cut line, staffing, refinement overdue) |
+| `not started` / `finished` for every release | no release reply; the Left out line says "no release in progress" |
+
+The refinement sprint, development window and branch-cut sprint come from the
+board sprints and the Product Pages milestones (see Rules below); the
+"behind schedule" check measures the development window from the sprint after
+the refinement sprint through the branch-cut sprint.
+
 ## Steps
 
 ### 1. Sprints

@@ -624,6 +624,19 @@ def _sprint_out(s):
             "projected": s["projected"]}
 
 
+def _development_window(mapping):
+    """The board's sprints (projected ones included) after the refinement sprint
+    up to and including the branch-cut sprint, in board order; "not scheduled
+    yet" when either anchor is unknown. Used to measure schedule progress."""
+    ref, bc = mapping["refinement"], mapping["branch_cut"]
+    if ref is None or bc is None:
+        return NOT_SCHEDULED
+    lo, hi = _index(mapping["sprints"], ref), _index(mapping["sprints"], bc)
+    if lo is None or hi is None or hi <= lo:
+        return NOT_SCHEDULED
+    return [_sprint_out(s) for s in mapping["sprints"][lo + 1:hi + 1]]
+
+
 def release_window(version, schedules, sprints, today, current=None):
     """A release's window: anchor sprints, dev sprints left, phase, and milestones."""
     if not is_valid_release(version):
@@ -644,6 +657,7 @@ def release_window(version, schedules, sprints, today, current=None):
                                 if m["refinement"] and m["pencils_down"] else NOT_SCHEDULED),
         "pencils_down_sprint": _sprint_out(m["pencils_down"]),
         "branch_cut_sprint": _sprint_out(m["branch_cut"]),
+        "development_window": _development_window(m),
         "development_sprints_remaining": dev_sprints_remaining(m, today, current),
         "milestones": {
             "development_branch_opens": _iso(ms["dev_branch_opens"]) or NOT_SCHEDULED,

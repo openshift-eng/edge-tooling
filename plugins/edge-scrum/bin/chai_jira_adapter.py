@@ -230,11 +230,15 @@ def parse_sprints(value):
     return parse_sprint_value(value)[0]
 
 
-def parse_issue_links(text):
+def parse_issue_links(text, unreadable=None):
     """``get_jira_issue`` output → issuelinks from its "Linked Jira Issues" section.
 
     Lines look like ``- is blocked by: KEY (Blocks) | status: <status> | <url>``.
     Returns ``(links, found)``; ``found`` is False when the section is missing.
+    A list line in the section that cannot be read is skipped; when it mentions
+    a block ("blocks" / "is blocked by", e.g. a cut-off row) it is appended to
+    ``unreadable`` (a list, when given), so the caller can treat that issue's
+    blocked signal as incomplete instead of unblocked.
     """
     links, found, inside = [], False, False
     for line in (text or "").splitlines():
@@ -250,6 +254,8 @@ def parse_issue_links(text):
         m = _LINKED_LINE_RE.match(line)
         if not m:
             if line.lstrip().startswith(("-", "*")):
+                if unreadable is not None and "block" in line.lower():
+                    unreadable.append(line.strip())
                 continue  # a list line we cannot read; skip it
             break  # next section
         wording = re.sub(r"\s+", " ", m.group("wording").strip().lower())
@@ -616,11 +622,14 @@ def attach_issue_links(adapted, issue_texts):
         if text is None:
             problems.append(f"{key}: get_jira_issue failed")
             continue
-        links, found = parse_issue_links(text)
+        unreadable = []
+        links, found = parse_issue_links(text, unreadable)
         if not found:
             problems.append(f"{key}: no 'Linked Jira Issues' section")
             continue
-        by_key[key]["issuelinks"] = links
+        by_key[key]["issuelinks"] = links  # readable links are kept (confirmed blockers stay)
+        if unreadable:
+            problems.append(f"{key}: {len(unreadable)} block link line(s) could not be read")
     adapted.setdefault("fetch", {}).setdefault("link_problems", []).extend(problems)
     return problems
 

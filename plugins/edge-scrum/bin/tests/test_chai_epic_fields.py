@@ -236,7 +236,11 @@ class EpicChecksTest(unittest.TestCase):
         self.assertEqual(_keys(self.gaps, "no_qa_contact"),
                          ["TEST-102", "TEST-103", "TEST-104", "TEST-106", "TEST-108"])
         detail = {i["key"]: i["detail"] for i in self.gaps["checks"]["no_qa_contact"]}
-        self.assertEqual(set(detail.values()), {"no QA Contact"})
+        # Decision 0024: note when the feature has none (or could not be read); never the parent's name.
+        self.assertEqual(detail, {"TEST-102": "no QA Contact", "TEST-103": "no QA Contact",
+                                  "TEST-104": "no QA Contact, feature has none",
+                                  "TEST-106": "no QA Contact, feature has none",
+                                  "TEST-108": "no QA Contact, feature could not be read"})
 
     def test_parent_qa_contact_name_is_never_printed(self):
         report = cr.build_report(None, [], epic_gaps=self.gaps)
@@ -339,12 +343,10 @@ class EmptyAndCapTest(unittest.TestCase):
         self.assertEqual((len(gaps["checks"]["no_qa_contact"]), len(gaps["epics"])), (13, 13))
         report = cr.build_report(None, [], epic_gaps=gaps)
         lines = next(r for r in report["replies"] if r.startswith("*Epic fields*")).splitlines()
-        self.assertEqual(lines[0], "*Epic fields* (13 epics: 13 no QA Contact)")  # zero counts and Key omitted
+        # Zero counts and the Key omitted; the cap is in the header; overflow keys only on the Left out line.
+        self.assertEqual(lines[0], "*Epic fields* (13 epics: 13 no QA Contact; ✓ 0 complete; 10 of 13 owners shown)")
         self.assertEqual(lines[1:-1], [f"• Owner {n}: TEST-{n} (no QA Contact)" for n in range(301, 311)])
-        self.assertEqual(lines[-1], "• +3 more owner(s) (listed under Left out)")
-        left = next(r for r in report["replies"] if r.startswith("*Left out*"))
-        self.assertIn("• 3 more owner(s) over the 10-line limit: Owner 311: TEST-311 (no QA Contact); "
-                      "Owner 312: TEST-312 (no QA Contact); Owner 313: TEST-313 (no QA Contact)", left)
+        self.assertEqual(lines[-1], "Left out: 3 more owner(s) in epic fields: TEST-311, TEST-312, TEST-313")
 
 
 class FailureIsolationTest(unittest.TestCase):
@@ -386,9 +388,9 @@ class FailureIsolationTest(unittest.TestCase):
                      "more": {}, "risks": ["x"], "left_out": []}):
             with self.subTest(bad=bad):
                 report = cr.build_report(sprint, [], epic_gaps=bad)
-                self.assertEqual(report["replies"][0], good["replies"][0])  # sprint reply intact
-                self.assertEqual(report["replies"][-1].splitlines()[-1],
-                                 "• Epic Target Version and QA Contact checks: result not readable")
+                lines = report["replies"][0].splitlines()
+                self.assertEqual(lines[:-1], good["replies"][0].splitlines())  # sprint reply intact
+                self.assertEqual(lines[-1], "Left out: Epic Target Version and QA Contact checks: result not readable")
 
 
 def weekly_report(epic_text, parent_text=PARENTS, parent_keys=("FEAT-1", "FEAT-2", "FEAT-3", "FEAT-4", "FEAT-9"),
@@ -417,7 +419,8 @@ CLEAN_CHECKS = {"meta": {"total_remaining_sp": 60, "total_capacity_sp": 90, "cap
 
 
 class InformationalTest(unittest.TestCase):
-    """The epic section never changes the top post: colour, risk line or action count."""
+    """The epic section never changes the colour, the risk line or the action count; its owners
+    are counted on the top post's third line like everyone tagged."""
 
     def test_flags_and_left_out_keep_the_top_post(self):
         _, _, gaps = _mix()  # 8 flagged, plus a parent that could not be read
@@ -431,14 +434,16 @@ class InformationalTest(unittest.TestCase):
                                                                      {"number": 15, "availability": 1}]))
                 without = cr.build_report(sprint, [release], [], MENTIONS)
                 with_gaps = cr.build_report(sprint, [release], [], MENTIONS, epic_gaps=gaps)
-                self.assertEqual(with_gaps["top_post"], without["top_post"])
+                self.assertEqual(with_gaps["top_post"][:2], without["top_post"][:2])
                 self.assertEqual(with_gaps["action_count"], without["action_count"])
+                self.assertIn("Morgan Manager", with_gaps["people"])  # an epic owner
+                self.assertTrue(set(without["people"]) <= set(with_gaps["people"]))
 
     def test_only_epic_flags_is_still_green(self):
         _, _, gaps = _mix()
         report = cr.build_report(None, [], epic_gaps=gaps)
         self.assertTrue(report["top_post"][0].startswith("🟢"))
-        self.assertEqual(report["top_post"][1:], ["No risks this week", "0 items need action"])
+        self.assertEqual(report["top_post"][1:], ["No risks this week", "2 people have items: Alex Example, Morgan Manager"])
         self.assertTrue(any(r.startswith("*Epic fields*") for r in report["replies"]))
 
     def test_malformed_epic_section_does_not_change_the_colour(self):
@@ -463,7 +468,7 @@ class PerOwnerLinesTest(unittest.TestCase):
                          [("TEST-103", 3), ("TEST-104", 3), ("TEST-102", 2), ("TEST-106", 2),
                           ("TEST-107", 2), ("TEST-108", 2), ("TEST-101", 1), ("TEST-112", 1)])
         e104 = next(e for e in self.gaps["epics"] if e["key"] == "TEST-104")
-        self.assertEqual(e104["problems"], ["no Target Version", "no QA Contact", "feature closed"])  # check order
+        self.assertEqual(e104["problems"], ["no Target Version", "no QA Contact, feature has none", "feature closed"])  # check order
 
     def test_section_is_emitted_once_and_owners_are_not_concatenated(self):
         report = weekly_report(EPICS_MIX)
@@ -471,12 +476,16 @@ class PerOwnerLinesTest(unittest.TestCase):
         self.assertEqual(text.count("*Epic fields*"), 1)
         self.assertNotIn("\r", text)
         epic = next(r for r in report["replies"] if r.startswith("*Epic fields*"))
-        for line in epic.splitlines()[1:]:  # one owner per line, then that owner's epics only
-            self.assertRegex(line, r"^• [^:()]+: TEST-\d+ \([^()]+\)(, TEST-\d+ \([^()]+\))*$")
-        self.assertEqual(len(epic.splitlines()), 1 + 3)  # three owners
-        self.assertNotIn("Synthetic epic", epic)  # no summaries
-        self.assertNotIn("openshift-", epic)  # no version numbers
-        self.assertNotIn("FEAT-", epic)  # no parent keys
+        lines = epic.splitlines()
+        for line in lines[1:-1]:  # one owner per line, then that owner's epics only
+            self.assertEqual(line.count(": "), 1, line)
+            self.assertRegex(line, r"^• [^:()]+: .*TEST-\d+")
+        self.assertEqual(len(lines), 1 + 3 + 1)  # header, three owners, the Left out line
+        self.assertTrue(lines[-1].startswith("Left out: "))
+        owner_part = "\n".join(lines[:-1])  # header and owner lines (Left out may name an unreadable parent)
+        self.assertNotIn("Synthetic epic", owner_part)  # no summaries
+        self.assertNotIn("openshift-", owner_part)  # no version numbers
+        self.assertNotIn("FEAT-", owner_part)  # no parent keys
 
 
 class DriftNeedsParentVersionTest(unittest.TestCase):
@@ -507,7 +516,7 @@ class NoAssigneeTest(unittest.TestCase):
         report = cr.build_report(None, [], [], {"Pat Product": "<@U000TEST9>"}, team_owner="Pat Product",
                                  epic_gaps=gaps)
         epic = next(r for r in report["replies"] if r.startswith("*Epic fields*"))
-        self.assertEqual(epic.splitlines(), ["*Epic fields* (1 epic: 1 no assignee)",
+        self.assertEqual(epic.splitlines(), ["*Epic fields* (1 epic: 1 no assignee; ✓ 1 complete)",
                                              "• <@U000TEST9>: TEST-1 (no assignee)"])
 
     def test_scrum_master_line_merges_their_own_epics(self):
@@ -534,9 +543,9 @@ class NewMarkerTest(unittest.TestCase):
                                                 "TEST-106", "TEST-107", "TEST-108", "TEST-112"])
         epic = next(r for r in cr.build_report(None, [], [], MENTIONS, epic_gaps=gaps)["replies"]
                     if r.startswith("*Epic fields*"))
-        self.assertIn("• <@U000TEST1>: TEST-104 (no Target Version, no QA Contact, feature closed), "
-                      "🆕 TEST-107 (no Target Version, feature in backlog), TEST-101 (Target Version \u2260 feature)", epic)
-        self.assertIn("• Morgan Manager: 🆕 TEST-106 (no QA Contact, feature closed), 🆕 TEST-112 (no Target Version)", epic)
+        self.assertIn("• <@U000TEST1>: no Target Version for TEST-104, 🆕 107; TEST-104 (no QA Contact, feature has none, feature closed); "
+                      "🆕 TEST-107 (feature in backlog); TEST-101 (Target Version \u2260 feature)", epic)
+        self.assertIn("• Morgan Manager: 🆕 TEST-106 (no QA Contact, feature has none, feature closed), 🆕 TEST-112 (no Target Version)", epic)
 
     def test_snapshot_is_complete_only_when_every_epic_was_checked(self):
         _, _, mix = _mix()  # FEAT-9 could not be read
@@ -604,8 +613,9 @@ class RejectedRecordsAndKeysTest(unittest.TestCase):
         self.assertEqual(_keys(gaps, "no_qa_contact"), ["TEST-1"])  # the valid sibling is checked
         self.assertIn({"what": "2 epic record(s) could not be read",
                        "why": "not an issue record or no issue key; not checked"}, gaps["left_out"])
-        left = next(r for r in cr.build_report(None, [], epic_gaps=gaps)["replies"] if r.startswith("*Left out*"))
-        self.assertIn("• 2 epic record(s) could not be read: not an issue record or no issue key; not checked", left)
+        left = cr.build_report(None, [], epic_gaps=gaps)["replies"][-1].splitlines()[-1]
+        self.assertIn("2 epic record(s) could not be read: not an issue record or no issue key; not checked", left)
+        self.assertTrue(left.startswith("Left out: "))
 
     def test_only_rejected_records_is_not_a_clean_result(self):
         gaps = cr.epic_field_gaps({"fetch": {"complete": True}, "issues": [None, {"key": None}]}, [])
@@ -656,24 +666,24 @@ class MentionsFromSkillTest(unittest.TestCase):
         sprint, computed = self._parts()
         _, _, gaps = _mix()
         owners = self._owners(sprint, computed, gaps, scrum_master="Pat Product")
-        # Alex Example owns flags in three checks and actions; Morgan Manager owns two flags.
+        # Alex Example owns epic flags and sprint/release items; Morgan Manager owns two epic flags.
         self.assertEqual(owners, {"Alex Example", "Quinn Quality", "Morgan Manager", "Pat Product"})
         mentions = self._mentions(owners)
         self.assertEqual(mentions, {"Alex Example": "<@U000TEST1>", "Morgan Manager": "<@U000TEST2>"})
         report = cr.build_report(sprint, computed, [], mentions, team_owner="Pat Product", epic_gaps=gaps)
         epic = next(r for r in report["replies"] if r.startswith("*Epic fields*"))
-        self.assertIn("• <@U000TEST2>: TEST-106 (no QA Contact, feature closed), TEST-112 (no Target Version)", epic)
-        self.assertIn("• <@U000TEST1>: TEST-104 (no Target Version, no QA Contact, feature closed)", epic)
-        self.assertIn("• Pat Product: TEST-103 (no Target Version, no QA Contact, no assignee)", epic)
-        actions = next(r for r in report["replies"] if r.startswith("*Action items*"))
-        self.assertIn("Re-plan the sprint: 8.4 SP over capacity (owner: Pat Product)", actions)
+        self.assertIn("• <@U000TEST2>: TEST-106 (no QA Contact, feature has none, feature closed), TEST-112 (no Target Version)", epic)
+        self.assertIn("• <@U000TEST1>: no Target Version for TEST-104, 107; TEST-104 (no QA Contact, feature has none, feature closed)", epic)
+        self.assertIn("• Pat Product: no assignee for TEST-102, 103, 108; no QA Contact for TEST-102, 103; "
+                      "TEST-103 (no Target Version); TEST-108 (no QA Contact, feature could not be read)", epic)
+        self.assertIn("• Pat Product: re-plan the sprint (8.4 SP over capacity)", report["replies"][0])
 
     def test_empty_epic_result_adds_no_owner(self):
         sprint, computed = self._parts()
         jql = EPICS_JQL + " ORDER BY key DESC"
         gaps = cr.epic_field_gaps(_adapt(f"No issues found for JQL: {jql}", jql, "epics"), [])
         with_empty = self._owners(sprint, computed, gaps)
-        self.assertEqual(with_empty, {"Alex Example", "Quinn Quality", "Morgan Manager"})
+        self.assertEqual(with_empty, {"Alex Example", "Quinn Quality"})
 
     def test_no_sprint_and_only_epic_flags(self):
         _, _, gaps = _mix()
@@ -687,30 +697,30 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(report["top_post"], [
             "🟢 Edge weekly health: Test Sprint 11 (week 1, capacity); 9.1 development",
             "No risks this week: committed 20 SP in 1 issue; capacity 21.6 SP (velocity 24 × availability 0.90)",
-            "0 items need action"])
+            "0 people have items"])
         self.assertFalse(any("Epic" in r for r in report["replies"]))
-        self.assertFalse(any(r.startswith("*Left out*") for r in report["replies"]))
+        self.assertFalse(any("Left out" in r for r in report["replies"]))
+        self.assertEqual(len(report["replies"]), 2)  # sprint, release
 
     def test_realistic_mix(self):
         report = weekly_report(EPICS_MIX)
         epic = next(r for r in report["replies"] if r.startswith("*Epic fields*"))
         self.assertEqual(epic.splitlines(), [
             "*Epic fields* (8 epics: 4 no Target Version, 5 no QA Contact, 1 Target Version ≠ feature, "
-            "3 feature closed or in backlog, 3 no assignee). Key: \"Target Version ≠ feature\" = retarget, split or keep?",
-            "• <@U000TEST1>: TEST-104 (no Target Version, no QA Contact, feature closed), "
-            "TEST-107 (no Target Version, feature in backlog), TEST-101 (Target Version ≠ feature)",
-            "• no owner set: TEST-103 (no Target Version, no QA Contact, no assignee), "
-            "TEST-102 (no QA Contact, no assignee), TEST-108 (no QA Contact, no assignee)",
-            "• Morgan Manager: TEST-106 (no QA Contact, feature closed), TEST-112 (no Target Version)",
+            "3 feature closed or in backlog, 3 no assignee; ✓ 2 complete). Key: \"Target Version ≠ feature\" = retarget, split or keep?",
+            "• <@U000TEST1>: no Target Version for TEST-104, 107; TEST-104 (no QA Contact, feature has none, feature closed); "
+            "TEST-107 (feature in backlog); TEST-101 (Target Version ≠ feature)",
+            "• no owner set: no assignee for TEST-102, 103, 108; no QA Contact for TEST-102, 103; "
+            "TEST-103 (no Target Version); TEST-108 (no QA Contact, feature could not be read)",
+            "• Morgan Manager: TEST-106 (no QA Contact, feature has none, feature closed), TEST-112 (no Target Version)",
+            "Left out: 9.1: capacity from 1 assignee(s) not on the roster: their 12 SP counts as scope, not capacity; "
+            "Target Version and parent status checks for 1 epic(s) under FEAT-9: parent could not be read: "
+            "not returned by Jira (restricted, deleted or no permission)",
         ])
-        # Order: sprint, release section, epic flags, action items, left out.
+        # At most 3 replies: sprint, release, epic fields (ending with the one Left out line).
         heads = [r.splitlines()[0] for r in report["replies"]]
         self.assertEqual([h.split("*")[1] for h in heads],
-                         ["Sprint health: Test Sprint 11", "9.1 release health",
-                          "Epic fields", "Action items", "Left out"])
-        self.assertIn("• Target Version and parent status checks for 1 epic(s) under FEAT-9: parent could "
-                      "not be read: not returned by Jira (restricted, deleted or no permission)",
-                      report["replies"][-1])
+                         ["Sprint health: Test Sprint 11", "9.1 release health", "Epic fields"])
         self.assertEqual(len(report["top_post"]), 3)
 
 

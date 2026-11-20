@@ -88,7 +88,8 @@ class UnreadableDateTest(unittest.TestCase):
         health = cr.sprint_health(sprint_issues, sprint, "2026-11-23", "mid-sprint")
         report = cr.build_report(health, [], out["left_out"])
         self.assertEqual(len(report["top_post"]), 3)
-        left = next(r for r in report["replies"] if r.startswith("*Left out*"))
+        left = report["replies"][-1].splitlines()[-1]
+        self.assertTrue(left.startswith("Left out: "))
         self.assertIn("Unreadable dates in the sprint_issues fetch (1 issue(s)): TEST-1 created 'garbage'", left)
 
     def test_transform_and_stale_tolerate_garbage(self):
