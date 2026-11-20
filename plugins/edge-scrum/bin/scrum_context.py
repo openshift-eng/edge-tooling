@@ -257,13 +257,19 @@ def current_sprint(sprints, day):
     """Today's sprint: the board sprint with state "active", else by date.
 
     When several sprints are active, the one containing ``day`` wins, else the
-    latest-starting one. Without an active sprint, a date past the last board
+    latest-starting one. On the active sprint's end day, a board sprint that
+    starts that day is today's sprint even if nobody has started it yet (the
+    sprint-change Monday). Without an active sprint, a date past the last board
     sprint maps to a projected sprint at the board's cadence.
     """
     day = to_date(day)
     active = [s for s in sprints if str(s.get("state") or "").lower() == "active"]
     if active:
-        return sprint_on(active, day) or active[-1]
+        current = sprint_on(active, day) or active[-1]
+        if current["end"] == day:
+            following = next((s for s in sprints if s is not current and s["start"] == day), None)
+            return following or current
+        return current
     return sprint_on(project_sprints(sprints, day), day)
 
 

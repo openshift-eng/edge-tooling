@@ -195,7 +195,10 @@ an event title. A malformed `today` is an error, not a warning.
 
 ## Rules the helper applies
 
-- **Today's sprint:** the board sprint with state `active`. Only when no sprint
+- **Today's sprint:** the board sprint with state `active`. On the active
+  sprint's end day, a board sprint that starts that day is today's sprint, even
+  if nobody has started it yet (the sprint-change Monday: week 1, and its
+  release phase). Only when no sprint
   is active, the sprint whose start day is on or before today and whose end day
   is after today, so a sprint's first day belongs to the new sprint. A date past
   the last board sprint maps to a projected sprint (up to the 12-sprint limit

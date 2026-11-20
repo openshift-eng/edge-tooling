@@ -63,6 +63,11 @@ ROSTER_SOURCE: "openshift-eng/edge-context: people/team-roster.md"
    incomplete.
 8. When `query_jira` says a field value was shortened or stored, read it whole
    with `result_page` before passing the results to the script.
+9. Labels `query_jira` prints that the adapter doesn't know are ignored with a
+   warning; they never change a known field. A date that isn't readable is
+   dropped, never guessed, and listed in the adapted fetch's `left_out`: add
+   every fetch's `left_out` to the report's `missing` so it appears under
+   "Left out".
 
 ## Steps
 
