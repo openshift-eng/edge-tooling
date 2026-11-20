@@ -10,6 +10,7 @@ from datetime import datetime, date, timedelta
 
 # --- Status Constants ---
 
+# "Done" is defensive: the OCPEDGE and USHIFT workflows have no Done status (law 07: Closed).
 DONE_STATUSES_SPRINT = {"Done", "Closed", "Verified"}
 DONE_STATUSES_OCPBUGS = {"Closed", "Verified"}
 DONE_STATUSES_BLOCKER = {"Closed", "Verified", "Done", "Won't Fix"}
@@ -392,8 +393,15 @@ def business_days_between(start, end):
 
 
 def is_stale(updated_str, today_str, threshold_days=5):
-    """True if updated is > threshold business days before today."""
-    return business_days_between(updated_str, today_str) > threshold_days
+    """True if updated is > threshold business days before today.
+
+    An unreadable date is not stale (False), never an error: one bad issue
+    must not stop a report.
+    """
+    try:
+        return business_days_between(updated_str, today_str) > threshold_days
+    except (ValueError, TypeError, AttributeError):
+        return False
 
 
 # --- ADF / Description Helpers ---

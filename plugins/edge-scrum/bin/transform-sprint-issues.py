@@ -18,7 +18,6 @@ from _jira_transforms import (
     extract_sprints,
     has_acceptance_criteria,
     is_stale,
-    format_date,
     safe_format_date,
     get_nested,
     load_issues,
@@ -43,8 +42,9 @@ def _none_if_null_string(value):
 def transform_issue(raw, today):
     issue_type = extract_issue_type(raw)
     status = get_nested(raw, "status", "name") or ""
-    updated = format_date(raw.get("updated", raw.get("created", today)))
-    created = format_date(raw.get("created", today))
+    # Unreadable or missing dates fall back (to created, then today) instead of raising.
+    created = safe_format_date(raw.get("created"), today)
+    updated = safe_format_date(raw.get("updated"), created)
 
     return {
         "key": raw.get("key", ""),
