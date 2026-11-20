@@ -30,10 +30,16 @@ INSTALL_PHASES = [
     "install should succeed: overall",
 ]
 
-# Component Readiness views — topology comparisons against HA baseline
+# Sippy Component Readiness view patterns for comparisons against HA.
+CR_VIEW_PATTERNS = {
+    "SNO": "{version}-ha-vs-single",
+    "TNA": "{version}-ha-vs-two-node-arbiter",
+    "TNF": "{version}-ha-vs-two-node-fencing",
+}
+
 CR_VIEWS = [
-    {"pattern": "{version}-ha-vs-single", "topology": "SNO"},
-    {"pattern": "{version}-ha-vs-two-node-fencing", "topology": "TNF"},
+    {"pattern": CR_VIEW_PATTERNS[topology], "topology": topology}
+    for topology in ("SNO", "TNF")
 ]
 
 JIRA_PROJECT = "OCPBUGS"

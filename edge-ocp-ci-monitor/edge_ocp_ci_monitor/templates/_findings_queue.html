@@ -1,61 +1,47 @@
-{% macro finding_row(source_id, kind, name, topology, version, rate=none, runs=none) %}
-<tr class="finding-row{% if kind == 'blocking' %} finding-blocker{% endif %}" data-finding-source="{{ source_id }}" data-finding-kind="{{ kind }}">
-  <td><span class="{% if kind == 'blocking' %}finding-blocking-label{% elif kind == 'informing' %}finding-informing-label{% else %}finding-source-label{% endif %}">{{ 'Sippy' if kind == 'sippy' else kind }}</span></td>
+{% macro finding_row(source_id, name, topology, version, blocking=false, rate=none, runs=none) %}
+<tr class="finding-row{% if blocking %} finding-blocker{% endif %}" data-finding-source="{{ source_id }}">
+  {% if blocking %}<td><span class="finding-blocking-label">blocking</span></td>{% endif %}
   <td>
     <button type="button" class="finding-job" aria-haspopup="dialog" aria-controls="finding-drawer">{{ name }}</button>
     <div class="finding-metadata"><span class="badge {{ topology|lower }}">{{ topology }}</span><span class="badge version-badge">{{ version }}</span><span class="finding-analysis-status"></span></div>
   </td>
-  <td class="finding-rate">{% if kind == 'sippy' %}<span class="pass-rate {% if rate < 70 %}low{% elif rate < 90 %}medium{% else %}high{% endif %}">{{ '%.1f'|format(rate) }}%</span><small>{{ runs }} runs</small>{% else %}<span class="finding-recurrence">&mdash;</span>{% endif %}</td>
+  <td class="finding-rate">{% if blocking %}<span class="finding-recurrence">{% with job_name=name %}{% include '_failure_recurrence.html' %}{% endwith %}</span>{% else %}<span class="pass-rate {% if rate < 70 %}low{% elif rate < 90 %}medium{% else %}high{% endif %}">{{ '%.1f'|format(rate) }}%</span><small>{{ runs }} runs</small>{% endif %}</td>
   <td><span class="finding-recommendation">&mdash;</span></td>
   <td class="finding-chevron" aria-hidden="true">›</td>
 </tr>
 {% endmacro %}
 {% macro finding_table(label, sippy=false) %}
 <div class="finding-table-wrapper">
-<table class="finding-table" aria-label="{{ label }}">
-  <colgroup><col class="finding-type-column"><col class="finding-job-column"><col class="finding-rate-column"><col><col class="finding-cue-column"></colgroup>
-  <thead><tr><th>Type</th><th>Job</th><th>{{ 'Current Pass Rate' if sippy else 'Recurrence' }}</th><th>Recommendation <span class="finding-ai-label">Chai</span></th><th><span class="dashboard-sr-only">Details</span></th></tr></thead>
+<table class="finding-table" aria-label="{{ label }}" data-resize-columns>
+  <colgroup>{% if not sippy %}<col class="finding-type-column">{% endif %}<col class="finding-job-column"><col class="finding-rate-column"><col><col class="finding-cue-column"></colgroup>
+  <thead><tr>{% if not sippy %}<th>Type</th>{% endif %}<th>Job</th><th>{{ 'Current Pass Rate' if sippy else 'Recurrence' }}</th><th>Recommendation <span class="finding-ai-label">Chai</span></th><th><span class="dashboard-sr-only">Details</span></th></tr></thead>
   <tbody>{{ caller() }}</tbody>
 </table>
-<p class="empty-state" data-finding-no-results hidden>No matching jobs.</p>
 </div>
-<div class="queue-footer"><span data-finding-count role="status" aria-live="polite"></span><button type="button" class="queue-expand" data-finding-expand hidden></button></div>
 {% endmacro %}
 
 <section class="finding-section" data-findings-section="payload" aria-labelledby="payload-findings-title">
-  <div class="queue-heading"><h2 id="payload-findings-title">Nightly Payload - Failure Analysis</h2><span class="queue-hint">Select a job to view details →</span></div>
-  {% if all_failing %}
-  <div class="queue-tools">
-    <div class="queue-filters" role="group" aria-label="Filter payload failures">
-      <button type="button" data-finding-filter="all" aria-pressed="true">All <span class="dashboard-count">{{ all_failing|length }}</span></button>
-      <button type="button" data-finding-filter="blocking" aria-pressed="false">Blocking <span class="dashboard-count">{{ ns.blocking_failures }}</span></button>
-      <button type="button" data-finding-filter="informing" aria-pressed="false">Informing <span class="dashboard-count">{{ ns.informing_failures }}</span></button>
-    </div>
-    <input type="search" class="finding-search" data-finding-search aria-label="Search nightly payload failures" placeholder="Search payload jobs…">
-  </div>
-  {% call finding_table('Nightly Payload - Failure Analysis') %}
-    {% for item in all_failing %}
-    {{ finding_row('detail-' ~ loop.index, item.job.job_type.value, item.job.name, item.job.topology, item.version) }}
+  <div class="queue-heading"><h2 id="payload-findings-title">Worse 5 blocking jobs</h2></div>
+  {% if overview_blocking %}
+  {% call finding_table('Worse 5 blocking jobs') %}
+    {% for source_index, item in overview_blocking %}
+    {{ finding_row('detail-' ~ source_index, item.job.name, item.job.topology, item.version, blocking=true) }}
     {% endfor %}
   {% endcall %}
   {% else %}
-  <div class="empty-state">No failing edge jobs found across monitored payloads.</div>
+  <div class="empty-state">No failing blocking jobs found across monitored payloads.</div>
   {% endif %}
-  {% include "_payload_history.html" %}
 </section>
 
 <section class="finding-section" data-findings-section="sippy" aria-labelledby="sippy-findings-title">
-  <div class="queue-heading"><h2 id="sippy-findings-title">Sippy Job Health Status</h2><span class="queue-hint">Select a job to view details →</span></div>
+  <div class="queue-heading"><h2 id="sippy-findings-title">Worse 5 Sippy jobs</h2></div>
   <div class="queue-selection">
-    <p>Source: <a href="https://sippy.dptools.openshift.org" target="_blank" rel="noopener noreferrer">Sippy Jobs</a> - jobs with negative net improvement or current pass rate below 50%, with at least 3 current runs. Investigation actions are available for each job.</p>
-    <p>Historical job pass rates; these findings do not determine payload blocking status.</p>
-    <p>Relative pass-rate drop &gt;50%, or current pass rate &lt;50%, even if flat or improving. Relative change = (current − previous) / previous × 100; unavailable when previous is 0%. Ranked by lowest current rate first, then largest relative drop.</p>
+    <p><a href="https://sippy.dptools.openshift.org" target="_blank" rel="noopener noreferrer">Sippy jobs</a> qualify with at least 3 current runs and either a relative pass-rate drop greater than 50% or a current pass rate below 50%. Selection uses the lowest current pass rate, then the largest relative drop. Rows with a failure date are ordered newest first.</p>
   </div>
-  {% if priority_sippy %}
-  <div class="queue-tools"><span class="queue-hint">Worst {{ priority_sippy|length }} of {{ priority_sippy_count }} Sippy jobs needing attention</span><input type="search" class="finding-search" data-finding-search aria-label="Search Sippy job health findings" placeholder="Search Sippy jobs…"></div>
-  {% call finding_table('Sippy Job Health Status', sippy=true) %}
-    {% for r in priority_sippy %}
-    {{ finding_row(sippy_analysis_ids[r.analysis_key], 'sippy', r.test_name, r.topology, r.version, r.sample_pass_rate, r.current_runs) }}
+  {% if overview_sippy %}
+  {% call finding_table('Worse 5 Sippy jobs', sippy=true) %}
+    {% for r in overview_sippy %}
+    {{ finding_row(sippy_analysis_ids[r.analysis_key], r.test_name, r.topology, r.version, rate=r.sample_pass_rate, runs=r.current_runs) }}
     {% endfor %}
   {% endcall %}
   {% elif all_regressions %}
@@ -65,7 +51,6 @@
   {% endif %}
   {% if all_regressions or component_regressions %}
   <div class="queue-more">
-    <span>Historical job pass rates; these findings do not determine payload blocking status.</span>
     <div>{% if all_regressions %}<a href="#section-sippy-regressions" data-dashboard-view="sippy-health">All {{ all_regressions|length }} Sippy job findings →</a>{% endif %}{% if component_regressions %}<a href="#section-component-readiness" data-dashboard-view="component-readiness">Review Components →</a>{% endif %}</div>
   </div>
   {% endif %}

@@ -28,6 +28,7 @@ from .security import protect_logs, redact_token
 logger = logging.getLogger(__name__)
 AI_TIMEOUT_SECONDS = 2700
 AI_CONCURRENCY = 2
+_MCP_PROTOCOL_VERSION = "2026-07-28"
 _HEARTBEAT_SECONDS = 30
 
 
@@ -289,18 +290,6 @@ def _parse_json(text: str) -> dict:
     return data
 
 
-def validate_analysis(text: str, target: dict, *, sippy: bool) -> dict:
-    """Validate a single analysis, also used by the per-entry batch validator."""
-    data = _parse_json(text)
-    result = _validate_entry(data, target, sippy=sippy)
-    if "jira" in data:
-        try:
-            result["jira"] = validate_jira(data["jira"], target)
-        except ValueError as exc:
-            raise InvalidAnalysis(str(exc)) from None
-    return result
-
-
 def _validate_entry(data: dict, target: dict, *, sippy: bool) -> dict:
     """Reject wrong jobs, incomplete attempts and malformed fields independently."""
     if not isinstance(data, dict):
@@ -456,6 +445,7 @@ async def ask_chai(settings: Settings, question: str, *, progress: _BatchProgres
         from fastmcp.client.auth import BearerAuth
         from fastmcp.client.transports import StreamableHttpTransport
         from fastmcp.exceptions import McpError
+        from pydantic import ValidationError
     except ImportError as exc:
         install = shlex.join([sys.executable, "-m", "pip", "install", "-r",
                               str(Path(__file__).resolve().parents[1] / "requirements.txt")])
@@ -471,7 +461,7 @@ async def ask_chai(settings: Settings, question: str, *, progress: _BatchProgres
             return expected(exc.__cause__)
         return isinstance(exc, (
             httpx2.HTTPError, httpx2.InvalidURL, McpError, OSError, TimeoutError,
-            ChaiUnavailable,
+            ChaiUnavailable, ValidationError,
             anyio.BrokenResourceError, anyio.ClosedResourceError, anyio.EndOfStream,
         ))
 
@@ -480,13 +470,15 @@ async def ask_chai(settings: Settings, question: str, *, progress: _BatchProgres
             return "; ".join(dict.fromkeys(diagnostic(child) for child in exc.exceptions))
         if isinstance(exc, RuntimeError) and exc.__cause__ is not None:
             return diagnostic(exc.__cause__)
+        if isinstance(exc, ValidationError):
+            return f"Invalid MCP response ({exc.title}, {exc.error_count()} validation errors)."
         if isinstance(exc, httpx2.HTTPStatusError):
             # Do not print response bodies, headers or the request URL.
             status = exc.response.status_code
             hint = {
                 401: "Authentication was rejected; check token validity.",
                 403: "Access was denied; check persona permissions.",
-                404: "Endpoint or session not found; check the full persona MCP URL.",
+                404: "Endpoint not found; check the full persona MCP URL.",
                 405: "HTTP method rejected; check that the URL is an MCP endpoint.",
                 429: "The service is at its request/capacity limit.",
             }.get(status, "The server returned an HTTP error.")
@@ -513,7 +505,7 @@ async def ask_chai(settings: Settings, question: str, *, progress: _BatchProgres
     try:
         async with asyncio.timeout(settings.timeout):
             async with Client(
-                transport, auth=BearerAuth(settings.token), timeout=settings.timeout, mode="legacy",
+                transport, auth=BearerAuth(settings.token), timeout=settings.timeout, mode=_MCP_PROTOCOL_VERSION,
             ) as client:
                 result = await client.call_tool(
                     "ask_persona", {"question": question}, timeout=settings.timeout,
@@ -525,7 +517,7 @@ async def ask_chai(settings: Settings, question: str, *, progress: _BatchProgres
         if not expected(exc):
             raise
         raise ChaiUnavailable(
-            f"Chai MCP could not complete the request. Reason: {diagnostic(exc)}"
+            f"Chai MCP {_MCP_PROTOCOL_VERSION} could not complete the request. Reason: {diagnostic(exc)}"
         ) from None
     text = redact_token("\n".join(block.text for block in result.content if block.type == "text"), settings.token)
     if result.is_error:

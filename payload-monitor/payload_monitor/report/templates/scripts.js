@@ -214,10 +214,7 @@ document.addEventListener('DOMContentLoaded', function() {
         return aText.localeCompare(bText) * dir;
       });
 
-      rows.forEach((row, index) => {
-        row.dataset.rowIndex = String(index + 1);
-        tbody.appendChild(row);
-      });
+      rows.forEach(row => tbody.appendChild(row));
       applyCollapse();
       updateExpandButtons();
     });
@@ -276,8 +273,8 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   };
 
-  // Draggable column resizers
-  document.querySelectorAll('table').forEach(table => {
+  // Tables with their own column resizers manage their widths separately.
+  document.querySelectorAll('table:not([data-resize-columns])').forEach(table => {
     const headers = table.querySelectorAll('th');
 
     // Freeze column widths to current auto-computed sizes, then switch to fixed layout

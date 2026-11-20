@@ -45,6 +45,8 @@
       <span style="color:var(--text-muted)">○ Data only</span>
       <span style="margin-left:4px">- run <code style="font-size:12px;color:var(--accent)">python -m edge_ocp_ci_monitor</code> for AI analysis</span>
     </div>
+    {% elif payload_data_incomplete %}
+    <div class="meta" style="margin-top:4px">{{ 'Payload data incomplete' if payload_data_available else 'Payload data unavailable' }}</div>
     {% else %}
     <div class="meta" style="margin-top:4px">
       <span style="color:var(--green)">● No blocking failures found</span>
@@ -54,10 +56,12 @@
 </div>
 
 <section class="report-notes" aria-label="Report notes">
+{% if analysis_status is defined or ai_warnings %}
+<div{% if analysis_status is defined %} data-analysis-status="{{ analysis_status | tojson | forceescape }}"{% elif pending_analysis is defined %} data-pending-analysis="{{ pending_analysis | tojson | forceescape }}"{% endif %}{% if ai_warnings %} class="warning-banner" role="status" id="chai-analysis-warning"{% else %} hidden{% endif %}>
 {% if ai_warnings %}
-<div class="warning-banner" role="status" id="chai-analysis-warning">
   <strong>Chai AI analysis unavailable or incomplete.</strong> Collected dashboard data remains available.
   <ul>{% for warning in ai_warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+{% endif %}
 </div>
 {% endif %}
 
@@ -68,7 +72,7 @@
   <span class="skip-flag">--skip-prow</span> Prow artifact fetching was skipped - Error column, Failing Tests, and Failure Details will be empty.
   {% endif %}
   {% if report.skip_sippy %}
-  <span class="skip-flag">--skip-sippy</span> Sippy job health check was skipped - Sippy Job Health section is not available.
+  <span class="skip-flag">--skip-sippy</span> Sippy job health and Component Readiness were skipped.
   {% endif %}
   {% if report.skip_timing %}
   <span class="skip-flag">Insights</span> Timing insights are disabled by default. Use <code>--with-timing</code> to include install/upgrade timing data.
@@ -136,9 +140,9 @@
   {% set informing_count = stream.total_informing_edge_failures %}
   <div class="health-row">
     <div class="health-version">{{ stream.version }}</div>
-    <div class="health-status {% if blocking_count > 0 %}critical clickable{% elif informing_count > 0 %}warning clickable{% else %}healthy{% endif %}"
+    <div class="health-status {% if not latest %}unavailable{% elif blocking_count > 0 %}critical clickable{% elif informing_count > 0 %}warning clickable{% else %}healthy{% endif %}"
          {% if blocking_count > 0 or informing_count > 0 %}role="button" tabindex="0" onkeydown="if(event.target===this && (event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}" onclick="jumpToFailures('{{ stream.version }}')" title="View all edge failures for {{ stream.version }}"{% endif %}>
-      {% if blocking_count > 0 %}Critical{% elif informing_count > 0 %}Warning{% else %}Healthy{% endif %}
+      {% if not latest %}Unavailable{% elif blocking_count > 0 %}Critical{% elif informing_count > 0 %}Warning{% else %}Healthy{% endif %}
     </div>
     <div class="health-counts">
       {% if latest %}
@@ -166,7 +170,9 @@
       {% endif %}
     </div>
     <div class="health-trend">
-      {% if blocking_count == 0 and informing_count == 0 %}
+      {% if not latest %}
+      <span class="meta" title="No terminal payload data">&mdash;</span>
+      {% elif blocking_count == 0 and informing_count == 0 %}
       <span class="trend-indicator stable" title="No failures">&#9644;</span>
       {% elif view.trend_signal < 2 %}
       <span class="trend-indicator stable" title="Not enough recent failures to establish a trend">&#9644; stable</span>
@@ -186,23 +192,7 @@
          class="timeline-dot {% if b_fails %}edge-critical{% elif i_fails %}edge-warning{% elif payload.status.value == 'Rejected' %}rejected-noedge{% else %}edge-healthy{% endif %}"
          title="{{ payload.tag }}">
         <span class="tooltip">
-          {{ payload.tag }}<br>
-          Payload: {{ payload.status.value }}
-          {% if b_fails %}
-          <br><strong>{{ b_fails | length }} blocking edge failure{{ 's' if b_fails | length != 1 else '' }}:</strong>
-          {% for j in b_fails %}
-          <br>&#9656; {{ j.name }} ({{ j.topology }})
-          {% endfor %}
-          {% endif %}
-          {% if i_fails %}
-          <br>{{ i_fails | length }} informing edge failure{{ 's' if i_fails | length != 1 else '' }}
-          {% endif %}
-          {% if not b_fails and not i_fails and payload.status.value == 'Rejected' %}
-          <br>Rejected for non-edge reasons
-          {% endif %}
-          {% if not b_fails and not i_fails and payload.status.value == 'Accepted' %}
-          <br>All edge jobs passing
-          {% endif %}
+          {% include '_payload_tooltip.html' %}
         </span>
         {{ 'A' if payload.status.value == 'Accepted' else 'R' if payload.status.value == 'Rejected' else 'P' }}
       </a>
@@ -291,7 +281,7 @@
   <button class="tab-btn dashboard-tab active" id="view-payload-health" data-tab="payload-health" role="tab" aria-selected="true" aria-controls="tab-payload-health" type="button">Overview</button>
   <button class="tab-btn dashboard-tab" id="view-failure-analysis" data-tab="failure-analysis" role="tab" aria-selected="false" aria-controls="tab-failure-analysis" type="button">Failure Analysis <span class="dashboard-count">{{ all_failing|length }}</span></button>
   {% if all_regressions %}<button class="tab-btn dashboard-tab" id="view-sippy-health" data-tab="sippy-health" role="tab" aria-selected="false" aria-controls="tab-sippy-health" type="button">Sippy Job Health Status <span class="dashboard-count">{{ all_regressions|length }}</span></button>{% endif %}
-  {% if component_regressions %}<button class="tab-btn dashboard-tab" id="view-component-readiness" data-tab="component-readiness" role="tab" aria-selected="false" aria-controls="tab-component-readiness" type="button">Component Readiness <span class="dashboard-count">{{ component_regressions|length }}</span></button>{% endif %}
+  {% if not report.skip_sippy %}<button class="tab-btn dashboard-tab" id="view-component-readiness" data-tab="component-readiness" role="tab" aria-selected="false" aria-controls="tab-component-readiness" type="button">Component Readiness{% if component_regressions %} <span class="dashboard-count">{{ component_regressions|length }}</span>{% endif %}</button>{% endif %}
   {% if timing_html %}<button class="tab-btn dashboard-tab" id="view-timing-insights" data-tab="timing-insights" role="tab" aria-selected="false" aria-controls="tab-timing-insights" type="button">Timing Insights</button>{% endif %}
 </nav>
   <button class="tab-scroll-btn tab-scroll-right" type="button" aria-label="Scroll tabs right" aria-controls="dashboard-tabs-nav"><span class="tab-scroll-icon" aria-hidden="true">&#8250;</span></button>
@@ -363,14 +353,14 @@
 {% if _fc >= recurring_threshold and _fc < persistent_threshold %}{% if _statuses.append('recurring') %}{% endif %}{% endif %}
 {% if detail.job.name in escalation_risk_jobs %}{% if _statuses.append('unstable') %}{% endif %}{% endif %}
 {% if detail.job.deep_analysis %}{% if _statuses.append('ai-analyzed') %}{% endif %}{% endif %}
-<details id="detail-{{ loop.index }}" class="detail-row failure-row" data-analysis-key="prow:{{ detail.job.prow_url }}" data-topology="{{ detail.job.topology }}" data-jobtype="{{ detail.job.job_type.value }}" data-version="{{ detail.version }}" data-status="{{ _statuses | join(' ') }}" data-row-index="{{ loop.index }}" data-prow-url="{{ detail.job.prow_url }}" data-job-name="{{ detail.job.name }}">
+<details id="detail-{{ loop.index }}" class="detail-row failure-row" data-analysis-key="prow:{{ detail.job.prow_url }}" data-topology="{{ detail.job.topology }}" data-jobtype="{{ detail.job.job_type.value }}" data-version="{{ detail.version }}" data-status="{{ _statuses | join(' ') }}" data-prow-url="{{ detail.job.prow_url }}" data-job-name="{{ detail.job.name }}">
   <summary>
     <span class="detail-cell-job" title="{{ detail.job.name }}">{{ detail.job.name }}{% if detail.job.deep_analysis %}<span class="badge ai-analyzed">AI Analyzed</span>{% endif %}{% set also_in = cross_topology.get(detail.job.name, []) %}{% if also_in %}<span class="cross-topo-hint" title="Also failing in other topologies">{% for t in also_in %}<span class="badge {{ t|lower }}">{{ t }}</span>{% endfor %}</span>{% endif %}</span>
     <span class="detail-cell-version">{{ detail.version }}</span>
     <span class="detail-cell-payload"><a href="{{ detail.payload_url }}" target="_blank" title="{{ detail.payload_tag }}" onclick="event.stopPropagation()">{{ detail.payload_tag }}</a></span>
     <span class="detail-cell-topology"><span class="badge {{ detail.job.topology | lower }}">{{ detail.job.topology }}</span></span>
     <span class="detail-cell-type"><span class="badge {{ detail.job.job_type.value }}">{{ detail.job.job_type.value }}</span></span>
-    <span class="detail-cell-recurrence">{% set fc = failure_counts.get(detail.job.name, 0) %}{% if fc >= persistent_threshold %}<span class="badge persistent" title="Failed in {{ fc }} payloads">Persistent</span>{% elif fc >= recurring_threshold %}<span class="badge recurring" title="Failed in {{ fc }} payloads">Recurring</span>{% endif %}{% if detail.job.name in escalation_risk_jobs %}<span class="badge escalation-risk">Unstable</span>{% endif %}{% if fc < recurring_threshold and detail.job.name not in escalation_risk_jobs %}<span style="color:var(--text-muted)">&mdash;</span>{% endif %}</span>
+    <span class="detail-cell-recurrence">{% with job_name=detail.job.name %}{% include '_failure_recurrence.html' %}{% endwith %}</span>
     <span class="detail-cell-date">{% if detail.date %}{{ detail.date }}{% endif %}</span>
   </summary>
   <div class="content">
@@ -394,7 +384,12 @@
     <div class="claude-suggestion" data-prow-url="{{ detail.job.prow_url }}" data-attempt-count="{{ detail.job.previous_attempts|length + 1 }}">
       For deeper analysis, ask Chai:<br>
       <div class="cmd-copy-row">
-        <code>Investigate this failing Prow job: {{ detail.job.prow_url }}</code>
+        <code>Investigate this failing Prow job: {{ detail.job.prow_url }}
+Edge OCP CI Monitor finding for {{ detail.job.name }}, a {{ detail.job.job_type.value }} job on {{ detail.job.topology }} in OpenShift {{ detail.version }}, payload {{ detail.payload_tag }}.
+{% if detail.job.previous_attempts %}Previous attempts: {{ detail.job.previous_attempts | map(attribute='prow_url') | join(', ') }}
+{% endif %}Start with the latest run's step results. Inspect its logs and artifacts to identify the failing step that explains the job outcome. Say whether the test suite started and name any relevant failed tests.
+{% if detail.job.previous_attempts %}Inspect the previous attempts independently. Compare the failing step and failure mechanism across runs. State which comparisons you could verify. A passing retry alone does not establish an infrastructure flake.
+{% endif %}Cite the evidence. Include a suspect PR only when the payload diff and failure evidence connect it to the failing component. Investigate without making changes.</code>
         <button class="copy-btn" onclick="copyCommand(this)" title="Copy to clipboard">Copy</button>
       </div>
     </div><!-- /claude-suggestion -->
@@ -484,10 +479,11 @@
 <button class="expand-btn" id="expand-details-btn" onclick="expandSection('details')">Show all {{ all_failing | length }} failure details</button>
 {% endif %}
 {% else %}
-<div class="empty-state">No failing edge jobs found across monitored payloads.</div>
+<div class="empty-state">{{ 'No failing edge jobs found in available payload data.' if payload_data_available else 'Payload data unavailable.' }}</div>
 {% endif %}
 
-</div>
+{% include "_payload_history.html" %}
+</div><!-- /tab-failure-analysis -->
 {% if all_regressions %}<div class="tab-panel" id="tab-sippy-health" role="tabpanel" aria-labelledby="view-sippy-health">
 <!-- Sippy Regressions -->
 {% if all_regressions %}
@@ -518,12 +514,17 @@
 
 
 </div>{% endif %}
-{% if component_regressions %}<div class="tab-panel" id="tab-component-readiness" role="tabpanel" aria-labelledby="view-component-readiness">
+{% if not report.skip_sippy %}<div class="tab-panel" id="tab-component-readiness" role="tabpanel" aria-labelledby="view-component-readiness">
 <!-- Component Readiness: HA vs Edge Topologies -->
-{% if component_regressions %}
 <h2 id="section-component-readiness">Component Readiness - HA vs Edge Topologies</h2>
+{% if component_readiness_incomplete %}
+<div class="warning-banner">Component Readiness data is unavailable for one or more views. See the data collection errors above.</div>
+{% elif not component_regressions %}
+<div class="empty-state">No regressions found in the queried Component Readiness views.</div>
+{% endif %}
+{% if component_regressions %}
 <div class="meta" style="margin-bottom:8px">
-  Source: <a href="https://sippy.dptools.openshift.org/sippy-ng/component_readiness/main" target="_blank">Sippy Component Readiness</a> - components with statistically significant regressions on edge topologies (SNO, TNA, TNF) compared to HA (Fisher's exact test, 95% confidence). Covers configured releases independently of the selected payload versions.
+  Source: <a href="https://sippy.dptools.openshift.org/sippy-ng/component_readiness/main" target="_blank">Sippy Component Readiness</a> - components with statistically significant regressions on edge topologies (SNO, TNA, TNF) compared to HA (Fisher's exact test, 95% confidence). Covers selected versions when specified, or all configured releases by default.
 </div>
 <div class="filters" id="cr-filters">
   {% if cr_comparisons | length > 1 %}
@@ -569,7 +570,7 @@
   </thead>
   <tbody>
     {% for cr in component_regressions %}
-    <tr class="cr-row" data-row-index="{{ loop.index }}" data-crcomparison="{{ cr.comparison }}" data-crplatform="{{ cr.variants.get('Platform', '') }}" data-crversion="{{ cr.version }}">
+    <tr class="cr-row" data-crcomparison="{{ cr.comparison }}" data-crplatform="{{ cr.variants.get('Platform', '') }}" data-crversion="{{ cr.version }}">
       <td>{{ cr.component }}</td>
       <td style="font-size:13px">
         {% if cr.detail_url %}

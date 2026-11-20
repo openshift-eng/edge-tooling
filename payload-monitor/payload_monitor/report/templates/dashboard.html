@@ -512,7 +512,7 @@
 {% if _fc >= recurring_threshold and _fc < persistent_threshold %}{% if _statuses.append('recurring') %}{% endif %}{% endif %}
 {% if detail.job.name in escalation_risk_jobs %}{% if _statuses.append('unstable') %}{% endif %}{% endif %}
 {% if detail.job.deep_analysis %}{% if _statuses.append('ai-analyzed') %}{% endif %}{% endif %}
-<details id="detail-{{ loop.index }}" class="detail-row failure-row" data-topology="{{ detail.job.topology }}" data-jobtype="{{ detail.job.job_type.value }}" data-version="{{ detail.version }}" data-status="{{ _statuses | join(' ') }}" data-row-index="{{ loop.index }}" data-prow-url="{{ detail.job.prow_url }}" data-job-name="{{ detail.job.name }}">
+<details id="detail-{{ loop.index }}" class="detail-row failure-row" data-topology="{{ detail.job.topology }}" data-jobtype="{{ detail.job.job_type.value }}" data-version="{{ detail.version }}" data-status="{{ _statuses | join(' ') }}" data-prow-url="{{ detail.job.prow_url }}" data-job-name="{{ detail.job.name }}">
   <summary>
     <span class="detail-cell-job" title="{{ detail.job.name }}">{{ detail.job.name }}{% if detail.job.deep_analysis %}<span class="badge ai-analyzed">AI Analyzed</span>{% endif %}{% set also_in = cross_topology.get(detail.job.name, []) %}{% if also_in %}<span class="cross-topo-hint" title="Also failing in other topologies">{% for t in also_in %}<span class="badge {{ t|lower }}">{{ t }}</span>{% endfor %}</span>{% endif %}</span>
     <span class="detail-cell-version">{{ detail.version }}</span>
@@ -711,7 +711,7 @@
   </thead>
   <tbody>
     {% for cr in component_regressions %}
-    <tr class="cr-row" data-row-index="{{ loop.index }}" data-crcomparison="{{ cr.comparison }}" data-crplatform="{{ cr.variants.get('Platform', '') }}" data-crversion="{{ cr.version }}">
+    <tr class="cr-row" data-crcomparison="{{ cr.comparison }}" data-crplatform="{{ cr.variants.get('Platform', '') }}" data-crversion="{{ cr.version }}">
       <td>{{ cr.component }}</td>
       <td style="font-size:13px">
         {% if cr.detail_url %}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -21,7 +22,7 @@ from payload_monitor.analyzer import (
     _find_escalation_risks,
     _find_recurring_failures,
 )
-from payload_monitor.collectors import prow, sippy, timing
+from payload_monitor.collectors import sippy, timing
 from payload_monitor.collectors.release_controller import (
     collect as collect_payloads,
 )
@@ -30,9 +31,10 @@ from payload_monitor.collectors.release_controller import (
     version_from_stream,
 )
 from payload_monitor.config import Config
-from payload_monitor.models import JobType, MonitorReport
+from payload_monitor.job_health import priority_sippy_findings, sippy_findings
+from payload_monitor.models import JobResult, JobType, MonitorReport, Regression
 
-from . import component_readiness
+from . import component_readiness, prow
 from .report import generate_html, generate_json, patch_analysis_html
 from .security import protect_logs, redact_data
 
@@ -41,6 +43,18 @@ from .security import protect_logs, redact_data
 class MonitorOutput:
     report: MonitorReport | None
     html_path: Path
+
+
+def _latest_sippy_failure(finding: Regression) -> int:
+    """Return the most recent failed Sippy run's timestamp in milliseconds."""
+    runs = timing.fetch_job_runs(finding.test_name, finding.version)
+    timestamps = (
+        timing._parse_sippy_timestamp(run.get("timestamp"))
+        for run in runs
+        if isinstance(run, dict) and run.get("overall_result") in ("F", "f", "U", "I", "N", "n")
+    )
+    latest = max((timestamp for timestamp in timestamps if timestamp is not None), default=None)
+    return int(latest.timestamp() * 1000) if latest else 0
 
 
 @protect_logs(lambda *args, **kwargs: os.environ.get("CHAI_MCP_TOKEN", "").strip())
@@ -109,7 +123,7 @@ def collect_report(
 
         if not skip_sippy:
             sippy_future = pool.submit(sippy.collect, config, active_versions)
-            cr_future = pool.submit(component_readiness.collect)
+            cr_future = pool.submit(component_readiness.collect, config.versions if versions else None)
 
         if with_timing:
             cache_path = Path(config.report_dir) / "timing_cache.json"
@@ -126,7 +140,9 @@ def collect_report(
 
         empty_streams = [s.version for s in stream_reports if not s.payloads]
         if empty_streams:
-            logger.warning(f"No payload data for versions: {', '.join(empty_streams)}")
+            message = f"No terminal payload data for {', '.join(empty_streams)}"
+            logger.warning("%s", message)
+            data_errors.append(f"Release Controller: {message}")
 
         if not skip_sippy:
             try:
@@ -141,7 +157,8 @@ def collect_report(
                 data_errors.append(f"Sippy: {e}")
 
             try:
-                comp_regs = cr_future.result()
+                comp_regs, cr_errors = cr_future.result()
+                data_errors.extend(f"Component Readiness: {error}" for error in cr_errors)
             except Exception as e:
                 logger.exception("Component Readiness collection failed")
                 data_errors.append(f"Component Readiness: {e}")
@@ -160,13 +177,25 @@ def collect_report(
             logger.info("  Skipping timing collection (use --with-timing to enable)")
 
     # Step 3: Enrich failing jobs with Prow data
-    if not skip_prow:
-        logger.info("Step 3: Fetching Prow artifacts for failing jobs...")
-        for stream in stream_reports:
-            for payload in stream.payloads:
-                prow.enrich_failing_jobs(payload.jobs)
-    else:
+    if skip_prow:
         logger.info("Step 3: Skipping Prow enrichment (--skip-prow)")
+    else:
+        artifact_jobs = [
+            job for stream in stream_reports for payload in stream.payloads for job in payload.jobs
+            if job.topology and ((job.result == JobResult.FAILURE and job.prow_url)
+                                 or any(attempt.prow_url for attempt in job.previous_attempts))
+        ]
+        gcloud = shutil.which("gcloud") if artifact_jobs else None
+        gsutil = shutil.which("gsutil") if artifact_jobs and not gcloud else None
+        if artifact_jobs and (gcloud or gsutil):
+            command = (gcloud, "storage", "cat") if gcloud else (gsutil, "cat")
+            logger.info("Step 3: Fetching Prow artifacts using %s", " ".join(command))
+            # gcloud storage supports one CLI invocation at a time.
+            prow.enrich_failing_jobs(artifact_jobs, command=command, max_workers=1 if gcloud else 4)
+        elif artifact_jobs:
+            message = "Prow artifacts unavailable. Install the Google Cloud CLI or use --skip-prow."
+            logger.warning("%s", message)
+            data_errors.append(message)
 
     # Build report
     now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
@@ -183,6 +212,12 @@ def collect_report(
         persistent_threshold=config.persistent_threshold,
         payloads_per_stream=config.payloads_per_stream,
     )
+
+    selected_sippy = priority_sippy_findings(sippy_findings(report))[:5]
+    if selected_sippy:
+        with ThreadPoolExecutor(max_workers=len(selected_sippy)) as pool:
+            for finding, timestamp in zip(selected_sippy, pool.map(_latest_sippy_failure, selected_sippy)):
+                finding.latest_failure_ms = timestamp
 
     report = redact_data(report, os.environ.get("CHAI_MCP_TOKEN", "").strip())
 

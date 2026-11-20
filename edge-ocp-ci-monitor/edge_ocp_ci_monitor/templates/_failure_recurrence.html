@@ -1,0 +1,12 @@
+{% set fc = failure_counts.get(job_name, 0) %}
+{% set risk = escalation_risk_by_job.get(job_name) %}
+{% if fc >= persistent_threshold %}
+<span class="badge persistent" title="Failed in {{ fc }} payloads">Persistent</span>
+{% elif fc >= recurring_threshold %}
+<span class="badge recurring" title="Failed in {{ fc }} payloads">Recurring</span>
+{% endif %}
+{% if risk %}
+<span class="badge escalation-risk">Unstable</span>
+{% elif fc < recurring_threshold %}
+<span style="color:var(--text-muted)">&mdash;</span>
+{% endif %}

@@ -5,12 +5,13 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 from payload_monitor.job_health import sippy_findings
-from payload_monitor.models import MonitorReport
+from payload_monitor.models import JobType, MonitorReport
 from payload_monitor.report import generator as payload_report
 
 from .analysis import build_targets
@@ -23,7 +24,7 @@ from .analysis_cards import (
     remove_jira_draft_links,
 )
 from .jira import AGENT_ISSUE_LABEL, suggested_bugs
-from .security import protect_logs, redact_data, redact_token
+from .security import protect_logs, redact_data
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +34,28 @@ _JINJA_ENV = Environment(
         str(payload_report.TEMPLATES_DIR),
     ]),
     autoescape=True,
+    # A checkpoint can run long after the Python renderer was loaded.
+    auto_reload=False,
 )
 _JINJA_ENV.filters["js_attr"] = payload_report._js_attr
 _JINJA_ENV.filters["safe_attempts"] = _safe_attempt_analyses
 _JINJA_ENV.filters["jira_links"] = _jira_links
+
+
+def _overview_blocking(all_failing: list[dict]) -> list[tuple[int, dict]]:
+    """Select recurring blockers and keep the latest row's full report index."""
+    counts = Counter()
+    latest = {}
+    for index, item in enumerate(all_failing, 1):
+        job = item["job"]
+        if job.job_type != JobType.BLOCKING:
+            continue
+        key = (item["version"], job.name)
+        counts[key] += 1
+        if key not in latest or item["date"] > latest[key][1]["date"]:
+            latest[key] = (index, item)
+    worst = sorted(latest, key=lambda key: (counts[key], latest[key][1]["date"]), reverse=True)[:5]
+    return sorted((latest[key] for key in worst), key=lambda row: row[1]["date"], reverse=True)
 
 
 @protect_logs(lambda *args, **kwargs: os.environ.get("CHAI_MCP_TOKEN", "").strip())
@@ -46,6 +65,14 @@ def generate_html(
     """Render Chai's template overrides with the existing dashboard data and assets."""
     report = redact_data(report, os.environ.get("CHAI_MCP_TOKEN", "").strip())
     context = payload_report._build_template_context(report)
+    context["payload_data_available"] = any(stream.payloads for stream in report.streams)
+    context["payload_data_incomplete"] = not report.streams or any(not stream.payloads for stream in report.streams)
+    context["component_readiness_incomplete"] = any(
+        error.startswith("Component Readiness:") for error in report.data_errors
+    )
+    context["overview_blocking"] = _overview_blocking(context["all_failing"])
+    context["overview_sippy"] = sorted(context["priority_sippy"], key=lambda finding: finding.latest_failure_ms,
+                                       reverse=True)
     jira_drafts_by_target = {}
     for bug in report.suggested_bugs:
         if _safe_urls([bug.create_url]):
@@ -58,6 +85,13 @@ def generate_html(
             jira_drafts=jira_drafts_by_target.get(f"sippy:{finding.analysis_key}", []),
         )
         for finding in context["priority_sippy"] if finding.deep_analysis
+    }
+    blocking_jobs = [item["job"] for item in context["all_failing"] if item["job"].job_type == JobType.BLOCKING]
+    prow_status = dict.fromkeys((job.prow_url for job in blocking_jobs), True)
+    prow_status.update({job.prow_url: False for job in blocking_jobs if not job.deep_analysis})
+    context["analysis_status"] = {
+        "by_prow_url": prow_status,
+        "by_sippy_job": {finding.analysis_key: bool(finding.deep_analysis) for finding in context["priority_sippy"]},
     }
     templates = Path(__file__).parent / "templates"
     context.update(
@@ -104,8 +138,9 @@ def merge_analysis_data(report: MonitorReport, data: dict) -> None:
 @protect_logs(lambda *args, **kwargs: os.environ.get("CHAI_MCP_TOKEN", "").strip())
 def patch_analysis_html(html_path: Path, analysis_path: Path) -> None:
     """Insert or replace keyed analysis cards using the edge-owned renderer."""
-    patch_analysis_cards(html_path, analysis_path)
-    content = redact_token(html_path.read_text(), os.environ.get("CHAI_MCP_TOKEN", "").strip())
+    content = patch_analysis_cards(html_path, analysis_path)
+    if content is None:
+        return
     content = content.replace(
         '<span style="color:var(--green)">● AI-enriched via Claude</span>',
         '<span style="color:var(--green)">● AI-enriched via Chai</span>',

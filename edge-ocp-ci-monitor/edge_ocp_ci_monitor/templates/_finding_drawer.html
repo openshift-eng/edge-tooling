@@ -9,8 +9,11 @@
   <div id="drawer-summary" class="drawer-panel" role="tabpanel" aria-labelledby="drawer-tab-summary">
     <dl id="finding-drawer-facts"></dl>
     <div id="finding-drawer-recommendation"></div>
-    <div id="finding-drawer-links" class="drawer-links"></div>
-    <div class="drawer-links"><button type="button" class="dashboard-button dashboard-primary" id="finding-drawer-analysis">AI Root Cause Analysis →</button><button type="button" class="dashboard-button" id="finding-drawer-bug" hidden>Bug draft</button></div>
+    <div id="finding-drawer-actions" class="drawer-actions">
+      <button type="button" class="dashboard-button" id="finding-drawer-full">Open full report view</button>
+      <button type="button" class="dashboard-button" id="finding-drawer-analysis">AI Root Cause Analysis</button>
+      <button type="button" class="dashboard-button" id="finding-drawer-bug" hidden>Bug draft</button>
+    </div>
   </div>
   <div id="drawer-analysis" class="drawer-panel" role="tabpanel" aria-labelledby="drawer-tab-analysis" hidden></div>
   <div id="drawer-attempts" class="drawer-panel" role="tabpanel" aria-labelledby="drawer-tab-attempts" hidden></div>
