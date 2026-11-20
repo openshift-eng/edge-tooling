@@ -136,11 +136,10 @@ def test_concise_prompt_keeps_targets_and_one_complete_response_schema(report, s
     assert "distinguish the root cause from downstream failures" in prompt
     assert "Include evidence links and flag anything uncertain" in prompt
     assert "Synthetic local error excerpt" not in prompt
-    assert ("Start with the step results for each exact latest Prow run" in prompt) == (not sippy)
-    if not sippy:
-        assert "Inspect each supplied previous attempt independently" in prompt
-        assert "If the comparison cannot be verified" in prompt
-        assert "Otherwise leave suspect_prs empty" in prompt
+    if sippy:
+        assert "step results" not in prompt
+    else:
+        assert prompt.startswith("Analyze these Prow job failures.")
     assert "Previously completed investigations" not in prompt
     shape, _ = json.JSONDecoder().raw_decode(prompt.split("Return only JSON in this format:\n", 1)[1])
     group = "by_sippy_job" if sippy else "by_prow_url"
@@ -150,6 +149,7 @@ def test_concise_prompt_keeps_targets_and_one_complete_response_schema(report, s
     # The response schema is supplied once, rather than duplicated per target.
     assert prompt.count('"suspect_prs":') == 1
     assert "with no extra keys" in prompt
+    assert "Compare supplied attempts." in prompt
     assert "prow_url, root_cause and failure_type" in prompt
     assert "do not omit targets" in prompt
     assert "stop investigating within 2400 seconds" in prompt
@@ -1051,6 +1051,9 @@ def test_manual_prow_prompt_includes_retry_guidance_and_omits_local_logs(report)
     assert "https://prow.example/latest" in prompt
     assert "Previous attempts: https://prow.example/previous" in prompt
     assert "Start with the latest run's step results" in prompt
+    assert "Inspect the previous attempts independently" in prompt
+    assert "State which comparisons you could verify" in prompt
+    assert "Include a suspect PR only when the payload diff and failure evidence connect it" in prompt
     assert "Synthetic local error excerpt" not in prompt
     assert "&lt;missing evidence&gt;" in html
 
