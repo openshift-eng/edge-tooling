@@ -43,9 +43,11 @@ skipped signal (a missing Flagged line otherwise just means "not flagged").
 ``query_jira`` cannot render issue links. Links come from ``get_jira_issue``,
 whose "Linked Jira Issues" section has lines like
 ``- is blocked by: KEY (Blocks) | status: <status> | <url>``
-(:func:`parse_issue_links`, :func:`attach_issue_links`). An issue with no links
-has no such section: a whole response without it (:func:`issue_text_complete`)
-means no links; a failed, cut-off or unreadable one is a problem. A feature's spikes come
+(:func:`parse_issue_links`, :func:`attach_issue_links`). Links are read with
+``get_jira_issue(<key>, fields="issuelinks")``: its Requested fields area says
+whether the field is empty (no links, no section) or set (read the section)
+(:func:`issuelinks_state`). A missing, unknown or ambiguous state, a failed
+call, or a cut-off or unreadable response is a problem, never "no links". A feature's spikes come
 from ``issue in linkedIssues("<feature>", "is blocked by") AND issuetype = Spike``
 (:func:`attach_linked_spikes`).
 
@@ -277,12 +279,14 @@ def issuelinks_state(text):
     Read only from the response's own Requested fields area: a ``Requested
     fields:`` line whose ``field: value`` entries are followed by the comments
     header (``Comments: N total…`` / ``Comments: none``), as the tool prints it
-    after the description. The same words in a description or comment are not
-    that area. Returns ``"empty"`` (:data:`LINKS_EMPTY`), ``"set"``
-    (:data:`LINKS_SET`), ``"unknown"`` (another value) or None (no such area, or
-    no issuelinks entry: the field was not requested, or the response is cut).
+    after the description. Returns ``"empty"`` (:data:`LINKS_EMPTY`), ``"set"``
+    (:data:`LINKS_SET`), ``"unknown"`` (another value), ``"ambiguous"`` (more
+    than one such area: a description or comment holds a whole example, and the
+    real one cannot be told apart, so none is trusted) or None (no such area,
+    or no issuelinks entry: the field was not requested, or the response is cut).
     """
     lines = (text or "").splitlines()
+    found = []
     for i, line in enumerate(lines):
         if line.strip() != "Requested fields:":
             continue
@@ -292,12 +296,23 @@ def issuelinks_state(text):
             j += 1
         while j < len(lines) and not lines[j].strip():
             j += 1
-        if j < len(lines) and _COMMENTS_LINE_RE.match(lines[j]):
-            value = entries.get("issuelinks")
-            if value is None:
-                return None
-            return {LINKS_EMPTY.casefold(): "empty", LINKS_SET.casefold(): "set"}.get(value.casefold(), "unknown")
-    return None
+        if j < len(lines) and _ends_response(lines, j):
+            found.append(entries.get("issuelinks"))
+    if len(found) > 1:
+        return "ambiguous"
+    if not found or found[0] is None:
+        return None
+    return {LINKS_EMPTY.casefold(): "empty", LINKS_SET.casefold(): "set"}.get(found[0].casefold(), "unknown")
+
+
+def _ends_response(lines, j):
+    """Whether ``lines[j]`` is the comments header that ends a response: ``Comments: N
+    total…`` (comments follow), or ``Comments: none`` with nothing after it."""
+    if not _COMMENTS_LINE_RE.match(lines[j]):
+        return False
+    if re.match(r"^\s*Comments:\s*none\b", lines[j], re.IGNORECASE):
+        return not any(line.strip() for line in lines[j + 1:])
+    return True
 
 
 def issue_text_complete(text, key):
@@ -310,7 +325,8 @@ def issue_text_complete(text, key):
     comments section is not whole.
     """
     issue = state = False
-    for line in (text or "").splitlines():
+    lines = (text or "").splitlines()
+    for j, line in enumerate(lines):
         m = _ISSUE_LINE_RE.match(line)
         if m and not issue:
             if m.group(1) != key:
@@ -318,7 +334,7 @@ def issue_text_complete(text, key):
             issue = True
         elif issue and _STATE_LINE_RE.match(line):
             state = True
-        elif issue and state and _COMMENTS_LINE_RE.match(line):
+        elif issue and state and _ends_response(lines, j):
             return True
     return False
 
@@ -743,8 +759,8 @@ def attach_issue_links(adapted, issue_texts):
       with no links section → no links;
     * ``set`` → the "Linked Jira Issues" section is read; missing or not
       readable → a problem;
-    * a missing, unknown or cut state never makes the links empty; a links
-      section that is there is still read.
+    * a missing, unknown, ambiguous or cut state is a problem and never makes
+      the links empty; confirmed rows of a links section that is there are kept.
 
     Also problems: a failed call, a response for another issue, a state that
     contradicts the response, and a response cut off before its comments
@@ -766,22 +782,28 @@ def attach_issue_links(adapted, issue_texts):
         unreadable = []
         links, found = parse_issue_links(text, unreadable)
         state, whole = issuelinks_state(text), issue_text_complete(text, key)
-        if not found:
-            if state == "empty" and whole and not _mentions_links(text):
-                by_key[key]["issuelinks"] = []  # the field says: no links
+        if state not in ("empty", "set"):  # no usable state: never "no links"
+            problems.append(f"{key}: " + {
+                "unknown": "issuelinks state not readable",
+                "ambiguous": "issuelinks state ambiguous (more than one Requested fields area)",
+            }.get(state, "no issuelinks state in Requested fields (request fields=\"issuelinks\")"))
+            if not found:
                 continue
-            problems.append(f"{key}: " + (
-                "get_jira_issue response cut off or not readable" if state == "empty" and not whole else
-                "issuelinks state contradicts the response" if state == "empty" else
-                "issuelinks is set but no readable 'Linked Jira Issues' section" if state == "set" else
-                "issuelinks state not readable" if state == "unknown" else
-                "no issuelinks state in Requested fields (request fields=\"issuelinks\")"))
+        elif state == "empty" and not (found and links):
+            if not whole:
+                problems.append(f"{key}: get_jira_issue response cut off or not readable")
+            elif _mentions_links(text):
+                problems.append(f"{key}: issuelinks state contradicts the response")
+            else:
+                by_key[key]["issuelinks"] = []  # the field says: no links
             continue
-        if state == "empty":
+        elif state == "empty":
             problems.append(f"{key}: issuelinks state contradicts the response")
-        elif state == "set" and not links and not unreadable:
+        elif not found or (not links and not unreadable):
             problems.append(f"{key}: issuelinks is set but no readable 'Linked Jira Issues' section")
-        if first == key and not whole:
+            if not found:
+                continue
+        if not whole:  # another issue's response has already returned above
             problems.append(f"{key}: get_jira_issue response cut off")
             last = text.splitlines()[-1] if text.strip() else ""
             if (links and not text.endswith("\n") and _LINKED_LINE_RE.match(last)

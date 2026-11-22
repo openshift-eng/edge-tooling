@@ -195,15 +195,22 @@ class ReleaseGateTest(unittest.TestCase):
     def test_unknown_type_or_status_is_incomplete_before_filtering(self):
         base = {"key": "TEST-1", "issue_type": {"name": "Feature"}, "status": {"name": "New"},
                 "labels": ["ocpedge-plan"], "customfield_10855": [{"name": "openshift-9.2"}]}
-        cases = {"no issue type": (dict(base, issue_type=None), "TEST-1: issue type not returned"),
-                 "blank issue type": (dict(base, issue_type={"name": "  "}), "TEST-1: issue type not returned"),
-                 "no status": (dict(base, status=None), "TEST-1: status not returned"),
-                 "blank status": (dict(base, status={"name": ""}), "TEST-1: status not returned")}
+        cases = {"no issue type": (dict(base, issue_type=None), "TEST-1: issue type not readable"),
+                 "blank issue type": (dict(base, issue_type={"name": "  "}), "TEST-1: issue type not readable"),
+                 "no status": (dict(base, status=None), "TEST-1: status not readable"),
+                 "blank status": (dict(base, status={"name": ""}), "TEST-1: status not readable"),
+                 "type as a string": (dict(base, issue_type="Feature"), "TEST-1: issue type not readable"),
+                 "type name as a list": (dict(base, issue_type={"name": ["Feature"]}),
+                                         "TEST-1: issue type not readable"),
+                 "status name as a number": (dict(base, status={"name": 1}), "TEST-1: status not readable")}
         for name, (issue, why) in cases.items():
             with self.subTest(name):
                 gate = cr.release_feature_gate({"fetch": {"complete": True}, "issues": [issue]})
                 self.assertEqual((gate["complete"], gate["counts"], gate["why"]), (False, None, why))
         self.assertEqual(cr.release_feature_gate({"fetch": {"complete": True}, "issues": [base]})["counts"], {"9.2": 1})
+        custom = dict(base, status={"name": "Custom Review"})  # any non-Closed status name still counts
+        counted = cr.release_feature_gate({"fetch": {"complete": True}, "issues": [custom]})
+        self.assertEqual(counted["counts"], {"9.2": 1})
 
     def test_release_without_edge_features_is_omitted_silently(self):
         gate = {"complete": True, "counts": {"9.3": 2}, "releases": ["9.3"], "why": None}

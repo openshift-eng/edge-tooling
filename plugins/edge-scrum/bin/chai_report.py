@@ -154,6 +154,12 @@ def _version_key(version):
         return (9999, 9999)
 
 
+def _readable_name(field):
+    """The non-blank ``name`` string of a ``{"name": ...}`` field, or None (missing or malformed)."""
+    name = field.get("name") if isinstance(field, dict) else None
+    return name.strip() if isinstance(name, str) and name.strip() else None
+
+
 def release_feature_gate(gate_fetch):
     """Releases with at least one Edge Feature, from the gate query's ``adapt_fetch`` output.
 
@@ -176,11 +182,10 @@ def release_feature_gate(gate_fetch):
         key = issue.get("key") if isinstance(issue, dict) else "?"
         if not isinstance(issue, dict) or "customfield_10855" not in issue:
             return {"complete": False, "counts": None, "releases": [], "why": f"{key}: Target Version not returned"}
-        kind = str((issue.get("issue_type") or {}).get("name") or "").strip()
-        status_name = str((issue.get("status") or {}).get("name") or "").strip()
-        if not kind or not status_name:  # unknown is not "not a Feature" or "Closed"
-            what = "issue type" if not kind else "status"
-            return {"complete": False, "counts": None, "releases": [], "why": f"{key}: {what} not returned"}
+        kind, status_name = _readable_name(issue.get("issue_type")), _readable_name(issue.get("status"))
+        if kind is None or status_name is None:  # unknown is not "not a Feature" or "Closed"
+            what = "issue type" if kind is None else "status"
+            return {"complete": False, "counts": None, "releases": [], "why": f"{key}: {what} not readable"}
         labels = {str(label).casefold() for label in issue.get("labels") or []}
         if not labels:  # the query asks for an Edge label: none means the field was not returned
             return {"complete": False, "counts": None, "releases": [], "why": f"{key}: labels not returned"}

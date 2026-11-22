@@ -741,7 +741,7 @@ class LinkTest(unittest.TestCase):
 
     def test_attached_links_feed_blocked_by(self):
         adapted = ad.adapt_fetch({"pages": [{"text": page(["TEST-304", "TEST-303"])}]}, ROSTER)
-        problems = ad.attach_issue_links(adapted, {"TEST-303": SAMPLE_GET_ISSUE, "TEST-304": None})
+        problems = ad.attach_issue_links(adapted, {"TEST-303": LINKED_ISSUE, "TEST-304": None})
         self.assertEqual(problems, ["TEST-304: get_jira_issue failed"])
         rows = {i["key"]: transform_sprint_issues.transform_issue(i, "2030-02-05") for i in adapted["issues"]}
         self.assertEqual(rows["TEST-303"]["blocked_by"], ["TEST-152", "TEST-154", "TEST-55"])
@@ -781,14 +781,16 @@ class LinkTest(unittest.TestCase):
         cut = SAMPLE_GET_ISSUE[:SAMPLE_GET_ISSUE.index("- is blocked by: TEST-154")]
         adapted = ad.adapt_fetch({"pages": [{"text": page(["TEST-303"])}]})
         self.assertEqual(ad.attach_issue_links(adapted, {"TEST-303": cut}),
-                         ["TEST-303: get_jira_issue response cut off"])
+                         ["TEST-303: no issuelinks state in Requested fields (request fields=\"issuelinks\")",
+                          "TEST-303: get_jira_issue response cut off"])
         self.assertEqual(extract_blocked_by(adapted["issues"][0]), ["TEST-152"])  # confirmed blockers are kept
 
     def test_row_cut_at_the_end_is_never_a_blocker(self):
         cut = SAMPLE_GET_ISSUE[:SAMPLE_GET_ISSUE.index("- is blocked by: TEST-154") + len("- is blocked by: TEST-15")]
         adapted = ad.adapt_fetch({"pages": [{"text": page(["TEST-303"])}]})
         self.assertEqual(ad.attach_issue_links(adapted, {"TEST-303": cut}),
-                         ["TEST-303: get_jira_issue response cut off"])
+                         ["TEST-303: no issuelinks state in Requested fields (request fields=\"issuelinks\")",
+                          "TEST-303: get_jira_issue response cut off"])
         self.assertEqual(extract_blocked_by(adapted["issues"][0]), ["TEST-152"])  # not "TEST-15"
 
     def test_response_for_another_issue_is_not_attached(self):
@@ -796,6 +798,55 @@ class LinkTest(unittest.TestCase):
         self.assertEqual(ad.attach_issue_links(adapted, {"TEST-304": SAMPLE_GET_ISSUE}),
                          ["TEST-304: get_jira_issue response is for TEST-303"])
         self.assertEqual(adapted["issues"][0]["issuelinks"], [])
+
+    def test_requested_fields_examples_are_scoped_or_fail_closed(self):
+        head = "Latest Jira State:\n[TEST-1] Synthetic spike\nType: Spike | Status: New\nAttachments: none\n"
+        example = "Description:\nExample:\nRequested fields:\nissuelinks: {}\n\n{}\nmore text\n\n"
+        for comments in ("Comments: none", "Comments: 2 total; showing the 2 most recent, newest first:"):
+            for real in (ad.LINKS_SET, ad.LINKS_EMPTY):
+                with self.subTest(comments=comments, real=real):
+                    text = head + example.format(ad.LINKS_EMPTY, comments) + \
+                        f"Requested fields:\nissuelinks: {real}\n\nComments: none\n"
+                    adapted = ad.adapt_fetch({"pages": [{"text": page(["TEST-1"])}]})
+                    problems = ad.attach_issue_links(adapted, {"TEST-1": text})
+                    if comments == "Comments: none":  # an example followed by text is not the end: scoped
+                        self.assertEqual(ad.issuelinks_state(text), "set" if real == ad.LINKS_SET else "empty")
+                        self.assertEqual(problems, [] if real == ad.LINKS_EMPTY else
+                                         ["TEST-1: issuelinks is set but no readable 'Linked Jira Issues' section"])
+                    else:  # cannot tell the real area apart: fail closed
+                        self.assertEqual(ad.issuelinks_state(text), "ambiguous")
+                        self.assertEqual(problems,
+                                         ["TEST-1: issuelinks state ambiguous (more than one Requested fields area)"])
+        # A lone example, response cut before the real area: never empty links.
+        cut = head + example.format(ad.LINKS_EMPTY, "Comments: none")
+        self.assertIsNone(ad.issuelinks_state(cut))
+        self.assertFalse(ad.issue_text_complete(cut, "TEST-1"))
+
+    def test_ambiguous_state_with_readable_links_keeps_them_as_a_problem(self):
+        example = (f"Description:\nRequested fields:\nissuelinks: {ad.LINKS_EMPTY}\n\n"
+                   "Comments: 2 total; showing the 2 most recent, newest first:\nmore\n")
+        text = LINKED_ISSUE.replace("Description:\n", example, 1)
+        adapted = ad.adapt_fetch({"pages": [{"text": page(["TEST-303"])}]})
+        self.assertEqual(ad.attach_issue_links(adapted, {"TEST-303": text}),
+                         ["TEST-303: issuelinks state ambiguous (more than one Requested fields area)"])
+        self.assertEqual(extract_blocked_by(adapted["issues"][0]), ["TEST-152", "TEST-154", "TEST-55"])
+
+    def test_headerless_cut_row_is_never_a_blocker(self):
+        text = "Linked Jira Issues:\n- is blocked by: TEST-9 (Blocks) | status: New | u\n- is blocked by: TEST-15"
+        adapted = ad.adapt_fetch({"pages": [{"text": page(["TEST-1"])}]})
+        problems = ad.attach_issue_links(adapted, {"TEST-1": text})
+        self.assertIn("TEST-1: get_jira_issue response cut off", problems)
+        self.assertEqual(extract_blocked_by(adapted["issues"][0]), ["TEST-9"])  # not "TEST-15"
+
+    def test_missing_or_unknown_state_with_readable_links_keeps_them_as_a_problem(self):
+        no_area = SAMPLE_GET_ISSUE
+        unknown = with_links_state(SAMPLE_GET_ISSUE, "(something else)")
+        for text, why in ((no_area, 'no issuelinks state in Requested fields (request fields="issuelinks")'),
+                          (unknown, "issuelinks state not readable")):
+            with self.subTest(why=why):
+                adapted = ad.adapt_fetch({"pages": [{"text": page(["TEST-303"])}]})
+                self.assertEqual(ad.attach_issue_links(adapted, {"TEST-303": text}), [f"TEST-303: {why}"])
+                self.assertEqual(extract_blocked_by(adapted["issues"][0]), ["TEST-152", "TEST-154", "TEST-55"])
 
     def test_failed_cut_off_or_unreadable_response_is_still_a_problem(self):
         no_state = 'no issuelinks state in Requested fields (request fields="issuelinks")'
@@ -856,7 +907,8 @@ class LinkTest(unittest.TestCase):
         cut = cut[:cut.rindex("status: To") + len("status: To")]  # cut off inside the description
         adapted = ad.adapt_fetch({"pages": [{"text": page(["TEST-303"])}]})
         self.assertEqual(ad.attach_issue_links(adapted, {"TEST-303": cut}),
-                         ["TEST-303: get_jira_issue response cut off"])
+                         ["TEST-303: no issuelinks state in Requested fields (request fields=\"issuelinks\")",
+                          "TEST-303: get_jira_issue response cut off"])
         links = adapted["issues"][0]["issuelinks"]  # all five confirmed rows, including the last ("blocks: TEST-26")
         self.assertEqual([(link.get("inward_issue") or link.get("outward_issue"))["key"] for link in links],
                          ["TEST-151", "TEST-152", "TEST-154", "TEST-55", "TEST-26"])
