@@ -1,6 +1,6 @@
 ---
 name: release-health
-description: Read-only coordinator skill that reports team-level health for one release in its current phase — refinement and test-plan spike gaps in the refinement sprint; capacity vs scope, cut line and features at risk from development through pre-branch-cut
+description: Read-only coordinator skill that reports team-level feature health for one release in its current phase — refinement gaps (staffing, size, epics, refinement and test plan spikes) in the refinement sprint; scope vs capacity, schedule, blocks, cut line and staffing from development through pre-branch-cut — plus the epic Target Version and QA Contact flags of decision 0024
 ---
 
 # Release Health (chai-bot coordinator)
@@ -75,6 +75,11 @@ fields:  # request fields by id only
    incomplete.
 8. When `query_jira` says a field value was shortened or stored, read it whole
    with `result_page` before passing the results to the script.
+9. Labels `query_jira` prints that the adapter doesn't know are ignored with a
+   warning; they never change a known field. A date that isn't readable is
+   dropped, never guessed, and listed in the adapted fetch's `left_out`: add
+   every fetch's `left_out` to the report's `missing` so it appears under
+   "Left out".
 
 **Features keep PM rank.** Fetch features once with `(<JQL>) ORDER BY Rank ASC`,
 `max_results: 50`, and adapt with `"order": "rank"`. If that page has the
@@ -110,18 +115,27 @@ in the sandbox; write `{"members", "contacts"}` to `roster.json`. Pass it to eve
 
 ### 3. Refinement mode
 
-The release-health `--refinement` checks for refinement and test-plan spikes.
+The release-health `--refinement` checks, for **every non-Closed OCPSTRAT
+Feature targeting the release, in any status** (New, Refinement, In Progress):
+features are often still New when the refinement sprint starts. Initiatives
+are not checked.
 
-1. **Features in Refinement**, paged:
-   `project = OCPSTRAT AND issuetype in (Feature, Initiative) AND labels in ("ocpedge-plan", "microshift") AND "Target Version" = "openshift-X.Y" AND status = "Refinement" AND (resolution is EMPTY OR resolution not in (Duplicate, Obsolete))`
+1. **Features**, paged:
+   `project = OCPSTRAT AND issuetype = Feature AND labels in ("ocpedge-plan", "microshift") AND "Target Version" = "openshift-X.Y" AND status != Closed AND (resolution is EMPTY OR resolution not in (Duplicate, Obsolete))`
    — fields `summary, status, issuetype, priority, assignee, fixVersions, labels,
-   customfield_10795, customfield_10470, customfield_10473, customfield_10475`.
-   None → the section says "no features in Refinement" and has no gaps.
+   customfield_10795, customfield_10470, customfield_10473, customfield_10475`
+   (Size, QA Contact, Doc Contact, SME; each prints as `customfield_N: value`,
+   and an unset field prints no line). None → the section says "0 feature(s)
+   checked".
 2. **Epics**, paged, in batches of 50 feature keys:
    `project in (OCPEDGE, USHIFT) AND "Parent Link" in (<keys>)` — fields
    `summary, status, assignee, labels, parent, updated, fixVersions,
    customfield_10028, customfield_10795, customfield_10855, customfield_10018,
    customfield_10470`. Run `transform-epics.py`.
+   **Epic issue counts** (for "empty epic"), paged, in batches of 20 epic keys:
+   `project in (OCPEDGE, USHIFT, OCPBUGS) AND parent in (<epic keys>)` — field
+   `parent`; count the issues per parent epic: `{epic key: count}`. Incomplete →
+   pass `None` (the empty-epic check is left out).
 3. **Refinement-sprint spikes**, paged:
    `project in (OCPEDGE, USHIFT) AND issuetype = Spike AND sprint = <refinement sprint id>`
    — fields `summary, status, assignee, resolution`. `query_jira` cannot return
@@ -146,21 +160,31 @@ The release-health `--refinement` checks for refinement and test-plan spikes.
    `sprints.json`, then run `transform-features.py`, and `transform-spikes.py`
    with `--input <refinement-sprint spikes> --linked-spikes <all linked spikes>
    --features-file --epics-file --sprints-file`.
-6. `chai_report.refinement_gaps(features, spikes, section, refinement_sprint_closed)`
-   applies the release-health refinement-spike rules (first match wins: Closed →
-   fine; missing but refined via epics → fine; missing → 🔴, owner SME; open but
-   not in the refinement sprint → 🟡 move it, owner SME; open in the refinement
-   sprint → in progress) and the test-plan spike rules (skipped when the QA
-   Contact is empty or `unassigned_jira`; missing or not Closed → 🟡, owner the
-   QE Lead). A Closed test plan spike satisfies the check whatever its resolution.
+6. `chai_report.refinement_gaps(features, spikes, section, refinement_sprint_closed,
+   epics=epics, epic_issue_counts=counts, week=<current sprint week>)` runs
+   `_scrum_rules.refinement_findings` on Features only. A feature with **no SME**
+   (`customfield_10475` empty) gets only "no SME": all of them go on one line,
+   "Leads, assign SMEs (@Scrum Master): N feature(s) have no SME: KEY, …
+   (+N)", and their other problems are not listed until an SME is set. In the
+   refinement sprint's **week 1**, "no refinement spike" is one count line, "N
+   feature(s) need a refinement spike this sprint", and never the biggest risk;
+   from week 2 it is listed per owner. Other labels, per feature: "no QA Contact", "no Doc Contact", "epic KEY has no
+   owner" (epic assignee), "unsized" (no Size), "no epics", "empty epic KEY",
+   "no refinement spike", "spike not in the refinement sprint" (refinement-spike
+   rules, first match wins: Closed → fine; missing but refined via epics → fine;
+   missing → 🔴; open but not in the refinement sprint → 🟡; open in it → in
+   progress), and "test plan spike missing" (on the **QE Lead's** line; skipped
+   when the QA Contact is empty or `unassigned_jira`; a Closed test plan spike
+   passes whatever its resolution). There is no acceptance-criteria check.
+   Owner of a feature's line: its **SME** only, never the feature's assignee.
 
 ### 4. Release-health mode (development, pencils-down sprint, pre-branch-cut)
 
-Capacity vs scope, cut line and features at risk, with release-planning's
-`run-checks.py`.
+Capacity vs scope and the cut line, with release-planning's `run-checks.py`,
+and the feature checks of `_scrum_rules.development_findings`.
 
 1. **Features**, rank-ordered (see Jira paging):
-   `project = OCPSTRAT AND issuetype in (Feature, Initiative) AND labels in ("ocpedge-plan", "microshift") AND "Target Version" = "openshift-X.Y" AND (resolution is EMPTY OR resolution not in (Duplicate, Obsolete))`
+   `project = OCPSTRAT AND issuetype = Feature AND labels in ("ocpedge-plan", "microshift") AND "Target Version" = "openshift-X.Y" AND (resolution is EMPTY OR resolution not in (Duplicate, Obsolete))`
    — fields `summary, status, issuetype, priority, assignee, fixVersions, labels,
    customfield_10795, customfield_10855, customfield_10470, customfield_10473,
    customfield_10475`. Run `transform-features.py`. No features → section missing
@@ -179,7 +203,7 @@ Capacity vs scope, cut line and features at risk, with release-planning's
    passes it in. Incomplete, or `chai_report.usable_velocity` returns a reason
    → velocity not available: run `run-checks.py`
    without `--velocity-file`; the section then reports scope only and lists
-   capacity, cut line and features at risk as left out (its roster-sum fallback
+   capacity and the cut line as left out (its roster-sum fallback
    would be an estimate).
 6. **Remaining sprints and availability**: the `sprint_availability` entries from
    the current sprint through the **branch-cut sprint** (projected sprints
@@ -207,18 +231,117 @@ Capacity vs scope, cut line and features at risk, with release-planning's
    branch-cut sprint: work can still land until branch
    cut, so the pencils-down sprint is flagged but not treated differently.
    Omit `--velocity-file` when velocity is not available.
-8. `chai_report.release_health(checks, section, capacity, rank_available,
-   velocity_reason)` (`velocity_reason` from `usable_velocity`, None when usable): scope
-   vs capacity, features below the cut line (owner: SME), features at risk
-   (composite HIGH or timeline HIGH; owner: SME). Per-person capacity rows and
-   `ABOVE_GUIDELINE` flags are dropped; roster drift becomes a count with its SP,
-   listed as left out. No prompt about roster drift.
+8. **Refinement spikes, again:** refinement steps 3–5 for the release's
+   refinement sprint, which is now closed (`refinement_sprint_closed` = true),
+   so an open refinement spike shows as "refinement overdue".
+9. **Feature and epic blocks:** `query_jira`, paged:
+   `key in (<feature and epic keys>) AND issueLinkType = "is blocked by"`;
+   `get_jira_issue` on each result, then
+   `chai_jira_adapter.attach_issue_links(adapted, {key: text})` and
+   Start with `links = {}` and `links_unread = []`. Set
+   `links = {key: _jira_transforms.extract_blocked_by(issue)}` (open blockers
+   only) for every issue whose links were read. Keys whose `get_jira_issue`
+   failed or had no readable "Linked Jira Issues" section (the keys in the
+   problems `attach_issue_links` returns, including a block row it could not
+   read) are **not** guessed: pass them as `links_unread=[...]`; confirmed
+   blockers are kept.
+   If the candidate query itself is incomplete, pass `links=None` (block check
+   not run). Either way the header's on-track count says the blocks were not
+   checked, and the Left out line says for which keys.
+10. `chai_report.release_health(checks, section, capacity, rank_available,
+    velocity_reason, features=features, epics=epics, spikes=spikes,
+    stories=stories, links=links, links_unread=links_unread,
+    current_sprint_number=<current sprint number>)`:
+    scope vs capacity (header), and per Feature (owner: the SME only; a feature
+    with no SME gets only "no SME", on the leads' line): "refinement overdue", "behind schedule: X% done vs Y% expected",
+    "blocked by KEY", "epic KEY blocked by KEY", "Blocked label", "Parked",
+    "below the cut line", "no QA Contact", "no Doc Contact", "epic KEY has no
+    owner". Per-person capacity rows and `ABOVE_GUIDELINE` flags are dropped;
+    roster drift becomes a count with its SP, listed as left out.
 
-### 5. Return the result
+    **Behind schedule** (`_scrum_rules.expected_pct`, `done_pct`): development
+    sprints = the board sprints after the refinement sprint up to and including
+    the branch-cut sprint, those between pencils down and branch cut included,
+    counted by position; **expected %** = development sprints finished before
+    the current sprint ÷ development sprints × 100; a feature's **% done** =
+    done SP ÷ total SP of its epics' issues (law 07 done states; by issue count
+    when none is pointed). Flagged when % done < 75% of expected %, both
+    compared unrounded (a tie is not behind; percentages are rounded only for
+    display). Closed and Release Pending features are not checked.
+
+### 5. Epic Target Version and QA Contact (decision 0024)
+
+Flags for active OCPEDGE epics with a parent (edge-context decision 0024). They
+do not depend on the release: the weekly report runs this step **once**, not
+once per release section. Epic statuses use the exact law 04 names: **active**
+epics are To Do, In Progress, Dev Complete, Testing and Release Pending (not
+New or Planning, which are still being refined, and not Closed).
+
+1. **Active epics with a parent**, paged by key until complete (see Jira paging):
+   `project = OCPEDGE AND issuetype = Epic AND status in ("To Do", "In Progress", "Dev Complete", "Testing", "Release Pending") AND parent is not EMPTY`
+   — fields `summary, status, assignee, parent, customfield_10855,
+   customfield_10470`. Adapt with `adapt_fetch` (name `epics`).
+2. **Their parents**, by key, in batches of up to 40 distinct parent keys (so
+   each batch fits on one page):
+   `key in (<parent keys>)` — fields `summary, issuetype, status,
+   customfield_10855, customfield_10470`. Adapt each batch with `adapt_fetch`
+   and keep the keys it asked for: `{"keys": [<keys sent>], "result": <adapted>}`.
+   If a batch call fails or its fetch is incomplete (for example a JQL error
+   naming a key you cannot see), query that batch's keys again one at a time
+   (`key = <KEY>`), each as its own `{"keys": [<KEY>], ...}` entry; a key that
+   still fails is recorded as `{"keys": [<KEY>], "error": "<the reason given>"}`.
+3. `gaps = chai_report.epic_field_gaps(epics, parent_batches, previous_flagged)`
+   flags active epics only (any other status returned is ignored). Each
+   problem has a label, in full words:
+   - **"no Target Version"** (all active epics);
+   - **"no QA Contact"** (all active epics; `unassigned_jira` counts as none),
+     noting the parent as decision 0024 asks: "no QA Contact" when the feature
+     has one, "no QA Contact, feature has none", or "no QA Contact, feature
+     could not be read" (never the parent's QA Contact name);
+   - **"Target Version ≠ feature"** (To Do and In Progress only, and only when
+     the parent has a Target Version): the epic's version is not among the
+     parent's version names (a parent with two versions matches either); the
+     owner decides: retarget, split or keep? From Dev Complete on, finished work
+     keeps its release;
+   - **"feature closed"** / **"feature in backlog"** (all active epics): the
+     parent is Closed or in Backlog;
+   - **"no assignee"** (all active epics): the epic goes on the **Scrum
+     Master's** line, as team-level action items do.
+
+   `previous_flagged` is the previous report's flagged epic keys, if the
+   persona's memory holds them; otherwise pass `None` and no epic is marked new.
+   Never reconstruct the previous set. If the persona can keep memory, store
+   `gaps["flagged_keys"]` after the **scheduled channel** report, for next
+   week (never after a DM run), **only when
+   `gaps["complete"]` is true** (a failed or partial run would make next
+   week's returning flags look new).
+
+   An empty field prints no line, so a missing line is an empty field.
+4. Parents that could not be read (restricted, deleted, no permission, a failed
+   or cut-off page) are never guessed: those epics skip the two checks that need
+   the parent, and the result lists them as left out with the reason. An
+   incomplete epic fetch computes nothing; the rest of the report is unaffected.
+
+The flags are one thread reply with **one line per owner** (the epic's
+assignee, or the Scrum Master for epics with no assignee):
+`• <owner>: OCPEDGE-1234 (no Target Version, no QA Contact), OCPEDGE-5678 (feature closed)`
+— full issue keys and labels only, no summaries, versions or parent keys.
+Within a line, epics with the most problems come first, then by key; 🆕 marks
+an epic not flagged in the previous report (only when `previous_flagged` was
+given). Owners with the most epics come first. The first line is
+`*Epic fields* (N epics: X no Target Version, Y no QA Contact, Z Target
+Version ≠ feature, W feature closed or in backlog, V no assignee)` with zero
+counts left out, followed by `Key: "Target Version ≠ feature" = retarget, split
+or keep?` when that label appears. At most 10 owner lines, then "+N more
+owner(s)" (their epics are under "Left out"). Nothing flagged → no reply at
+all. The flags are informational: they never change the top post's colour,
+risk line or action count.
+
+### 6. Return the result
 
 Return the section dict (with `kind`: `refinement` or `release-health`) to the
 caller. Run on its own (for example in a DM), reply with
-`chai_report.build_report(None, [section], left_out, mentions)`.
+`chai_report.build_report(None, [section], left_out, mentions, epic_gaps=gaps)`.
 
 Release testing (EC/RC validation after branch cut, decision 0017) is out of scope.
 
@@ -229,7 +352,9 @@ Release testing (EC/RC validation after branch cut, decision 0017) is out of sco
 | Release not scheduled, an anchor not placeable, or phase not in progress | No section; returned as missing with the reason |
 | Any fetch of the section incomplete | Section left out (`<fetch> incomplete: <problem>`); nothing computed from it |
 | Features did not fit on one rank-ordered page | Cut line left out; scope and risk still reported |
-| Velocity | Scope only; capacity, cut line and features at risk left out |
+| Velocity | Scope only; capacity and cut line left out; feature checks still run |
 | A remaining sprint's availability | That sprint not adjusted, labelled "not PTO-adjusted" |
+| Open-epic fetch incomplete | No epic flags; "Epic Target Version and QA Contact checks" left out with the reason |
+| An epic's parent not readable | That epic skips the Target Version and parent status checks; left out with the reason |
 
 Never fill a gap from memory or by estimating.

@@ -257,13 +257,19 @@ def current_sprint(sprints, day):
     """Today's sprint: the board sprint with state "active", else by date.
 
     When several sprints are active, the one containing ``day`` wins, else the
-    latest-starting one. Without an active sprint, a date past the last board
+    latest-starting one. On the active sprint's end day, a board sprint that
+    starts that day is today's sprint even if nobody has started it yet (the
+    sprint-change Monday). Without an active sprint, a date past the last board
     sprint maps to a projected sprint at the board's cadence.
     """
     day = to_date(day)
     active = [s for s in sprints if str(s.get("state") or "").lower() == "active"]
     if active:
-        return sprint_on(active, day) or active[-1]
+        current = sprint_on(active, day) or active[-1]
+        if current["end"] == day:
+            following = next((s for s in sprints if s is not current and s["start"] == day), None)
+            return following or current
+        return current
     return sprint_on(project_sprints(sprints, day), day)
 
 
@@ -618,6 +624,19 @@ def _sprint_out(s):
             "projected": s["projected"]}
 
 
+def _development_window(mapping):
+    """The board's sprints (projected ones included) after the refinement sprint
+    up to and including the branch-cut sprint, in board order; "not scheduled
+    yet" when either anchor is unknown. Used to measure schedule progress."""
+    ref, bc = mapping["refinement"], mapping["branch_cut"]
+    if ref is None or bc is None:
+        return NOT_SCHEDULED
+    lo, hi = _index(mapping["sprints"], ref), _index(mapping["sprints"], bc)
+    if lo is None or hi is None or hi <= lo:
+        return NOT_SCHEDULED
+    return [_sprint_out(s) for s in mapping["sprints"][lo + 1:hi + 1]]
+
+
 def release_window(version, schedules, sprints, today, current=None):
     """A release's window: anchor sprints, dev sprints left, phase, and milestones."""
     if not is_valid_release(version):
@@ -638,6 +657,7 @@ def release_window(version, schedules, sprints, today, current=None):
                                 if m["refinement"] and m["pencils_down"] else NOT_SCHEDULED),
         "pencils_down_sprint": _sprint_out(m["pencils_down"]),
         "branch_cut_sprint": _sprint_out(m["branch_cut"]),
+        "development_window": _development_window(m),
         "development_sprints_remaining": dev_sprints_remaining(m, today, current),
         "milestones": {
             "development_branch_opens": _iso(ms["dev_branch_opens"]) or NOT_SCHEDULED,

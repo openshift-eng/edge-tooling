@@ -1,6 +1,6 @@
 ---
 name: sprint-health
-description: Read-only coordinator skill that reports team-level sprint health for the current sprint — capacity mode in sprint week 1, mid-sprint mode after — with no prompts and no per-person sections
+description: Read-only coordinator skill that reports team-level sprint health for the current sprint — capacity mode in sprint week 1, mid-sprint mode after, with a sprint-end view in the last week — with no prompts and no per-person sections
 ---
 
 # Sprint Health (chai-bot coordinator)
@@ -34,7 +34,6 @@ fields:  # request fields by id only
   story_points: customfield_10028
   sprint:       customfield_10020
   qa_contact:   customfield_10470
-  flagged:      customfield_10021   # unset → no line (not flagged); rejected → unavailable
   epic_link:    customfield_10014
 ```
 
@@ -71,11 +70,16 @@ fields:  # request fields by id only
    incomplete.
 8. When `query_jira` says a field value was shortened or stored, read it whole
    with `result_page` before passing the results to the script.
+9. Labels `query_jira` prints that the adapter doesn't know are ignored with a
+   warning; they never change a known field. A date that isn't readable is
+   dropped, never guessed, and listed in the adapted fetch's `left_out`: add
+   every fetch's `left_out` to the report's `missing` so it appears under
+   "Left out".
 
 ```python
 import chai_jira_adapter as ad
 adapted = ad.adapt_fetch({
-    "name": "sprint_issues", "signals": ["flagged", "description"],
+    "name": "sprint_issues",
     "parts": [{"project": "OCPEDGE", "pages": [{"text": page_1, "jql": "<the JQL sent>"},
                                                {"text": page_2, "jql": "<the JQL sent>"}]},
               {"project": "USHIFT", "pages": [{"text": page_1, "jql": "<the JQL sent>"}]}]},
@@ -117,15 +121,13 @@ Read `ROSTER_SOURCE` and parse it in the sandbox with
 
 - **JQL:** `project in (OCPEDGE, USHIFT, OCPBUGS) AND sprint = <current sprint id>`
 - **Fields:** `summary, status, issuetype, priority, assignee, created, updated,
-  labels, parent, customfield_10028, customfield_10014, customfield_10021,
-  customfield_10470`
+  labels, parent, customfield_10028, customfield_10014, customfield_10470`
 
-Adapt (`signals: ["flagged", "description"]`), then run
-`transform-sprint-issues.py` with a metadata file
+Adapt, then run `transform-sprint-issues.py` with a metadata file
 (`{"sprint_id", "sprint_name", "sprint_start", "sprint_end"}`, JSON-encoded) and
-`--today`. Acceptance criteria are left out (no description is requested from
-`query_jira`); the adapter reports that as a skipped signal, and Flagged too if
-`query_jira` rejects the field.
+`--today`. Flagged, acceptance criteria and the sprint goal are not part of
+this report (chai-bot cannot read Flagged, descriptions come back cut, and the
+board's sprint list has no goal field).
 
 **Mid-sprint mode only — blocked items.** `query_jira`, paged:
 `(project in (OCPEDGE, USHIFT, OCPBUGS) AND sprint = <id>) AND issueLinkType = "is blocked by" AND statusCategory != Done`.
@@ -136,8 +138,9 @@ the transform. The adapter turns the "Linked Jira Issues" lines into the
 pipeline rule, `_jira_transforms.extract_blocked_by`: an issue is blocked when
 at least one "is blocked by" issue is not in a done state (Closed, Verified,
 Done or Won't Fix). If `attach_issue_links` returns any problem (a failed
-`get_jira_issue` call, or a response without a readable "Linked Jira Issues"
-section), or the candidate fetch is incomplete, set `links_complete = False`:
+`get_jira_issue` call, a response without a readable "Linked Jira Issues"
+section, or a block row in it that could not be read), or the candidate fetch
+is incomplete, set `links_complete = False`:
 the blocked signal is left out, not guessed.
 
 ### 4. Velocity (capacity mode)
@@ -168,37 +171,27 @@ number, capacity is the velocity unadjusted, labelled **"not PTO-adjusted"**.
 ### 5. Analysis (inline)
 
 Run `chai_report.sprint_health(sprint_issues, current_sprint, today, mode,
-velocity, availability, skipped_signals, links_complete, goal, velocity_reason)`,
-where `velocity_reason` is the reason `usable_velocity` returned (None when
-velocity is usable); it becomes the reason capacity is left out. It applies the
-sprint-health analyzers at team level:
+velocity, availability, skipped_signals, links_complete,
+velocity_reason=velocity_reason)`, where `velocity_reason` is the reason
+`usable_velocity` returned (None when velocity is usable); it becomes the reason
+capacity is left out. The checks themselves are `_scrum_rules.sprint_findings`:
 
-- **Capacity mode** (capacity analyzer): committed SP and issues, by type,
-  velocity, capacity, committed vs capacity, unpointed issues, issues without an
-  epic. Over capacity is a 🔴 risk with a re-plan action (a team-level item,
-  owned by the Scrum Master when the weekly report can determine one); unpointed and
-  epic-less issues are 🟡 with one action per issue for its assignee.
-- **Mid-sprint mode** (midpoint analyzer): burndown (expected = total SP ×
-  elapsed ÷ total days; On Track / Slightly Behind (≤ 10% of total) / Behind),
-  projected finish, and blocked or stalled open issues (blocked by an open issue,
-  "Blocked" label, Flagged (unless the field was rejected), and issues in an
-  active status per law 07 (In Progress, Review, or OCPBUGS ASSIGNED) with no
-  update for more than 5 business days).
-- **Sprint goal (mid-sprint, inline judgement):** call `list_jira_board_sprints`
-  for board 11479 with state `active`, take the sprint whose id matches
-  scrum-context's `current_sprint` id, and read its `goal` (scrum-context does
-  not return the goal, and the velocity call above lists closed sprints only). List the issues whose summary clearly
-  matches the goal's terms, and rate the goal 🟢 (none blocked and burndown on
-  track; never green when blocked-by links are incomplete or Flagged was
-  rejected, since `sprint_health` then clears the rating), 🟡 (stalled or
-  slightly behind) or 🔴 (goal work blocked, or behind).
-  Pass `goal={"rating": <emoji>, "note": "<one line>"}` to `sprint_health`; it
-  is shown in the sprint reply. No goal on the sprint →
-  `goal={"rating": None, "note": "no sprint goal set"}`; sprint data not readable
-  → leave `goal` out and list "sprint goal" as left out.
+- **Capacity mode (week 1):** committed SP and issues, capacity, committed vs
+  capacity, and per issue "unpointed" and "no epic" (owner: the assignee). Over
+  capacity is a 🔴 risk and a team item for the Scrum Master ("re-plan the
+  sprint"); unpointed and epic-less issues are 🟡.
+- **Mid-sprint mode (weeks 2 and 3):** burndown (expected = total SP × elapsed ÷
+  total days; On Track / Slightly Behind (≤ 10% of total) / Behind; Behind adds
+  "re-scope the sprint" for the Scrum Master), projected finish, and **explicit
+  blocks only** on open issues: "blocked by KEY" (an open "is blocked by" link)
+  and the "Blocked label" / "Parked" labels. There is no stale (no recent
+  update) check.
+- **Sprint-end view (the sprint's last week, week 3):** in the same reply,
+  delivered SP and % (done SP ÷ committed SP, law 07 done states) and likely
+  carry-over: every open issue is listed as "carry-over" on its owner's line.
 
 **Team level only.** There is no per-person load table, no per-person SP, and no
-PTO detail. A name appears only as the owner of one action item.
+PTO detail. A name appears only as the owner of an item.
 
 ### 6. Return the result
 
@@ -215,6 +208,6 @@ then the replies.
 | Sprint issue fetch incomplete | Sprint health left out (`sprint issue fetch incomplete: <problem>`) |
 | A velocity sprint's fetch incomplete, or no roster | Velocity and capacity "not available"; other figures still reported |
 | Current sprint availability | Capacity not adjusted, labelled "not PTO-adjusted" |
-| Flagged field / issue links | That signal left out and listed |
+| Issue links | Blocked-by links left out and listed |
 
 Never fill a gap from memory or by estimating.

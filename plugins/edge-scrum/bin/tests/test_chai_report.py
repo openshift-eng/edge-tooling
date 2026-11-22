@@ -220,7 +220,7 @@ class TeamLevelOutputTest(unittest.TestCase):
         self.assertEqual(sprint["capacity"]["capacity_sp"], 21.6)
         self.assertEqual(sprint["unpointed"], ["TEST-3"])
         self.assertEqual(sprint["no_epic"], ["TEST-2"])
-        self.assertEqual(sprint["missing_ac"], [])  # bugs are exempt from AC
+        self.assertNotIn("missing_ac", sprint)  # acceptance criteria are not checked (descriptions come back cut)
         self.assertEqual(sprint["by_type"]["Story"], {"issues": 2, "sp": 26})
         self.assertIn("8.4 SP over", sprint["risks"][0]["text"])
 
@@ -231,10 +231,11 @@ class TeamLevelOutputTest(unittest.TestCase):
         self.assertNotIn("Robin Outsider", text)  # roster drift is a count
         self.assertNotIn("70", text)  # a person's assigned SP
         self.assertNotIn("Load by Person", text)
-        for name in ("Alex Example", "Quinn Quality", "Morgan Manager"):
+        for name in ("Alex Example", "Quinn Quality"):  # names only as owners or in the people line
             for line in text.splitlines():
                 if name in line:
-                    self.assertRegex(line, r"^\d+\. .*\(owner: " + name + r"\)$")
+                    self.assertTrue(line.startswith(f"• {name}: ") or line.endswith("have items: " + ", ".join(report["people"]))
+                                    or "people have items" in line, line)
         self.assertNotIn("capacity", release)  # no per-person rows carried through
         self.assertEqual(release["roster_drift"], {"people": 1, "sp": 12})
 
@@ -245,24 +246,26 @@ class TeamLevelOutputTest(unittest.TestCase):
         self.assertTrue(top[0].startswith("🔴 Edge weekly health: Test Sprint 11 (week 1, capacity)"))
         self.assertIn("9.1 pencils-down sprint", top[0])
         self.assertTrue(top[1].startswith("Biggest risk: Sprint committed 30 SP vs capacity 21.6 SP"))
-        self.assertEqual(top[2], f"{report['action_count']} items need action")
+        self.assertEqual(top[2], "2 people have items: Alex Example, Quinn Quality")
         self.assertEqual(release["below_cut_line"], ["FEAT-2", "FEAT-3"])
-        self.assertEqual(release["features_at_risk"], ["FEAT-1", "FEAT-2"])
 
     def test_owner_mentions_and_fallbacks(self):
         _, _, report = self._report(mentions={"Alex Example": "<@U000TEST1>"})
-        actions = next(r for r in report["replies"] if r.startswith("*Action items*"))
-        self.assertIn("Point: TEST-3 (owner: Quinn Quality)", actions)
-        self.assertIn("Link to an epic: TEST-2 (owner: <@U000TEST1>)", actions)
-        self.assertIn("decide scope for FEAT-3 (below the cut line) (owner: no owner set)", actions)
-        self.assertIn("review plan for FEAT-1 (at risk) (owner: Morgan Manager)", actions)
+        sprint_reply, release_reply = report["replies"][:2]
+        self.assertIn("• Quinn Quality: TEST-3 (unpointed)", sprint_reply)
+        self.assertIn("• <@U000TEST1>: TEST-2 (no epic)", sprint_reply)
+        self.assertIn("• no owner set: re-plan the sprint (8.4 SP over capacity)", sprint_reply)
+        self.assertIn("• <@U000TEST1>: FEAT-2 (below the cut line)", release_reply)
+        self.assertIn("• no owner set: FEAT-3 (below the cut line)", release_reply)
 
     def test_left_out_lists_missing_sections_and_signals(self):
         _, _, report = self._report()
-        left = next(r for r in report["replies"] if r.startswith("*Left out*"))
+        left = report["replies"][-1].splitlines()[-1]
+        self.assertTrue(left.startswith("Left out: "))
         self.assertIn("9.2 release section: no Product Pages schedule yet", left)
         self.assertIn("flagged signal: query_jira rejected customfield_10021", left)
         self.assertIn("capacity from 1 assignee(s) not on the roster", left)
+        self.assertEqual(len(report["replies"]), 2)  # sprint, release; no action-items or left-out reply
 
     def test_rank_unavailable_leaves_cut_line_out(self):
         release = cr.release_health(CHECKS, {"release": "9.1", "phase": "development"}, rank_available=False)
@@ -273,10 +276,9 @@ class TeamLevelOutputTest(unittest.TestCase):
         checks = dict(CHECKS, meta=dict(CHECKS["meta"], capacity_basis="roster_fallback"))
         release = cr.release_health(checks, {"release": "9.1", "phase": "development"})
         self.assertIsNone(release["capacity_sp"])
-        self.assertEqual((release["below_cut_line"], release["features_at_risk"], release["risks"]), ([], [], []))
+        self.assertEqual((release["below_cut_line"], release["items"], release["risks"]), ([], [], []))
         self.assertEqual(release["left_out"][0]["why"], "velocity not available")
-        lines = "\n".join(cr._section_lines(dict(release, kind="release-health")))
-        self.assertIn("capacity not available", lines)
+        self.assertIn("capacity not available", cr._section_header(release))
 
     def test_nothing_to_flag(self):
         clean = {"total_sp": 20, "total_issues": 1, "issues": [
@@ -287,7 +289,7 @@ class TeamLevelOutputTest(unittest.TestCase):
         self.assertEqual(report["top_post"][1],
                          "No risks this week: committed 20 SP in 1 issue; capacity 24 SP "
                          "(velocity 24 × availability 1.00)")
-        self.assertEqual(report["top_post"][2], "0 items need action")
+        self.assertEqual(report["top_post"][2], "0 people have items")
         self.assertTrue(report["top_post"][0].startswith("🟢"))
 
 
@@ -300,20 +302,20 @@ class MidSprintTest(unittest.TestCase):
         self.assertEqual((b["days_elapsed"], b["total_days"]), (11, 22))
         self.assertEqual(b["expected_done_sp"], 15.0)
         self.assertEqual(b["status"], "Behind")
-        self.assertEqual([x["key"] for x in out["blockers"]], ["TEST-1", "TEST-2"])
-        self.assertNotIn("owner", out["blockers"][0])
+        # Explicit blocks only: TEST-1 is blocked by TEST-9; TEST-2 (stale) is not listed.
+        self.assertEqual(out["blockers"], [{"key": "TEST-1", "reasons": ["blocked by TEST-9"]}])
 
     def test_done_issues_are_not_listed_as_blocked(self):
         issues = dict(ISSUES, issues=[dict(i, status="Closed") if i["key"] == "TEST-1" else i
                                       for i in ISSUES["issues"]])
         out = cr.sprint_health(issues, dict(SPRINT, week=2), "2030-02-07", "mid-sprint")
-        self.assertEqual([x["key"] for x in out["blockers"]], ["TEST-2"])
-        self.assertNotIn("Unblock TEST-1", " ".join(a["text"] for a in out["actions"]))
+        self.assertEqual(out["blockers"], [])
+        self.assertNotIn("TEST-1", [f["key"] for f in out["items"]])
 
     def test_incomplete_links_leave_blocked_signal_out(self):
         out = cr.sprint_health(ISSUES, dict(SPRINT, week=2), "2030-02-07", "mid-sprint",
                                links_complete=False)
-        self.assertEqual([x["key"] for x in out["blockers"]], ["TEST-2"])  # stale only
+        self.assertEqual(out["blockers"], [])  # links unknown, and stale is not a block
         self.assertIn("blocked-by links", [x["what"] for x in out["left_out"]])
 
 
@@ -335,16 +337,14 @@ class RefinementGapsTest(unittest.TestCase):
                            test_plan_spike_key="TEST-61", test_plan_spike_status="Closed")}}
         section = {"release": "9.2", "phase": "refinement", "window": {"refinement_sprint": _sprint(16)}}
         out = cr.refinement_gaps(features, spikes, section)
-        self.assertEqual(out["missing_refinement_spike"], ["FEAT-1", "FEAT-2"])
-        self.assertEqual(out["missing_test_plan_spike"], ["FEAT-1"])
-        self.assertEqual(out["spike_not_in_refinement_sprint"], ["FEAT-3"])
-        owners = {a["text"]: a["owner"] for a in out["actions"]}
-        self.assertEqual(owners["9.2: create a refinement spike that blocks FEAT-1 in sprint 16"], "Alex Example")
-        self.assertIsNone(owners["9.2: create a refinement spike that blocks FEAT-2 in sprint 16"])
-        self.assertEqual(owners["9.2: create a test plan spike that blocks FEAT-1"], "Quinn Quality")
-        self.assertEqual(owners["9.2: move refinement spike TEST-60 (FEAT-3) to sprint 16"], "Alex Example")
-        self.assertIn("9.2: 2 of 3 feature(s) with a missing or overdue refinement spike",
-                      [r["text"] for r in out["risks"]])
+        found = {(f["key"], f["label"]): f["owner"] for f in out["items"] if f["check"] != "unsized"}
+        self.assertEqual(found[("FEAT-1", "no refinement spike")], "Alex Example")
+        self.assertEqual([k for k in found if k[0] == "FEAT-2"], [("FEAT-2", "no SME")])  # only "no SME"
+        self.assertEqual(found[("FEAT-1", "test plan spike missing")], "Quinn Quality")  # the QE Lead
+        self.assertEqual(found[("FEAT-3", "spike not in the refinement sprint")], "Alex Example")
+        self.assertEqual(out["refinement_sprint"], 16)
+        self.assertEqual([r["text"] for r in out["risks"]][:2],
+                         ["9.2: 1 feature(s) have no SME", "9.2: 1 feature(s) with a missing or overdue refinement spike"])
 
 
 class NoEstimateTest(unittest.TestCase):
@@ -356,7 +356,7 @@ class NoEstimateTest(unittest.TestCase):
         sprint = cr.sprint_health(ISSUES, SPRINT, "2030-01-29", "capacity", velocity=24, availability=0.9)
         report = cr.build_report(sprint, [release])
         text = "\n".join(report["top_post"] + report["replies"])
-        self.assertIn("6 unpointed items, not counted in scope", text)
+        self.assertIn("6 unpointed items not counted", text)
         self.assertNotRegex(text, r"\d+(\.\d+)?\s*[–-]\s*\d+(\.\d+)?\s*SP")
         self.assertNotIn("about", text)
         self.assertNotIn("hidden_scope", release)
@@ -478,9 +478,9 @@ class CodeRabbitFixesTest(unittest.TestCase):
         checks = dict(CHECKS, meta=dict(CHECKS["meta"], capacity_basis="roster_fallback"))
         release = cr.release_health(checks, {"release": "9.1", "phase": "development"},
                                     velocity_reason="only 2 closed sprint(s) measured, 3 needed")
-        lines = "\n".join(cr._section_lines(dict(release, kind="release-health")))
-        self.assertIn("capacity not available (only 2 closed sprint(s) measured, 3 needed)", lines)
-        self.assertNotIn("velocity not measured", lines)
+        header = cr._section_header(release)
+        self.assertIn("capacity not available (only 2 closed sprint(s) measured, 3 needed)", header)
+        self.assertNotIn("velocity not measured", header)
 
     def test_mention_matches_case_and_space_insensitively(self):
         mentions = {"Alex Example": "<@U000TEST1>"}
@@ -493,24 +493,30 @@ class CodeRabbitFixesTest(unittest.TestCase):
         self.assertEqual([s["release"] for s in sections], ["9.1"])
         self.assertEqual(missing, [])
 
-    def test_assigned_is_active_work_per_law_07(self):
+    def test_only_explicit_blocks_count(self):
         base = {"type": "Bug", "sp": 1, "assignee_display": "Alex Example", "epic_key": "TEST-100",
-                "blocked_by": [], "labels": [], "flagged": False, "stale": False, "updated": "2030-01-29"}
-        issues = {"total_sp": 3, "total_done_sp": 0, "total_remaining_sp": 3, "issues": [
-            dict(base, key="BUG-1", status="ASSIGNED"),
-            dict(base, key="BUG-2", status="Code Review"),   # not a law 07 state: not counted
-            dict(base, key="BUG-3", status="ASSIGNED", updated="2030-02-06")]}
+                "blocked_by": [], "labels": [], "flagged": True, "stale": True, "updated": "2030-01-02"}
+        issues = {"total_sp": 4, "total_done_sp": 0, "total_remaining_sp": 4, "issues": [
+            dict(base, key="BUG-1", status="ASSIGNED"),  # stale and Flagged: not a block
+            dict(base, key="BUG-2", status="In Progress", labels=["Blocked"]),
+            dict(base, key="BUG-3", status="New", labels=["Parked"]),
+            dict(base, key="BUG-4", status="Code Review", blocked_by=["BUG-9"])]}
         out = cr.sprint_health(issues, dict(SPRINT, week=2), "2030-02-07", "mid-sprint")
-        self.assertEqual(out["blockers"], [{"key": "BUG-1", "reasons": ["no update for more than 5 business days"]}])
+        self.assertEqual(out["blockers"], [{"key": "BUG-2", "reasons": ["Blocked label"]},
+                                           {"key": "BUG-3", "reasons": ["Parked"]},
+                                           {"key": "BUG-4", "reasons": ["blocked by BUG-9"]}])
+        text = "\n".join(cr.build_report(out, [])["replies"])
+        self.assertNotIn("stale", text)
+        self.assertNotIn("no update", text)
 
     def test_goal_rating_is_carried_into_the_reply(self):
         sprint = cr.sprint_health(ISSUES, dict(SPRINT, week=2), "2030-02-07", "mid-sprint",
                                   goal={"rating": "🟡", "note": "goal work stalled on TEST-2"})
         reply = cr.build_report(sprint, [])["replies"][0]
-        self.assertIn("• Sprint goal: 🟡 goal work stalled on TEST-2", reply)
+        self.assertIn("goal: 🟡 goal work stalled on TEST-2", reply.splitlines()[0])
         none = cr.sprint_health(ISSUES, dict(SPRINT, week=2), "2030-02-07", "mid-sprint",
                                 goal={"rating": None, "note": "no sprint goal set"})
-        self.assertIn("• Sprint goal: no sprint goal set", cr.build_report(none, [])["replies"][0])
+        self.assertIn("goal: no sprint goal set", cr.build_report(none, [])["replies"][0].splitlines()[0])
 
     def test_goal_is_not_green_without_blocked_signals(self):
         green = {"rating": "🟢", "note": "goal work on track"}
@@ -522,8 +528,7 @@ class CodeRabbitFixesTest(unittest.TestCase):
                                             "note": "goal work on track (not rated: blocked-by links not available)"})
         no_flag = cr.sprint_health(ISSUES, dict(SPRINT, week=2), "2030-02-07", "mid-sprint", goal=green,
                                    skipped_signals=[ad.SKIPPED_FLAGGED])
-        self.assertIsNone(no_flag["goal"]["rating"])
-        self.assertIn("Flagged not available", no_flag["goal"]["note"])
+        self.assertEqual(no_flag["goal"], green)  # Flagged is no longer a block signal
         yellow = cr.sprint_health(ISSUES, dict(SPRINT, week=2), "2030-02-07", "mid-sprint",
                                   goal={"rating": "🟡", "note": "stalled"}, links_complete=False)
         self.assertEqual(yellow["goal"]["rating"], "🟡")  # only green is withheld
@@ -542,10 +547,10 @@ class UnknownSprintModeTest(unittest.TestCase):
             out = cr.sprint_health(ISSUES, dict(SPRINT, week=week), "2030-02-07", mode)
             self.assertNotIn("burndown", out)
             self.assertNotIn("capacity", out)
-            self.assertEqual((out["risks"], out["actions"]), ([], []))
+            self.assertEqual((out["risks"], out["items"]), ([], []))
             report = cr.build_report(out, [])
             text = "\n".join(report["top_post"] + report["replies"])
-            self.assertIn("• Sprint health: sprint week unknown", text)
+            self.assertIn("Left out: Sprint health: sprint week unknown", text)
             self.assertNotIn("None mode", text)
             self.assertNotIn("Sprint health: Test Sprint", text)
             self.assertTrue(report["top_post"][0].endswith("sprint data not available"))
@@ -557,12 +562,14 @@ class TeamOwnerTest(unittest.TestCase):
     def test_team_actions_go_to_the_scrum_master(self):
         sprint = cr.sprint_health(ISSUES, SPRINT, "2030-01-29", "capacity", velocity=24, availability=0.9)
         with_owner = cr.build_report(sprint, [], team_owner="Sam Scrum")
-        actions = next(r for r in with_owner["replies"] if r.startswith("*Action items*"))
-        self.assertIn("Re-plan the sprint: 8.4 SP over capacity (owner: Sam Scrum)", actions)
-        self.assertIn("Point: TEST-3 (owner: Quinn Quality)", actions)  # issue owners unchanged
-        self.assertIn("Link to an epic: TEST-2 (owner: Alex Example)", actions)
-        without = next(r for r in cr.build_report(sprint, [])["replies"] if r.startswith("*Action items*"))
-        self.assertIn("Re-plan the sprint: 8.4 SP over capacity (owner: no owner set)", without)
+        reply = with_owner["replies"][0]
+        # The team item goes to the Scrum Master; issues keep their assignees.
+        self.assertIn("• Sam Scrum: re-plan the sprint (8.4 SP over capacity)", reply)
+        self.assertIn("• Quinn Quality: TEST-3 (unpointed)", reply)  # issue owners unchanged
+        self.assertIn("• Alex Example: TEST-2 (no epic)", reply)
+        self.assertIn("Sam Scrum", with_owner["people"])
+        without = cr.build_report(sprint, [])["replies"][0]
+        self.assertIn("• no owner set: re-plan the sprint (8.4 SP over capacity)", without)
 
     def test_find_scrum_master(self):
         self.assertIsNone(ad.find_scrum_master(ROSTER_MD, self.ROLE_DOC))  # edge-context names no one today

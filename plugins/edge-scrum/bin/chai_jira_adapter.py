@@ -20,8 +20,9 @@ unset custom field prints no line at all::
 
       [KEY-123] Summary text
         Type: Story | Status: Code Review | Priority: Major | Assignee: <name> | Reporter: <name> | Resolution: Done
-        Created: 2030-01-02 | Updated: 2030-01-06 | Resolved: 2030-01-06
+        Created: 2030-01-02 | Updated: 2030-01-06 | Due: 2030-01-06 | Resolved: 2030-01-06
         Components: <name> | Labels: a, b | Fix Versions: x | Parent: KEY-100
+        URL: <browse link>
         customfield_10020: <name> (id N, <state>, board B, start <iso>, end <iso>, completed <iso>); <name> (...)
         customfield_10028: <story points>
         customfield_<id>: <value>
@@ -74,6 +75,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from _jira_transforms import (  # noqa: E402
     build_roster_index,
     normalize_name,
+    parse_date,
     roster_match,
     write_output,
 )
@@ -105,8 +107,9 @@ PIPE_FIELDS = {
     "type": "issue_type", "issue type": "issue_type", "status": "status",
     "priority": "priority", "assignee": "assignee", "reporter": "reporter",
     "resolution": "resolution", "created": "created", "updated": "updated",
-    "resolved": "resolved",
+    "resolved": "resolved", "due": "duedate",
 }
+DATE_FIELDS = ("created", "updated", "resolutiondate", "duedate")
 USER_FIELDS = {"assignee", "customfield_10470", "customfield_10473", "customfield_10475"}
 # Custom fields the transforms read.
 CUSTOM_FIELDS = {
@@ -121,7 +124,8 @@ CUSTOM_FIELDS = {
     "customfield_10018",  # Parent Link
     "customfield_10021",  # Flagged (no line when unset; skipped signal when rejected)
 }
-IGNORED_FIELDS = {"issuelinks"}  # query_jira prints "(set, but ... cannot render ...)"
+# issuelinks: query_jira prints "(set, but ... cannot render ...)"; url: the issue's browse link.
+IGNORED_FIELDS = {"issuelinks", "url"}
 LIST_FIELDS = {"components": "components", "labels": "labels", "fix versions": "fixVersions",
                "fixversions": "fixVersions", "fix version": "fixVersions"}
 # Labels that may share a line with others (`` | ``-separated); see _segments.
@@ -226,11 +230,15 @@ def parse_sprints(value):
     return parse_sprint_value(value)[0]
 
 
-def parse_issue_links(text):
+def parse_issue_links(text, unreadable=None):
     """``get_jira_issue`` output → issuelinks from its "Linked Jira Issues" section.
 
     Lines look like ``- is blocked by: KEY (Blocks) | status: <status> | <url>``.
     Returns ``(links, found)``; ``found`` is False when the section is missing.
+    A list line in the section that cannot be read is skipped; when it mentions
+    a block ("blocks" / "is blocked by", e.g. a cut-off row) it is appended to
+    ``unreadable`` (a list, when given), so the caller can treat that issue's
+    blocked signal as incomplete instead of unblocked.
     """
     links, found, inside = [], False, False
     for line in (text or "").splitlines():
@@ -246,6 +254,8 @@ def parse_issue_links(text):
         m = _LINKED_LINE_RE.match(line)
         if not m:
             if line.lstrip().startswith(("-", "*")):
+                if unreadable is not None and "block" in line.lower():
+                    unreadable.append(line.strip())
                 continue  # a list line we cannot read; skip it
             break  # next section
         wording = re.sub(r"\s+", " ", m.group("wording").strip().lower())
@@ -287,16 +297,26 @@ def _split_blocks(text):
     return preamble, blocks, hint
 
 
+def _known(match):
+    """Whether a label match names a known field."""
+    return bool(match) and match.group(1).strip().lower() in KNOWN_LABELS
+
+
 def _segments(line):
     """``Label: value | Label: value`` → label matches.
 
-    The line is split on `` | `` only when every part's label is a known field
-    label; otherwise it stays one value, so a value containing `` | Note: x``
-    is not cut at the pipe.
+    A line is split on `` | `` when any part starts with a known field label:
+    known parts are read, and an unknown part comes back as its own match (or
+    None) so the caller ignores it with a warning instead of letting it run
+    into a known field's value (``Created: x | Due: y`` must not make
+    "Created" read "x | Due: y"). A line with no known label, or a
+    ``Description:`` line (free text), stays one value, so a value containing
+    `` | Note: x`` is not cut at the pipe.
     """
     parts = re.split(r"\s+\|\s+", line.strip())
     matches = [_LABEL_RE.match(p) for p in parts]
-    if len(parts) > 1 and all(m and m.group(1).strip().lower() in KNOWN_LABELS for m in matches):
+    free_text = matches[0] and matches[0].group(1).strip().lower() == "description"
+    if len(parts) > 1 and not free_text and any(_known(m) for m in matches):
         return matches
     m = _LABEL_RE.match(line)
     return [m] if m else [None]
@@ -502,8 +522,25 @@ _PARENT_TYPE_RE = re.compile(r"\b(Epic|Feature|Initiative|Outcome|Story|Task)\b"
 _CHILD_OF_EPIC = {"story", "task", "spike", "bug"}
 
 
-def to_issue(raw, people):
-    """Raw text fields → an issue in the mcp-atlassian ``jira_search`` shape."""
+def _date(value):
+    """A date or ISO timestamp as given, or None when empty or not a readable date."""
+    text = _clean(value)
+    if text is None:
+        return None
+    try:
+        parse_date(text)
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return text
+
+
+def to_issue(raw, people, date_problems=None):
+    """Raw text fields → an issue in the mcp-atlassian ``jira_search`` shape.
+
+    A date that is not readable is left out (the transforms then use their
+    defaults) and, when ``date_problems`` is given, recorded there as
+    ``"<key> <field> '<value>'"``; it never raises.
+    """
     issue = {"key": raw["key"], "summary": raw.get("summary") or ""}
     for field in ("issue_type", "status", "priority", "resolution"):
         value = _clean(raw.get(field))
@@ -512,9 +549,15 @@ def to_issue(raw, people):
         issue["status"] = {"name": ""}
     # Dates are left out when missing: the transforms read them with defaults
     # (raw.get("updated", ...)), which a stored None would bypass.
-    dates = {"created": _clean(raw.get("created")), "updated": _clean(raw.get("updated")),
-             "resolutiondate": _clean(raw.get("resolutiondate")) or _clean(raw.get("resolved"))}
-    issue.update({k: v for k, v in dates.items() if v})
+    given = {"created": _clean(raw.get("created")), "updated": _clean(raw.get("updated")),
+             "resolutiondate": _clean(raw.get("resolutiondate")) or _clean(raw.get("resolved")),
+             "duedate": _clean(raw.get("duedate"))}
+    for field in DATE_FIELDS:
+        value = _date(given[field])
+        if value:
+            issue[field] = value
+        elif given[field] and date_problems is not None:
+            date_problems.append(f"{raw['key']} {field} '{given[field]}'")
     for field in USER_FIELDS:
         if field in raw or field == "assignee":
             issue[field] = people.user(raw.get(field))
@@ -579,11 +622,14 @@ def attach_issue_links(adapted, issue_texts):
         if text is None:
             problems.append(f"{key}: get_jira_issue failed")
             continue
-        links, found = parse_issue_links(text)
+        unreadable = []
+        links, found = parse_issue_links(text, unreadable)
         if not found:
             problems.append(f"{key}: no 'Linked Jira Issues' section")
             continue
-        by_key[key]["issuelinks"] = links
+        by_key[key]["issuelinks"] = links  # readable links are kept (confirmed blockers stay)
+        if unreadable:
+            problems.append(f"{key}: {len(unreadable)} block link line(s) could not be read")
     adapted.setdefault("fetch", {}).setdefault("link_problems", []).extend(problems)
     return problems
 
@@ -726,7 +772,9 @@ def adapt_fetch(manifest, roster=None):
 
     ``"pages"`` at the top level is shorthand for a single part. The fetch is
     ``complete`` only if every page succeeded and every part reached its last
-    page; callers must not compute figures from an incomplete fetch.
+    page; callers must not compute figures from an incomplete fetch. A date
+    that is not readable is dropped (never raises) and listed in ``left_out``
+    (``[{"what", "why"}]``), which the caller adds to the report's Left out.
     """
     page_size = manifest.get("page_size") or PAGE_SIZE
     order = manifest.get("order") or "key"
@@ -734,7 +782,7 @@ def adapt_fetch(manifest, roster=None):
     if parts is None:
         parts = [{"project": manifest.get("project"), "pages": manifest.get("pages") or []}]
     people = PeopleMatcher(roster)
-    problems, unknown, issues, seen = [], [], [], set()
+    problems, unknown, issues, seen, date_problems = [], [], [], set(), []
     rejected, unknown_fields = set(), set()
     page_count = 0
     for part in parts:
@@ -759,7 +807,7 @@ def adapt_fetch(manifest, roster=None):
                 if raw["key"] in seen:
                     continue
                 seen.add(raw["key"])
-                issues.append(to_issue(raw, people))
+                issues.append(to_issue(raw, people, date_problems))
 
     # An issue whose sprint value is not whole: its sprint data is incomplete, so
     # nothing that depends on sprints (velocity, activity) is computed from it.
@@ -786,6 +834,10 @@ def adapt_fetch(manifest, roster=None):
         labels = sorted({u for u in unknown if u not in ("(preamble)", "(unlabelled)")})
         warnings.append(f"ignored {len(unknown)} unrecognized line(s)"
                         + (f"; labels: {', '.join(labels)}" if labels else ""))
+    # Unreadable dates are dropped, not guessed; the report lists them under Left out.
+    left_out = [{"what": f"Unreadable dates in the {manifest.get('name') or 'fetch'} fetch "
+                         f"({len({p.split()[0] for p in date_problems})} issue(s))",
+                 "why": "; ".join(date_problems) + "; those dates are ignored"}] if date_problems else []
     return {
         "issues": issues,
         "fetch": {"name": manifest.get("name"), "complete": not problems, "pages": page_count,
@@ -793,6 +845,7 @@ def adapt_fetch(manifest, roster=None):
         "skipped_signals": skipped,
         "people": {"matched": len(people.matched), "unmatched": sorted(people.unmatched)},
         "warnings": warnings,
+        "left_out": left_out,
     }
 
 
