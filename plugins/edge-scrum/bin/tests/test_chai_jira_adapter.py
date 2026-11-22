@@ -858,7 +858,7 @@ class LinkTest(unittest.TestCase):
         self.assertEqual(ad.attach_issue_links(adapted, {"TEST-303": cut}),
                          ["TEST-303: get_jira_issue response cut off"])
         links = adapted["issues"][0]["issuelinks"]  # all five confirmed rows, including the last ("blocks: TEST-26")
-        self.assertEqual([(l.get("inward_issue") or l.get("outward_issue"))["key"] for l in links],
+        self.assertEqual([(link.get("inward_issue") or link.get("outward_issue"))["key"] for link in links],
                          ["TEST-151", "TEST-152", "TEST-154", "TEST-55", "TEST-26"])
 
     def test_linked_spikes_become_feature_spike_candidates(self):
