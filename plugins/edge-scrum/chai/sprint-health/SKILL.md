@@ -144,11 +144,11 @@ the transform. The adapter turns the "Linked Jira Issues" lines into the
 `issuelinks` shape, and `transform-sprint-issues.py` applies the single
 pipeline rule, `_jira_transforms.extract_blocked_by`: an issue is blocked when
 at least one "is blocked by" issue is not in a done state (Closed, Verified,
-Done or Won't Fix). If `attach_issue_links` returns any problem (a failed
-`get_jira_issue` call, a response without a readable "Linked Jira Issues"
-section, or a block row in it that could not be read), or the candidate fetch
-is incomplete, set `links_complete = False`:
-the blocked signal is left out, not guessed.
+Done or Won't Fix). A whole `get_jira_issue` response with no "Linked Jira
+Issues" section is an issue with no links. If `attach_issue_links` returns any
+problem (a failed `get_jira_issue` call, a response cut off or not readable, or
+a block row that could not be read), or the candidate fetch is incomplete, set
+`links_complete = False`: the blocked signal is left out, not guessed.
 
 ### 4. Velocity (capacity mode)
 

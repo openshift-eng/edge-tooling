@@ -15,18 +15,24 @@ appears only as the owner of a specific action item (decision 0018).
 
 import math
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 import _scrum_rules as rules  # noqa: E402
 from _jira_transforms import DONE_STATUSES_SPRINT, normalize_name, sprint_day_counts  # noqa: E402
-from scrum_context import NOT_SCHEDULED, to_date, working_days  # noqa: E402
+from scrum_context import NOT_SCHEDULED, PHASE_LOOKUP_FAILED, to_date, working_days  # noqa: E402
 
 NOT_PTO_ADJUSTED = "not PTO-adjusted"
 REFINEMENT, RELEASE_HEALTH = "refinement", "release-health"
 DEV_PHASES = ("development", "pencils-down sprint", "pre-branch-cut")
 SKIP_PHASES = ("not started", "finished")
 REFINEMENT_NOT_PLACED = "refinement sprint could not be placed on a sprint"
+# The release gate: Edge Features (OCPSTRAT, type Feature, not Closed, an Edge label)
+# per Target Version "openshift-X.Y".
+EDGE_FEATURE_LABELS = ("ocpedge-plan", "microshift")
+GATE_INCOMPLETE = "release Feature gate incomplete"
+_TARGET_RELEASE_RE = re.compile(r"^openshift-(\d+\.\d+)$", re.IGNORECASE)
 RED, YELLOW, GREEN = "🔴", "🟡", "🟢"
 
 
@@ -148,6 +154,42 @@ def _version_key(version):
         return (9999, 9999)
 
 
+def release_feature_gate(gate_fetch):
+    """Releases with at least one Edge Feature, from the gate query's ``adapt_fetch`` output.
+
+    The gate query (weekly-health-report SKILL) asks for every non-Closed
+    OCPSTRAT Feature with an Edge label and a Target Version. Counted here,
+    rechecked per issue: type Feature (Initiatives do not count), status not
+    Closed, an :data:`EDGE_FEATURE_LABELS` label (any case), once per Target Version
+    ``openshift-X.Y``. Returns ``{"complete", "counts", "releases", "why"}``:
+    ``releases`` are the releases with a count, the candidates the report
+    reads. A failed, cut-off or unreadable fetch is unknown (``complete``
+    False, ``counts`` None, ``why`` the reason), never zero Features.
+    """
+    status = gate_fetch.get("fetch") if isinstance(gate_fetch, dict) else None
+    issues = gate_fetch.get("issues") if isinstance(gate_fetch, dict) else None
+    if not isinstance(status, dict) or status.get("complete") is not True or not isinstance(issues, list):
+        why = "; ".join(status.get("problems") or []) if isinstance(status, dict) else ""
+        return {"complete": False, "counts": None, "releases": [], "why": why or "fetch status missing"}
+    counts = {}
+    for issue in issues:
+        key = issue.get("key") if isinstance(issue, dict) else "?"
+        if not isinstance(issue, dict) or "customfield_10855" not in issue:
+            return {"complete": False, "counts": None, "releases": [], "why": f"{key}: Target Version not returned"}
+        labels = {str(label).casefold() for label in issue.get("labels") or []}
+        if not labels:  # the query asks for an Edge label: none means the field was not returned
+            return {"complete": False, "counts": None, "releases": [], "why": f"{key}: labels not returned"}
+        if ((issue.get("issue_type") or {}).get("name") != "Feature"
+                or (issue.get("status") or {}).get("name") == "Closed"
+                or not labels & set(EDGE_FEATURE_LABELS)):
+            continue
+        releases = {m.group(1) for v in issue["customfield_10855"] or []
+                    if isinstance(v, dict) and (m := _TARGET_RELEASE_RE.match(str(v.get("name") or "").strip()))}
+        for release in releases:
+            counts[release] = counts.get(release, 0) + 1
+    return {"complete": True, "counts": counts, "releases": sorted(counts, key=_version_key), "why": None}
+
+
 def _not_scheduled_reason(window):
     """Why a release has no refinement sprint: no schedule at all, a schedule
     without the refinement milestone, or a milestone no sprint starts near."""
@@ -160,19 +202,24 @@ def _not_scheduled_reason(window):
             f'(nor a previous release\'s "Master Branch Open for {window.get("release")}")')
 
 
-def select_sections(context, windows=()):
+def select_sections(context, windows=(), gate=None):
     """Release sections for the report, from scrum-context results (decision 0018).
 
     ``context`` is the no-argument scrum-context result; ``windows`` are
-    release-mode results (one per release in progress, plus any release Product
-    Pages lists as planned or in development). Returns ``(sections, missing)``:
+    release-mode results, one per candidate release. ``gate`` is
+    :func:`release_feature_gate` output: when given, only releases with at
+    least one Edge Feature are reported, a release with none is left out
+    silently (no section, nothing under Left out, whatever Product Pages
+    says), and an incomplete gate reports no release section and says why
+    (unknown, never zero). Returns ``(sections, missing)``:
 
     * refinement phase → a ``refinement`` section;
     * development, pencils-down sprint, pre-branch-cut → a ``release-health``
       section, with ``pencils_down`` set in the pencils-down sprint;
     * not scheduled yet (no schedule, or no refinement milestone in it), an
-      anchor that could not be placed on a sprint, or an unknown phase → listed
-      in ``missing`` with the reason;
+      anchor that could not be placed on a sprint, a failed Product Pages
+      lookup ("release phase unknown: Product Pages lookup failed"), or an
+      unknown phase → listed in ``missing`` with the reason;
     * not started / finished → no section.
 
     When nothing is in progress, ``missing`` says so.
@@ -185,6 +232,15 @@ def select_sections(context, windows=()):
     in_progress = context.get("release_in_progress") if isinstance(context, dict) else None
     for entry in in_progress if isinstance(in_progress, list) else []:
         by_release.setdefault(entry.get("release"), entry)
+    if gate is not None:
+        if not isinstance(gate, dict) or gate.get("complete") is not True or not isinstance(gate.get("counts"), dict):
+            why = gate.get("why") if isinstance(gate, dict) else None
+            return [], [{"what": "Release sections", "why": f"{GATE_INCOMPLETE}: {why or 'result not readable'}"}]
+        counts = gate["counts"]
+        by_release = {r: w for r, w in by_release.items() if (counts.get(r) or 0) > 0}
+        for release in counts:
+            if (counts.get(release) or 0) > 0:
+                by_release.setdefault(release, {"release": release, "phase": None})  # no window read
     sections, missing = [], []
     for release in sorted(by_release, key=_version_key):
         w = by_release[release]
@@ -192,7 +248,9 @@ def select_sections(context, windows=()):
         label = f"{release} release section"
         if phase in SKIP_PHASES:
             continue
-        if phase == "not scheduled yet":
+        if phase == PHASE_LOOKUP_FAILED:
+            missing.append({"what": label, "why": PHASE_LOOKUP_FAILED})
+        elif phase == NOT_SCHEDULED:
             missing.append({"what": label, "why": _not_scheduled_reason(w)})
         elif phase == REFINEMENT:
             if not isinstance(w.get("refinement_sprint"), dict):
@@ -387,11 +445,13 @@ def _feature_risks(tag, findings):
 
 def rank_order_available(features_fetch):
     """Whether the features fetch (``adapt_fetch`` output) is in PM rank order: a
-    complete fetch checked as one rank-ordered page (``"order": "rank"``). The
-    key-ordered fetch used when the features do not fit on one page is not rank
-    order, so :func:`release_health` must leave the cut line out."""
+    complete fetch checked as rank-ordered (``"order": "rank"``) with exactly one
+    page in all. Several parts of one page each are complete but give no global
+    rank, and the key-ordered fetch used when the features do not fit on one page
+    is not rank order either: :func:`release_health` must leave the cut line out."""
     status = features_fetch.get("fetch") if isinstance(features_fetch, dict) else None
-    return isinstance(status, dict) and status.get("complete") is True and status.get("order") == "rank"
+    return (isinstance(status, dict) and status.get("complete") is True and status.get("order") == "rank"
+            and status.get("pages") == 1)
 
 
 def release_health(checks, section, capacity=None, rank_available=True, velocity_reason=None,
@@ -464,6 +524,7 @@ def release_health(checks, section, capacity=None, rank_available=True, velocity
                                    _window_sprint_numbers(section), exact=True)
         out["expected_pct"] = None if exact is None else round(exact)  # for display; compared unrounded
         if exact is None:
+            out["not_checked"].append("schedule")
             out["left_out"].append({"what": f"{tag} schedule check", "why": "development window not known"})
         # A check whose input was not given did not run: left out, and named in the header.
         if epics is None:

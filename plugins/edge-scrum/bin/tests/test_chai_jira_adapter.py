@@ -10,6 +10,7 @@ seen from chai-bot yet; their fixtures are assumptions.
 import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -740,6 +741,50 @@ class LinkTest(unittest.TestCase):
         adapted = ad.adapt_fetch({"pages": [{"text": page(["TEST-5"])}]})
         self.assertEqual(ad.attach_issue_links(adapted, {"TEST-5": "Latest Jira State:\n[TEST-5] x\n"}),
                          ["TEST-5: no 'Linked Jira Issues' section"])
+
+    def test_whole_response_without_links_is_an_empty_link_list(self):
+        no_links = re.sub(r"Linked Jira Issues:\n(?:- .*\n)+", "", SAMPLE_GET_ISSUE)
+        self.assertTrue(ad.issue_text_complete(no_links, "TEST-303"))
+        adapted = ad.adapt_fetch({"pages": [{"text": page(["TEST-303"])}]})
+        self.assertEqual(ad.attach_issue_links(adapted, {"TEST-303": no_links}), [])
+        self.assertEqual(adapted["issues"][0]["issuelinks"], [])
+        self.assertEqual(adapted["fetch"]["link_problems"], [])
+        # A summary naming linked issues, or a row that is not a link (a subtask), is still no links.
+        for text in (no_links.replace("[TEST-303] Synthetic docs: final re-assembly",
+                                      "[TEST-303] Clean up linked Jira issues"),
+                     no_links.replace("Attachments: none", "Subtasks:\n- Subtask: TEST-9 (Sub-task) | status: New\n"
+                                                           "Attachments: none")):
+            with self.subTest(text=text.splitlines()[1]):
+                adapted = ad.adapt_fetch({"pages": [{"text": page(["TEST-303"])}]})
+                self.assertEqual(ad.attach_issue_links(adapted, {"TEST-303": text}), [])
+
+    def test_links_in_another_form_are_not_read_as_no_links(self):
+        for header in ("Linked Jira Issues (5):", "**Linked Jira Issues:**"):
+            with self.subTest(header=header):
+                text = SAMPLE_GET_ISSUE.replace("Linked Jira Issues:", header)
+                adapted = ad.adapt_fetch({"pages": [{"text": page(["TEST-303"])}]})
+                self.assertEqual(ad.attach_issue_links(adapted, {"TEST-303": text}),
+                                 ["TEST-303: no 'Linked Jira Issues' section"])
+
+    def test_response_cut_inside_the_links_section_is_a_problem(self):
+        cut = SAMPLE_GET_ISSUE[:SAMPLE_GET_ISSUE.index("- is blocked by: TEST-154")]
+        adapted = ad.adapt_fetch({"pages": [{"text": page(["TEST-303"])}]})
+        self.assertEqual(ad.attach_issue_links(adapted, {"TEST-303": cut}),
+                         ["TEST-303: get_jira_issue response cut off"])
+        self.assertEqual(extract_blocked_by(adapted["issues"][0]), ["TEST-152"])  # confirmed blockers are kept
+
+    def test_failed_cut_off_or_unreadable_response_is_still_a_problem(self):
+        no_links = re.sub(r"Linked Jira Issues:\n(?:- .*\n)+", "", SAMPLE_GET_ISSUE)
+        cases = {"failed call": None,
+                 "cut off before the comments": no_links.split("Description:")[0],
+                 "explanation instead of the issue": "TEST-303 could not be read: not returned by Jira\n",
+                 "no state line": no_links.replace("Type: Story | Status: To Do | Priority: Major\n", ""),
+                 "another issue": no_links.replace("[TEST-303]", "[TEST-304]")}
+        for name, text in cases.items():
+            with self.subTest(name):
+                adapted = ad.adapt_fetch({"pages": [{"text": page(["TEST-303"])}]})
+                why = "get_jira_issue failed" if text is None else "no 'Linked Jira Issues' section"
+                self.assertEqual(ad.attach_issue_links(adapted, {"TEST-303": text}), [f"TEST-303: {why}"])
 
     def test_linked_spikes_become_feature_spike_candidates(self):
         features = ad.adapt_fetch({"order": "rank", "pages": [{"text": SAMPLE_COMPLETE}]}, ROSTER)

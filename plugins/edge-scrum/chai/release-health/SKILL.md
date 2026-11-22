@@ -151,8 +151,9 @@ are not checked.
    — fields `summary, status, assignee, resolution`. `query_jira` cannot return
    issue links, so call `get_jira_issue` on each spike and attach its links with
    `attach_issue_links` (needed to see spikes that block a child epic instead of
-   the feature). If it returns any problem (a failed call, or no readable
-   "Linked Jira Issues" section), the refinement section is left out ("spike
+   the feature). A whole response with no "Linked Jira Issues" section means
+   the issue has no links. If it returns any problem (a failed call, or a
+   response cut off or not readable), the refinement section is left out ("spike
    links incomplete"): a missed link would report a false missing spike. A
    projected refinement sprint (no id) → refinement section missing
    ("refinement sprint is not on the board yet").
@@ -250,11 +251,12 @@ and the feature checks of `_scrum_rules.development_findings`.
    `chai_jira_adapter.attach_issue_links(adapted, {key: text})` and
    Start with `links = {}` and `links_unread = []`. Set
    `links = {key: _jira_transforms.extract_blocked_by(issue)}` (open blockers
-   only) for every issue whose links were read. Keys whose `get_jira_issue`
-   failed or had no readable "Linked Jira Issues" section (the keys in the
-   problems `attach_issue_links` returns, including a block row it could not
-   read) are **not** guessed: pass them as `links_unread=[...]`; confirmed
-   blockers are kept.
+   only) for every issue whose links were read (a whole response with no
+   "Linked Jira Issues" section is an issue with no links). Keys whose
+   `get_jira_issue` failed, or whose response was cut off or not readable (the
+   keys in the problems `attach_issue_links` returns, including a block row it
+   could not read) are **not** guessed: pass them as `links_unread=[...]`;
+   confirmed blockers are kept.
    If the candidate query itself is incomplete, pass `links=None` (block check
    not run). Either way the header's on-track count says the blocks were not
    checked, and the Left out line says for which keys.

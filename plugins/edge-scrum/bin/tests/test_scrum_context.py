@@ -608,6 +608,45 @@ class TestAvailability(unittest.TestCase):
         self.assertEqual(sc.availability([], 0, self.START, self.END), sc.ROSTER_NOT_CONFIGURED)
 
 
+class TestProductPagesLookupFailed(unittest.TestCase):
+    TODAY = (_start(13) + dt.timedelta(days=9)).isoformat()
+
+    def _context(self, schedules, release=None):
+        data = {"today": self.TODAY, "board_id": BOARD, "sprints": _raw_sprints(), "schedules": schedules}
+        if release:
+            data["release"] = release
+        return sc.build_context(data)
+
+    def test_failed_lookup_is_unknown_not_unscheduled(self):
+        failed = self._context({"9.1": {"error": "lookup failed"}}, "9.1")["release"]
+        self.assertEqual(failed["phase"], "release phase unknown: Product Pages lookup failed")
+        self.assertEqual(failed["phase"], sc.PHASE_LOOKUP_FAILED)
+        self.assertEqual(self._context({"9.1": []}, "9.1")["release"]["phase"], sc.NOT_SCHEDULED)
+
+    def test_anchor_from_a_failed_previous_release_is_unknown(self):
+        self.assertEqual(self._context({"9.1": {"error": "x"}, "9.2": []}, "9.2")["release"]["phase"],
+                         sc.PHASE_LOOKUP_FAILED)
+        own = [{"name": "9.2 Development Branch opens", "date": _start(16).isoformat()}]
+        self.assertEqual(self._context({"9.1": {"error": "x"}, "9.2": own}, "9.2")["release"]["phase"],
+                         sc.PHASE_NOT_STARTED)
+        # The previous release's "Master Branch Open for 9.2" still places it when that lookup worked.
+        inferred = self._context({"9.1": SCHEDULES["9.1"], "9.2": []}, "9.2")["release"]
+        self.assertEqual((inferred["phase"], _num(inferred["refinement_sprint"])), (sc.PHASE_NOT_STARTED, 16))
+
+    def test_no_argument_mode_leaves_failed_releases_out(self):
+        ctx = self._context({"9.1": SCHEDULES["9.1"], "9.2": {"error": "x"}})
+        self.assertEqual([r["release"] for r in ctx["release_in_progress"]], ["9.1"])
+        self.assertIn("Product Pages lookup failed for 9.2", ctx["warnings"])
+        # In Sprint 16, 9.2's refinement sprint (inferred from 9.1), only a working lookup reports it.
+        day = (_start(16) + dt.timedelta(days=2)).isoformat()
+        worked = sc.build_context({"today": day, "board_id": BOARD, "sprints": _raw_sprints(),
+                                   "schedules": {"9.1": SCHEDULES["9.1"], "9.2": []}})
+        self.assertEqual([(r["release"], r["phase"]) for r in worked["release_in_progress"]], [("9.2", "refinement")])
+        failed = sc.build_context({"today": day, "board_id": BOARD, "sprints": _raw_sprints(),
+                                   "schedules": {"9.1": {"error": "x"}, "9.2": []}})
+        self.assertEqual(failed["release_in_progress"], sc.NOT_AVAILABLE)
+
+
 class TestBuildContext(unittest.TestCase):
     def _data(self, **extra):
         """Default build_context input, overridden by ``extra``."""

@@ -153,22 +153,39 @@ def rank_page(jql, items):
 
 
 def issue_text(key, links):
-    """get_jira_issue output with its "Linked Jira Issues" section."""
-    rows = "\n".join(f"- {wording}: {other} (Blocks) | status: {status} | https://example.invalid/browse/{other}"
-                     for wording, other, status in links)
-    return (f"Latest Jira State:\n[{key}] Synthetic item\nType: Story | Status: In Progress\n"
-            f"Linked Jira Issues:\n{rows}\nURL: https://example.invalid/browse/{key}\n")
+    """A whole get_jira_issue response; ``links=None`` is an issue with no links (no section)."""
+    section = ""
+    if links is not None:
+        rows = "\n".join(f"- {wording}: {other} (Blocks) | status: {status} | https://example.invalid/browse/{other}"
+                         for wording, other, status in links)
+        section = f"Linked Jira Issues:\n{rows}\n"
+    return (f"Latest Jira State:\n[{key}] Synthetic item\nType: Story | Status: In Progress\n{section}"
+            f"Attachments: none\nURL: https://example.invalid/browse/{key}\n\nDescription:\nSynthetic text.\n\n"
+            "Comments: none\n")
 
 
 # ---------------------------------------------------------------- synthetic team data
 
 
-def _feature(key, sme="Alex Example", labels="ocpedge-plan", status="In Progress", size="M"):
-    fields = [f"Labels: {labels}", f"customfield_10795: {size}", "customfield_10855: openshift-9.2",
+def _feature(key, sme="Alex Example", labels="ocpedge-plan", status="In Progress", size="M", tv="openshift-9.2",
+             type_="Feature"):
+    fields = [f"Labels: {labels}", f"customfield_10795: {size}", f"customfield_10855: {tv}",
               "customfield_10470: Quinn Quality", "customfield_10473: Dana Docs"]
     if sme:
         fields.append(f"customfield_10475: {sme}")
-    return block(key, "Feature", status, "Pat Product", fields=fields)
+    return block(key, type_, status, "Pat Product", fields=fields)
+
+
+def gate_view(items):
+    """What the gate query returns for these issues: only its fields (issuetype, status,
+    labels, customfield_10855), as query_jira prints them."""
+    keep = ("Labels:", "customfield_10855:")
+    return {k: "\n".join(ln for n, ln in enumerate(v.splitlines()) if n < 3 or ln.strip().startswith(keep))
+            for k, v in items.items()}
+
+
+GATE_JQL = ('project = OCPSTRAT AND issuetype = Feature AND labels in ("ocpedge-plan", "microshift") AND '
+            'status != Closed AND "Target Version" is not EMPTY')
 
 
 def world(active):
@@ -214,7 +231,9 @@ def world(active):
         "feature_blocks": ["FEAT-30"],
         "fail": set(),  # fetch names whose tool call fails
         "stuck": set(),  # fetch names whose tool ignores "key <" (returns the first page again)
+        # Product Pages: release → milestones ([] = listed, no dates; {"error": ...} = lookup failed).
         "schedules": SCHEDULES,
+        "gate": None,  # what the release Feature gate query returns ({key: block}); None = the features
         "gaps": _mix()[2],
     }
 
@@ -294,15 +313,35 @@ class WeeklyRun:
         return None if f"get_jira_issue {key}" in self.w["fail"] else self.w["issue_links"].get(key)
 
     # -- scrum-context (step 1) and sections (step 2)
+    def product_pages(self, candidates):
+        """Weekly step 1.2: the candidates' schedules and the previous release of each
+        ([] when a release is not listed; {"error": ...} when its lookup failed)."""
+        store = self.w["schedules"]
+        needed = set(candidates)
+        for release in candidates:
+            lower = [r for r in store if sc.parse_version(r) < sc.parse_version(release)]
+            if lower:
+                needed.add(max(lower, key=sc.parse_version))
+        return {r: store.get(r, []) for r in needed}
+
     def context(self):
-        base = {"today": self.today, "board_id": BOARD, "sprints": board(self.active), "schedules": self.w["schedules"],
-                "engineer_count": 3, "absences": []}
+        # Step 1.1: the release Feature gate, then the SKILL's block, verbatim.
+        gate_items = gate_view(self.w["features"] if self.w["gate"] is None else self.w["gate"])
+        scope = {"chai_report": cr, "gate_fetch": self.fetch("feature_gate", GATE_JQL, gate_items)}
+        exec(skill_snippet("release_feature_gate("), {}, scope)  # noqa: S102 - our own SKILL text
+        gate, candidates = scope["gate"], scope["candidates"]
+        # Steps 1.2-1.4: Product Pages, scrum-context with no argument and per candidate release.
+        base = {"today": self.today, "board_id": BOARD, "sprints": board(self.active),
+                "schedules": self.product_pages(candidates), "engineer_count": 3, "absences": []}
         self.ctx = sc.build_context(base)
-        self.release_results = {r: sc.build_context(dict(base, release=r)) for r in self.w["schedules"]}
-        windows = [result["release"] for result in self.release_results.values()]
-        sections, missing = cr.select_sections(self.ctx, windows)
-        self.missing += missing
-        return sections
+        self.release_results = {r: sc.build_context(dict(base, release=r)) for r in candidates}
+        release_results = list(self.release_results.values())
+        windows = [result["release"] for result in release_results]
+        # Step 2: the SKILL's block, verbatim.
+        scope = {"chai_report": cr, "context": self.ctx, "windows": windows, "gate": gate}
+        exec(skill_snippet("select_sections("), {}, scope)  # noqa: S102 - our own SKILL text
+        self.missing += scope["missing"]
+        return scope["sections"]
 
     # -- velocity (sprint-health step 4), computed once
     def velocity(self):
@@ -693,6 +732,70 @@ class PartialInputTest(unittest.TestCase):
         self.assertIn('9.2 release section: Product Pages schedule has no readable "Development Branch opens" '
                       'milestone',
                       _left_out(posted))
+
+
+class ReleaseGateChainTest(unittest.TestCase):
+    """The weekly SKILL's gate and section blocks, run on the chain."""
+
+    def test_incomplete_gate_reports_no_release_section_and_says_why(self):
+        posted, report = weekly(day(14, 2), 14, lambda w: w["fail"].add("feature_gate"))
+        self.assertNotIn("release health", "\n".join(posted))
+        self.assertIn("Release sections: release Feature gate incomplete: fetch: page 1: query_jira call failed",
+                      _left_out(posted))
+        self.assertNotIn("no release in progress", _left_out(posted))  # unknown, not zero
+        self.assertTrue(posted[1].startswith("*Sprint health: Test Sprint 14*"))
+        self.assertEqual(budget_problems(report), [])
+
+    def test_release_without_edge_features_is_omitted_silently(self):
+        def change(w):  # only an Initiative and a Closed Feature target 9.2; 9.2 is in development
+            w["gate"] = {"FEAT-50": _feature("FEAT-50", type_="Initiative"),
+                         "FEAT-51": _feature("FEAT-51", status="Closed")}
+        posted, _ = weekly(day(14, 2), 14, change)
+        self.assertNotIn("9.2", posted[0])
+        self.assertNotIn("9.2", _left_out(posted))
+        self.assertNotIn("release health", "\n".join(posted))
+        self.assertIn("Release section: no release in progress", _left_out(posted))
+
+    def test_product_pages_lookup_failure_leaves_only_that_section_out(self):
+        posted, _ = weekly(day(14, 2), 14, lambda w: w.update(schedules={"9.2": {"error": "lookup failed"}}))
+        self.assertIn("9.2 release section: release phase unknown: Product Pages lookup failed", _left_out(posted))
+        self.assertTrue(posted[1].startswith("*Sprint health: Test Sprint 14*"))  # the rest goes on
+        self.assertTrue(posted[2].startswith("*Epic fields*"))
+
+    def test_lookup_without_dates_is_not_a_lookup_failure(self):
+        posted, _ = weekly(day(14, 2), 14, lambda w: w.update(schedules={"9.2": []}))
+        self.assertIn("9.2 release section: no Product Pages schedule yet", _left_out(posted))
+        self.assertNotIn("lookup failed", _left_out(posted))
+
+    def _future(self, w):
+        """9.3 Features only; 9.3 has no schedule of its own: 9.2's "Master Branch Open for 9.3" places it."""
+        w["features"] = {"FEAT-40": _feature("FEAT-40", tv="openshift-9.3")}
+        w["linked_spikes"], w["feature_blocks"] = {}, []
+
+    def test_future_release_refinement_is_inferred_from_the_previous_release(self):
+        posted, _ = weekly(day(17, 1), 17, self._future)
+        self.assertIn("9.3 refinement", posted[0])
+        self.assertTrue(posted[2].startswith("*9.3 refinement* (refinement sprint 17): 1 feature(s) checked"))
+
+    def test_future_release_is_not_forced_into_refinement_early(self):
+        posted, _ = weekly(day(16, 2), 16, self._future)
+        self.assertNotIn("9.3", "\n".join(posted[:-1]))
+        self.assertIn("Release section: no release in progress", _left_out(posted))
+
+    def test_whole_issue_response_without_links_is_an_empty_link_list(self):
+        def change(w):
+            w["issue_links"]["FEAT-30"] = issue_text("FEAT-30", None)
+        posted, _ = weekly(day(14, 2), 14, change)
+        self.assertNotIn("blocks not checked", posted[2])
+        self.assertNotIn("FEAT-30 (blocked by", posted[2])
+        self.assertNotIn("blocks of FEAT-30", _left_out(posted))
+
+    def test_cut_off_issue_response_without_links_is_not_read_as_unblocked(self):
+        def change(w):
+            w["issue_links"]["FEAT-30"] = issue_text("FEAT-30", None).split("Description:")[0]
+        posted, _ = weekly(day(14, 2), 14, change)
+        self.assertIn("(blocks not checked for 1)", posted[2])
+        self.assertIn("9.2 blocks of FEAT-30: issue links could not be read", _left_out(posted))
 
 
 def _print():

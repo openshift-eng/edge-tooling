@@ -15,6 +15,8 @@ uses no sub-agents.
 
 | Tool | Used for |
 |------|----------|
+| `query_jira` | The release Feature gate (step 1) |
+| Product Pages (`list_entities`, schedule reading, as scrum-context step 2 says) | Schedules of the gate's candidate releases |
 | `scrum-context` skill | Current sprint and week, releases in progress, phases, availability |
 | `sprint-health` skill | Sprint section (capacity or mid-sprint mode) |
 | `release-health` skill | One release section per release in progress; the epic Target Version and QA Contact flags (once per report) |
@@ -22,7 +24,8 @@ uses no sub-agents.
 | Slack post | The top post and its thread replies |
 | `sandbox_exec` (Python) | `plugins/edge-scrum/bin/chai_report.py` and the scripts the skills use |
 
-All Jira reads follow the **Jira paging** recipe below, through the skills.
+All Jira reads follow the **Jira paging** recipe below, through the skills
+(the release Feature gate in step 1 too).
 
 ## Configuration
 
@@ -83,18 +86,44 @@ ROSTER_SOURCE: "openshift-eng/edge-context: people/team-roster.md"
 
 ### 1. Where are we
 
-Run **scrum-context** with no argument: `current_sprint` (with `week`),
-`current_sprint_availability`, `release_in_progress`.
+1. **Release Feature gate.** Releases are reported only when Edge Features
+   target them. One query, paged by key (Jira paging):
+   `project = OCPSTRAT AND issuetype = Feature AND labels in ("ocpedge-plan", "microshift") AND status != Closed AND "Target Version" is not EMPTY`
+   — fields `issuetype, status, labels, customfield_10855`. Adapt all pages with
+   `chai_jira_adapter.adapt_fetch` (name `feature_gate`) as `gate_fetch`, then
+   in the sandbox:
 
-Then run **scrum-context** once per release with that release as the argument,
-for every release in `release_in_progress` **and** every release Product Pages
-lists as Planning or in development. Collect each result's `release` value
-(the window, not the whole result) as `windows`:
-`windows = [result["release"] for result in release_results]`.
+   ```python
+   gate = chai_report.release_feature_gate(gate_fetch)
+   candidates = gate["releases"]  # releases with at least one Edge Feature; [] when the gate is incomplete
+   ```
+
+   Only non-Closed Features count (Initiatives do not), once per Target Version
+   `openshift-X.Y`. Run this block even when the gate fetch is incomplete, and
+   never pass `gate=None` on: a failed or cut-off gate fetch is **unknown**,
+   never zero, so no release section is reported and the Left out line says
+   why.
+2. **Product Pages:** read the schedules of the `candidates` and the previous
+   release of each, as scrum-context step 2 says
+   (`list_entities(kind="release", public_parent_id=ocp_product_id)`, no phase
+   filter). Read them once and pass the same `schedules` to every
+   scrum-context run in items 3 and 4. A release whose lookup failed is passed
+   as `{"error": "<reason>"}`; its section is left out ("release phase
+   unknown: Product Pages lookup failed") and the rest of the report goes on.
+3. Run **scrum-context** with no argument: `current_sprint` (with `week`),
+   `current_sprint_availability`, `release_in_progress`.
+4. Run **scrum-context** once per release in `candidates`, with that release as
+   the argument. Collect each result's `release` value (the window, not the
+   whole result) as `windows`:
+   `windows = [result["release"] for result in release_results]`.
 
 ### 2. Choose the sections
 
-In the sandbox: `sections, missing = chai_report.select_sections(context, windows)`.
+In the sandbox:
+
+```python
+sections, missing = chai_report.select_sections(context, windows, gate)
+```
 
 | Release phase (scrum-context) | Release reply: feature checks (`_scrum_rules`) |
 |---------------|---------|
@@ -103,7 +132,10 @@ In the sandbox: `sections, missing = chai_report.select_sections(context, window
 | `pencils-down sprint` | the same, flagged as the pencils-down sprint |
 | `pre-branch-cut` | the same (work can still land before branch cut) |
 | `not scheduled yet`, an anchor not placeable on a sprint, or phase unknown | listed in `missing`, with the reason |
+| `release phase unknown: Product Pages lookup failed` | listed in `missing` with exactly that reason |
 | `not started`, `finished` | no release reply |
+| no Edge Feature targets the release (gate complete) | no release reply, and the release is not named under Left out, whatever Product Pages says |
+| gate fetch incomplete | no release reply; Left out: `Release sections: release Feature gate incomplete: <reason>` |
 
 Two releases in progress share the one release reply (one header part each).
 No release in progress → no release reply, and the Left out line says "no

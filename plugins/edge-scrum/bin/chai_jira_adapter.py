@@ -43,7 +43,9 @@ skipped signal (a missing Flagged line otherwise just means "not flagged").
 ``query_jira`` cannot render issue links. Links come from ``get_jira_issue``,
 whose "Linked Jira Issues" section has lines like
 ``- is blocked by: KEY (Blocks) | status: <status> | <url>``
-(:func:`parse_issue_links`, :func:`attach_issue_links`). A feature's spikes come
+(:func:`parse_issue_links`, :func:`attach_issue_links`). An issue with no links
+has no such section: a whole response without it (:func:`issue_text_complete`)
+means no links; a failed, cut-off or unreadable one is a problem. A feature's spikes come
 from ``issue in linkedIssues("<feature>", "is blocked by") AND issuetype = Spike``
 (:func:`attach_linked_spikes`).
 
@@ -258,6 +260,54 @@ def shortened_fields(raw):
 def parse_sprints(value):
     """``customfield_10020`` text → sprint dicts (see :func:`parse_sprint_value`)."""
     return parse_sprint_value(value)[0]
+
+
+_ISSUE_LINE_RE = re.compile(r"^\s*\[(" + KEY_PATTERN + r")\]")
+_STATE_LINE_RE = re.compile(r"^\s*Type:\s*[^|]+\|\s*Status:", re.IGNORECASE)
+_COMMENTS_LINE_RE = re.compile(r"^\s*Comments\b[^:]*:", re.IGNORECASE)
+
+
+def issue_text_complete(text, key):
+    """Whether ``text`` is a whole, normal ``get_jira_issue`` response for ``key``.
+
+    It names the issue on its ``[KEY] summary`` line, has the ``Type: … |
+    Status: …`` state line, and reaches the comments section that ends the
+    response (after the linked issues, attachments and description). A failed
+    call's explanation, a response for another issue, or one cut off before its
+    comments section is not whole.
+    """
+    issue = state = False
+    for line in (text or "").splitlines():
+        m = _ISSUE_LINE_RE.match(line)
+        if m and not issue:
+            if m.group(1) != key:
+                return False
+            issue = True
+        elif issue and _STATE_LINE_RE.match(line):
+            state = True
+        elif issue and state and _COMMENTS_LINE_RE.match(line):
+            return True
+    return False
+
+
+def _mentions_links(text):
+    """Whether the state part of an issue response (before ``Description:``) looks like it
+    has links in another form: a row with a known link wording (``- is blocked by: KEY``),
+    or a "linked jira issues" heading other than the issue's own ``[KEY]`` summary line."""
+    for line in (text or "").splitlines():
+        if re.match(r"^\s*Description\s*:", line, re.IGNORECASE):
+            break
+        m = _LINKED_LINE_RE.match(line)
+        if m and re.sub(r"\s+", " ", m.group("wording").strip().lower()) in LINK_WORDING:
+            return True
+        if "linked jira issues" in line.casefold() and not _ISSUE_LINE_RE.match(line):
+            return True
+    return False
+
+
+def _issue_envelope(text, key):
+    """Whether ``text`` starts as ``key``'s issue response (its ``[KEY]`` line)."""
+    return any((m := _ISSUE_LINE_RE.match(line)) and m.group(1) == key for line in (text or "").splitlines())
 
 
 def parse_issue_links(text, unreadable=None):
@@ -641,8 +691,12 @@ def attach_issue_links(adapted, issue_texts):
     """Set ``issuelinks`` from ``get_jira_issue`` output on the matching issues.
 
     ``issue_texts`` maps key → that issue's ``get_jira_issue`` text (None when the
-    call failed). Returns the problems found; a failed call or a missing "Linked
-    Jira Issues" section means that issue's blocked signal is incomplete.
+    call failed). Returns the problems found. A failed call, a response with no
+    "Linked Jira Issues" section that is not a whole issue response (cut off,
+    not readable, another issue, or links in another form), or an issue
+    response cut off before its comments section, means that issue's blocked
+    signal is incomplete (links read so far are kept); a whole response with no
+    such section means the issue has no links (:func:`issue_text_complete`).
     """
     by_key = {i["key"]: i for i in adapted.get("issues", [])}
     problems = []
@@ -655,9 +709,14 @@ def attach_issue_links(adapted, issue_texts):
         unreadable = []
         links, found = parse_issue_links(text, unreadable)
         if not found:
+            if issue_text_complete(text, key) and not _mentions_links(text):
+                by_key[key]["issuelinks"] = []  # a whole response with no links
+                continue
             problems.append(f"{key}: no 'Linked Jira Issues' section")
             continue
         by_key[key]["issuelinks"] = links  # readable links are kept (confirmed blockers stay)
+        if _issue_envelope(text, key) and not issue_text_complete(text, key):
+            problems.append(f"{key}: get_jira_issue response cut off")
         if unreadable:
             problems.append(f"{key}: {len(unreadable)} block link line(s) could not be read")
     adapted.setdefault("fetch", {}).setdefault("link_problems", []).extend(problems)
