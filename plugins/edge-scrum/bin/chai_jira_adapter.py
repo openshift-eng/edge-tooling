@@ -305,9 +305,9 @@ def _mentions_links(text):
     return False
 
 
-def _issue_envelope(text, key):
-    """Whether ``text`` starts as ``key``'s issue response (its ``[KEY]`` line)."""
-    return any((m := _ISSUE_LINE_RE.match(line)) and m.group(1) == key for line in (text or "").splitlines())
+def _first_issue_key(text):
+    """The key on the first ``[KEY] summary`` line of an issue response, or None."""
+    return next((m.group(1) for line in (text or "").splitlines() if (m := _ISSUE_LINE_RE.match(line))), None)
 
 
 def parse_issue_links(text, unreadable=None):
@@ -691,12 +691,13 @@ def attach_issue_links(adapted, issue_texts):
     """Set ``issuelinks`` from ``get_jira_issue`` output on the matching issues.
 
     ``issue_texts`` maps key → that issue's ``get_jira_issue`` text (None when the
-    call failed). Returns the problems found. A failed call, a response with no
-    "Linked Jira Issues" section that is not a whole issue response (cut off,
-    not readable, another issue, or links in another form), or an issue
-    response cut off before its comments section, means that issue's blocked
-    signal is incomplete (links read so far are kept); a whole response with no
-    such section means the issue has no links (:func:`issue_text_complete`).
+    call failed). Returns the problems found. A failed call, a response for
+    another issue, a response with no "Linked Jira Issues" section that is not a
+    whole issue response (cut off, not readable, or links in another form), or
+    an issue response cut off before its comments section, means that issue's
+    blocked signal is incomplete (complete rows read so far are kept; a row cut
+    off at the end is dropped); a whole response with no such section means the
+    issue has no links (:func:`issue_text_complete`).
     """
     by_key = {i["key"]: i for i in adapted.get("issues", [])}
     problems = []
@@ -706,6 +707,10 @@ def attach_issue_links(adapted, issue_texts):
         if text is None:
             problems.append(f"{key}: get_jira_issue failed")
             continue
+        first = _first_issue_key(text)
+        if first not in (None, key):
+            problems.append(f"{key}: get_jira_issue response is for {first}")
+            continue
         unreadable = []
         links, found = parse_issue_links(text, unreadable)
         if not found:
@@ -714,9 +719,12 @@ def attach_issue_links(adapted, issue_texts):
                 continue
             problems.append(f"{key}: no 'Linked Jira Issues' section")
             continue
-        by_key[key]["issuelinks"] = links  # readable links are kept (confirmed blockers stay)
-        if _issue_envelope(text, key) and not issue_text_complete(text, key):
+        if first == key and not issue_text_complete(text, key):
             problems.append(f"{key}: get_jira_issue response cut off")
+            last = text.splitlines()[-1] if text.strip() else ""
+            if links and not text.endswith("\n") and _LINKED_LINE_RE.match(last):
+                links = links[:-1]  # the row at the cut may be partial: never a confirmed blocker
+        by_key[key]["issuelinks"] = links  # readable links are kept (confirmed blockers stay)
         if unreadable:
             problems.append(f"{key}: {len(unreadable)} block link line(s) could not be read")
     adapted.setdefault("fetch", {}).setdefault("link_problems", []).extend(problems)

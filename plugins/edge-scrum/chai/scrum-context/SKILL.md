@@ -85,19 +85,58 @@ also drops marked sprints.
 
 ### 2. Product Pages schedule
 
-Only these Product Pages calls are supported:
+Only these Product Pages calls are supported, with the Product Pages
+`list_entities` tool. Each response has `data` (the entities) and `cursor` (the
+next page's cursor, or null on the last page):
 
-1. **OpenShift product:** resolve `ocp_product_id` with the Product Pages
-   product lookup (the OpenShift Container Platform product entity). Never
-   hard-code or guess it.
+1. **OpenShift product:** `list_entities(kind="product", shortname="openshift")`.
+   `ocp_product_id` is the integer `id` of the one `data` entry whose
+   `shortname` is `openshift`. Never hard-code or guess it; no single match, or
+   no integer `id`, means the lookup failed.
 2. **Releases:** `list_entities(kind="release", public_parent_id=ocp_product_id)`,
-   with **no** `phase__in` or other phase filter (the phase values are not
-   verified, and a phase label is never used to pick releases). The response
-   has `data` and `cursor`: while it returns a cursor, call again with that
-   cursor; stop when there is none. A cursor already seen in this listing, or
-   a call that fails, means the listing failed (do not retry it).
+   then, while the response's `cursor` is set,
+   `list_entities(kind="release", public_parent_id=ocp_product_id, cursor=next_cursor)`
+   with `next_cursor` = that `cursor`, the same filters, and **no** `phase__in`
+   or other phase filter (phase values are not verified, and a phase label is
+   never used to pick releases). A cursor already seen in this listing, or a
+   call that fails, means the listing failed: do not retry it.
 3. **Schedules:** read the schedule of each needed `openshift-<X.Y>` release
    from its listed entity, as the persona does.
+
+Make these calls yourself with the Product Pages tool: the sandbox has no
+access to it. The same sequence as code (the tests run this block with a
+stand-in for the tool):
+
+```python
+def openshift_releases(list_entities):
+    """Every OpenShift release entity Product Pages lists, or None when a lookup failed."""
+    try:
+        found = list_entities(kind="product", shortname="openshift")["data"]
+        if not isinstance(found, list):
+            return None  # not a readable listing
+        products = [p for p in found if isinstance(p, dict) and p.get("shortname") == "openshift"]
+        if len(products) != 1 or type(products[0].get("id")) is not int:
+            return None  # no single OpenShift product with an integer id
+        ocp_product_id = products[0]["id"]
+        page = list_entities(kind="release", public_parent_id=ocp_product_id)
+        releases, seen = [], set()
+        while True:
+            if not isinstance(page.get("data"), list):
+                return None  # not a readable listing
+            releases += page["data"]
+            next_cursor = page.get("cursor")
+            if not next_cursor:
+                return releases
+            if next_cursor in seen:
+                return None  # a cursor already seen: the listing failed; no retry
+            seen.add(next_cursor)
+            page = list_entities(kind="release", public_parent_id=ocp_product_id, cursor=next_cursor)
+    except Exception:  # a failed call: the lookup failed; no retry
+        return None
+```
+
+When it returns None, pass every needed release as
+`{"error": "Product Pages listing failed"}` (below).
 
 Which releases:
 

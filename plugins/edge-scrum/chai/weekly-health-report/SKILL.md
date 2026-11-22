@@ -105,8 +105,10 @@ ROSTER_SOURCE: "openshift-eng/edge-context: people/team-roster.md"
    why.
 2. **Product Pages:** read the schedules of the `candidates` and the previous
    release of each, as scrum-context step 2 says
-   (`list_entities(kind="release", public_parent_id=ocp_product_id)`, no phase
-   filter). Read them once and pass the same `schedules` to every
+   (`list_entities(kind="product", shortname="openshift")` for
+   `ocp_product_id`, then `list_entities(kind="release",
+   public_parent_id=ocp_product_id)` with `cursor=next_cursor` for further
+   pages; no phase filter). Read them once and pass the same `schedules` to every
    scrum-context run in items 3 and 4. A release whose lookup failed is passed
    as `{"error": "<reason>"}`; its section is left out ("release phase
    unknown: Product Pages lookup failed") and the rest of the report goes on.
@@ -134,12 +136,14 @@ sections, missing = chai_report.select_sections(context, windows, gate)
 | `not scheduled yet`, an anchor not placeable on a sprint, or phase unknown | listed in `missing`, with the reason |
 | `release phase unknown: Product Pages lookup failed` | listed in `missing` with exactly that reason |
 | `not started`, `finished` | no release reply |
-| no Edge Feature targets the release (gate complete) | no release reply, and the release is not named under Left out, whatever Product Pages says |
+| no Edge Feature targets the release (gate complete) | no release reply and nothing under Left out about it, whatever Product Pages says |
 | gate fetch incomplete | no release reply; Left out: `Release sections: release Feature gate incomplete: <reason>` |
 
 Two releases in progress share the one release reply (one header part each).
 No release in progress → no release reply, and the Left out line says "no
-release in progress"; sprint health is still reported.
+release in progress"; sprint health is still reported. When the gate is
+complete and no release has an Edge Feature, nothing about releases is said
+under Left out: no release was expected.
 
 | Sprint week | Sprint reply |
 |---|---|

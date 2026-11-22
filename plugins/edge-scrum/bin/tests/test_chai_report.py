@@ -191,6 +191,18 @@ class ReleaseGateTest(unittest.TestCase):
                 self.assertEqual(sections, [])
                 self.assertEqual(missing, [{"what": "Release section", "why": "no release in progress"}])
 
+    def test_complete_empty_gate_adds_nothing_to_left_out(self):
+        gate = {"complete": True, "counts": {}, "releases": [], "why": None}
+        context = {"release_in_progress": [{"release": "9.2", "phase": "development"}]}
+        windows = [_window("9.1", "finished"), _window("9.2", "development"),
+                   {"release": "9.3", "phase": sc.NOT_SCHEDULED},
+                   {"release": "9.4", "phase": sc.PHASE_LOOKUP_FAILED, "milestones": sc.NOT_AVAILABLE}]
+        self.assertEqual(cr.select_sections(context, windows, gate), ([], []))
+        self.assertEqual(cr.select_sections({}, [], gate), ([], []))
+        # Unknown is never zero: an incomplete gate still says why.
+        unknown = cr.select_sections(context, windows, {"complete": False, "counts": None, "releases": [], "why": "x"})
+        self.assertEqual(unknown, ([], [{"what": "Release sections", "why": "release Feature gate incomplete: x"}]))
+
     def test_gated_releases_keep_their_schedule_phase(self):
         gate = {"complete": True, "counts": {"9.2": 1, "9.3": 4, "9.4": 1}, "releases": ["9.2", "9.3", "9.4"],
                 "why": None}

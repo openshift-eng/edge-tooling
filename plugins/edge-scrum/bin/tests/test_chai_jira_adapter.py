@@ -773,6 +773,19 @@ class LinkTest(unittest.TestCase):
                          ["TEST-303: get_jira_issue response cut off"])
         self.assertEqual(extract_blocked_by(adapted["issues"][0]), ["TEST-152"])  # confirmed blockers are kept
 
+    def test_row_cut_at_the_end_is_never_a_blocker(self):
+        cut = SAMPLE_GET_ISSUE[:SAMPLE_GET_ISSUE.index("- is blocked by: TEST-154") + len("- is blocked by: TEST-15")]
+        adapted = ad.adapt_fetch({"pages": [{"text": page(["TEST-303"])}]})
+        self.assertEqual(ad.attach_issue_links(adapted, {"TEST-303": cut}),
+                         ["TEST-303: get_jira_issue response cut off"])
+        self.assertEqual(extract_blocked_by(adapted["issues"][0]), ["TEST-152"])  # not "TEST-15"
+
+    def test_response_for_another_issue_is_not_attached(self):
+        adapted = ad.adapt_fetch({"pages": [{"text": page(["TEST-304"])}]})
+        self.assertEqual(ad.attach_issue_links(adapted, {"TEST-304": SAMPLE_GET_ISSUE}),
+                         ["TEST-304: get_jira_issue response is for TEST-303"])
+        self.assertEqual(adapted["issues"][0]["issuelinks"], [])
+
     def test_failed_cut_off_or_unreadable_response_is_still_a_problem(self):
         no_links = re.sub(r"Linked Jira Issues:\n(?:- .*\n)+", "", SAMPLE_GET_ISSUE)
         cases = {"failed call": None,
@@ -783,7 +796,8 @@ class LinkTest(unittest.TestCase):
         for name, text in cases.items():
             with self.subTest(name):
                 adapted = ad.adapt_fetch({"pages": [{"text": page(["TEST-303"])}]})
-                why = "get_jira_issue failed" if text is None else "no 'Linked Jira Issues' section"
+                why = ("get_jira_issue failed" if text is None else "get_jira_issue response is for TEST-304"
+                       if name == "another issue" else "no 'Linked Jira Issues' section")
                 self.assertEqual(ad.attach_issue_links(adapted, {"TEST-303": text}), [f"TEST-303: {why}"])
 
     def test_linked_spikes_become_feature_spike_candidates(self):

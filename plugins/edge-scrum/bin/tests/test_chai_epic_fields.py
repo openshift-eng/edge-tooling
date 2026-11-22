@@ -453,9 +453,9 @@ class InformationalTest(unittest.TestCase):
         self.assertIn("result not readable", report["replies"][-1])
 
 
-def skill_snippet(*needles):
-    """The first python code block of weekly-health-report/SKILL.md containing every needle, verbatim."""
-    with open(WEEKLY_SKILL, encoding="utf-8") as fh:
+def skill_snippet(*needles, path=WEEKLY_SKILL):
+    """The first python code block of a SKILL.md (weekly-health-report by default) containing every needle."""
+    with open(path, encoding="utf-8") as fh:
         blocks = re.findall(r"```python\n(.*?)```", fh.read(), re.S)
     return textwrap.dedent(next(b for b in blocks if all(n in b for n in needles)))
 

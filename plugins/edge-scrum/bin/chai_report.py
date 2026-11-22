@@ -211,7 +211,8 @@ def select_sections(context, windows=(), gate=None):
     least one Edge Feature are reported, a release with none is left out
     silently (no section, nothing under Left out, whatever Product Pages
     says), and an incomplete gate reports no release section and says why
-    (unknown, never zero). Returns ``(sections, missing)``:
+    (unknown, never zero). A complete gate with no Edge Feature at all adds
+    nothing to ``missing``: no release was expected. Returns ``(sections, missing)``:
 
     * refinement phase → a ``refinement`` section;
     * development, pencils-down sprint, pre-branch-cut → a ``release-health``
@@ -222,7 +223,8 @@ def select_sections(context, windows=(), gate=None):
       unknown phase → listed in ``missing`` with the reason;
     * not started / finished → no section.
 
-    When nothing is in progress, ``missing`` says so.
+    When nothing is in progress, ``missing`` says so, unless a complete gate
+    found no Edge Feature for any release.
     """
     # Accept a full release-mode scrum-context result as well as its "release" window.
     windows = [w["release"] if isinstance(w, dict) and isinstance(w.get("release"), dict) else w
@@ -267,7 +269,8 @@ def select_sections(context, windows=(), gate=None):
                              "pencils_down": phase == "pencils-down sprint", "window": w})
         else:
             missing.append({"what": label, "why": f"phase unknown ({phase or 'not available'})"})
-    if not sections and not missing:
+    expected = gate is None or any((n or 0) > 0 for n in gate["counts"].values())
+    if not sections and not missing and expected:
         missing.append({"what": "Release section", "why": "no release in progress"})
     return sections, missing
 

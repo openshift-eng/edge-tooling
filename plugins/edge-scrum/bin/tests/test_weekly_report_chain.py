@@ -28,8 +28,9 @@ import chai_jira_adapter as ad  # noqa: E402
 import chai_report as cr  # noqa: E402
 import scrum_context as sc  # noqa: E402
 from _jira_transforms import extract_blocked_by, normalize_name  # noqa: E402
-from tests.test_chai_epic_fields import _mix, skill_owner_snippet, skill_snippet  # noqa: E402
+from tests.test_chai_epic_fields import WEEKLY_SKILL, _mix, skill_owner_snippet, skill_snippet  # noqa: E402
 from tests.test_chai_jira_adapter import HINT, ROSTER_MD  # noqa: E402
+from tests.test_scrum_context import SCRUM_CONTEXT_SKILL  # noqa: E402
 from tests.test_feature_health import budget_problems  # noqa: E402
 
 BOARD = 1000
@@ -65,7 +66,7 @@ def day(sprint, week):
 
 
 # 9.2: refinement = Test Sprint 12, pencils down = end of 15, branch cut in 16.
-SCHEDULES = {RELEASE: [
+SCHEDULES = {"9.1": [], RELEASE: [
     {"name": "9.2 Development Branch opens", "date": _start(12).isoformat()},
     {"name": "Pencils Down / Stabilization", "date": _start(16).isoformat()},
     {"name": "Master Branch Open for 9.3", "date": (_start(16) + dt.timedelta(days=3)).isoformat()}]}
@@ -234,6 +235,7 @@ def world(active):
         # Product Pages: release → milestones ([] = listed, no dates; {"error": ...} = lookup failed).
         "schedules": SCHEDULES,
         "gate": None,  # what the release Feature gate query returns ({key: block}); None = the features
+        "pp_fails": False,  # the Product Pages listing call fails
         "gaps": _mix()[2],
     }
 
@@ -285,7 +287,7 @@ class WeeklyRun:
         self.roster = ad.parse_team_roster(ROSTER_MD)
         self.roster_file = sandbox.write("roster.json", {"members": self.roster["members"],
                                                          "contacts": self.roster["contacts"]})
-        self.missing, self.posted, self.pages = [], [], {}
+        self.missing, self.posted, self.pages, self.pp_calls = [], [], {}, []
 
     # -- Jira tools
     def fetch(self, name, jql, items, order="key"):
@@ -313,16 +315,35 @@ class WeeklyRun:
         return None if f"get_jira_issue {key}" in self.w["fail"] else self.w["issue_links"].get(key)
 
     # -- scrum-context (step 1) and sections (step 2)
+    def list_entities(self, **kwargs):
+        """A stand-in for the Product Pages tool over the synthetic store: one product, the
+        releases one per page. ``release`` is this stand-in's own field, not a real one."""
+        if self.w["pp_fails"] and kwargs.get("kind") == "release":
+            raise RuntimeError("tool call failed")
+        if kwargs.get("kind") == "product":
+            return {"data": [{"id": 990001, "shortname": "openshift"}], "cursor": None}
+        releases = sorted(self.w["schedules"], key=sc.parse_version)
+        entities = [{"id": 900 + n, "release": r} for n, r in enumerate(releases)]
+        start = int(kwargs.get("cursor") or 0)  # one entity per page, so the cursor path runs
+        self.pp_calls.append(kwargs)
+        return {"data": entities[start:start + 1], "cursor": str(start + 1) if start + 1 < len(entities) else None}
+
     def product_pages(self, candidates):
-        """Weekly step 1.2: the candidates' schedules and the previous release of each
-        ([] when a release is not listed; {"error": ...} when its lookup failed)."""
-        store = self.w["schedules"]
+        """Weekly step 1.2: list releases with the scrum-context SKILL's block, then the
+        candidates' schedules and the previous release of each ([] when a release is not
+        listed; {"error": ...} when a lookup failed)."""
+        scope = {}
+        exec(skill_snippet("def openshift_releases(", path=SCRUM_CONTEXT_SKILL), scope)  # noqa: S102
+        listed = scope["openshift_releases"](self.list_entities)
+        if listed is None:
+            return {r: {"error": "Product Pages listing failed"} for r in candidates}
+        names = [e["release"] for e in listed]
         needed = set(candidates)
         for release in candidates:
-            lower = [r for r in store if sc.parse_version(r) < sc.parse_version(release)]
+            lower = [r for r in names if sc.parse_version(r) < sc.parse_version(release)]
             if lower:
                 needed.add(max(lower, key=sc.parse_version))
-        return {r: store.get(r, []) for r in needed}
+        return {r: self.w["schedules"].get(r, []) if r in names else [] for r in needed}
 
     def context(self):
         # Step 1.1: the release Feature gate, then the SKILL's block, verbatim.
@@ -752,15 +773,30 @@ class ReleaseGateChainTest(unittest.TestCase):
                          "FEAT-51": _feature("FEAT-51", status="Closed")}
         posted, _ = weekly(day(14, 2), 14, change)
         self.assertNotIn("9.2", posted[0])
-        self.assertNotIn("9.2", _left_out(posted))
         self.assertNotIn("release health", "\n".join(posted))
-        self.assertIn("Release section: no release in progress", _left_out(posted))
+        # No release was expected: nothing about releases under Left out, not even "no release in progress".
+        self.assertNotIn("Release section", _left_out(posted))
+        self.assertNotIn("9.2", _left_out(posted))
 
     def test_product_pages_lookup_failure_leaves_only_that_section_out(self):
         posted, _ = weekly(day(14, 2), 14, lambda w: w.update(schedules={"9.2": {"error": "lookup failed"}}))
         self.assertIn("9.2 release section: release phase unknown: Product Pages lookup failed", _left_out(posted))
         self.assertTrue(posted[1].startswith("*Sprint health: Test Sprint 14*"))  # the rest goes on
         self.assertTrue(posted[2].startswith("*Epic fields*"))
+
+    def test_product_pages_listing_follows_every_cursor(self):
+        run, _ = weekly_run(day(14, 2), 14)
+        self.assertEqual(run.pp_calls, [{"kind": "release", "public_parent_id": 990001},
+                                        {"kind": "release", "public_parent_id": 990001, "cursor": "1"}])
+
+    def test_gate_query_is_the_skill_query(self):
+        with open(WEEKLY_SKILL, encoding="utf-8") as fh:
+            self.assertIn(f"`{GATE_JQL}`", fh.read())
+
+    def test_product_pages_listing_failure_leaves_release_sections_out(self):
+        posted, _ = weekly(day(14, 2), 14, lambda w: w.update(pp_fails=True))
+        self.assertIn("9.2 release section: release phase unknown: Product Pages lookup failed", _left_out(posted))
+        self.assertTrue(posted[1].startswith("*Sprint health: Test Sprint 14*"))
 
     def test_lookup_without_dates_is_not_a_lookup_failure(self):
         posted, _ = weekly(day(14, 2), 14, lambda w: w.update(schedules={"9.2": []}))
