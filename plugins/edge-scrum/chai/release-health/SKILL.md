@@ -149,12 +149,18 @@ are not checked.
 3. **Refinement-sprint spikes**, paged:
    `project in (OCPEDGE, USHIFT) AND issuetype = Spike AND sprint = <refinement sprint id>`
    — fields `summary, status, assignee, resolution`. `query_jira` cannot return
-   issue links, so call `get_jira_issue` on each spike and attach its links with
+   issue links, so call `get_jira_issue(<spike key>, fields="issuelinks")` on
+   each spike (`fields="customfield_10020,issuelinks"` when the same read also
+   supplies a whole Sprint value) and attach its links with
    `attach_issue_links` (needed to see spikes that block a child epic instead of
-   the feature). A whole response with no "Linked Jira Issues" section means
-   the issue has no links. If it returns any problem (a failed call, or a
-   response cut off or not readable), the refinement section is left out ("spike
-   links incomplete"): a missed link would report a false missing spike. A
+   the feature). Its Requested fields area (after the description) says
+   `issuelinks: (empty, or not a field of this issue)` (no links) or
+   `issuelinks: (set, but get_jira_issue cannot render this field's structure)`
+   (the "Linked Jira Issues" section is read). A missing,
+   unknown or cut issuelinks state never means "no links". If it returns any
+   problem (a failed call, a response for another issue, a state it cannot use,
+   or a response cut off or not readable), the refinement section is left out
+   ("spike links incomplete"): a missed link would report a false missing spike. A
    projected refinement sprint (no id) → refinement section missing
    ("refinement sprint is not on the board yet").
 4. **Spikes that block each feature**, one paged query per feature:
@@ -247,13 +253,13 @@ and the feature checks of `_scrum_rules.development_findings`.
    so an open refinement spike shows as "refinement overdue".
 9. **Feature and epic blocks:** `query_jira`, paged:
    `key in (<feature and epic keys>) AND issueLinkType = "is blocked by"`;
-   `get_jira_issue` on each result, then
+   `get_jira_issue(<key>, fields="issuelinks")` on each result, then
    `chai_jira_adapter.attach_issue_links(adapted, {key: text})` and
    Start with `links = {}` and `links_unread = []`. Set
    `links = {key: _jira_transforms.extract_blocked_by(issue)}` (open blockers
-   only) for every issue whose links were read (a whole response with no
-   "Linked Jira Issues" section is an issue with no links). Keys whose
-   `get_jira_issue` failed, or whose response was cut off or not readable (the
+   only) for every issue whose links were read (the issuelinks state "empty"
+   is an issue with no links). Keys whose `get_jira_issue` failed, or whose
+   response had no usable issuelinks state, was cut off or not readable (the
    keys in the problems `attach_issue_links` returns, including a block row it
    could not read) are **not** guessed: pass them as `links_unread=[...]`;
    confirmed blockers are kept.
@@ -280,7 +286,10 @@ and the feature checks of `_scrum_rules.development_findings`.
     done SP ÷ total SP of its epics' issues (law 07 done states; by issue count
     when none is pointed). Flagged when % done < 75% of expected %, both
     compared unrounded (a tie is not behind; percentages are rounded only for
-    display). Closed and Release Pending features are not checked.
+    display). Closed and Release Pending features are not checked. When the
+    development window is not known, or the schedule check could not run (no
+    epics or epic issues), the header says "schedule not checked" and gives no
+    on-track count; the other feature checks are still listed.
 
 ### 5. Epic Target Version and QA Contact (decision 0024)
 

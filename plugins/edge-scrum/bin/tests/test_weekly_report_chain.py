@@ -154,15 +154,16 @@ def rank_page(jql, items):
 
 
 def issue_text(key, links):
-    """A whole get_jira_issue response; ``links=None`` is an issue with no links (no section)."""
-    section = ""
+    """A whole get_jira_issue(fields="issuelinks") response; ``links=None`` is an issue with no
+    links (the field is empty and there is no section)."""
+    section, state = "", ad.LINKS_EMPTY
     if links is not None:
         rows = "\n".join(f"- {wording}: {other} (Blocks) | status: {status} | https://example.invalid/browse/{other}"
                          for wording, other, status in links)
-        section = f"Linked Jira Issues:\n{rows}\n"
+        section, state = f"Linked Jira Issues:\n{rows}\n", ad.LINKS_SET
     return (f"Latest Jira State:\n[{key}] Synthetic item\nType: Story | Status: In Progress\n{section}"
             f"Attachments: none\nURL: https://example.invalid/browse/{key}\n\nDescription:\nSynthetic text.\n\n"
-            "Comments: none\n")
+            f"Requested fields:\nissuelinks: {state}\n\nComments: none\n")
 
 
 # ---------------------------------------------------------------- synthetic team data
@@ -287,7 +288,7 @@ class WeeklyRun:
         self.roster = ad.parse_team_roster(ROSTER_MD)
         self.roster_file = sandbox.write("roster.json", {"members": self.roster["members"],
                                                          "contacts": self.roster["contacts"]})
-        self.missing, self.posted, self.pages, self.pp_calls = [], [], {}, []
+        self.missing, self.posted, self.pages, self.pp_calls, self.issue_reads = [], [], {}, [], []
 
     # -- Jira tools
     def fetch(self, name, jql, items, order="key"):
@@ -311,7 +312,9 @@ class WeeklyRun:
             raise Incomplete(f"{name} fetch incomplete: {'; '.join(adapted['fetch']['problems'])}")
         return adapted
 
-    def get_jira_issue(self, key):
+    def get_jira_issue(self, key, fields):
+        """get_jira_issue as the SKILLs call it for links: fields="issuelinks"."""
+        self.issue_reads.append((key, fields))
         return None if f"get_jira_issue {key}" in self.w["fail"] else self.w["issue_links"].get(key)
 
     # -- scrum-context (step 1) and sections (step 2)
@@ -401,7 +404,7 @@ class WeeklyRun:
                                     f"(project in (OCPEDGE, USHIFT, OCPBUGS) AND sprint = {cur['id']}) "
                                     "AND issueLinkType = \"is blocked by\" AND statusCategory != Done",
                                     {k: self.w["sprint"][k] for k in self.w["sprint_blocked"]})
-            problems = ad.attach_issue_links(adapted, {i["key"]: self.get_jira_issue(i["key"])
+            problems = ad.attach_issue_links(adapted, {i["key"]: self.get_jira_issue(i["key"], fields="issuelinks")
                                                        for i in candidates["issues"]})
             links_complete = candidates["fetch"]["complete"] and not problems
         meta = self.box.write("meta.json", {"sprint_id": int(cur["id"]), "sprint_name": cur["name"],
@@ -432,7 +435,8 @@ class WeeklyRun:
         spikes = self.complete("refinement-sprint spikes", self.fetch(
             "ref_spikes", f"project in (OCPEDGE, USHIFT) AND issuetype = Spike AND sprint = {ref['id']}",
             self.w["ref_spikes"]))
-        problems = ad.attach_issue_links(spikes, {i["key"]: self.get_jira_issue(i["key"]) for i in spikes["issues"]})
+        reads = {i["key"]: self.get_jira_issue(i["key"], fields="issuelinks") for i in spikes["issues"]}
+        problems = ad.attach_issue_links(spikes, reads)
         if problems:
             raise Incomplete(f"spike links incomplete: {'; '.join(problems)}")
         linked = {f["key"]: self.fetch(f"linked_{f['key']}", f'issue in linkedIssues("{f["key"]}", "is blocked by") '
@@ -507,7 +511,7 @@ class WeeklyRun:
                                 {k: self.w["features"][k] for k in self.w["feature_blocks"]})
         links, unread = None, []
         if candidates["fetch"]["complete"]:
-            problems = ad.attach_issue_links(candidates, {i["key"]: self.get_jira_issue(i["key"])
+            problems = ad.attach_issue_links(candidates, {i["key"]: self.get_jira_issue(i["key"], fields="issuelinks")
                                                           for i in candidates["issues"]})
             unread = sorted({p.split(":")[0] for p in problems})
             links = {i["key"]: extract_blocked_by(i) for i in candidates["issues"] if i["key"] not in unread}
@@ -784,10 +788,33 @@ class ReleaseGateChainTest(unittest.TestCase):
         self.assertTrue(posted[1].startswith("*Sprint health: Test Sprint 14*"))  # the rest goes on
         self.assertTrue(posted[2].startswith("*Epic fields*"))
 
+    def test_every_links_read_requests_issuelinks_and_the_report_is_whole(self):
+        run, report = weekly_run(day(14, 2), 14)
+        self.assertEqual({fields for _, fields in run.issue_reads}, {"issuelinks"})
+        # sprint candidate, spike, feature block
+        self.assertEqual({key for key, _ in run.issue_reads}, {"TEST-12", "TEST-920", "FEAT-30"})
+        # A text top post and three replies: sprint, the active release, epic fields.
+        self.assertEqual(len(run.posted), 4)
+        self.assertTrue(all(isinstance(m, str) for m in run.posted))
+        self.assertTrue(run.posted[0].startswith(
+            "🔴 Edge weekly health: Test Sprint 14 (week 2, mid-sprint); 9.2 development"))
+        self.assertTrue(run.posted[2].startswith("*9.2 release health* (development)"))
+        self.assertIn("FEAT-30 (blocked by BUG-77)", run.posted[2])  # read from the set issuelinks field
+        self.assertIn("refinement overdue", run.posted[2])  # spike links read from the set field
+        self.assertTrue(run.posted[3].startswith("*Epic fields*"))
+        self.assertEqual(budget_problems(report), [])
+
     def test_product_pages_listing_follows_every_cursor(self):
         run, _ = weekly_run(day(14, 2), 14)
         self.assertEqual(run.pp_calls, [{"kind": "release", "public_parent_id": 990001},
                                         {"kind": "release", "public_parent_id": 990001, "cursor": "1"}])
+
+    def test_skills_request_the_issuelinks_field(self):
+        chai = os.path.join(BIN, "..", "chai")
+        for skill, reads in (("release-health", 2), ("sprint-health", 1)):
+            with self.subTest(skill=skill), open(os.path.join(chai, skill, "SKILL.md"), encoding="utf-8") as fh:
+                text = fh.read()
+                self.assertGreaterEqual(text.count('fields="issuelinks"'), reads)
 
     def test_gate_query_is_the_skill_query(self):
         with open(WEEKLY_SKILL, encoding="utf-8") as fh:
@@ -825,6 +852,14 @@ class ReleaseGateChainTest(unittest.TestCase):
         self.assertNotIn("blocks not checked", posted[2])
         self.assertNotIn("FEAT-30 (blocked by", posted[2])
         self.assertNotIn("blocks of FEAT-30", _left_out(posted))
+
+    def test_spike_response_without_issuelinks_state_leaves_the_section_out(self):
+        def change(w):  # the field was not requested: no Requested fields area
+            w["issue_links"]["TEST-920"] = issue_text("TEST-920", None).replace(
+                "Requested fields:\nissuelinks: " + ad.LINKS_EMPTY + "\n\n", "")
+        posted, _ = weekly(day(14, 2), 14, change)
+        self.assertIn("9.2 release section: spike links incomplete: TEST-920: no issuelinks state", _left_out(posted))
+        self.assertNotIn("release health", "\n".join(posted))
 
     def test_cut_off_issue_response_without_links_is_not_read_as_unblocked(self):
         def change(w):

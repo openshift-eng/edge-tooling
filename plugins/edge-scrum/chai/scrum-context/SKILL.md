@@ -86,8 +86,9 @@ also drops marked sprints.
 ### 2. Product Pages schedule
 
 Only these Product Pages calls are supported, with the Product Pages
-`list_entities` tool. Each response has `data` (the entities) and `cursor` (the
-next page's cursor, or null on the last page):
+`list_entities` tool. Each response has `data` (the entities, a list) and
+`cursor` (the next page's cursor, or null on the last page); a response
+without either is not readable, and the lookup failed:
 
 1. **OpenShift product:** `list_entities(kind="product", shortname="openshift")`.
    `ocp_product_id` is the integer `id` of the one `data` entry whose
@@ -111,22 +112,24 @@ stand-in for the tool):
 def openshift_releases(list_entities):
     """Every OpenShift release entity Product Pages lists, or None when a lookup failed."""
     try:
-        found = list_entities(kind="product", shortname="openshift")["data"]
-        if not isinstance(found, list):
-            return None  # not a readable listing
-        products = [p for p in found if isinstance(p, dict) and p.get("shortname") == "openshift"]
+        found = list_entities(kind="product", shortname="openshift")
+        if not isinstance(found, dict) or not isinstance(found.get("data"), list) or "cursor" not in found:
+            return None  # not a readable page: data must be a list and cursor must be there
+        products = [p for p in found["data"] if isinstance(p, dict) and p.get("shortname") == "openshift"]
         if len(products) != 1 or type(products[0].get("id")) is not int:
             return None  # no single OpenShift product with an integer id
         ocp_product_id = products[0]["id"]
         page = list_entities(kind="release", public_parent_id=ocp_product_id)
         releases, seen = [], set()
         while True:
-            if not isinstance(page.get("data"), list):
-                return None  # not a readable listing
+            if not isinstance(page, dict) or not isinstance(page.get("data"), list) or "cursor" not in page:
+                return None  # not a readable page: data must be a list and cursor must be there
             releases += page["data"]
-            next_cursor = page.get("cursor")
-            if not next_cursor:
-                return releases
+            next_cursor = page["cursor"]
+            if next_cursor is None:
+                return releases  # an explicit null cursor: the last page
+            if next_cursor == "":
+                return None  # not a readable cursor
             if next_cursor in seen:
                 return None  # a cursor already seen: the listing failed; no retry
             seen.add(next_cursor)

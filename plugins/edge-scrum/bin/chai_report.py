@@ -176,12 +176,15 @@ def release_feature_gate(gate_fetch):
         key = issue.get("key") if isinstance(issue, dict) else "?"
         if not isinstance(issue, dict) or "customfield_10855" not in issue:
             return {"complete": False, "counts": None, "releases": [], "why": f"{key}: Target Version not returned"}
+        kind = str((issue.get("issue_type") or {}).get("name") or "").strip()
+        status_name = str((issue.get("status") or {}).get("name") or "").strip()
+        if not kind or not status_name:  # unknown is not "not a Feature" or "Closed"
+            what = "issue type" if not kind else "status"
+            return {"complete": False, "counts": None, "releases": [], "why": f"{key}: {what} not returned"}
         labels = {str(label).casefold() for label in issue.get("labels") or []}
         if not labels:  # the query asks for an Edge label: none means the field was not returned
             return {"complete": False, "counts": None, "releases": [], "why": f"{key}: labels not returned"}
-        if ((issue.get("issue_type") or {}).get("name") != "Feature"
-                or (issue.get("status") or {}).get("name") == "Closed"
-                or not labels & set(EDGE_FEATURE_LABELS)):
+        if kind != "Feature" or status_name == "Closed" or not labels & set(EDGE_FEATURE_LABELS):
             continue
         releases = {m.group(1) for v in issue["customfield_10855"] or []
                     if isinstance(v, dict) and (m := _TARGET_RELEASE_RE.match(str(v.get("name") or "").strip()))}
@@ -533,7 +536,7 @@ def release_health(checks, section, capacity=None, rank_available=True, velocity
         if epics is None:
             skipped = (["epic owner"] + (["epic blocks"] if links is not None else [])
                        + (["schedule"] if exact is not None else []))
-            out["not_checked"].append("epics")
+            out["not_checked"] += ["epics"] + (["schedule"] if exact is not None else [])
             out["left_out"].append({"what": f"{tag} epic checks ({', '.join(skipped)})", "why": "epics not fetched"})
         elif stories is None and exact is not None:
             out["not_checked"].append("schedule")
@@ -1037,12 +1040,16 @@ def _section_header(sec):
     if sec.get("expected_pct") is not None:
         head += f"; {sec['expected_pct']}% of development expected done"
     if sec.get("checked") is not None:
-        head += f"; ✓ {sec['clean']} of {sec['checked']} feature(s) on track"
+        not_checked = [c for c in sec.get("not_checked") or [] if c != "schedule"]
+        if "schedule" in (sec.get("not_checked") or []):
+            head += "; schedule not checked"  # no on-track count without the schedule check
+        else:
+            head += f"; ✓ {sec['clean']} of {sec['checked']} feature(s) on track"
         unchecked = sec.get("blocks_unchecked")
         if unchecked:
             head += " (blocks not checked)" if unchecked == "all" else f" (blocks not checked for {unchecked})"
-        if sec.get("not_checked"):
-            head += f" ({', '.join(sec['not_checked'])} not checked)"
+        if not_checked:
+            head += f" ({', '.join(not_checked)} not checked)"
     return head
 
 

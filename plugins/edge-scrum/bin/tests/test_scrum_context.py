@@ -661,7 +661,7 @@ class FakeProductPages:
         if self.fail_on is not None and len(self.calls) == self.fail_on:
             raise RuntimeError("tool call failed")
         if kwargs.get("kind") == "product":
-            return {"data": self.products, "cursor": None}
+            return getattr(self, "product_response", None) or {"data": self.products, "cursor": None}
         return self.pages[len(self.calls) - 2]
 
 
@@ -694,6 +694,16 @@ class TestProductPagesCalls(unittest.TestCase):
                 failed = FakeProductPages(pages=self.PAGES, fail_on=fail_on)
                 self.assertIsNone(self._releases(failed))
                 self.assertEqual(len(failed.calls), fail_on)  # no retry after the failed call
+
+    def test_missing_cursor_member_is_malformed_but_null_is_the_last_page(self):
+        self.assertEqual(self._releases(FakeProductPages(pages=({"data": [{"id": 1}], "cursor": None},))), [{"id": 1}])
+        for pages in (({"data": [{"id": 1}]},), ({"data": [{"id": 1}], "cursor": "c1"}, {"data": [{"id": 2}]}),
+                      ({"data": [{"id": 1}], "cursor": ""},)):
+            with self.subTest(pages=pages):
+                self.assertIsNone(self._releases(FakeProductPages(pages=pages)))
+        product_without_cursor = FakeProductPages(pages=self.PAGES)
+        product_without_cursor.product_response = {"data": [{"id": 990001, "shortname": "openshift"}]}
+        self.assertIsNone(self._releases(product_without_cursor))
 
     def test_unreadable_listing_is_a_failed_lookup(self):
         for pages in (({"data": "abc", "cursor": None},), ({"data": [{"id": 1}], "cursor": "c1"}, {"cursor": None})):

@@ -264,7 +264,40 @@ def parse_sprints(value):
 
 _ISSUE_LINE_RE = re.compile(r"^\s*\[(" + KEY_PATTERN + r")\]")
 _STATE_LINE_RE = re.compile(r"^\s*Type:\s*[^|]+\|\s*Status:", re.IGNORECASE)
-_COMMENTS_LINE_RE = re.compile(r"^\s*Comments\b[^:]*:", re.IGNORECASE)
+_COMMENTS_LINE_RE = re.compile(r"^\s*Comments:\s*(?:none\b|\d+\s+total\b)", re.IGNORECASE)
+_FIELD_ENTRY_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_]*):\s?(.*)$")
+# The issuelinks state get_jira_issue(fields="issuelinks") prints in its Requested fields area.
+LINKS_EMPTY = "(empty, or not a field of this issue)"
+LINKS_SET = "(set, but get_jira_issue cannot render this field's structure)"
+
+
+def issuelinks_state(text):
+    """The issuelinks state of a ``get_jira_issue(fields="issuelinks")`` response.
+
+    Read only from the response's own Requested fields area: a ``Requested
+    fields:`` line whose ``field: value`` entries are followed by the comments
+    header (``Comments: N total…`` / ``Comments: none``), as the tool prints it
+    after the description. The same words in a description or comment are not
+    that area. Returns ``"empty"`` (:data:`LINKS_EMPTY`), ``"set"``
+    (:data:`LINKS_SET`), ``"unknown"`` (another value) or None (no such area, or
+    no issuelinks entry: the field was not requested, or the response is cut).
+    """
+    lines = (text or "").splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() != "Requested fields:":
+            continue
+        entries, j = {}, i + 1
+        while j < len(lines) and lines[j].strip() and (m := _FIELD_ENTRY_RE.match(lines[j])):
+            entries[m.group(1)] = m.group(2).strip()
+            j += 1
+        while j < len(lines) and not lines[j].strip():
+            j += 1
+        if j < len(lines) and _COMMENTS_LINE_RE.match(lines[j]):
+            value = entries.get("issuelinks")
+            if value is None:
+                return None
+            return {LINKS_EMPTY.casefold(): "empty", LINKS_SET.casefold(): "set"}.get(value.casefold(), "unknown")
+    return None
 
 
 def issue_text_complete(text, key):
@@ -303,6 +336,18 @@ def _mentions_links(text):
         if "linked jira issues" in line.casefold() and not _ISSUE_LINE_RE.match(line):
             return True
     return False
+
+
+def _links_section_open_at_end(text):
+    """Whether the response ends inside its "Linked Jira Issues" section (no other
+    section began after it), so a final unterminated row is a row cut off there."""
+    inside = False
+    for line in (text or "").splitlines():
+        if re.fullmatch(r"[*#>\s]*linked jira issues:?\s*", line, re.I):
+            inside = True
+        elif inside and line.strip() and not line.lstrip().startswith(("-", "*")):
+            inside = False
+    return inside
 
 
 def _first_issue_key(text):
@@ -690,14 +735,21 @@ def to_issue(raw, people, date_problems=None):
 def attach_issue_links(adapted, issue_texts):
     """Set ``issuelinks`` from ``get_jira_issue`` output on the matching issues.
 
-    ``issue_texts`` maps key → that issue's ``get_jira_issue`` text (None when the
-    call failed). Returns the problems found. A failed call, a response for
-    another issue, a response with no "Linked Jira Issues" section that is not a
-    whole issue response (cut off, not readable, or links in another form), or
-    an issue response cut off before its comments section, means that issue's
-    blocked signal is incomplete (complete rows read so far are kept; a row cut
-    off at the end is dropped); a whole response with no such section means the
-    issue has no links (:func:`issue_text_complete`).
+    ``issue_texts`` maps key → that issue's ``get_jira_issue(fields="issuelinks")``
+    text (None when the call failed). The Requested fields area's issuelinks
+    state (:func:`issuelinks_state`) is the signal:
+
+    * ``empty`` on a whole response for the issue (:func:`issue_text_complete`)
+      with no links section → no links;
+    * ``set`` → the "Linked Jira Issues" section is read; missing or not
+      readable → a problem;
+    * a missing, unknown or cut state never makes the links empty; a links
+      section that is there is still read.
+
+    Also problems: a failed call, a response for another issue, a state that
+    contradicts the response, and a response cut off before its comments
+    section. Confirmed rows read so far are kept; only an unterminated last row
+    of a links section that runs to the cut is dropped. Returns the problems.
     """
     by_key = {i["key"]: i for i in adapted.get("issues", [])}
     problems = []
@@ -713,16 +765,27 @@ def attach_issue_links(adapted, issue_texts):
             continue
         unreadable = []
         links, found = parse_issue_links(text, unreadable)
+        state, whole = issuelinks_state(text), issue_text_complete(text, key)
         if not found:
-            if issue_text_complete(text, key) and not _mentions_links(text):
-                by_key[key]["issuelinks"] = []  # a whole response with no links
+            if state == "empty" and whole and not _mentions_links(text):
+                by_key[key]["issuelinks"] = []  # the field says: no links
                 continue
-            problems.append(f"{key}: no 'Linked Jira Issues' section")
+            problems.append(f"{key}: " + (
+                "get_jira_issue response cut off or not readable" if state == "empty" and not whole else
+                "issuelinks state contradicts the response" if state == "empty" else
+                "issuelinks is set but no readable 'Linked Jira Issues' section" if state == "set" else
+                "issuelinks state not readable" if state == "unknown" else
+                "no issuelinks state in Requested fields (request fields=\"issuelinks\")"))
             continue
-        if first == key and not issue_text_complete(text, key):
+        if state == "empty":
+            problems.append(f"{key}: issuelinks state contradicts the response")
+        elif state == "set" and not links and not unreadable:
+            problems.append(f"{key}: issuelinks is set but no readable 'Linked Jira Issues' section")
+        if first == key and not whole:
             problems.append(f"{key}: get_jira_issue response cut off")
             last = text.splitlines()[-1] if text.strip() else ""
-            if links and not text.endswith("\n") and _LINKED_LINE_RE.match(last):
+            if (links and not text.endswith("\n") and _LINKED_LINE_RE.match(last)
+                    and _links_section_open_at_end(text)):
                 links = links[:-1]  # the row at the cut may be partial: never a confirmed blocker
         by_key[key]["issuelinks"] = links  # readable links are kept (confirmed blockers stay)
         if unreadable:
