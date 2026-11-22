@@ -225,6 +225,36 @@ def parse_sprint_value(value):
     return out, problem
 
 
+# Fields the report's checks read (besides the sprint, checked by parse_sprint_value):
+# a shortened or stored value would be read as data (a "+2 more" label, a stored
+# note as the SME), so the fetch is incomplete until the value is read whole.
+WHOLE_VALUE_FIELDS = (
+    "assignee", "labels", "components", "fixVersions",
+    "customfield_10028",  # Story Points
+    "customfield_10470",  # QA Contact
+    "customfield_10473",  # Docs approver
+    "customfield_10475",  # SME
+    "customfield_10795",  # T-shirt size
+    "customfield_10855",  # Target Version
+)
+# A value that is not whole: it names where the whole value is (a stored result for
+# result_page / result_tail, or a get_jira_issue call), ends in a "+N more" list item
+# or an ellipsis, or ends in a bracketed note. Whole values that merely contain a word
+# such as "stored" (a "log-truncated" label) are not matched.
+_SHORTENED_VALUE_RE = re.compile(
+    r"\b(?:result_page|result_tail|get_jira_issue)\b"
+    r"|(?:^|,)\s*\+\s*\d+\s+more\s*$"
+    r"|(?:\.\.\.|…)\s*$"
+    r"|[(\[][^()\[\]]*\b(?:stored|shortened|truncated|shown)\b[^()\[\]]*[)\]]\s*$",
+    re.IGNORECASE)
+
+
+def shortened_fields(raw):
+    """The :data:`WHOLE_VALUE_FIELDS` of a parsed issue block whose value is not
+    whole (see ``_SHORTENED_VALUE_RE``)."""
+    return [f for f in WHOLE_VALUE_FIELDS if raw.get(f) and _SHORTENED_VALUE_RE.search(str(raw[f]))]
+
+
 def parse_sprints(value):
     """``customfield_10020`` text → sprint dicts (see :func:`parse_sprint_value`)."""
     return parse_sprint_value(value)[0]
@@ -772,7 +802,11 @@ def adapt_fetch(manifest, roster=None):
 
     ``"pages"`` at the top level is shorthand for a single part. The fetch is
     ``complete`` only if every page succeeded and every part reached its last
-    page; callers must not compute figures from an incomplete fetch. A date
+    page; callers must not compute figures from an incomplete fetch. A value
+    that still looks shortened in a field the checks read
+    (:data:`WHOLE_VALUE_FIELDS`, and the sprint) makes the fetch incomplete.
+    ``fetch.order`` is the order the pages were checked against: PM rank is
+    available only from a complete ``"rank"`` fetch. A date
     that is not readable is dropped (never raises) and listed in ``left_out``
     (``[{"what", "why"}]``), which the caller adds to the report's Left out.
     """
@@ -782,7 +816,7 @@ def adapt_fetch(manifest, roster=None):
     if parts is None:
         parts = [{"project": manifest.get("project"), "pages": manifest.get("pages") or []}]
     people = PeopleMatcher(roster)
-    problems, unknown, issues, seen, date_problems = [], [], [], set(), []
+    problems, unknown, issues, seen, date_problems, shortened = [], [], [], set(), [], []
     rejected, unknown_fields = set(), set()
     page_count = 0
     for part in parts:
@@ -808,6 +842,9 @@ def adapt_fetch(manifest, roster=None):
                     continue
                 seen.add(raw["key"])
                 issues.append(to_issue(raw, people, date_problems))
+                cut = shortened_fields(raw)
+                if cut:
+                    shortened.append(f"{raw['key']}: {', '.join(cut)} value shortened (not read whole)")
 
     # An issue whose sprint value is not whole: its sprint data is incomplete, so
     # nothing that depends on sprints (velocity, activity) is computed from it.
@@ -815,6 +852,7 @@ def adapt_fetch(manifest, roster=None):
                       for i in issues if i.get("sprint_data_incomplete")}
     sprint_incomplete = list(incomplete_why)
     problems.extend(f"{key}: {why}" for key, why in incomplete_why.items())
+    problems.extend(shortened)
     signals = set(manifest.get("signals") or [])
     skipped = []
     # Unset custom fields print no line, so a missing Flagged line means "not
@@ -840,7 +878,7 @@ def adapt_fetch(manifest, roster=None):
                  "why": "; ".join(date_problems) + "; those dates are ignored"}] if date_problems else []
     return {
         "issues": issues,
-        "fetch": {"name": manifest.get("name"), "complete": not problems, "pages": page_count,
+        "fetch": {"name": manifest.get("name"), "order": order, "complete": not problems, "pages": page_count,
                   "fetched": len(issues), "problems": problems, "sprint_incomplete": sprint_incomplete},
         "skipped_signals": skipped,
         "people": {"matched": len(people.matched), "unmatched": sorted(people.unmatched)},

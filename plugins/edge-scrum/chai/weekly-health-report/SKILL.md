@@ -36,13 +36,18 @@ ROSTER_SOURCE: "openshift-eng/edge-context: people/team-roster.md"
 
 `query_jira` returns text with no total count. Every fetch in this report:
 
-1. First page: `(<JQL>) ORDER BY key DESC` with `max_results: 50`.
+1. First page: `(<JQL>) ORDER BY key DESC` with `max_results: 50`. The one
+   exception is release-health's feature fetch: one page ordered by Rank, for
+   the cut line, never paged on with `key <`; if more match, the features are
+   fetched again from this step (release-health "Features keep PM rank").
 2. While the results header — the first such line, after any "Create metadata"
    block — is `Showing the first 50 matching issues; more match:` (the page then
    ends with the "... More issues match" hint), fetch the next page:
    `(<JQL>) AND key < <last key on the page> ORDER BY key DESC`.
 3. Stop when a page has the header `Found N issues (showing N):` or fewer than
-   50 issues.
+   50 issues. Also stop when the number of a page's last key is not lower than
+   the number of the previous page's last key (same project; the page did not
+   advance): the fetch is then incomplete; do not fetch it again.
 4. **More than one project:** Jira's `key <` compares keys within one project
    only. When a query over several projects does not fit on one page, page each
    project separately by adding `AND project = <P>`.
@@ -62,7 +67,12 @@ ROSTER_SOURCE: "openshift-eng/edge-context: people/team-roster.md"
    empty only when that JQL matches the query sent; otherwise the fetch is
    incomplete.
 8. When `query_jira` says a field value was shortened or stored, read it whole
-   with `result_page` before passing the results to the script.
+   once (with `result_page` for a stored result, or with the `get_jira_issue`
+   call the note names) and put the whole value in place of the shortened one
+   in that page's text before passing it to the script. If it cannot be read
+   whole, pass the page as it is: the adapter marks the fetch incomplete (for
+   example `<KEY>: <field> value shortened`), and it is left out like any
+   incomplete fetch, never guessed.
 9. Labels `query_jira` prints that the adapter doesn't know are ignored with a
    warning; they never change a known field. A date that isn't readable is
    dropped, never guessed, and listed in the adapted fetch's `left_out`: add
@@ -176,13 +186,18 @@ report does not decide it. Do this lookup outside the sandbox.
 ```python
 report = chai_report.build_report(sprint, computed, missing, mentions, team_owner=scrum_master,
                                   epic_gaps=gaps)
+top_post_text = report["top_post_text"]  # one string: the channel message
+replies = report["replies"]  # strings, one per thread reply, in order
 ```
 
-- **Top post** = `report["top_post"]`, exactly three lines: status, sprint,
+`report["top_post"]` is the list of the top post's lines, for checks; post
+`top_post_text`, never the list.
+
+- **Top post** = `top_post_text`, exactly three lines: status, sprint,
   week, mode and release phase; the biggest risk (or "No risks this week" with
   the sprint figures); "N people have items: @A, @B, …" (everyone tagged in
   any reply, epic fields included; at most 8 names, then "+N more").
-- **Thread replies** = `report["replies"]`, **at most 3**, in this order:
+- **Thread replies** = `replies`, **at most 3**, in this order:
   1. sprint health (with the sprint-end view in week 3);
   2. release or refinement health for the current phase (omitted when no
      release is in progress);
@@ -212,9 +227,9 @@ report = chai_report.build_report(sprint, computed, missing, mentions, team_owne
   true and this is the scheduled channel report**: a failed or partial epic
   run, or a run from a DM, must not replace last week's set.
 
-Post the top post to the channel, then each reply in its thread. Run from a DM
-(validation or an extra run requested by a task manager), reply in the DM
-instead of the channel.
+Post `top_post_text` to the channel, then each string of `replies` in its
+thread. Run from a DM (validation or an extra run requested by a task manager),
+reply in the DM instead of the channel.
 
 ## Rules
 

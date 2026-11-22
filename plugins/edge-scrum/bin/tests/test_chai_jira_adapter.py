@@ -534,6 +534,45 @@ class SprintValueTest(unittest.TestCase):
         self.assertIn("has no id", problem)
 
 
+class ShortenedFieldTest(unittest.TestCase):
+    """Fields the checks read must be whole; a shortened one makes the fetch incomplete."""
+
+    def _adapt(self, *fields, summary="Synthetic item"):
+        text = page(["TEST-1"], sprints=None, summary=summary, extra=fields)
+        return ad.adapt_fetch({"name": "features", "pages": [{"text": text}]})
+
+    def test_shortened_values_are_incomplete(self):
+        for line, field in (("Labels: Blocked, +2 more", "labels"),
+                            ("customfield_10855: openshift-9.2, openshift-9.3...", "customfield_10855"),
+                            ("customfield_10475: (value stored; read it with result_page)", "customfield_10475"),
+                            ("customfield_10470: Quinn Q [shown 20 of 900 characters]", "customfield_10470"),
+                            ('customfield_10795: M (cut; get_jira_issue(issue_key, fields="customfield_10795"))',
+                             "customfield_10795"),
+                            ("Fix Versions: 9.2 (truncated)", "fixVersions")):
+            with self.subTest(line=line):
+                out = self._adapt(line)
+                self.assertFalse(out["fetch"]["complete"])
+                self.assertEqual(out["fetch"]["problems"],
+                                 [f"TEST-1: {field} value shortened (not read whole)"])
+
+    def test_whole_values_stay_complete(self):
+        out = self._adapt("Labels: Blocked, Parked", "Components: MicroShift / Storage",
+                          "customfield_10855: openshift-9.2", "customfield_10475: Alex Example",
+                          "customfield_10028: 3.0", summary="Summary ending in an ellipsis...")
+        self.assertTrue(out["fetch"]["complete"], out["fetch"]["problems"])
+        self.assertEqual(ad.shortened_fields({"summary": "cut...", "description": "+3 more"}), [])
+        # Whole values that only contain a word such as "stored" are not shortened.
+        for raw in ({"labels": "log-truncated, data-stored"}, {"components": "Stored Procedures"},
+                    {"assignee": "Alex Stored"}, {"components": "Storage (Local)"}, {"labels": "+2"}):
+            with self.subTest(raw=raw):
+                self.assertEqual(ad.shortened_fields(raw), [])
+
+    def test_fetch_records_its_order(self):
+        self.assertEqual(self._adapt()["fetch"]["order"], "key")
+        rank = ad.adapt_fetch({"order": "rank", "pages": [{"text": page(["TEST-1"])}]})
+        self.assertEqual((rank["fetch"]["order"], rank["fetch"]["complete"]), ("rank", True))
+
+
 class LinkedSpikesCliTest(unittest.TestCase):
     """CLI --linked-spikes: an incomplete per-feature fetch marks the output incomplete."""
 

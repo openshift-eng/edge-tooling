@@ -452,11 +452,16 @@ class InformationalTest(unittest.TestCase):
         self.assertIn("result not readable", report["replies"][-1])
 
 
-def skill_owner_snippet():
-    """The owner-collection code block from weekly-health-report/SKILL.md, verbatim."""
+def skill_snippet(*needles):
+    """The first python code block of weekly-health-report/SKILL.md containing every needle, verbatim."""
     with open(WEEKLY_SKILL, encoding="utf-8") as fh:
         blocks = re.findall(r"```python\n(.*?)```", fh.read(), re.S)
-    return next(b for b in blocks if "owners" in b and 'gaps["epics"]' in b)
+    return next(b for b in blocks if all(n in b for n in needles))
+
+
+def skill_owner_snippet():
+    """The owner-collection code block from weekly-health-report/SKILL.md, verbatim."""
+    return skill_snippet("owners", 'gaps["epics"]')
 
 
 class PerOwnerLinesTest(unittest.TestCase):

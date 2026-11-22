@@ -20,12 +20,13 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 import _scrum_rules as rules  # noqa: E402
 from _jira_transforms import DONE_STATUSES_SPRINT, normalize_name, sprint_day_counts  # noqa: E402
-from scrum_context import to_date, working_days  # noqa: E402
+from scrum_context import NOT_SCHEDULED, to_date, working_days  # noqa: E402
 
 NOT_PTO_ADJUSTED = "not PTO-adjusted"
 REFINEMENT, RELEASE_HEALTH = "refinement", "release-health"
 DEV_PHASES = ("development", "pencils-down sprint", "pre-branch-cut")
 SKIP_PHASES = ("not started", "finished")
+REFINEMENT_NOT_PLACED = "refinement sprint could not be placed on a sprint"
 RED, YELLOW, GREEN = "🔴", "🟡", "🟢"
 
 
@@ -147,6 +148,18 @@ def _version_key(version):
         return (9999, 9999)
 
 
+def _not_scheduled_reason(window):
+    """Why a release has no refinement sprint: no schedule at all, a schedule
+    without the refinement milestone, or a milestone no sprint starts near."""
+    milestones = window.get("milestones")
+    if not isinstance(milestones, dict) or not milestones:
+        return "no Product Pages schedule yet"
+    if milestones.get("development_branch_opens") not in (None, NOT_SCHEDULED):
+        return REFINEMENT_NOT_PLACED
+    return (f'Product Pages schedule has no readable "Development Branch opens" milestone '
+            f'(nor a previous release\'s "Master Branch Open for {window.get("release")}")')
+
+
 def select_sections(context, windows=()):
     """Release sections for the report, from scrum-context results (decision 0018).
 
@@ -157,8 +170,9 @@ def select_sections(context, windows=()):
     * refinement phase → a ``refinement`` section;
     * development, pencils-down sprint, pre-branch-cut → a ``release-health``
       section, with ``pencils_down`` set in the pencils-down sprint;
-    * not scheduled yet, an anchor that could not be placed on a sprint, or an
-      unknown phase → listed in ``missing`` with the reason;
+    * not scheduled yet (no schedule, or no refinement milestone in it), an
+      anchor that could not be placed on a sprint, or an unknown phase → listed
+      in ``missing`` with the reason;
     * not started / finished → no section.
 
     When nothing is in progress, ``missing`` says so.
@@ -179,10 +193,10 @@ def select_sections(context, windows=()):
         if phase in SKIP_PHASES:
             continue
         if phase == "not scheduled yet":
-            missing.append({"what": label, "why": "no Product Pages schedule yet"})
+            missing.append({"what": label, "why": _not_scheduled_reason(w)})
         elif phase == REFINEMENT:
             if not isinstance(w.get("refinement_sprint"), dict):
-                missing.append({"what": label, "why": "refinement sprint could not be placed on a sprint"})
+                missing.append({"what": label, "why": REFINEMENT_NOT_PLACED})
                 continue
             sections.append({"release": release, "phase": phase, "kind": REFINEMENT,
                              "pencils_down": False, "window": w})
@@ -371,6 +385,15 @@ def _feature_risks(tag, findings):
     return out
 
 
+def rank_order_available(features_fetch):
+    """Whether the features fetch (``adapt_fetch`` output) is in PM rank order: a
+    complete fetch checked as one rank-ordered page (``"order": "rank"``). The
+    key-ordered fetch used when the features do not fit on one page is not rank
+    order, so :func:`release_health` must leave the cut line out."""
+    status = features_fetch.get("fetch") if isinstance(features_fetch, dict) else None
+    return isinstance(status, dict) and status.get("complete") is True and status.get("order") == "rank"
+
+
 def release_health(checks, section, capacity=None, rank_available=True, velocity_reason=None,
                    features=None, epics=None, spikes=None, stories=None, links=None, current_sprint_number=None,
                    links_unread=()):
@@ -384,12 +407,16 @@ def release_health(checks, section, capacity=None, rank_available=True, velocity
     behind schedule (``_scrum_rules.expected_pct`` from the refinement and
     branch-cut sprints and ``current_sprint_number``), blocked, epic blocked,
     Blocked / Parked label, below the cut line, no QA Contact, no Doc Contact,
-    epic with no owner. ``links=None`` means the block check did not run, and
+    epic with no owner. ``epics``, ``spikes`` or ``stories`` None means the
+    checks needing them did not run: they are left out, and the header's
+    on-track count says what was not checked (``not_checked``).
+    ``links=None`` means the block check did not run, and
     ``links_unread`` lists the keys whose links could not be read: both are left
     out, and the header's on-track count says the blocks were not checked.
     ``capacity`` is :func:`release_capacity` output, for its
     label. ``rank_available=False`` leaves the cut line out, since key order is
-    not PM rank. ``velocity_reason`` is shown when velocity is not available.
+    not PM rank: pass :func:`rank_order_available` of the features fetch.
+    ``velocity_reason`` is shown when velocity is not available.
     """
     meta = checks.get("meta", {})
     scope, cap = meta.get("total_remaining_sp"), meta.get("total_capacity_sp")
@@ -404,7 +431,7 @@ def release_health(checks, section, capacity=None, rank_available=True, velocity
            # A count, never an SP estimate (decision 0018).
            "unpointed_items": (meta.get("total_unpointed_stories") or 0) + (meta.get("unpointed_bugs") or 0),
            "below_cut_line": [], "items": [], "checked": None, "clean": None, "expected_pct": None,
-           "blocks_unchecked": None,
+           "blocks_unchecked": None, "not_checked": [],
            "risks": [], "left_out": []}
     velocity_ok = meta.get("capacity_basis") == "velocity"
     if not velocity_ok:
@@ -438,6 +465,18 @@ def release_health(checks, section, capacity=None, rank_available=True, velocity
         out["expected_pct"] = None if exact is None else round(exact)  # for display; compared unrounded
         if exact is None:
             out["left_out"].append({"what": f"{tag} schedule check", "why": "development window not known"})
+        # A check whose input was not given did not run: left out, and named in the header.
+        if epics is None:
+            skipped = (["epic owner"] + (["epic blocks"] if links is not None else [])
+                       + (["schedule"] if exact is not None else []))
+            out["not_checked"].append("epics")
+            out["left_out"].append({"what": f"{tag} epic checks ({', '.join(skipped)})", "why": "epics not fetched"})
+        elif stories is None and exact is not None:
+            out["not_checked"].append("schedule")
+            out["left_out"].append({"what": f"{tag} schedule check", "why": "epic issues not fetched"})
+        if spikes is None:
+            out["not_checked"].append("refinement spikes")
+            out["left_out"].append({"what": f"{tag} refinement-overdue check", "why": "refinement spikes not fetched"})
         if links is None:
             out["blocks_unchecked"] = "all"
             out["left_out"].append({"what": f"{tag} feature and epic blocks", "why": "issue links not read"})
@@ -938,6 +977,8 @@ def _section_header(sec):
         unchecked = sec.get("blocks_unchecked")
         if unchecked:
             head += " (blocks not checked)" if unchecked == "all" else f" (blocks not checked for {unchecked})"
+        if sec.get("not_checked"):
+            head += f" ({', '.join(sec['not_checked'])} not checked)"
     return head
 
 
@@ -975,8 +1016,10 @@ def build_report(sprint, sections, missing=(), mentions=None, team_owner=None, e
     Each reply is one header line and at most 10 owner lines
     (``• owner: KEY (label, label)``, at most 200 characters); the keys of
     further owners and everything left out go on ONE "Left out:" line at the
-    end of the last reply. Returns ``{"top_post", "replies", "action_count",
-    "people"}``.
+    end of the last reply. Returns ``{"top_post", "top_post_text", "replies",
+    "action_count", "people"}``. ``top_post`` is the list of the three lines;
+    ``top_post_text`` (one string) and each entry of ``replies`` (one string per
+    thread reply) are the Slack message texts to post.
     """
     left_out_sprint = []
     if sprint and sprint.get("skipped"):
@@ -1084,5 +1127,5 @@ def build_report(sprint, sections, missing=(), mentions=None, team_owner=None, e
     top.append(f"{len(ranked)} {'person has' if len(ranked) == 1 else 'people have'} items"
                + (f": {names}{more}" if ranked else ""))
     action_count = sum(len(p.get("items", [])) + len(p.get("team_items", [])) for p in parts)
-    return {"top_post": top, "replies": ["\n".join(r) for r in replies], "action_count": action_count,
-            "people": ranked}
+    return {"top_post": top, "top_post_text": "\n".join(top), "replies": ["\n".join(r) for r in replies],
+            "action_count": action_count, "people": ranked}

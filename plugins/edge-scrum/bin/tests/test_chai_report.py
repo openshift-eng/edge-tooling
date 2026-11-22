@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import chai_jira_adapter as ad  # noqa: E402
 import chai_report as cr  # noqa: E402
 import scrum_context as sc  # noqa: E402
-from tests.test_chai_jira_adapter import ROSTER_MD  # noqa: E402
+from tests.test_chai_jira_adapter import ROSTER_MD, keys_desc, page  # noqa: E402
 
 run_checks = import_module("run-checks")
 
@@ -85,6 +85,50 @@ class ModeAndCapacityTest(unittest.TestCase):
         self.assertEqual(none["label"], "not PTO-adjusted")
 
 
+class ReleaseInputsTest(unittest.TestCase):
+    """What release_health may claim from the inputs it was given."""
+
+    CHECKS = {"meta": {"total_remaining_sp": 10, "total_capacity_sp": 90, "capacity_basis": "velocity"},
+              "cut_line": [], "process_gaps": {"roster_drift": []}}
+    SECTION = {"release": "9.2", "phase": "development",
+               "window": {"refinement_sprint": {"number": 12}, "branch_cut_sprint": {"number": 16}}}
+    FEATURES = {"features": [{"key": "TEST-1", "type": "Feature", "status": "In Progress", "sme": "Alex Example",
+                              "qa_contact": "Quinn Quality", "docs_approver": "Dana Docs"}]}
+
+    def test_rank_order_only_from_a_complete_rank_fetch(self):
+        one = [{"text": page(["TEST-1"])}]
+        self.assertTrue(cr.rank_order_available(ad.adapt_fetch({"order": "rank", "pages": one})))
+        self.assertFalse(cr.rank_order_available(ad.adapt_fetch({"pages": [{"text": page(["TEST-1"])}]})))
+        more = page(keys_desc("TEST", 60, 50), final=False)  # the rank page shows only the first 50
+        self.assertFalse(cr.rank_order_available(ad.adapt_fetch({"order": "rank", "pages": [{"text": more}]})))
+        self.assertFalse(cr.rank_order_available(None))
+
+    def test_checks_whose_input_is_missing_are_named_not_counted_on_track(self):
+        out = cr.release_health(self.CHECKS, self.SECTION, features=self.FEATURES, epics=None, spikes=None,
+                                stories=None, links={}, current_sprint_number=14)
+        self.assertEqual([x["what"] for x in out["left_out"]],
+                         ["9.2 epic checks (epic owner, epic blocks, schedule)", "9.2 refinement-overdue check"])
+        header = cr.build_report(None, [out])["replies"][0].splitlines()[0]
+        self.assertTrue(header.endswith("✓ 1 of 1 feature(s) on track (epics, refinement spikes not checked)"), header)
+        out = cr.release_health(self.CHECKS, self.SECTION, features=self.FEATURES,
+                                epics={"feature_to_epics": {}, "epics": []}, spikes={"spike_map": {}}, stories=None,
+                                links={}, current_sprint_number=14)
+        self.assertEqual(out["left_out"], [{"what": "9.2 schedule check", "why": "epic issues not fetched"}])
+        self.assertEqual(out["not_checked"], ["schedule"])
+
+    def test_missing_epics_name_only_checks_that_would_have_run(self):
+        out = cr.release_health(self.CHECKS, {"release": "9.2", "phase": "development"}, features=self.FEATURES,
+                                epics=None, spikes={"spike_map": {}}, stories={"stories": []}, links=None)
+        self.assertEqual([x["what"] for x in out["left_out"]],
+                         ["9.2 schedule check", "9.2 epic checks (epic owner)", "9.2 feature and epic blocks"])
+
+    def test_all_inputs_given_leave_nothing_out(self):
+        out = cr.release_health(self.CHECKS, self.SECTION, features=self.FEATURES,
+                                epics={"feature_to_epics": {}, "epics": []}, spikes={"spike_map": {}},
+                                stories={"stories": []}, links={}, current_sprint_number=14)
+        self.assertEqual((out["left_out"], out["not_checked"]), ([], []))
+
+
 class SectionSelectionTest(unittest.TestCase):
     def test_phase_selects_section_kind(self):
         cases = {"refinement": "refinement", "development": "release-health",
@@ -126,6 +170,20 @@ class SectionSelectionTest(unittest.TestCase):
             ("9.2 release section", "no Product Pages schedule yet"),
             ("9.3 release section", "phase unknown (not available)"),
             ("9.4 release section", "a release milestone could not be placed on a sprint")])
+
+    def test_not_scheduled_reason_names_what_is_missing(self):
+        base = {"phase": sc.NOT_SCHEDULED}
+        no_milestone = {"development_branch_opens": sc.NOT_SCHEDULED, "pencils_down": "2030-05-13",
+                        "master_branch_open": "2030-05-16"}
+        unplaced = dict(no_milestone, development_branch_opens="2030-02-20")
+        _, missing = cr.select_sections({}, [dict(base, release="9.2", milestones={}),
+                                             dict(base, release="9.3", milestones=no_milestone),
+                                             dict(base, release="9.4", milestones=unplaced)])
+        self.assertEqual([m["why"] for m in missing], [
+            "no Product Pages schedule yet",
+            'Product Pages schedule has no readable "Development Branch opens" milestone '
+            '(nor a previous release\'s "Master Branch Open for 9.3")',
+            "refinement sprint could not be placed on a sprint"])
 
     def test_in_progress_entry_without_window_uses_context(self):
         context = {"release_in_progress": [{"release": "9.1", "phase": "development"}]}
