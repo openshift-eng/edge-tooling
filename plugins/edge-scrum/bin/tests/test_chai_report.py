@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import chai_jira_adapter as ad  # noqa: E402
 import chai_report as cr  # noqa: E402
 import scrum_context as sc  # noqa: E402
-from tests.test_chai_jira_adapter import ROSTER_MD  # noqa: E402
+from tests.test_chai_jira_adapter import ROSTER_MD, block, keys_desc, page  # noqa: E402
 
 run_checks = import_module("run-checks")
 
@@ -85,6 +85,164 @@ class ModeAndCapacityTest(unittest.TestCase):
         self.assertEqual(none["label"], "not PTO-adjusted")
 
 
+class ReleaseInputsTest(unittest.TestCase):
+    """What release_health may claim from the inputs it was given."""
+
+    CHECKS = {"meta": {"total_remaining_sp": 10, "total_capacity_sp": 90, "capacity_basis": "velocity"},
+              "cut_line": [], "process_gaps": {"roster_drift": []}}
+    SECTION = {"release": "9.2", "phase": "development",
+               "window": {"refinement_sprint": {"number": 12}, "branch_cut_sprint": {"number": 16}}}
+    FEATURES = {"features": [{"key": "TEST-1", "type": "Feature", "status": "In Progress", "sme": "Alex Example",
+                              "qa_contact": "Quinn Quality", "docs_approver": "Dana Docs"}]}
+
+    def test_rank_order_only_from_a_complete_rank_fetch(self):
+        one = [{"text": page(["TEST-1"])}]
+        self.assertTrue(cr.rank_order_available(ad.adapt_fetch({"order": "rank", "pages": one})))
+        self.assertFalse(cr.rank_order_available(ad.adapt_fetch({"pages": [{"text": page(["TEST-1"])}]})))
+        more = page(keys_desc("TEST", 60, 50), final=False)  # the rank page shows only the first 50
+        self.assertFalse(cr.rank_order_available(ad.adapt_fetch({"order": "rank", "pages": [{"text": more}]})))
+        self.assertFalse(cr.rank_order_available(None))
+
+    def test_rank_order_needs_one_page_in_all(self):
+        parts = [{"project": "TEST", "pages": [{"text": page(["TEST-2"])}]},
+                 {"project": "OTHER", "pages": [{"text": page(["OTHER-1"])}]}]
+        two = ad.adapt_fetch({"order": "rank", "parts": parts})
+        self.assertEqual((two["fetch"]["complete"], two["fetch"]["order"], two["fetch"]["pages"]), (True, "rank", 2))
+        self.assertFalse(cr.rank_order_available(two))  # one final page per part is no global rank
+        out = cr.release_health(self.CHECKS | {"cut_line": [{"feature_key": "TEST-1", "fits": "over"}]}, self.SECTION,
+                                rank_available=cr.rank_order_available(two))
+        self.assertEqual(out["below_cut_line"], [])
+        self.assertIn("9.2 cut line", [x["what"] for x in out["left_out"]])
+
+    def test_unknown_development_window_qualifies_the_header(self):
+        out = cr.release_health(self.CHECKS, {"release": "9.2", "phase": "development"}, features=self.FEATURES,
+                                epics={"feature_to_epics": {}, "epics": []}, spikes={"spike_map": {}},
+                                stories={"stories": []}, links={})
+        self.assertEqual(out["not_checked"], ["schedule"])
+        header = cr.build_report(None, [out])["replies"][0].splitlines()[0]
+        self.assertTrue(header.endswith("; schedule not checked"), header)
+        self.assertNotIn("on track", header)  # no on-track count, not even a qualified one
+        known = cr.release_health(self.CHECKS, self.SECTION, features=self.FEATURES,
+                                  epics={"feature_to_epics": {}, "epics": []}, spikes={"spike_map": {}},
+                                  stories={"stories": []}, links={}, current_sprint_number=14)
+        self.assertIn("; ✓ 1 of 1 feature(s) on track", cr.build_report(None, [known])["replies"][0])
+
+    def test_checks_whose_input_is_missing_are_named_not_counted_on_track(self):
+        out = cr.release_health(self.CHECKS, self.SECTION, features=self.FEATURES, epics=None, spikes=None,
+                                stories=None, links={}, current_sprint_number=14)
+        self.assertEqual([x["what"] for x in out["left_out"]],
+                         ["9.2 epic checks (epic owner, epic blocks, schedule)", "9.2 refinement-overdue check"])
+        header = cr.build_report(None, [out])["replies"][0].splitlines()[0]
+        self.assertTrue(header.endswith("; schedule not checked (epics, refinement spikes not checked)"), header)
+        self.assertNotIn("on track", header)  # no epics: the schedule check could not run
+        out = cr.release_health(self.CHECKS, self.SECTION, features=self.FEATURES,
+                                epics={"feature_to_epics": {}, "epics": []}, spikes={"spike_map": {}}, stories=None,
+                                links={}, current_sprint_number=14)
+        self.assertEqual(out["left_out"], [{"what": "9.2 schedule check", "why": "epic issues not fetched"}])
+        self.assertEqual(out["not_checked"], ["schedule"])
+
+    def test_missing_epics_name_only_checks_that_would_have_run(self):
+        out = cr.release_health(self.CHECKS, {"release": "9.2", "phase": "development"}, features=self.FEATURES,
+                                epics=None, spikes={"spike_map": {}}, stories={"stories": []}, links=None)
+        self.assertEqual([x["what"] for x in out["left_out"]],
+                         ["9.2 schedule check", "9.2 epic checks (epic owner)", "9.2 feature and epic blocks"])
+
+    def test_all_inputs_given_leave_nothing_out(self):
+        out = cr.release_health(self.CHECKS, self.SECTION, features=self.FEATURES,
+                                epics={"feature_to_epics": {}, "epics": []}, spikes={"spike_map": {}},
+                                stories={"stories": []}, links={}, current_sprint_number=14)
+        self.assertEqual((out["left_out"], out["not_checked"]), ([], []))
+
+
+class ReleaseGateTest(unittest.TestCase):
+    """Releases are reported only when non-Closed Edge Features target them (complete gate)."""
+
+    @staticmethod
+    def _fetch(*issues):
+        blocks = [block(key, type_=kind, status=status, sprints=None, sp=None,
+                        extra=[f"Labels: {labels}", f"customfield_10855: {versions}"])
+                  for key, kind, status, labels, versions in issues]
+        text = f"Found {len(blocks)} issues (showing {len(blocks)}):\n" + "\n".join(blocks) + "\n"
+        return ad.adapt_fetch({"name": "feature_gate", "pages": [{"text": text}]})
+
+    def test_counts_non_closed_edge_features_per_target_version(self):
+        gate = cr.release_feature_gate(self._fetch(
+            ("FEAT-1", "Feature", "In Progress", "ocpedge-plan", "openshift-9.2"),
+            ("FEAT-2", "Feature", "New", "MicroShift", "openshift-9.2, openshift-9.3"),
+            ("FEAT-3", "Initiative", "In Progress", "ocpedge-plan", "openshift-9.4"),
+            ("FEAT-4", "Feature", "Closed", "ocpedge-plan", "openshift-9.5"),
+            ("FEAT-5", "Feature", "In Progress", "other-label", "openshift-9.6"),
+            ("FEAT-6", "Feature", "In Progress", "ocpedge-plan", "9.7")))
+        self.assertEqual(gate, {"complete": True, "counts": {"9.2": 2, "9.3": 1}, "releases": ["9.2", "9.3"],
+                                "why": None})
+
+    def test_incomplete_gate_is_unknown_never_zero(self):
+        failed = cr.release_feature_gate(ad.adapt_fetch({"name": "feature_gate", "pages": [{"error": "x"}]}))
+        self.assertEqual((failed["complete"], failed["counts"], failed["releases"]), (False, None, []))
+        self.assertEqual(failed["why"], "fetch: page 1: query_jira call failed")
+        cut = ad.adapt_fetch({"pages": [{"text": page(keys_desc("TEST", 60, 50), final=False)}]})
+        self.assertFalse(cr.release_feature_gate(cut)["complete"])  # stopped after a "more match" page
+        no_version = ad.adapt_fetch({"pages": [{"text": page(["TEST-1"])}]})  # Target Version not requested
+        self.assertEqual(cr.release_feature_gate(no_version)["why"], "TEST-1: Target Version not returned")
+        no_labels = ad.adapt_fetch({"pages": [{"text": page(["TEST-2"], extra=["customfield_10855: openshift-9.2"])}]})
+        self.assertEqual(cr.release_feature_gate(no_labels)["why"], "TEST-2: labels not returned")
+        self.assertFalse(cr.release_feature_gate(None)["complete"])
+        sections, missing = cr.select_sections({"release_in_progress": [{"release": "9.2", "phase": "development"}]},
+                                               [_window("9.2", "development")], failed)
+        why = "release Feature gate incomplete: fetch: page 1: query_jira call failed"
+        self.assertEqual((sections, missing), ([], [{"what": "Release sections", "why": why}]))
+
+    def test_unknown_type_or_status_is_incomplete_before_filtering(self):
+        base = {"key": "TEST-1", "issue_type": {"name": "Feature"}, "status": {"name": "New"},
+                "labels": ["ocpedge-plan"], "customfield_10855": [{"name": "openshift-9.2"}]}
+        cases = {"no issue type": (dict(base, issue_type=None), "TEST-1: issue type not readable"),
+                 "blank issue type": (dict(base, issue_type={"name": "  "}), "TEST-1: issue type not readable"),
+                 "no status": (dict(base, status=None), "TEST-1: status not readable"),
+                 "blank status": (dict(base, status={"name": ""}), "TEST-1: status not readable"),
+                 "type as a string": (dict(base, issue_type="Feature"), "TEST-1: issue type not readable"),
+                 "type name as a list": (dict(base, issue_type={"name": ["Feature"]}),
+                                         "TEST-1: issue type not readable"),
+                 "status name as a number": (dict(base, status={"name": 1}), "TEST-1: status not readable")}
+        for name, (issue, why) in cases.items():
+            with self.subTest(name):
+                gate = cr.release_feature_gate({"fetch": {"complete": True}, "issues": [issue]})
+                self.assertEqual((gate["complete"], gate["counts"], gate["why"]), (False, None, why))
+        self.assertEqual(cr.release_feature_gate({"fetch": {"complete": True}, "issues": [base]})["counts"], {"9.2": 1})
+        custom = dict(base, status={"name": "Custom Review"})  # any non-Closed status name still counts
+        counted = cr.release_feature_gate({"fetch": {"complete": True}, "issues": [custom]})
+        self.assertEqual(counted["counts"], {"9.2": 1})
+
+    def test_release_without_edge_features_is_omitted_silently(self):
+        gate = {"complete": True, "counts": {"9.3": 2}, "releases": ["9.3"], "why": None}
+        for phase in ("refinement", "development", sc.NOT_SCHEDULED, sc.PHASE_LOOKUP_FAILED):
+            with self.subTest(phase=phase):
+                sections, missing = cr.select_sections({"release_in_progress": [{"release": "9.2", "phase": phase}]},
+                                                       [_window("9.2", phase), _window("9.3", "not started")], gate)
+                self.assertEqual(sections, [])
+                self.assertEqual(missing, [{"what": "Release section", "why": "no release in progress"}])
+
+    def test_complete_empty_gate_adds_nothing_to_left_out(self):
+        gate = {"complete": True, "counts": {}, "releases": [], "why": None}
+        context = {"release_in_progress": [{"release": "9.2", "phase": "development"}]}
+        windows = [_window("9.1", "finished"), _window("9.2", "development"),
+                   {"release": "9.3", "phase": sc.NOT_SCHEDULED},
+                   {"release": "9.4", "phase": sc.PHASE_LOOKUP_FAILED, "milestones": sc.NOT_AVAILABLE}]
+        self.assertEqual(cr.select_sections(context, windows, gate), ([], []))
+        self.assertEqual(cr.select_sections({}, [], gate), ([], []))
+        # Unknown is never zero: an incomplete gate still says why.
+        unknown = cr.select_sections(context, windows, {"complete": False, "counts": None, "releases": [], "why": "x"})
+        self.assertEqual(unknown, ([], [{"what": "Release sections", "why": "release Feature gate incomplete: x"}]))
+
+    def test_gated_releases_keep_their_schedule_phase(self):
+        gate = {"complete": True, "counts": {"9.2": 1, "9.3": 4, "9.4": 1}, "releases": ["9.2", "9.3", "9.4"],
+                "why": None}
+        failed = {"release": "9.3", "phase": sc.PHASE_LOOKUP_FAILED, "milestones": sc.NOT_AVAILABLE}
+        sections, missing = cr.select_sections({}, [_window("9.2", "development"), failed], gate)
+        self.assertEqual([s["release"] for s in sections], ["9.2"])
+        self.assertEqual(missing, [
+            {"what": "9.3 release section", "why": "release phase unknown: Product Pages lookup failed"},
+            {"what": "9.4 release section", "why": "phase unknown (not available)"}])  # no window read: not lost
+
 class SectionSelectionTest(unittest.TestCase):
     def test_phase_selects_section_kind(self):
         cases = {"refinement": "refinement", "development": "release-health",
@@ -126,6 +284,20 @@ class SectionSelectionTest(unittest.TestCase):
             ("9.2 release section", "no Product Pages schedule yet"),
             ("9.3 release section", "phase unknown (not available)"),
             ("9.4 release section", "a release milestone could not be placed on a sprint")])
+
+    def test_not_scheduled_reason_names_what_is_missing(self):
+        base = {"phase": sc.NOT_SCHEDULED}
+        no_milestone = {"development_branch_opens": sc.NOT_SCHEDULED, "pencils_down": "2030-05-13",
+                        "master_branch_open": "2030-05-16"}
+        unplaced = dict(no_milestone, development_branch_opens="2030-02-20")
+        _, missing = cr.select_sections({}, [dict(base, release="9.2", milestones={}),
+                                             dict(base, release="9.3", milestones=no_milestone),
+                                             dict(base, release="9.4", milestones=unplaced)])
+        self.assertEqual([m["why"] for m in missing], [
+            "no Product Pages schedule yet",
+            'Product Pages schedule has no readable "Development Branch opens" milestone '
+            '(nor a previous release\'s "Master Branch Open for 9.3")',
+            "refinement sprint could not be placed on a sprint"])
 
     def test_in_progress_entry_without_window_uses_context(self):
         context = {"release_in_progress": [{"release": "9.1", "phase": "development"}]}

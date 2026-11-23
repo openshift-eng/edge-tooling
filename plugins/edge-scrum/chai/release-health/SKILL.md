@@ -52,7 +52,9 @@ fields:  # request fields by id only
    ends with the "... More issues match" hint), fetch the next page:
    `(<JQL>) AND key < <last key on the page> ORDER BY key DESC`.
 3. Stop when a page has the header `Found N issues (showing N):` or fewer than
-   50 issues.
+   50 issues. Also stop when the number of a page's last key is not lower than
+   the number of the previous page's last key (same project; the page did not
+   advance): the fetch is then incomplete; do not fetch it again.
 4. **More than one project:** Jira's `key <` compares keys within one project
    only. When a query over several projects does not fit on one page, page each
    project separately by adding `AND project = <P>`, and pass each project as its
@@ -74,7 +76,12 @@ fields:  # request fields by id only
    empty only when that JQL matches the query sent; otherwise the fetch is
    incomplete.
 8. When `query_jira` says a field value was shortened or stored, read it whole
-   with `result_page` before passing the results to the script.
+   once (with `result_page` for a stored result, or with the `get_jira_issue`
+   call the note names) and put the whole value in place of the shortened one
+   in that page's text before passing it to the script. If it cannot be read
+   whole, pass the page as it is: the adapter marks the fetch incomplete (for
+   example `<KEY>: <field> value shortened`), and it is left out like any
+   incomplete fetch, never guessed.
 9. Labels `query_jira` prints that the adapter doesn't know are ignored with a
    warning; they never change a known field. A date that isn't readable is
    dropped, never guessed, and listed in the adapted fetch's `left_out`: add
@@ -84,10 +91,13 @@ fields:  # request fields by id only
 **Features keep PM rank.** Fetch features once with `(<JQL>) ORDER BY Rank ASC`,
 `max_results: 50`, and adapt with `"order": "rank"`. If that page has the
 `Found N issues (showing N):` header, the order is the PM rank. If it shows only
-the first 50 ("more match"), fetch the
-features again with the key recipe above: scope and risk can still be computed,
-but the **cut line is left out** (`release_health(..., rank_available=False)`),
-since key order is not rank.
+the first 50 ("more match"), do not page on from it; fetch the features again
+from step 1 of the key recipe above. Scope and risk can still be computed, but
+the **cut line is left out** (`release_health(..., rank_available=False)`),
+since key order is not rank. Keep the `adapt_fetch` result of the features fetch
+you used as `features_fetch`; `chai_report.rank_order_available(features_fetch)`
+is true only for a complete `"order": "rank"` fetch, and is the `rank_available`
+to pass (never assume rank order).
 
 ## Steps
 
@@ -139,11 +149,18 @@ are not checked.
 3. **Refinement-sprint spikes**, paged:
    `project in (OCPEDGE, USHIFT) AND issuetype = Spike AND sprint = <refinement sprint id>`
    — fields `summary, status, assignee, resolution`. `query_jira` cannot return
-   issue links, so call `get_jira_issue` on each spike and attach its links with
+   issue links, so call `get_jira_issue(<spike key>, fields="issuelinks")` on
+   each spike (`fields="customfield_10020,issuelinks"` when the same read also
+   supplies a whole Sprint value) and attach its links with
    `attach_issue_links` (needed to see spikes that block a child epic instead of
-   the feature). If it returns any problem (a failed call, or no readable
-   "Linked Jira Issues" section), the refinement section is left out ("spike
-   links incomplete"): a missed link would report a false missing spike. A
+   the feature). Its Requested fields area (after the description) says
+   `issuelinks: (empty, or not a field of this issue)` (no links) or
+   `issuelinks: (set, but get_jira_issue cannot render this field's structure)`
+   (the "Linked Jira Issues" section is read). A missing,
+   unknown or cut issuelinks state never means "no links". If it returns any
+   problem (a failed call, a response for another issue, a state it cannot use,
+   or a response cut off or not readable), the refinement section is left out
+   ("spike links incomplete"): a missed link would report a false missing spike. A
    projected refinement sprint (no id) → refinement section missing
    ("refinement sprint is not on the board yet").
 4. **Spikes that block each feature**, one paged query per feature:
@@ -236,19 +253,21 @@ and the feature checks of `_scrum_rules.development_findings`.
    so an open refinement spike shows as "refinement overdue".
 9. **Feature and epic blocks:** `query_jira`, paged:
    `key in (<feature and epic keys>) AND issueLinkType = "is blocked by"`;
-   `get_jira_issue` on each result, then
+   `get_jira_issue(<key>, fields="issuelinks")` on each result, then
    `chai_jira_adapter.attach_issue_links(adapted, {key: text})` and
    Start with `links = {}` and `links_unread = []`. Set
    `links = {key: _jira_transforms.extract_blocked_by(issue)}` (open blockers
-   only) for every issue whose links were read. Keys whose `get_jira_issue`
-   failed or had no readable "Linked Jira Issues" section (the keys in the
-   problems `attach_issue_links` returns, including a block row it could not
-   read) are **not** guessed: pass them as `links_unread=[...]`; confirmed
-   blockers are kept.
+   only) for every issue whose links were read (the issuelinks state "empty"
+   is an issue with no links). Keys whose `get_jira_issue` failed, or whose
+   response had no usable issuelinks state, was cut off or not readable (the
+   keys in the problems `attach_issue_links` returns, including a block row it
+   could not read) are **not** guessed: pass them as `links_unread=[...]`;
+   confirmed blockers are kept.
    If the candidate query itself is incomplete, pass `links=None` (block check
    not run). Either way the header's on-track count says the blocks were not
    checked, and the Left out line says for which keys.
-10. `chai_report.release_health(checks, section, capacity, rank_available,
+10. `chai_report.release_health(checks, section, capacity,
+    chai_report.rank_order_available(features_fetch),
     velocity_reason, features=features, epics=epics, spikes=spikes,
     stories=stories, links=links, links_unread=links_unread,
     current_sprint_number=<current sprint number>)`:
@@ -267,7 +286,10 @@ and the feature checks of `_scrum_rules.development_findings`.
     done SP ÷ total SP of its epics' issues (law 07 done states; by issue count
     when none is pointed). Flagged when % done < 75% of expected %, both
     compared unrounded (a tie is not behind; percentages are rounded only for
-    display). Closed and Release Pending features are not checked.
+    display). Closed and Release Pending features are not checked. When the
+    development window is not known, or the schedule check could not run (no
+    epics or epic issues), the header says "schedule not checked" and gives no
+    on-track count; the other feature checks are still listed.
 
 ### 5. Epic Target Version and QA Contact (decision 0024)
 
@@ -341,7 +363,8 @@ risk line or action count.
 
 Return the section dict (with `kind`: `refinement` or `release-health`) to the
 caller. Run on its own (for example in a DM), reply with
-`chai_report.build_report(None, [section], left_out, mentions, epic_gaps=gaps)`.
+`chai_report.build_report(None, [section], left_out, mentions, epic_gaps=gaps)`:
+post its `top_post_text`, then each string of its `replies` in the thread.
 
 Release testing (EC/RC validation after branch cut, decision 0017) is out of scope.
 
@@ -351,6 +374,7 @@ Release testing (EC/RC validation after branch cut, decision 0017) is out of sco
 |---------|--------|
 | Release not scheduled, an anchor not placeable, or phase not in progress | No section; returned as missing with the reason |
 | Any fetch of the section incomplete | Section left out (`<fetch> incomplete: <problem>`); nothing computed from it |
+| A field value still shortened (not read whole) | That fetch is incomplete (for example `<KEY>: <field> value shortened`); left out as above |
 | Features did not fit on one rank-ordered page | Cut line left out; scope and risk still reported |
 | Velocity | Scope only; capacity and cut line left out; feature checks still run |
 | A remaining sprint's availability | That sprint not adjusted, labelled "not PTO-adjusted" |

@@ -15,17 +15,24 @@ appears only as the owner of a specific action item (decision 0018).
 
 import math
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 import _scrum_rules as rules  # noqa: E402
 from _jira_transforms import DONE_STATUSES_SPRINT, normalize_name, sprint_day_counts  # noqa: E402
-from scrum_context import to_date, working_days  # noqa: E402
+from scrum_context import NOT_SCHEDULED, PHASE_LOOKUP_FAILED, to_date, working_days  # noqa: E402
 
 NOT_PTO_ADJUSTED = "not PTO-adjusted"
 REFINEMENT, RELEASE_HEALTH = "refinement", "release-health"
 DEV_PHASES = ("development", "pencils-down sprint", "pre-branch-cut")
 SKIP_PHASES = ("not started", "finished")
+REFINEMENT_NOT_PLACED = "refinement sprint could not be placed on a sprint"
+# The release gate: Edge Features (OCPSTRAT, type Feature, not Closed, an Edge label)
+# per Target Version "openshift-X.Y".
+EDGE_FEATURE_LABELS = ("ocpedge-plan", "microshift")
+GATE_INCOMPLETE = "release Feature gate incomplete"
+_TARGET_RELEASE_RE = re.compile(r"^openshift-(\d+\.\d+)$", re.IGNORECASE)
 RED, YELLOW, GREEN = "🔴", "🟡", "🟢"
 
 
@@ -147,21 +154,85 @@ def _version_key(version):
         return (9999, 9999)
 
 
-def select_sections(context, windows=()):
+def _readable_name(field):
+    """The non-blank ``name`` string of a ``{"name": ...}`` field, or None (missing or malformed)."""
+    name = field.get("name") if isinstance(field, dict) else None
+    return name.strip() if isinstance(name, str) and name.strip() else None
+
+
+def release_feature_gate(gate_fetch):
+    """Releases with at least one Edge Feature, from the gate query's ``adapt_fetch`` output.
+
+    The gate query (weekly-health-report SKILL) asks for every non-Closed
+    OCPSTRAT Feature with an Edge label and a Target Version. Counted here,
+    rechecked per issue: type Feature (Initiatives do not count), status not
+    Closed, an :data:`EDGE_FEATURE_LABELS` label (any case), once per Target Version
+    ``openshift-X.Y``. Returns ``{"complete", "counts", "releases", "why"}``:
+    ``releases`` are the releases with a count, the candidates the report
+    reads. A failed, cut-off or unreadable fetch is unknown (``complete``
+    False, ``counts`` None, ``why`` the reason), never zero Features.
+    """
+    status = gate_fetch.get("fetch") if isinstance(gate_fetch, dict) else None
+    issues = gate_fetch.get("issues") if isinstance(gate_fetch, dict) else None
+    if not isinstance(status, dict) or status.get("complete") is not True or not isinstance(issues, list):
+        why = "; ".join(status.get("problems") or []) if isinstance(status, dict) else ""
+        return {"complete": False, "counts": None, "releases": [], "why": why or "fetch status missing"}
+    counts = {}
+    for issue in issues:
+        key = issue.get("key") if isinstance(issue, dict) else "?"
+        if not isinstance(issue, dict) or "customfield_10855" not in issue:
+            return {"complete": False, "counts": None, "releases": [], "why": f"{key}: Target Version not returned"}
+        kind, status_name = _readable_name(issue.get("issue_type")), _readable_name(issue.get("status"))
+        if kind is None or status_name is None:  # unknown is not "not a Feature" or "Closed"
+            what = "issue type" if kind is None else "status"
+            return {"complete": False, "counts": None, "releases": [], "why": f"{key}: {what} not readable"}
+        labels = {str(label).casefold() for label in issue.get("labels") or []}
+        if not labels:  # the query asks for an Edge label: none means the field was not returned
+            return {"complete": False, "counts": None, "releases": [], "why": f"{key}: labels not returned"}
+        if kind != "Feature" or status_name == "Closed" or not labels & set(EDGE_FEATURE_LABELS):
+            continue
+        releases = {m.group(1) for v in issue["customfield_10855"] or []
+                    if isinstance(v, dict) and (m := _TARGET_RELEASE_RE.match(str(v.get("name") or "").strip()))}
+        for release in releases:
+            counts[release] = counts.get(release, 0) + 1
+    return {"complete": True, "counts": counts, "releases": sorted(counts, key=_version_key), "why": None}
+
+
+def _not_scheduled_reason(window):
+    """Why a release has no refinement sprint: no schedule at all, a schedule
+    without the refinement milestone, or a milestone no sprint starts near."""
+    milestones = window.get("milestones")
+    if not isinstance(milestones, dict) or not milestones:
+        return "no Product Pages schedule yet"
+    if milestones.get("development_branch_opens") not in (None, NOT_SCHEDULED):
+        return REFINEMENT_NOT_PLACED
+    return (f'Product Pages schedule has no readable "Development Branch opens" milestone '
+            f'(nor a previous release\'s "Master Branch Open for {window.get("release")}")')
+
+
+def select_sections(context, windows=(), gate=None):
     """Release sections for the report, from scrum-context results (decision 0018).
 
     ``context`` is the no-argument scrum-context result; ``windows`` are
-    release-mode results (one per release in progress, plus any release Product
-    Pages lists as planned or in development). Returns ``(sections, missing)``:
+    release-mode results, one per candidate release. ``gate`` is
+    :func:`release_feature_gate` output: when given, only releases with at
+    least one Edge Feature are reported, a release with none is left out
+    silently (no section, nothing under Left out, whatever Product Pages
+    says), and an incomplete gate reports no release section and says why
+    (unknown, never zero). A complete gate with no Edge Feature at all adds
+    nothing to ``missing``: no release was expected. Returns ``(sections, missing)``:
 
     * refinement phase → a ``refinement`` section;
     * development, pencils-down sprint, pre-branch-cut → a ``release-health``
       section, with ``pencils_down`` set in the pencils-down sprint;
-    * not scheduled yet, an anchor that could not be placed on a sprint, or an
+    * not scheduled yet (no schedule, or no refinement milestone in it), an
+      anchor that could not be placed on a sprint, a failed Product Pages
+      lookup ("release phase unknown: Product Pages lookup failed"), or an
       unknown phase → listed in ``missing`` with the reason;
     * not started / finished → no section.
 
-    When nothing is in progress, ``missing`` says so.
+    When nothing is in progress, ``missing`` says so, unless a complete gate
+    found no Edge Feature for any release.
     """
     # Accept a full release-mode scrum-context result as well as its "release" window.
     windows = [w["release"] if isinstance(w, dict) and isinstance(w.get("release"), dict) else w
@@ -171,6 +242,15 @@ def select_sections(context, windows=()):
     in_progress = context.get("release_in_progress") if isinstance(context, dict) else None
     for entry in in_progress if isinstance(in_progress, list) else []:
         by_release.setdefault(entry.get("release"), entry)
+    if gate is not None:
+        if not isinstance(gate, dict) or gate.get("complete") is not True or not isinstance(gate.get("counts"), dict):
+            why = gate.get("why") if isinstance(gate, dict) else None
+            return [], [{"what": "Release sections", "why": f"{GATE_INCOMPLETE}: {why or 'result not readable'}"}]
+        counts = gate["counts"]
+        by_release = {r: w for r, w in by_release.items() if (counts.get(r) or 0) > 0}
+        for release in counts:
+            if (counts.get(release) or 0) > 0:
+                by_release.setdefault(release, {"release": release, "phase": None})  # no window read
     sections, missing = [], []
     for release in sorted(by_release, key=_version_key):
         w = by_release[release]
@@ -178,11 +258,13 @@ def select_sections(context, windows=()):
         label = f"{release} release section"
         if phase in SKIP_PHASES:
             continue
-        if phase == "not scheduled yet":
-            missing.append({"what": label, "why": "no Product Pages schedule yet"})
+        if phase == PHASE_LOOKUP_FAILED:
+            missing.append({"what": label, "why": PHASE_LOOKUP_FAILED})
+        elif phase == NOT_SCHEDULED:
+            missing.append({"what": label, "why": _not_scheduled_reason(w)})
         elif phase == REFINEMENT:
             if not isinstance(w.get("refinement_sprint"), dict):
-                missing.append({"what": label, "why": "refinement sprint could not be placed on a sprint"})
+                missing.append({"what": label, "why": REFINEMENT_NOT_PLACED})
                 continue
             sections.append({"release": release, "phase": phase, "kind": REFINEMENT,
                              "pencils_down": False, "window": w})
@@ -195,7 +277,8 @@ def select_sections(context, windows=()):
                              "pencils_down": phase == "pencils-down sprint", "window": w})
         else:
             missing.append({"what": label, "why": f"phase unknown ({phase or 'not available'})"})
-    if not sections and not missing:
+    expected = gate is None or any((n or 0) > 0 for n in gate["counts"].values())
+    if not sections and not missing and expected:
         missing.append({"what": "Release section", "why": "no release in progress"})
     return sections, missing
 
@@ -371,6 +454,17 @@ def _feature_risks(tag, findings):
     return out
 
 
+def rank_order_available(features_fetch):
+    """Whether the features fetch (``adapt_fetch`` output) is in PM rank order: a
+    complete fetch checked as rank-ordered (``"order": "rank"``) with exactly one
+    page in all. Several parts of one page each are complete but give no global
+    rank, and the key-ordered fetch used when the features do not fit on one page
+    is not rank order either: :func:`release_health` must leave the cut line out."""
+    status = features_fetch.get("fetch") if isinstance(features_fetch, dict) else None
+    return (isinstance(status, dict) and status.get("complete") is True and status.get("order") == "rank"
+            and status.get("pages") == 1)
+
+
 def release_health(checks, section, capacity=None, rank_available=True, velocity_reason=None,
                    features=None, epics=None, spikes=None, stories=None, links=None, current_sprint_number=None,
                    links_unread=()):
@@ -384,12 +478,16 @@ def release_health(checks, section, capacity=None, rank_available=True, velocity
     behind schedule (``_scrum_rules.expected_pct`` from the refinement and
     branch-cut sprints and ``current_sprint_number``), blocked, epic blocked,
     Blocked / Parked label, below the cut line, no QA Contact, no Doc Contact,
-    epic with no owner. ``links=None`` means the block check did not run, and
+    epic with no owner. ``epics``, ``spikes`` or ``stories`` None means the
+    checks needing them did not run: they are left out, and the header's
+    on-track count says what was not checked (``not_checked``).
+    ``links=None`` means the block check did not run, and
     ``links_unread`` lists the keys whose links could not be read: both are left
     out, and the header's on-track count says the blocks were not checked.
     ``capacity`` is :func:`release_capacity` output, for its
     label. ``rank_available=False`` leaves the cut line out, since key order is
-    not PM rank. ``velocity_reason`` is shown when velocity is not available.
+    not PM rank: pass :func:`rank_order_available` of the features fetch.
+    ``velocity_reason`` is shown when velocity is not available.
     """
     meta = checks.get("meta", {})
     scope, cap = meta.get("total_remaining_sp"), meta.get("total_capacity_sp")
@@ -404,7 +502,7 @@ def release_health(checks, section, capacity=None, rank_available=True, velocity
            # A count, never an SP estimate (decision 0018).
            "unpointed_items": (meta.get("total_unpointed_stories") or 0) + (meta.get("unpointed_bugs") or 0),
            "below_cut_line": [], "items": [], "checked": None, "clean": None, "expected_pct": None,
-           "blocks_unchecked": None,
+           "blocks_unchecked": None, "not_checked": [],
            "risks": [], "left_out": []}
     velocity_ok = meta.get("capacity_basis") == "velocity"
     if not velocity_ok:
@@ -437,7 +535,20 @@ def release_health(checks, section, capacity=None, rank_available=True, velocity
                                    _window_sprint_numbers(section), exact=True)
         out["expected_pct"] = None if exact is None else round(exact)  # for display; compared unrounded
         if exact is None:
+            out["not_checked"].append("schedule")
             out["left_out"].append({"what": f"{tag} schedule check", "why": "development window not known"})
+        # A check whose input was not given did not run: left out, and named in the header.
+        if epics is None:
+            skipped = (["epic owner"] + (["epic blocks"] if links is not None else [])
+                       + (["schedule"] if exact is not None else []))
+            out["not_checked"] += ["epics"] + (["schedule"] if exact is not None else [])
+            out["left_out"].append({"what": f"{tag} epic checks ({', '.join(skipped)})", "why": "epics not fetched"})
+        elif stories is None and exact is not None:
+            out["not_checked"].append("schedule")
+            out["left_out"].append({"what": f"{tag} schedule check", "why": "epic issues not fetched"})
+        if spikes is None:
+            out["not_checked"].append("refinement spikes")
+            out["left_out"].append({"what": f"{tag} refinement-overdue check", "why": "refinement spikes not fetched"})
         if links is None:
             out["blocks_unchecked"] = "all"
             out["left_out"].append({"what": f"{tag} feature and epic blocks", "why": "issue links not read"})
@@ -934,10 +1045,16 @@ def _section_header(sec):
     if sec.get("expected_pct") is not None:
         head += f"; {sec['expected_pct']}% of development expected done"
     if sec.get("checked") is not None:
-        head += f"; ✓ {sec['clean']} of {sec['checked']} feature(s) on track"
+        not_checked = [c for c in sec.get("not_checked") or [] if c != "schedule"]
+        if "schedule" in (sec.get("not_checked") or []):
+            head += "; schedule not checked"  # no on-track count without the schedule check
+        else:
+            head += f"; ✓ {sec['clean']} of {sec['checked']} feature(s) on track"
         unchecked = sec.get("blocks_unchecked")
         if unchecked:
             head += " (blocks not checked)" if unchecked == "all" else f" (blocks not checked for {unchecked})"
+        if not_checked:
+            head += f" ({', '.join(not_checked)} not checked)"
     return head
 
 
@@ -975,8 +1092,10 @@ def build_report(sprint, sections, missing=(), mentions=None, team_owner=None, e
     Each reply is one header line and at most 10 owner lines
     (``• owner: KEY (label, label)``, at most 200 characters); the keys of
     further owners and everything left out go on ONE "Left out:" line at the
-    end of the last reply. Returns ``{"top_post", "replies", "action_count",
-    "people"}``.
+    end of the last reply. Returns ``{"top_post", "top_post_text", "replies",
+    "action_count", "people"}``. ``top_post`` is the list of the three lines;
+    ``top_post_text`` (one string) and each entry of ``replies`` (one string per
+    thread reply) are the Slack message texts to post.
     """
     left_out_sprint = []
     if sprint and sprint.get("skipped"):
@@ -1084,5 +1203,5 @@ def build_report(sprint, sections, missing=(), mentions=None, team_owner=None, e
     top.append(f"{len(ranked)} {'person has' if len(ranked) == 1 else 'people have'} items"
                + (f": {names}{more}" if ranked else ""))
     action_count = sum(len(p.get("items", [])) + len(p.get("team_items", [])) for p in parts)
-    return {"top_post": top, "replies": ["\n".join(r) for r in replies], "action_count": action_count,
-            "people": ranked}
+    return {"top_post": top, "top_post_text": "\n".join(top), "replies": ["\n".join(r) for r in replies],
+            "action_count": action_count, "people": ranked}

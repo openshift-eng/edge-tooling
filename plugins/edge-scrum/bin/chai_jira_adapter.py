@@ -43,7 +43,11 @@ skipped signal (a missing Flagged line otherwise just means "not flagged").
 ``query_jira`` cannot render issue links. Links come from ``get_jira_issue``,
 whose "Linked Jira Issues" section has lines like
 ``- is blocked by: KEY (Blocks) | status: <status> | <url>``
-(:func:`parse_issue_links`, :func:`attach_issue_links`). A feature's spikes come
+(:func:`parse_issue_links`, :func:`attach_issue_links`). Links are read with
+``get_jira_issue(<key>, fields="issuelinks")``: its Requested fields area says
+whether the field is empty (no links, no section) or set (read the section)
+(:func:`issuelinks_state`). A missing, unknown or ambiguous state, a failed
+call, or a cut-off or unreadable response is a problem, never "no links". A feature's spikes come
 from ``issue in linkedIssues("<feature>", "is blocked by") AND issuetype = Spike``
 (:func:`attach_linked_spikes`).
 
@@ -225,9 +229,146 @@ def parse_sprint_value(value):
     return out, problem
 
 
+# Fields the report's checks read (besides the sprint, checked by parse_sprint_value):
+# a shortened or stored value would be read as data (a "+2 more" label, a stored
+# note as the SME), so the fetch is incomplete until the value is read whole.
+WHOLE_VALUE_FIELDS = (
+    "assignee", "labels", "components", "fixVersions",
+    "customfield_10028",  # Story Points
+    "customfield_10470",  # QA Contact
+    "customfield_10473",  # Docs approver
+    "customfield_10475",  # SME
+    "customfield_10795",  # T-shirt size
+    "customfield_10855",  # Target Version
+)
+# A value that is not whole: it names where the whole value is (a stored result for
+# result_page / result_tail, or a get_jira_issue call), ends in a "+N more" list item
+# or an ellipsis, or ends in a bracketed note. Whole values that merely contain a word
+# such as "stored" (a "log-truncated" label) are not matched.
+_SHORTENED_VALUE_RE = re.compile(
+    r"\b(?:result_page|result_tail|get_jira_issue)\b"
+    r"|(?:^|,)\s*\+\s*\d+\s+more\s*$"
+    r"|(?:\.\.\.|…)\s*$"
+    r"|[(\[][^()\[\]]*\b(?:stored|shortened|truncated|shown)\b[^()\[\]]*[)\]]\s*$",
+    re.IGNORECASE)
+
+
+def shortened_fields(raw):
+    """The :data:`WHOLE_VALUE_FIELDS` of a parsed issue block whose value is not
+    whole (see ``_SHORTENED_VALUE_RE``)."""
+    return [f for f in WHOLE_VALUE_FIELDS if raw.get(f) and _SHORTENED_VALUE_RE.search(str(raw[f]))]
+
+
 def parse_sprints(value):
     """``customfield_10020`` text → sprint dicts (see :func:`parse_sprint_value`)."""
     return parse_sprint_value(value)[0]
+
+
+_ISSUE_LINE_RE = re.compile(r"^\s*\[(" + KEY_PATTERN + r")\]")
+_STATE_LINE_RE = re.compile(r"^\s*Type:\s*[^|]+\|\s*Status:", re.IGNORECASE)
+_COMMENTS_LINE_RE = re.compile(r"^\s*Comments:\s*(?:none\b|\d+\s+total\b)", re.IGNORECASE)
+_FIELD_ENTRY_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_]*):\s?(.*)$")
+# The issuelinks state get_jira_issue(fields="issuelinks") prints in its Requested fields area.
+LINKS_EMPTY = "(empty, or not a field of this issue)"
+LINKS_SET = "(set, but get_jira_issue cannot render this field's structure)"
+
+
+def issuelinks_state(text):
+    """The issuelinks state of a ``get_jira_issue(fields="issuelinks")`` response.
+
+    Read only from the response's own Requested fields area: a ``Requested
+    fields:`` line whose ``field: value`` entries are followed by the comments
+    header (``Comments: N total…`` / ``Comments: none``), as the tool prints it
+    after the description. Returns ``"empty"`` (:data:`LINKS_EMPTY`), ``"set"``
+    (:data:`LINKS_SET`), ``"unknown"`` (another value), ``"ambiguous"`` (more
+    than one such area: a description or comment holds a whole example, and the
+    real one cannot be told apart, so none is trusted) or None (no such area,
+    or no issuelinks entry: the field was not requested, or the response is cut).
+    """
+    lines = (text or "").splitlines()
+    found = []
+    for i, line in enumerate(lines):
+        if line.strip() != "Requested fields:":
+            continue
+        entries, j = {}, i + 1
+        while j < len(lines) and lines[j].strip() and (m := _FIELD_ENTRY_RE.match(lines[j])):
+            entries[m.group(1)] = m.group(2).strip()
+            j += 1
+        while j < len(lines) and not lines[j].strip():
+            j += 1
+        if j < len(lines) and _ends_response(lines, j):
+            found.append(entries.get("issuelinks"))
+    if len(found) > 1:
+        return "ambiguous"
+    if not found or found[0] is None:
+        return None
+    return {LINKS_EMPTY.casefold(): "empty", LINKS_SET.casefold(): "set"}.get(found[0].casefold(), "unknown")
+
+
+def _ends_response(lines, j):
+    """Whether ``lines[j]`` is the comments header that ends a response: ``Comments: N
+    total…`` (comments follow), or ``Comments: none`` with nothing after it."""
+    if not _COMMENTS_LINE_RE.match(lines[j]):
+        return False
+    if re.match(r"^\s*Comments:\s*none\b", lines[j], re.IGNORECASE):
+        return not any(line.strip() for line in lines[j + 1:])
+    return True
+
+
+def issue_text_complete(text, key):
+    """Whether ``text`` is a whole, normal ``get_jira_issue`` response for ``key``.
+
+    It names the issue on its ``[KEY] summary`` line, has the ``Type: … |
+    Status: …`` state line, and reaches the comments section that ends the
+    response (after the linked issues, attachments and description). A failed
+    call's explanation, a response for another issue, or one cut off before its
+    comments section is not whole.
+    """
+    issue = state = False
+    lines = (text or "").splitlines()
+    for j, line in enumerate(lines):
+        m = _ISSUE_LINE_RE.match(line)
+        if m and not issue:
+            if m.group(1) != key:
+                return False
+            issue = True
+        elif issue and _STATE_LINE_RE.match(line):
+            state = True
+        elif issue and state and _ends_response(lines, j):
+            return True
+    return False
+
+
+def _mentions_links(text):
+    """Whether the state part of an issue response (before ``Description:``) looks like it
+    has links in another form: a row with a known link wording (``- is blocked by: KEY``),
+    or a "linked jira issues" heading other than the issue's own ``[KEY]`` summary line."""
+    for line in (text or "").splitlines():
+        if re.match(r"^\s*Description\s*:", line, re.IGNORECASE):
+            break
+        m = _LINKED_LINE_RE.match(line)
+        if m and re.sub(r"\s+", " ", m.group("wording").strip().lower()) in LINK_WORDING:
+            return True
+        if "linked jira issues" in line.casefold() and not _ISSUE_LINE_RE.match(line):
+            return True
+    return False
+
+
+def _links_section_open_at_end(text):
+    """Whether the response ends inside its "Linked Jira Issues" section (no other
+    section began after it), so a final unterminated row is a row cut off there."""
+    inside = False
+    for line in (text or "").splitlines():
+        if re.fullmatch(r"[*#>\s]*linked jira issues:?\s*", line, re.I):
+            inside = True
+        elif inside and line.strip() and not line.lstrip().startswith(("-", "*")):
+            inside = False
+    return inside
+
+
+def _first_issue_key(text):
+    """The key on the first ``[KEY] summary`` line of an issue response, or None."""
+    return next((m.group(1) for line in (text or "").splitlines() if (m := _ISSUE_LINE_RE.match(line))), None)
 
 
 def parse_issue_links(text, unreadable=None):
@@ -610,9 +751,21 @@ def to_issue(raw, people, date_problems=None):
 def attach_issue_links(adapted, issue_texts):
     """Set ``issuelinks`` from ``get_jira_issue`` output on the matching issues.
 
-    ``issue_texts`` maps key → that issue's ``get_jira_issue`` text (None when the
-    call failed). Returns the problems found; a failed call or a missing "Linked
-    Jira Issues" section means that issue's blocked signal is incomplete.
+    ``issue_texts`` maps key → that issue's ``get_jira_issue(fields="issuelinks")``
+    text (None when the call failed). The Requested fields area's issuelinks
+    state (:func:`issuelinks_state`) is the signal:
+
+    * ``empty`` on a whole response for the issue (:func:`issue_text_complete`)
+      with no links section → no links;
+    * ``set`` → the "Linked Jira Issues" section is read; missing or not
+      readable → a problem;
+    * a missing, unknown, ambiguous or cut state is a problem and never makes
+      the links empty; confirmed rows of a links section that is there are kept.
+
+    Also problems: a failed call, a response for another issue, a state that
+    contradicts the response, and a response cut off before its comments
+    section. Confirmed rows read so far are kept; only an unterminated last row
+    of a links section that runs to the cut is dropped. Returns the problems.
     """
     by_key = {i["key"]: i for i in adapted.get("issues", [])}
     problems = []
@@ -622,11 +775,40 @@ def attach_issue_links(adapted, issue_texts):
         if text is None:
             problems.append(f"{key}: get_jira_issue failed")
             continue
+        first = _first_issue_key(text)
+        if first not in (None, key):
+            problems.append(f"{key}: get_jira_issue response is for {first}")
+            continue
         unreadable = []
         links, found = parse_issue_links(text, unreadable)
-        if not found:
-            problems.append(f"{key}: no 'Linked Jira Issues' section")
+        state, whole = issuelinks_state(text), issue_text_complete(text, key)
+        if state not in ("empty", "set"):  # no usable state: never "no links"
+            problems.append(f"{key}: " + {
+                "unknown": "issuelinks state not readable",
+                "ambiguous": "issuelinks state ambiguous (more than one Requested fields area)",
+            }.get(state, "no issuelinks state in Requested fields (request fields=\"issuelinks\")"))
+            if not found:
+                continue
+        elif state == "empty" and not (found and links):
+            if not whole:
+                problems.append(f"{key}: get_jira_issue response cut off or not readable")
+            elif _mentions_links(text):
+                problems.append(f"{key}: issuelinks state contradicts the response")
+            else:
+                by_key[key]["issuelinks"] = []  # the field says: no links
             continue
+        elif state == "empty":
+            problems.append(f"{key}: issuelinks state contradicts the response")
+        elif not found or (not links and not unreadable):
+            problems.append(f"{key}: issuelinks is set but no readable 'Linked Jira Issues' section")
+            if not found:
+                continue
+        if not whole:  # another issue's response has already returned above
+            problems.append(f"{key}: get_jira_issue response cut off")
+            last = text.splitlines()[-1] if text.strip() else ""
+            if (links and not text.endswith("\n") and _LINKED_LINE_RE.match(last)
+                    and _links_section_open_at_end(text)):
+                links = links[:-1]  # the row at the cut may be partial: never a confirmed blocker
         by_key[key]["issuelinks"] = links  # readable links are kept (confirmed blockers stay)
         if unreadable:
             problems.append(f"{key}: {len(unreadable)} block link line(s) could not be read")
@@ -772,7 +954,11 @@ def adapt_fetch(manifest, roster=None):
 
     ``"pages"`` at the top level is shorthand for a single part. The fetch is
     ``complete`` only if every page succeeded and every part reached its last
-    page; callers must not compute figures from an incomplete fetch. A date
+    page; callers must not compute figures from an incomplete fetch. A value
+    that still looks shortened in a field the checks read
+    (:data:`WHOLE_VALUE_FIELDS`, and the sprint) makes the fetch incomplete.
+    ``fetch.order`` is the order the pages were checked against: PM rank is
+    available only from a complete ``"rank"`` fetch. A date
     that is not readable is dropped (never raises) and listed in ``left_out``
     (``[{"what", "why"}]``), which the caller adds to the report's Left out.
     """
@@ -782,7 +968,7 @@ def adapt_fetch(manifest, roster=None):
     if parts is None:
         parts = [{"project": manifest.get("project"), "pages": manifest.get("pages") or []}]
     people = PeopleMatcher(roster)
-    problems, unknown, issues, seen, date_problems = [], [], [], set(), []
+    problems, unknown, issues, seen, date_problems, shortened = [], [], [], set(), [], []
     rejected, unknown_fields = set(), set()
     page_count = 0
     for part in parts:
@@ -808,6 +994,9 @@ def adapt_fetch(manifest, roster=None):
                     continue
                 seen.add(raw["key"])
                 issues.append(to_issue(raw, people, date_problems))
+                cut = shortened_fields(raw)
+                if cut:
+                    shortened.append(f"{raw['key']}: {', '.join(cut)} value shortened (not read whole)")
 
     # An issue whose sprint value is not whole: its sprint data is incomplete, so
     # nothing that depends on sprints (velocity, activity) is computed from it.
@@ -815,6 +1004,7 @@ def adapt_fetch(manifest, roster=None):
                       for i in issues if i.get("sprint_data_incomplete")}
     sprint_incomplete = list(incomplete_why)
     problems.extend(f"{key}: {why}" for key, why in incomplete_why.items())
+    problems.extend(shortened)
     signals = set(manifest.get("signals") or [])
     skipped = []
     # Unset custom fields print no line, so a missing Flagged line means "not
@@ -840,7 +1030,7 @@ def adapt_fetch(manifest, roster=None):
                  "why": "; ".join(date_problems) + "; those dates are ignored"}] if date_problems else []
     return {
         "issues": issues,
-        "fetch": {"name": manifest.get("name"), "complete": not problems, "pages": page_count,
+        "fetch": {"name": manifest.get("name"), "order": order, "complete": not problems, "pages": page_count,
                   "fetched": len(issues), "problems": problems, "sprint_incomplete": sprint_incomplete},
         "skipped_signals": skipped,
         "people": {"matched": len(people.matched), "unmatched": sorted(people.unmatched)},

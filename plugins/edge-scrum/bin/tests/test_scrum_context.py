@@ -608,6 +608,118 @@ class TestAvailability(unittest.TestCase):
         self.assertEqual(sc.availability([], 0, self.START, self.END), sc.ROSTER_NOT_CONFIGURED)
 
 
+class TestProductPagesLookupFailed(unittest.TestCase):
+    TODAY = (_start(13) + dt.timedelta(days=9)).isoformat()
+
+    def _context(self, schedules, release=None):
+        data = {"today": self.TODAY, "board_id": BOARD, "sprints": _raw_sprints(), "schedules": schedules}
+        if release:
+            data["release"] = release
+        return sc.build_context(data)
+
+    def test_failed_lookup_is_unknown_not_unscheduled(self):
+        failed = self._context({"9.1": {"error": "lookup failed"}}, "9.1")["release"]
+        self.assertEqual(failed["phase"], "release phase unknown: Product Pages lookup failed")
+        self.assertEqual(failed["phase"], sc.PHASE_LOOKUP_FAILED)
+        self.assertEqual(self._context({"9.1": []}, "9.1")["release"]["phase"], sc.NOT_SCHEDULED)
+
+    def test_anchor_from_a_failed_previous_release_is_unknown(self):
+        self.assertEqual(self._context({"9.1": {"error": "x"}, "9.2": []}, "9.2")["release"]["phase"],
+                         sc.PHASE_LOOKUP_FAILED)
+        own = [{"name": "9.2 Development Branch opens", "date": _start(16).isoformat()}]
+        self.assertEqual(self._context({"9.1": {"error": "x"}, "9.2": own}, "9.2")["release"]["phase"],
+                         sc.PHASE_NOT_STARTED)
+        # The previous release's "Master Branch Open for 9.2" still places it when that lookup worked.
+        inferred = self._context({"9.1": SCHEDULES["9.1"], "9.2": []}, "9.2")["release"]
+        self.assertEqual((inferred["phase"], _num(inferred["refinement_sprint"])), (sc.PHASE_NOT_STARTED, 16))
+
+    def test_no_argument_mode_leaves_failed_releases_out(self):
+        ctx = self._context({"9.1": SCHEDULES["9.1"], "9.2": {"error": "x"}})
+        self.assertEqual([r["release"] for r in ctx["release_in_progress"]], ["9.1"])
+        self.assertIn("Product Pages lookup failed for 9.2", ctx["warnings"])
+        # In Sprint 16, 9.2's refinement sprint (inferred from 9.1), only a working lookup reports it.
+        day = (_start(16) + dt.timedelta(days=2)).isoformat()
+        worked = sc.build_context({"today": day, "board_id": BOARD, "sprints": _raw_sprints(),
+                                   "schedules": {"9.1": SCHEDULES["9.1"], "9.2": []}})
+        self.assertEqual([(r["release"], r["phase"]) for r in worked["release_in_progress"]], [("9.2", "refinement")])
+        failed = sc.build_context({"today": day, "board_id": BOARD, "sprints": _raw_sprints(),
+                                   "schedules": {"9.1": {"error": "x"}, "9.2": []}})
+        self.assertEqual(failed["release_in_progress"], sc.NOT_AVAILABLE)
+
+
+SCRUM_CONTEXT_SKILL = os.path.join(os.path.dirname(__file__), "..", "..", "chai", "scrum-context", "SKILL.md")
+
+
+class FakeProductPages:
+    """A stand-in for the Product Pages ``list_entities`` tool, with synthetic entities only."""
+
+    def __init__(self, products=({"id": 990001, "shortname": "openshift"},), pages=(), fail_on=None):
+        self.products, self.pages, self.fail_on, self.calls = list(products), list(pages), fail_on, []
+
+    def __call__(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.fail_on is not None and len(self.calls) == self.fail_on:
+            raise RuntimeError("tool call failed")
+        if kwargs.get("kind") == "product":
+            return getattr(self, "product_response", None) or {"data": self.products, "cursor": None}
+        return self.pages[len(self.calls) - 2]
+
+
+class TestProductPagesCalls(unittest.TestCase):
+    """The scrum-context SKILL's Product Pages block, run verbatim with a stand-in tool."""
+
+    def _releases(self, pp):
+        from tests.test_chai_epic_fields import skill_snippet
+        scope = {}
+        exec(skill_snippet("def openshift_releases(", path=SCRUM_CONTEXT_SKILL), scope)  # noqa: S102
+        return scope["openshift_releases"](pp)
+
+    PAGES = ({"data": [{"id": 1}, {"id": 2}], "cursor": "c1"}, {"data": [{"id": 3}], "cursor": None})
+
+    def test_product_lookup_then_every_release_page(self):
+        products = [{"id": 990007, "shortname": "openshift-other"}, {"id": 990001, "shortname": "openshift"}]
+        pp = FakeProductPages(products=products, pages=self.PAGES)
+        self.assertEqual(self._releases(pp), [{"id": 1}, {"id": 2}, {"id": 3}])
+        self.assertEqual(pp.calls, [{"kind": "product", "shortname": "openshift"},
+                                    {"kind": "release", "public_parent_id": 990001},
+                                    {"kind": "release", "public_parent_id": 990001, "cursor": "c1"}])
+        self.assertFalse(any(k.startswith("phase") for call in pp.calls for k in call))
+
+    def test_repeated_cursor_or_failed_call_fails_without_retry(self):
+        repeat = FakeProductPages(pages=({"data": [], "cursor": "c1"}, {"data": [], "cursor": "c1"}))
+        self.assertIsNone(self._releases(repeat))
+        self.assertEqual(len(repeat.calls), 3)  # never asked again for a cursor already seen
+        for fail_on in (1, 2, 3):  # the product call, the first release page, a cursor page
+            with self.subTest(fail_on=fail_on):
+                failed = FakeProductPages(pages=self.PAGES, fail_on=fail_on)
+                self.assertIsNone(self._releases(failed))
+                self.assertEqual(len(failed.calls), fail_on)  # no retry after the failed call
+
+    def test_missing_cursor_member_is_malformed_but_null_is_the_last_page(self):
+        self.assertEqual(self._releases(FakeProductPages(pages=({"data": [{"id": 1}], "cursor": None},))), [{"id": 1}])
+        for pages in (({"data": [{"id": 1}]},), ({"data": [{"id": 1}], "cursor": "c1"}, {"data": [{"id": 2}]}),
+                      ({"data": [{"id": 1}], "cursor": ""},)):
+            with self.subTest(pages=pages):
+                self.assertIsNone(self._releases(FakeProductPages(pages=pages)))
+        product_without_cursor = FakeProductPages(pages=self.PAGES)
+        product_without_cursor.product_response = {"data": [{"id": 990001, "shortname": "openshift"}]}
+        self.assertIsNone(self._releases(product_without_cursor))
+
+    def test_unreadable_listing_is_a_failed_lookup(self):
+        for pages in (({"data": "abc", "cursor": None},), ({"data": [{"id": 1}], "cursor": "c1"}, {"cursor": None})):
+            with self.subTest(pages=pages):
+                self.assertIsNone(self._releases(FakeProductPages(pages=pages)))
+        self.assertIsNone(self._releases(FakeProductPages(products="abc", pages=self.PAGES)))
+
+    def test_no_single_openshift_product_is_a_failed_lookup(self):
+        for products in ([], [{"id": 1, "shortname": "openshift"}, {"id": 2, "shortname": "openshift"}],
+                         [{"id": "1", "shortname": "openshift"}], [{"id": True, "shortname": "openshift"}]):
+            with self.subTest(products=products):
+                pp = FakeProductPages(products=products, pages=self.PAGES)
+                self.assertIsNone(self._releases(pp))
+                self.assertEqual(len(pp.calls), 1)  # no release listing without the product id
+
+
 class TestBuildContext(unittest.TestCase):
     def _data(self, **extra):
         """Default build_context input, overridden by ``extra``."""

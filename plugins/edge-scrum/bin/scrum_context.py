@@ -29,7 +29,12 @@ Rules (see the SKILL for the reasoning):
   version ("5.1 ", "OpenShift 5.1 ").
 * A milestone after the last board sprint maps to a sprint projected at the
   board's cadence; projected sprints carry ``"projected": true`` and no id.
-* Anything without a source is "not scheduled yet" / "not available".
+* Anything without a source is "not scheduled yet" / "not available". A
+  release whose Product Pages lookup failed (``{"error": ...}`` instead of a
+  milestone list) has the phase "release phase unknown: Product Pages lookup
+  failed", as does a release that needs a failed previous release's
+  "Master Branch Open for <X.Y>"; a successful lookup with no dates is
+  "not scheduled yet".
 * A source item (sprint, milestone, event, absence) with a malformed date is
   skipped and reported in ``warnings`` without the raw value. A malformed
   ``today`` raises.
@@ -52,6 +57,9 @@ PHASE_DEVELOPMENT = "development"
 PHASE_PENCILS_DOWN = "pencils-down sprint"
 PHASE_PRE_BRANCH_CUT = "pre-branch-cut"
 PHASE_FINISHED = "finished"
+# A release whose Product Pages listing or schedule lookup failed (passed as
+# {"error": "<reason>"}): its phase is unknown, never "not scheduled yet".
+PHASE_LOOKUP_FAILED = "release phase unknown: Product Pages lookup failed"
 IN_PROGRESS_PHASES = (PHASE_REFINEMENT, PHASE_DEVELOPMENT, PHASE_PENCILS_DOWN,
                       PHASE_PRE_BRANCH_CUT)
 
@@ -637,11 +645,29 @@ def _development_window(mapping):
     return [_sprint_out(s) for s in mapping["sprints"][lo + 1:hi + 1]]
 
 
-def release_window(version, schedules, sprints, today, current=None):
-    """A release's window: anchor sprints, dev sprints left, phase, and milestones."""
+def _lookup_failed_window(version):
+    return {"release": version, "phase": PHASE_LOOKUP_FAILED,
+            "refinement_sprint": NOT_AVAILABLE, "development_sprints": NOT_AVAILABLE,
+            "pencils_down_sprint": NOT_AVAILABLE, "branch_cut_sprint": NOT_AVAILABLE,
+            "development_sprints_remaining": NOT_AVAILABLE, "milestones": NOT_AVAILABLE}
+
+
+def release_window(version, schedules, sprints, today, current=None, failed=()):
+    """A release's window: anchor sprints, dev sprints left, phase, and milestones.
+
+    ``failed`` names the releases whose Product Pages lookup failed: such a
+    release, or one that needs a failed previous release's "Master Branch Open
+    for <X.Y>" (it has no "Development Branch opens" of its own), has the phase
+    ``PHASE_LOOKUP_FAILED``."""
     if not is_valid_release(version):
         return {"release": version, "phase": INVALID_RELEASE}
     version = version.strip()
+    if version in failed:
+        return _lookup_failed_window(version)
+    if failed and find_milestone(schedules.get(version) or [], "development branch opens") is None:
+        prev = previous_version(version, set(schedules) | set(failed))
+        if prev in failed:
+            return _lookup_failed_window(version)
     if not schedules.get(version) and release_milestones(version, schedules)["dev_branch_opens"] is None:
         return {"release": version, "phase": NOT_SCHEDULED,
                 "refinement_sprint": NOT_SCHEDULED, "development_sprints": NOT_SCHEDULED,
@@ -681,7 +707,7 @@ def candidate_releases(schedules):
     return sorted(versions, key=parse_version)
 
 
-def releases_in_progress(schedules, sprints, today, current=None):
+def releases_in_progress(schedules, sprints, today, current=None, failed=()):
     """Releases whose phase on ``today`` is refinement through pre-branch-cut.
 
     Includes a release with an empty or missing schedule when its refinement
@@ -689,7 +715,7 @@ def releases_in_progress(schedules, sprints, today, current=None):
     """
     out = []
     for version in candidate_releases(schedules):
-        window = release_window(version, schedules, sprints, today, current)
+        window = release_window(version, schedules, sprints, today, current, failed)
         if window["phase"] in IN_PROGRESS_PHASES:
             out.append(window)
     return out
@@ -698,14 +724,27 @@ def releases_in_progress(schedules, sprints, today, current=None):
 _MILESTONE_DATE_KEYS = ("date", "start", "date_start", "end", "date_finish")
 
 
-def clean_schedules(raw, warnings):
-    """Drop non-'X.Y' releases and milestones with a malformed date (with a warning)."""
+def clean_schedules(raw, warnings, failed=None):
+    """Drop non-'X.Y' releases and milestones with a malformed date (with a warning).
+
+    A release passed as anything but a milestone list (``{"error": "<reason>"}``)
+    had its Product Pages lookup fail: it is left out of the schedules and added
+    to ``failed`` (a set, when given). ``None`` or ``[]`` is a successful lookup
+    with no dates."""
     out = {}
     for key, milestones in (raw or {}).items():
         if not is_valid_release(str(key)):
             continue  # ignored rather than crashing version ordering
         version, kept = str(key).strip(), []
+        if milestones is not None and not isinstance(milestones, list):
+            if failed is not None:
+                failed.add(version)
+            warnings.append(f"Product Pages lookup failed for {version}")
+            continue
         for m in milestones or []:
+            if not isinstance(m, dict):
+                warnings.append(f"skipped milestone ({version}): not readable")
+                continue
             if all(source_date(m.get(k))[1] for k in _MILESTONE_DATE_KEYS):
                 kept.append(m)
             else:
@@ -749,7 +788,8 @@ def build_context(data):
     """
     today = strict_today(data.get("today"))
     warnings = []
-    schedules = clean_schedules(data.get("schedules"), warnings)
+    failed = set()
+    schedules = clean_schedules(data.get("schedules"), warnings, failed)
     events = clean_events(data.get("events"), warnings)
     absences = clean_absences(data.get("absences"), warnings)
     sprints = board_sprints(data.get("sprints"), data.get("board_id"), warnings)
@@ -773,12 +813,12 @@ def build_context(data):
     horizon_windows = []
     if release is not None and release != "":
         # Non-strings are rejected: a JSON number would turn 5.10 into 5.1.
-        result["release"] = release_window(release, schedules, sprints, today, current)
+        result["release"] = release_window(release, schedules, sprints, today, current, failed)
         horizon_windows = [result["release"]]
     elif not schedules:
         result["release_in_progress"] = NOT_AVAILABLE
     else:
-        in_progress = releases_in_progress(schedules, sprints, today, current)
+        in_progress = releases_in_progress(schedules, sprints, today, current, failed)
         horizon_windows = in_progress
         result["release_in_progress"] = (
             [{"release": w["release"], "phase": w["phase"],

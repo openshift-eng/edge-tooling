@@ -12,6 +12,7 @@ with a QA Contact; the epic line is assumed to match the parent's
 import os
 import re
 import sys
+import textwrap
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -452,11 +453,16 @@ class InformationalTest(unittest.TestCase):
         self.assertIn("result not readable", report["replies"][-1])
 
 
+def skill_snippet(*needles, path=WEEKLY_SKILL):
+    """The first python code block of a SKILL.md (weekly-health-report by default) containing every needle."""
+    with open(path, encoding="utf-8") as fh:
+        blocks = re.findall(r"```python\n(.*?)```", fh.read(), re.S)
+    return textwrap.dedent(next(b for b in blocks if all(n in b for n in needles)))
+
+
 def skill_owner_snippet():
     """The owner-collection code block from weekly-health-report/SKILL.md, verbatim."""
-    with open(WEEKLY_SKILL, encoding="utf-8") as fh:
-        blocks = re.findall(r"```python\n(.*?)```", fh.read(), re.S)
-    return next(b for b in blocks if "owners" in b and 'gaps["epics"]' in b)
+    return skill_snippet("owners", 'gaps["epics"]')
 
 
 class PerOwnerLinesTest(unittest.TestCase):

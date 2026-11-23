@@ -15,6 +15,8 @@ uses no sub-agents.
 
 | Tool | Used for |
 |------|----------|
+| `query_jira` | The release Feature gate (step 1) |
+| Product Pages (`list_entities`, schedule reading, as scrum-context step 2 says) | Schedules of the gate's candidate releases |
 | `scrum-context` skill | Current sprint and week, releases in progress, phases, availability |
 | `sprint-health` skill | Sprint section (capacity or mid-sprint mode) |
 | `release-health` skill | One release section per release in progress; the epic Target Version and QA Contact flags (once per report) |
@@ -22,7 +24,8 @@ uses no sub-agents.
 | Slack post | The top post and its thread replies |
 | `sandbox_exec` (Python) | `plugins/edge-scrum/bin/chai_report.py` and the scripts the skills use |
 
-All Jira reads follow the **Jira paging** recipe below, through the skills.
+All Jira reads follow the **Jira paging** recipe below, through the skills
+(the release Feature gate in step 1 too).
 
 ## Configuration
 
@@ -36,13 +39,18 @@ ROSTER_SOURCE: "openshift-eng/edge-context: people/team-roster.md"
 
 `query_jira` returns text with no total count. Every fetch in this report:
 
-1. First page: `(<JQL>) ORDER BY key DESC` with `max_results: 50`.
+1. First page: `(<JQL>) ORDER BY key DESC` with `max_results: 50`. The one
+   exception is release-health's feature fetch: one page ordered by Rank, for
+   the cut line, never paged on with `key <`; if more match, the features are
+   fetched again from this step (release-health "Features keep PM rank").
 2. While the results header — the first such line, after any "Create metadata"
    block — is `Showing the first 50 matching issues; more match:` (the page then
    ends with the "... More issues match" hint), fetch the next page:
    `(<JQL>) AND key < <last key on the page> ORDER BY key DESC`.
 3. Stop when a page has the header `Found N issues (showing N):` or fewer than
-   50 issues.
+   50 issues. Also stop when the number of a page's last key is not lower than
+   the number of the previous page's last key (same project; the page did not
+   advance): the fetch is then incomplete; do not fetch it again.
 4. **More than one project:** Jira's `key <` compares keys within one project
    only. When a query over several projects does not fit on one page, page each
    project separately by adding `AND project = <P>`.
@@ -62,7 +70,12 @@ ROSTER_SOURCE: "openshift-eng/edge-context: people/team-roster.md"
    empty only when that JQL matches the query sent; otherwise the fetch is
    incomplete.
 8. When `query_jira` says a field value was shortened or stored, read it whole
-   with `result_page` before passing the results to the script.
+   once (with `result_page` for a stored result, or with the `get_jira_issue`
+   call the note names) and put the whole value in place of the shortened one
+   in that page's text before passing it to the script. If it cannot be read
+   whole, pass the page as it is: the adapter marks the fetch incomplete (for
+   example `<KEY>: <field> value shortened`), and it is left out like any
+   incomplete fetch, never guessed.
 9. Labels `query_jira` prints that the adapter doesn't know are ignored with a
    warning; they never change a known field. A date that isn't readable is
    dropped, never guessed, and listed in the adapted fetch's `left_out`: add
@@ -73,18 +86,46 @@ ROSTER_SOURCE: "openshift-eng/edge-context: people/team-roster.md"
 
 ### 1. Where are we
 
-Run **scrum-context** with no argument: `current_sprint` (with `week`),
-`current_sprint_availability`, `release_in_progress`.
+1. **Release Feature gate.** Releases are reported only when Edge Features
+   target them. One query, paged by key (Jira paging):
+   `project = OCPSTRAT AND issuetype = Feature AND labels in ("ocpedge-plan", "microshift") AND status != Closed AND "Target Version" is not EMPTY`
+   — fields `issuetype, status, labels, customfield_10855`. Adapt all pages with
+   `chai_jira_adapter.adapt_fetch` (name `feature_gate`) as `gate_fetch`, then
+   in the sandbox:
 
-Then run **scrum-context** once per release with that release as the argument,
-for every release in `release_in_progress` **and** every release Product Pages
-lists as Planning or in development. Collect each result's `release` value
-(the window, not the whole result) as `windows`:
-`windows = [result["release"] for result in release_results]`.
+   ```python
+   gate = chai_report.release_feature_gate(gate_fetch)
+   candidates = gate["releases"]  # releases with at least one Edge Feature; [] when the gate is incomplete
+   ```
+
+   Only non-Closed Features count (Initiatives do not), once per Target Version
+   `openshift-X.Y`. Run this block even when the gate fetch is incomplete, and
+   never pass `gate=None` on: a failed or cut-off gate fetch is **unknown**,
+   never zero, so no release section is reported and the Left out line says
+   why.
+2. **Product Pages:** read the schedules of the `candidates` and the previous
+   release of each, as scrum-context step 2 says
+   (`list_entities(kind="product", shortname="openshift")` for
+   `ocp_product_id`, then `list_entities(kind="release",
+   public_parent_id=ocp_product_id)` with `cursor=next_cursor` for further
+   pages; no phase filter). Read them once and pass the same `schedules` to every
+   scrum-context run in items 3 and 4. A release whose lookup failed is passed
+   as `{"error": "<reason>"}`; its section is left out ("release phase
+   unknown: Product Pages lookup failed") and the rest of the report goes on.
+3. Run **scrum-context** with no argument: `current_sprint` (with `week`),
+   `current_sprint_availability`, `release_in_progress`.
+4. Run **scrum-context** once per release in `candidates`, with that release as
+   the argument. Collect each result's `release` value (the window, not the
+   whole result) as `windows`:
+   `windows = [result["release"] for result in release_results]`.
 
 ### 2. Choose the sections
 
-In the sandbox: `sections, missing = chai_report.select_sections(context, windows)`.
+In the sandbox:
+
+```python
+sections, missing = chai_report.select_sections(context, windows, gate)
+```
 
 | Release phase (scrum-context) | Release reply: feature checks (`_scrum_rules`) |
 |---------------|---------|
@@ -93,11 +134,16 @@ In the sandbox: `sections, missing = chai_report.select_sections(context, window
 | `pencils-down sprint` | the same, flagged as the pencils-down sprint |
 | `pre-branch-cut` | the same (work can still land before branch cut) |
 | `not scheduled yet`, an anchor not placeable on a sprint, or phase unknown | listed in `missing`, with the reason |
+| `release phase unknown: Product Pages lookup failed` | listed in `missing` with exactly that reason |
 | `not started`, `finished` | no release reply |
+| no Edge Feature targets the release (gate complete) | no release reply and nothing under Left out about it, whatever Product Pages says |
+| gate fetch incomplete | no release reply; Left out: `Release sections: release Feature gate incomplete: <reason>` |
 
 Two releases in progress share the one release reply (one header part each).
 No release in progress → no release reply, and the Left out line says "no
-release in progress"; sprint health is still reported.
+release in progress"; sprint health is still reported. When the gate is
+complete and no release has an Edge Feature, nothing about releases is said
+under Left out: no release was expected.
 
 | Sprint week | Sprint reply |
 |---|---|
@@ -176,13 +222,18 @@ report does not decide it. Do this lookup outside the sandbox.
 ```python
 report = chai_report.build_report(sprint, computed, missing, mentions, team_owner=scrum_master,
                                   epic_gaps=gaps)
+top_post_text = report["top_post_text"]  # one string: the channel message
+replies = report["replies"]  # strings, one per thread reply, in order
 ```
 
-- **Top post** = `report["top_post"]`, exactly three lines: status, sprint,
+`report["top_post"]` is the list of the top post's lines, for checks; post
+`top_post_text`, never the list.
+
+- **Top post** = `top_post_text`, exactly three lines: status, sprint,
   week, mode and release phase; the biggest risk (or "No risks this week" with
   the sprint figures); "N people have items: @A, @B, …" (everyone tagged in
   any reply, epic fields included; at most 8 names, then "+N more").
-- **Thread replies** = `report["replies"]`, **at most 3**, in this order:
+- **Thread replies** = `replies`, **at most 3**, in this order:
   1. sprint health (with the sprint-end view in week 3);
   2. release or refinement health for the current phase (omitted when no
      release is in progress);
@@ -212,9 +263,9 @@ report = chai_report.build_report(sprint, computed, missing, mentions, team_owne
   true and this is the scheduled channel report**: a failed or partial epic
   run, or a run from a DM, must not replace last week's set.
 
-Post the top post to the channel, then each reply in its thread. Run from a DM
-(validation or an extra run requested by a task manager), reply in the DM
-instead of the channel.
+Post `top_post_text` to the channel, then each string of `replies` in its
+thread. Run from a DM (validation or an extra run requested by a task manager),
+reply in the DM instead of the channel.
 
 ## Rules
 

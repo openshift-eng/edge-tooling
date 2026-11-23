@@ -384,14 +384,18 @@ class DevelopmentChecksTest(unittest.TestCase):
 
     def test_unreadable_block_row_is_a_link_problem(self):
         import chai_jira_adapter as ad
-        text = ("Linked Jira Issues:\n- is blocked by: TEST-9 (Blocks) | status: New | https://x\n"
-                "- is blocked by: TES\n- relates to: weird line\n")
+        text = ("[TEST-1] Synthetic item\nType: Story | Status: New\n"
+                "Linked Jira Issues:\n- is blocked by: TEST-9 (Blocks) | status: New | https://x\n"
+                "- is blocked by: TES\n- relates to: weird line\n"
+                f"Description:\nx\n\nRequested fields:\nissuelinks: {ad.LINKS_SET}\n\nComments: none\n")
         adapted = {"issues": [{"key": "TEST-1", "issuelinks": []}]}
         problems = ad.attach_issue_links(adapted, {"TEST-1": text})
         self.assertEqual(problems, ["TEST-1: 1 block link line(s) could not be read"])
         self.assertEqual(adapted["issues"][0]["issuelinks"][0]["inward_issue"]["key"], "TEST-9")  # kept
         clean = {"issues": [{"key": "TEST-2", "issuelinks": []}]}
-        self.assertEqual(ad.attach_issue_links(clean, {"TEST-2": "Linked Jira Issues:\n"}), [])  # empty is fine
+        self.assertEqual(ad.attach_issue_links(clean, {"TEST-2": "Linked Jira Issues:\n"}),  # no state, not whole
+                         ['TEST-2: no issuelinks state in Requested fields (request fields="issuelinks")',
+                          "TEST-2: get_jira_issue response cut off"])
 
     def test_behind_compares_the_exact_percentage(self):
         stories = [{"key": "S-1", "epic_key": "EPIC-11", "sp": 8, "status": "Closed"},
@@ -568,11 +572,12 @@ class FormatTest(unittest.TestCase):
         sec = {"release": "9.2", "phase": "development", "window": {}}
         none = cr.release_health(CHECKS, sec, None, features=FEATURES, epics=EPICS, spikes=None, stories=None,
                                  links=None)
-        self.assertIn("on track (blocks not checked)", cr._section_header(none))
+        self.assertIn("schedule not checked (blocks not checked)", cr._section_header(none))  # window unknown
+        self.assertNotIn("on track", cr._section_header(none))
         self.assertIn("9.2 feature and epic blocks", [x["what"] for x in none["left_out"]])
         some = cr.release_health(CHECKS, sec, None, features=FEATURES, epics=EPICS, spikes=None, stories=None,
                                  links={"FEAT-3": ["OCPBUGS-1"]}, links_unread=["EPIC-61"])
-        self.assertIn("on track (blocks not checked for 1)", cr._section_header(some))
+        self.assertIn("schedule not checked (blocks not checked for 1)", cr._section_header(some))
         self.assertIn("blocked by OCPBUGS-1", _labels(some["items"], "FEAT-3"))  # confirmed blocker kept
         self.assertIn("9.2 blocks of EPIC-61", [x["what"] for x in some["left_out"]])
         start = START + dt.timedelta(weeks=6)

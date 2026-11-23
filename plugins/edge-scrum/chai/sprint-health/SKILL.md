@@ -47,7 +47,9 @@ fields:  # request fields by id only
    ends with the "... More issues match" hint), fetch the next page:
    `(<JQL>) AND key < <last key on the page> ORDER BY key DESC`.
 3. Stop when a page has the header `Found N issues (showing N):` or fewer than
-   50 issues.
+   50 issues. Also stop when the number of a page's last key is not lower than
+   the number of the previous page's last key (same project; the page did not
+   advance): the fetch is then incomplete; do not fetch it again.
 4. **More than one project:** Jira's `key <` compares keys within one project
    only. When a query over several projects does not fit on one page, page each
    project separately by adding `AND project = <P>`, and pass each project as its
@@ -69,7 +71,12 @@ fields:  # request fields by id only
    empty only when that JQL matches the query sent; otherwise the fetch is
    incomplete.
 8. When `query_jira` says a field value was shortened or stored, read it whole
-   with `result_page` before passing the results to the script.
+   once (with `result_page` for a stored result, or with the `get_jira_issue`
+   call the note names) and put the whole value in place of the shortened one
+   in that page's text before passing it to the script. If it cannot be read
+   whole, pass the page as it is: the adapter marks the fetch incomplete (for
+   example `<KEY>: <field> value shortened`), and it is left out like any
+   incomplete fetch, never guessed.
 9. Labels `query_jira` prints that the adapter doesn't know are ignored with a
    warning; they never change a known field. A date that isn't readable is
    dropped, never guessed, and listed in the adapted fetch's `left_out`: add
@@ -131,17 +138,21 @@ board's sprint list has no goal field).
 
 **Mid-sprint mode only — blocked items.** `query_jira`, paged:
 `(project in (OCPEDGE, USHIFT, OCPBUGS) AND sprint = <id>) AND issueLinkType = "is blocked by" AND statusCategory != Done`.
-For each returned key, call `get_jira_issue` and pass the texts to
+For each returned key, call `get_jira_issue(<key>, fields="issuelinks")` and pass the texts to
 `chai_jira_adapter.attach_issue_links(adapted, {key: text_or_None})` **before**
 the transform. The adapter turns the "Linked Jira Issues" lines into the
 `issuelinks` shape, and `transform-sprint-issues.py` applies the single
 pipeline rule, `_jira_transforms.extract_blocked_by`: an issue is blocked when
 at least one "is blocked by" issue is not in a done state (Closed, Verified,
-Done or Won't Fix). If `attach_issue_links` returns any problem (a failed
-`get_jira_issue` call, a response without a readable "Linked Jira Issues"
-section, or a block row in it that could not be read), or the candidate fetch
-is incomplete, set `links_complete = False`:
-the blocked signal is left out, not guessed.
+Done or Won't Fix). The response's Requested fields area says
+`issuelinks: (empty, or not a field of this issue)` (no links) or
+`issuelinks: (set, but get_jira_issue cannot render this field's structure)`
+(the "Linked Jira Issues" section is read); a missing, unknown or cut state
+never means "no links". If `attach_issue_links` returns any problem (a failed
+`get_jira_issue` call, a response for another issue, no usable issuelinks
+state, a response cut off or not readable, or a block row that could not be
+read), or the candidate fetch is incomplete, set `links_complete = False`: the
+blocked signal is left out, not guessed.
 
 ### 4. Velocity (capacity mode)
 
@@ -197,8 +208,9 @@ PTO detail. A name appears only as the owner of an item.
 
 Return the `sprint_health` dict to the caller (the weekly report). Run on its own
 (for example in a DM), reply with
-`chai_report.build_report(result, [], left_out, mentions)`: the three top lines,
-then the replies.
+`chai_report.build_report(result, [], left_out, mentions)`: post its
+`top_post_text` (the three top lines as one message), then each string of its
+`replies` in the thread.
 
 ## Missing data
 
