@@ -374,7 +374,24 @@ class PagingTest(unittest.TestCase):
         out = ad.adapt_fetch({"pages": [{"text": page(keys_desc("TEST", 120, 50), final=False)},
                                         {"error": "tool error"}]})
         self.assertFalse(out["fetch"]["complete"])
-        self.assertIn("query_jira call failed", " ".join(out["fetch"]["problems"]))
+        self.assertIn("page 2: query_jira call failed: tool error", " ".join(out["fetch"]["problems"]))
+
+    def test_failed_call_names_its_error_on_one_line(self):
+        self.assertEqual(ad.call_failed("403 Forbidden:\n  no permission\tfor OCPEDGE"),
+                         "query_jira call failed: 403 Forbidden: no permission for OCPEDGE")
+        self.assertEqual(ad.call_failed(True), "query_jira call failed")  # no message
+        self.assertEqual(ad.call_failed("   "), "query_jira call failed")
+        self.assertEqual(ad.call_failed({"code": 403}), "query_jira call failed: {'code': 403}")
+        self.assertEqual(ad.call_failed(RuntimeError("timed out")), "query_jira call failed: timed out")
+        # Never Slack markup: no mention, link or HTML from the tool's text.
+        self.assertEqual(ad.call_failed("<!here> 502 <html>Bad & Gateway</html>"),
+                         "query_jira call failed: &lt;!here&gt; 502 &lt;html&gt;Bad &amp; Gateway&lt;/html&gt;")
+        long = ad.call_failed("x" * 500)
+        self.assertEqual(len(long), len("query_jira call failed: ") + ad.ERROR_CHARS)
+        self.assertTrue(long.endswith("x…"))
+        self.assertEqual(ad.parse_page(None, error="timed out")["reason"], "query_jira call failed: timed out")
+        self.assertEqual(ad.adapt_fetch({"pages": [{"text": None}]})["fetch"]["problems"],
+                         ["fetch: page 1: query_jira call failed"])
 
     # Not observed from chai-bot yet (assumptions): a cut-off page and an error page.
     def test_cut_off_page_lists_fewer_issues_than_header(self):
@@ -434,6 +451,15 @@ class PagingTest(unittest.TestCase):
                               "pages": [{"text": page(keys_desc("TEST", 120, 50), final=False)}]})
         self.assertFalse(cut["fetch"]["complete"])
         self.assertIn("rank order not available", cut["fetch"]["problems"][0])
+
+    def test_a_rank_part_holds_only_its_project(self):
+        other = ad.adapt_fetch({"order": "rank", "project": "TEST", "pages": [{"text": page(["OTHER-1"])}]})
+        self.assertFalse(other["fetch"]["complete"])  # no page JQL to catch it: the part check does
+        self.assertEqual(other["fetch"]["problems"], ["TEST: issues from other projects in a TEST-only fetch"])
+        ok = ad.adapt_fetch({"order": "rank", "project": "TEST",
+                             "pages": [{"text": page(["TEST-3", "TEST-9", "TEST-1"])}]})
+        self.assertEqual((ok["fetch"]["complete"], ok["fetch"]["order"], [i["key"] for i in ok["issues"]]),
+                         (True, "rank", ["TEST-3", "TEST-9", "TEST-1"]))  # a valid page keeps its rank order
 
     def test_page_jql(self):
         self.assertEqual(ad.page_jql("project = TEST AND sprint = 5 ORDER BY priority ASC"),
@@ -610,9 +636,20 @@ class LinkedSpikesCliTest(unittest.TestCase):
         self.assertEqual(len(out["fetch"]["linked_spike_problems"]), 1)
         self.assertTrue(out["fetch"]["linked_spike_problems"][0].startswith(
             "FEAT-602: linked-spike fetch incomplete (fetch: last page says more issues match"))
+        # The Left out reason ("<fetch> incomplete: <problems>") names it too.
+        self.assertTrue(out["fetch"]["problems"][-1].startswith("FEAT-602: linked-spike fetch incomplete (fetch: "))
         # Spikes from complete fetches are still attached.
         links = out["issues"][0]["issuelinks"]
         self.assertEqual([link["inward_issue"]["key"] for link in links], ["TEST-50"])
+
+    def test_features_sharing_a_linked_spike_failure_are_named_once(self):
+        features = ad.adapt_fetch({"order": "rank", "pages": [{"text": SAMPLE_COMPLETE}]})
+        failed = {"issues": [], "fetch": {"complete": False, "problems": ["TEST-930: get_jira_issue failed"]}}
+        problems = ad.attach_linked_spike_fetches(features, {"FEAT-601": failed, "FEAT-602": failed})
+        self.assertEqual(len(problems), 2)  # one per feature, as before
+        self.assertEqual(features["fetch"]["problems"][-1],
+                         "FEAT-601, FEAT-602: linked-spike fetch incomplete (TEST-930: get_jira_issue failed)")
+        self.assertFalse(features["fetch"]["complete"])
 
     def test_complete_linked_spike_fetches_keep_the_fetch_complete(self):
         features = ad.adapt_fetch({"order": "rank", "pages": [{"text": SAMPLE_COMPLETE}]})
@@ -971,6 +1008,745 @@ class RosterTest(unittest.TestCase):
         r = ad.parse_team_roster(ROSTER_MD + "- Nobody Here\n")
         self.assertEqual(len(r["warnings"]), 1)
         self.assertEqual(r["engineer_count"], 3)
+
+
+# ---------------------------------------------------------------- the SKILL paging loop
+
+MORE_MATCH = "Showing the first 50 matching issues; more match:"
+SKILL_SENTENCE = ("`Showing the first 50 matching issues; more match:` is normal. It is never an error, never "
+                  "partial data and never a reason to stop: call `next_page_jql` and fetch that page now, until "
+                  "it returns `None`.")
+CHAI = os.path.join(BIN, "..", "chai")
+
+
+def _project(key):
+    return key.rsplit("-", 1)[0]
+
+
+def _number(key):
+    return int(key.rsplit("-", 1)[1])
+
+
+def after_group(sent):
+    """What follows the leading ``(<predicate>)`` of a query (the paging clauses); a
+    parenthesis inside a quoted value does not count."""
+    depth, quote, escaped = 0, None, False
+    for i, c in enumerate(sent):
+        if escaped:
+            escaped = False
+            continue
+        if quote:
+            escaped = c == "\\"
+            quote = None if c == quote else quote
+            continue
+        if c in "\"'":
+            quote = c
+            continue
+        depth += (c == "(") - (c == ")")
+        if depth == 0:
+            return sent[i + 1:]
+    return sent
+
+
+def jira_keys(sent, keys, ignores_key_below=False):
+    """The keys a stand-in Jira returns for ``sent``, in order, from ``keys`` (every one
+    matching the query's predicate; synthetic projects). It applies the clauses paging adds
+    after ``(<predicate>)``: ``AND project = P``, ``AND project not in (...)`` and
+    ``AND key < K`` (keys of K's project only, as Jira does); it orders by key, or keeps the
+    given order for ``ORDER BY Rank``. ``ignores_key_below`` stands for a tool that does not
+    apply ``key <``."""
+    if re.search(r"ORDER BY Rank ASC\s*$", sent):  # the trailing clause, not text inside a literal
+        return list(keys)
+    found = sorted(keys, key=lambda k: (_project(k), _number(k)), reverse=True)
+    tail = after_group(sent) if sent.startswith("(") else sent
+    part = re.search(r"AND project = ([A-Z][A-Z0-9_]*)", tail)
+    if part:
+        found = [k for k in found if _project(k) == part.group(1)]
+    excluded = re.search(r"AND project not in \(([^)]*)\)", tail)
+    if excluded:
+        names = {n.strip() for n in excluded.group(1).split(",")}
+        found = [k for k in found if _project(k) not in names]
+    below = re.search(r"AND key < (" + ad.KEY_PATTERN + ")", tail)
+    if below and not ignores_key_below:
+        cursor = below.group(1)
+        found = [k for k in found if _project(k) == _project(cursor) and _number(k) < _number(cursor)]
+    return found
+
+
+def jira_answer(keys, ignores_key_below=False, log=None):
+    """A stand-in for ``query_jira`` over ``keys`` (see :func:`jira_keys`), 50 to a page."""
+    def answer(sent):
+        if log is not None:
+            log.append(sent)
+        found = jira_keys(sent, keys, ignores_key_below)
+        if not found:
+            return f"No issues found for JQL: {sent}"
+        return page(found[:ad.PAGE_SIZE], final=len(found) <= ad.PAGE_SIZE)
+    return answer
+
+
+def manifest_page(reply, sent):
+    """The manifest page the SKILL keeps for one answer: ``{"text": <answer>, "jql": sent}``,
+    the answer bare or wrapped (``{"result": ...}``), or ``{"error": ..., "jql": sent}`` for
+    a failed call."""
+    if isinstance(reply, dict) and (reply.get("error") is not None or "text" in reply):
+        return dict(reply, jql=sent)  # a failed call's slot (or a page slot already), as next_page_jql reads it
+    return {"text": reply, "jql": sent}
+
+
+def send_page(answer, sent):
+    """One page as the SKILL sends it: ``next_page_jql`` after it, and the same query sent
+    again once when it raises :class:`PageNotWhole`. Returns ``(manifest page, outcome)``:
+    the next query, None, or the exception (not whole twice, a page that did not advance
+    included; a query error; split)."""
+    for _ in range(2):
+        reply = answer(sent)
+        entry = manifest_page(reply, sent)
+        try:
+            return entry, ad.next_page_jql(sent, reply)
+        except ad.PageNotWhole as exc:
+            outcome = exc
+        except ad.QueryError as exc:  # not sent again; the kept page carries the reason
+            return dict(entry, incomplete=str(exc)), exc
+        except ad.SplitByProject as exc:
+            return entry, exc
+    return dict(entry, incomplete=str(outcome)), outcome
+
+
+def fetch_by_skill(query, answer, first=None, guard=200):
+    """A fetch as the SKILL "Jira paging" recipe runs it over the tool ``answer(sent)``: the
+    first page ``page_jql(query)`` (or ``first``), then the page ``next_page_jql`` returns,
+    until it returns None. A page it reports not whole is sent again once; a page still not
+    whole after it (one that did not advance included), or a query error, is kept and the
+    fetch stops there (``adapt_fetch`` then says why it is incomplete). On
+    :class:`SplitByProject` that query's pages are dropped and each part is fetched from
+    its first page. Returns the manifest parts.
+    ``guard`` only keeps a broken loop from hanging the test."""
+    parts, queue, sends = [], [(None, first or ad.page_jql(query))], 0
+    while queue:
+        project, sent = queue.pop(0)
+        pages = []
+        while isinstance(sent, str):
+            sends += 1
+            if sends > guard:
+                raise AssertionError(f"paging did not end after {guard} pages")
+            entry, sent = send_page(answer, sent)
+            if isinstance(sent, ad.SplitByProject):
+                queue += [(p["project"], p["jql"]) for p in sent.parts]
+                break
+            pages.append(entry)
+        else:
+            parts.append({"project": project, "pages": pages})
+    return parts
+
+
+def fetched_keys(parts):
+    return [i["key"] for i in ad.adapt_fetch({"parts": parts})["issues"]]
+
+
+class NextPageJqlTest(unittest.TestCase):
+    """``next_page_jql``: the page after a more-match page; None only after the last one."""
+
+    Q = "project = TEST AND status != Closed"
+
+    def test_the_literal_more_match_page_gives_the_next_page_now(self):
+        text = page(keys_desc("TEST", 200, 50), final=False)
+        self.assertTrue(text.startswith(MORE_MATCH + "\n"))
+        expected = "(project = TEST AND status != Closed) AND key < TEST-151 ORDER BY key DESC"
+        self.assertEqual(ad.next_page_jql(ad.page_jql(self.Q), text), expected)
+        self.assertEqual(ad.next_page_jql(ad.page_jql(self.Q), json.dumps({"result": text})), expected)
+        self.assertEqual(ad.page_jql(self.Q), "(project = TEST AND status != Closed) ORDER BY key DESC")
+
+    def test_every_page_is_fetched_until_none_and_never_retried(self):
+        log = []
+        parts = fetch_by_skill(self.Q, jira_answer(keys_desc("TEST", 300, 107), log=log))
+        self.assertEqual(log, ["(project = TEST AND status != Closed) ORDER BY key DESC",
+                               "(project = TEST AND status != Closed) AND key < TEST-251 ORDER BY key DESC",
+                               "(project = TEST AND status != Closed) AND key < TEST-201 ORDER BY key DESC"])
+        out = ad.adapt_fetch({"parts": parts})
+        self.assertEqual((out["fetch"]["complete"], out["fetch"]["fetched"], out["fetch"]["problems"]),
+                         (True, 107, []))
+        self.assertEqual(out["left_out"], [])  # a more-match page is never left out
+
+    def test_only_a_whole_last_page_is_none(self):
+        sent = ad.page_jql(self.Q)
+        self.assertIsNone(ad.next_page_jql(sent, page(keys_desc("TEST", 12, 12))))
+        self.assertIsNone(ad.next_page_jql(sent, f"No issues found for JQL: {sent}"))
+        self.assertIsNone(ad.next_page_jql(sent, page(keys_desc("TEST", 60, 50))))  # exactly 50, the last
+
+    def test_an_error_or_cut_off_page_never_looks_like_the_last(self):
+        sent = ad.page_jql(self.Q)
+        more = page(keys_desc("TEST", 200, 50), final=False)
+        cases = {
+            "call failed": None,
+            "error slot": {"error": "403 Forbidden: no permission"},
+            "empty answer": "",
+            "fewer issues than the header": page(keys_desc("TEST", 200, 49), final=False, shown=50),
+            "no paging hint": more.split("\n\n  ... More issues match")[0] + "\n",
+            "last issue cut": more.rpartition("\n    Type: ")[0] + "\n",
+            "last page cut": page(keys_desc("TEST", 12, 12)).rpartition("\n    Type: ")[0] + "\n",
+            "no results for another query": "No issues found for JQL: project = OTHER",
+        }
+        for name, text in cases.items():
+            with self.subTest(name), self.assertRaises(ad.PageNotWhole) as raised:
+                ad.next_page_jql(sent, text)
+            if name == "error slot":
+                self.assertEqual(str(raised.exception), "query_jira call failed: 403 Forbidden: no permission")
+
+    def test_a_page_that_does_not_advance_is_sent_again_once(self):
+        sent = "(project = TEST AND status != Closed) AND key < TEST-151 ORDER BY key DESC"
+        why = "key TEST-200 on the page is not below the key < TEST-151 sent (the tool did not apply it)"
+        stuck = page(keys_desc("TEST", 200, 50), final=False)
+        with self.assertRaises(ad.PageDidNotAdvance) as raised:  # a PageNotWhole: the page cannot be used
+            ad.next_page_jql(sent, stuck)
+        self.assertIsInstance(raised.exception, ad.PageNotWhole)
+        self.assertEqual(str(raised.exception), why)
+        self.assertEqual(ad.paging_round({"f": {"jql": sent, "page": stuck, "retried": False}})["f"], {"retry": why})
+        self.assertEqual(ad.paging_round({"f": {"jql": sent, "page": stuck, "retried": True}})["f"],
+                         {"incomplete": why})
+        log = []  # a tool that ignores "key <" every time: page 2 sent twice, then the fetch stops with the cause
+        parts = fetch_by_skill(self.Q, jira_answer(keys_desc("TEST", 160, 60), ignores_key_below=True, log=log))
+        self.assertEqual(len(log), 3)
+        self.assertEqual(log[1], log[2])  # sent again unchanged, never a third time, never from the start
+        out = ad.adapt_fetch({"parts": parts})
+        self.assertFalse(out["fetch"]["complete"])
+        self.assertIn("key TEST-160 on the page is not below the key < TEST-111 sent (the tool did not apply it)",
+                      " ".join(out["fetch"]["problems"]))  # the actual cause, kept to the end
+        good, log = jira_answer(keys_desc("TEST", 160, 60)), []
+        seen = set()
+
+        def once(sent):  # the tool ignores "key <" on the first send of each query only
+            log.append(sent)
+            ignore = "key <" in sent and sent not in seen
+            seen.add(sent)
+            return jira_answer(keys_desc("TEST", 160, 60), ignores_key_below=True)(sent) if ignore else good(sent)
+        out = ad.adapt_fetch({"parts": fetch_by_skill(self.Q, once)})
+        self.assertEqual((out["fetch"]["complete"], out["fetch"]["fetched"], len(log)), (True, 60, 3))  # recovered
+
+    def test_a_query_whose_cursor_is_outside_its_project_is_not_sent_again(self):
+        sent = "(project = TESTA) AND key < TESTB-10 ORDER BY key DESC"  # a query error: resending cannot help
+        more = page(keys_desc("TESTA", 200, 50), final=False)
+        with self.assertRaises(ad.QueryError):
+            ad.next_page_jql(sent, more)
+        why = "the key < TESTB-10 sent is not of project TESTA: the query cannot be paged"
+        self.assertEqual(ad.paging_round({"f": {"jql": sent, "page": more, "retried": False}})["f"],
+                         {"incomplete": why})  # not sent again
+        out = ad.adapt_fetch({"pages": [{"text": more, "jql": sent}]})
+        self.assertFalse(out["fetch"]["complete"])
+        self.assertIn(why, " ".join(out["fetch"]["problems"]))  # the cause kept to the end
+        with self.assertRaises(ad.QueryError):  # on a last page too
+            ad.next_page_jql(sent, page(["TESTA-3"]))
+
+    def test_order_by_is_replaced_and_quoted_text_kept(self):
+        page_1 = page(keys_desc("TEST", 200, 50), final=False)
+        for sent, expected in (
+                ("(project = TEST) order by key desc", "(project = TEST) AND key < TEST-151 ORDER BY key DESC"),
+                ("project = TEST ORDER BY key DESC", "(project = TEST) AND key < TEST-151 ORDER BY key DESC"),
+                ('(project = TEST AND summary ~ "ORDER BY x") ORDER BY key DESC',
+                 '(project = TEST AND summary ~ "ORDER BY x") AND key < TEST-151 ORDER BY key DESC'),
+                ("(project = TEST) AND key < TEST-251 ORDER BY key DESC",
+                 "(project = TEST) AND key < TEST-151 ORDER BY key DESC")):
+            with self.subTest(sent=sent):
+                self.assertEqual(ad.next_page_jql(sent, page_1), expected)
+        self.assertEqual(ad.strip_order_by('summary ~ "a ORDER BY b"'), 'summary ~ "a ORDER BY b"')
+
+    def test_a_rank_ordered_page_with_more_starts_the_key_fetch(self):
+        sent = "(project = TEST AND issuetype = Feature) ORDER BY Rank ASC"
+        self.assertIsNone(ad.next_page_jql(sent, page(["TEST-5", "TEST-9", "TEST-7"])))
+        self.assertEqual(ad.next_page_jql(sent, page(keys_desc("TEST", 200, 50), final=False)),
+                         "(project = TEST AND issuetype = Feature) ORDER BY key DESC")
+
+    def test_the_cursor_stays_in_one_project(self):
+        more = page([*keys_desc("TESTA", 200, 49), "TESTB-9"], final=False)
+        with self.assertRaises(ad.PageNotWhole):  # a project part never returns another project
+            ad.next_page_jql("(p = 1) AND project = TESTA ORDER BY key DESC", more)
+        unordered = page([*keys_desc("TEST", 200, 48), "TEST-300", "TEST-100"], final=False)
+        with self.assertRaises(ad.PageNotWhole):  # not in key order: no key would be safe
+            ad.next_page_jql(ad.page_jql(self.Q), unordered)
+        with self.assertRaises(ad.SplitByProject) as raised:  # project = TESTA, yet TESTB on the page
+            ad.next_page_jql(ad.page_jql("project = TESTA"), more)
+        self.assertEqual([p["jql"] for p in raised.exception.parts],
+                         ["(project = TESTA) AND project = TESTA ORDER BY key DESC",
+                          "(project = TESTA) AND project = TESTB ORDER BY key DESC",
+                          "(project = TESTA) AND project not in (TESTA, TESTB) ORDER BY key DESC"])
+
+    SPRINT_Q = "project in (TESTA, TESTB) AND sprint = 1001"
+    SPRINT_KEYS = keys_desc("TESTA", 180, 80) + keys_desc("TESTB", 12, 12)
+
+    def test_named_projects_are_paged_per_project_with_nothing_dropped(self):
+        log = []
+        parts = fetch_by_skill(self.SPRINT_Q, jira_answer(self.SPRINT_KEYS, log=log))
+        self.assertEqual(log, [
+            "(project in (TESTA, TESTB) AND sprint = 1001) ORDER BY key DESC",
+            "(project in (TESTA, TESTB) AND sprint = 1001) AND project = TESTA ORDER BY key DESC",
+            "(project in (TESTA, TESTB) AND sprint = 1001) AND project = TESTA AND key < TESTA-131 ORDER BY key DESC",
+            "(project in (TESTA, TESTB) AND sprint = 1001) AND project = TESTB ORDER BY key DESC"])
+        self.assertEqual([(p["project"], len(p["pages"])) for p in parts], [("TESTA", 2), ("TESTB", 1)])
+        out = ad.adapt_fetch({"parts": parts})
+        self.assertEqual((out["fetch"]["complete"], out["fetch"]["problems"]), (True, []))
+        self.assertEqual(sorted(fetched_keys(parts)), sorted(self.SPRINT_KEYS))
+
+    def test_splitting_before_the_first_call_is_the_same_fetch(self):
+        answer = jira_answer(self.SPRINT_KEYS)
+        parts = [{"project": p, "pages": fetch_by_skill(None, answer, first=ad.page_jql(self.SPRINT_Q, project=p))
+                  [0]["pages"]} for p in ("TESTA", "TESTB")]
+        self.assertEqual(parts, fetch_by_skill(self.SPRINT_Q, answer))
+
+    def test_a_key_list_is_paged_per_project_of_its_keys(self):
+        listed = keys_desc("TESTA", 70, 40) + keys_desc("TESTB", 30, 20)
+        query = f"key in ({', '.join(listed)}) AND issueLinkType = \"is blocked by\""
+        log = []
+        parts = fetch_by_skill(query, jira_answer(listed, log=log))
+        self.assertEqual([p["project"] for p in parts], ["TESTA", "TESTB"])  # no "every other project" part
+        self.assertTrue(log[1].endswith(") AND project = TESTA ORDER BY key DESC"))
+        self.assertEqual(sorted(fetched_keys(parts)), sorted(listed))
+
+    def test_unnamed_projects_split_into_the_seen_ones_and_every_other(self):
+        query = 'issue in linkedIssues("TEST-1", "is blocked by") AND issuetype = Spike'
+        keys = keys_desc("TESTC", 30, 30) + keys_desc("TESTB", 30, 30) + keys_desc("TESTA", 90, 60)
+        log = []
+        parts = fetch_by_skill(query, jira_answer(keys, log=log))
+        base = '(issue in linkedIssues("TEST-1", "is blocked by") AND issuetype = Spike)'
+        self.assertEqual(log, [
+            f"{base} ORDER BY key DESC",
+            f"{base} AND project = TESTC ORDER BY key DESC",
+            f"{base} AND project = TESTB ORDER BY key DESC",
+            f"{base} AND project not in (TESTC, TESTB) ORDER BY key DESC",  # every other project
+            f"{base} AND project = TESTA ORDER BY key DESC",
+            f"{base} AND project = TESTA AND key < TESTA-41 ORDER BY key DESC",
+            f"{base} AND project not in (TESTC, TESTB, TESTA) ORDER BY key DESC"])
+        self.assertEqual([p["project"] for p in parts], ["TESTC", "TESTB", "TESTA", None])
+        out = ad.adapt_fetch({"parts": parts})
+        self.assertEqual((out["fetch"]["complete"], out["fetch"]["problems"]), (True, []))
+        self.assertEqual(sorted(fetched_keys(parts)), sorted(keys))
+
+
+class StandInTest(unittest.TestCase):
+    """The Jira stand-in applies only the clauses paging added after the predicate."""
+
+    def test_a_quoted_parenthesis_is_part_of_the_predicate(self):
+        sent = ad.page_jql('summary ~ "x) \\" AND project = TESTB AND (y"', project="TESTA")
+        self.assertEqual(after_group(sent), " AND project = TESTA ORDER BY key DESC")
+        self.assertEqual(jira_keys(sent, ["TESTA-2", "TESTB-1"]), ["TESTA-2"])
+
+
+class TrailingOrderTest(unittest.TestCase):
+    def test_the_stand_in_reads_the_trailing_order_clause(self):
+        sent = ad.page_jql('summary ~ "ORDER BY Rank"')  # rank only inside the literal; ordered by key
+        self.assertEqual(jira_keys(sent, ["TEST-1", "TEST-3", "TEST-2"]), ["TEST-3", "TEST-2", "TEST-1"])
+        below = ad.page_jql('summary ~ "ORDER BY Rank"', last_key="TEST-3")
+        self.assertEqual(jira_keys(below, ["TEST-1", "TEST-3", "TEST-2"]), ["TEST-2", "TEST-1"])
+        self.assertEqual(jira_keys("(project = TEST) ORDER BY Rank ASC", ["TEST-1", "TEST-3"]), ["TEST-1", "TEST-3"])
+
+
+class WrappedAnswerTest(unittest.TestCase):
+    """A ``{"result": <text>}`` answer is kept as the page's ``text`` and adapts like bare text."""
+
+    def test_a_wrapped_answer_goes_through_paging_and_adaptation(self):
+        bare = jira_answer(keys_desc("TEST", 60, 60))
+        parts = fetch_by_skill("project = TEST", lambda sent: {"result": bare(sent)})
+        self.assertEqual([len(p["pages"]) for p in parts], [2])
+        self.assertTrue(all(isinstance(pg["text"], dict) and "result" in pg["text"] for pg in parts[0]["pages"]))
+        out = ad.adapt_fetch({"parts": parts})
+        self.assertEqual((out["fetch"]["complete"], out["fetch"]["fetched"]), (True, 60))
+        failed = manifest_page({"error": "tool call failed"}, "q")
+        self.assertEqual(failed, {"error": "tool call failed", "jql": "q"})  # a failed call keeps its slot
+        for reply in ({"result": "x", "error": "boom"}, {"result": "x", "error": None}):
+            with self.subTest(reply=reply):  # read the same way as next_page_jql reads it
+                slot = manifest_page(reply, "q")
+                self.assertEqual("text" in slot, reply["error"] is None)
+
+
+class NextPageJqlEdgeTest(unittest.TestCase):
+    """The less common answers and queries ``next_page_jql`` meets."""
+
+    MORE = page(keys_desc("TEST", 200, 50), final=False)
+
+    def test_an_answer_given_as_a_dict(self):
+        sent = ad.page_jql("project = TEST")
+        expected = "(project = TEST) AND key < TEST-151 ORDER BY key DESC"
+        self.assertEqual(ad.next_page_jql(sent, {"result": self.MORE}), expected)  # already parsed JSON
+        self.assertEqual(ad.next_page_jql(sent, {"result": self.MORE, "error": None}), expected)
+        self.assertEqual(ad.next_page_jql(sent, {"text": self.MORE, "jql": sent}), expected)  # a manifest page
+        self.assertIsNone(ad.next_page_jql(sent, {"result": f"No issues found for JQL: {sent}"}))
+        for slot in ({"text": None}, {"error": True}):
+            with self.subTest(slot=slot), self.assertRaises(ad.PageNotWhole) as raised:
+                ad.next_page_jql(sent, slot)
+            self.assertEqual(str(raised.exception), "query_jira call failed")
+
+    def test_a_final_page_must_keep_the_restriction_paging_added(self):
+        part = ad.page_jql("issuetype = Story", project="TESTA")
+        rest = ad.page_jql("issuetype = Story", excluded=["TESTA"])
+        for sent, answer, why in ((part, page(["TESTB-9"]), "issue TESTB-9 is outside project TESTA"),
+                                  (rest, page(["TESTB-9", "TESTA-3"]), "excluded project(s) TESTA returned")):
+            with self.subTest(sent=sent):
+                with self.assertRaises(ad.PageNotWhole) as raised:
+                    ad.next_page_jql(sent, answer)  # sent again once (Jira paging step 3)
+                self.assertIn(why, str(raised.exception))
+                project = "TESTA" if sent == part else None
+                out = ad.adapt_fetch({"parts": [{"project": project, "pages": [{"text": answer, "jql": sent}]}]})
+                self.assertFalse(out["fetch"]["complete"])  # still rejected after the retry
+                self.assertIn(why, "; ".join(out["fetch"]["problems"]))
+        no_jql = ad.adapt_fetch({"parts": [{"project": "TESTA", "pages": [{"text": page(["TESTB-9"])}]}]})
+        self.assertFalse(no_jql["fetch"]["complete"])  # one page without its query: the part's project still checked
+        self.assertIn("issues from other projects in a TESTA-only fetch", no_jql["fetch"]["problems"][0])
+        self.assertIsNone(ad.next_page_jql(part, f"No issues found for JQL: {part}"))  # empty and matching
+        self.assertIsNone(ad.next_page_jql(part, page(["TESTA-3"])))
+        self.assertIsNone(ad.next_page_jql(rest, page(["TESTB-9", "TESTC-1"])))
+        anywhere = ad.page_jql("issuetype = Story")
+        self.assertIsNone(ad.next_page_jql(anywhere, page(["TESTB-9", "TESTA-3"])))  # no restriction: any project
+        out = ad.adapt_fetch({"pages": [{"text": page(["TESTB-9", "TESTA-3"]), "jql": anywhere}]})
+        self.assertTrue(out["fetch"]["complete"])
+
+    def test_a_page_listing_an_issue_twice_is_not_whole(self):
+        dup = "Found 2 issues (showing 2):\n" + block("TEST-9") + "\n" + block("TEST-9") + "\n"
+        sent = ad.page_jql("project = TEST")
+        self.assertEqual(ad.paging_round({"f": {"jql": sent, "page": dup, "retried": False}})["f"],
+                         {"retry": "issue TEST-9 is listed twice on the page"})  # sent again once
+        self.assertEqual(ad.paging_round({"f": {"jql": sent, "page": dup, "retried": True}})["f"],
+                         {"incomplete": "issue TEST-9 is listed twice on the page"})
+        out = ad.adapt_fetch({"pages": [{"text": dup, "jql": sent}]})
+        self.assertFalse(out["fetch"]["complete"])  # never one issue silently dropped
+        self.assertIn("issue TEST-9 is listed twice on the page", out["fetch"]["problems"][0])
+        rank = "Found 2 issues (showing 2):\n" + block("TEST-3") + "\n" + block("TEST-3") + "\n"
+        self.assertEqual(ad.parse_page(rank, jql="(project = TEST) ORDER BY Rank ASC")["status"], "incomplete")
+        apart = "Found 3 issues (showing 3):\n" + "\n".join(block(k) for k in ("TEST-3", "TEST-9", "TEST-3")) + "\n"
+        self.assertEqual(ad.parse_page(apart, jql="(project = TEST) ORDER BY Rank ASC")["reason"],
+                         "issue TEST-3 is listed twice on the page")  # not only next to each other
+        mixed = "Found 2 issues (showing 2):\n" + block("TEST-3") + "\n" + block("TEST-9") + "\n"
+        self.assertEqual(ad.parse_page(mixed, jql="(project = TEST) ORDER BY Rank ASC")["status"], "ok")  # any order
+
+    def test_a_last_page_must_stay_below_the_cursor(self):
+        sent = "(project = TEST) AND key < TEST-151 ORDER BY key DESC"
+        bad = page(["TEST-151", "TEST-150"])
+        self.assertEqual(ad.paging_round({"f": {"jql": sent, "page": bad, "retried": False}})["f"],
+                         {"retry": "key TEST-151 on the last page is not below the key < TEST-151 sent"})
+        first = page(keys_desc("TEST", 200, 50), final=False)
+        out = ad.adapt_fetch({"pages": [{"text": first, "jql": "(project = TEST) ORDER BY key DESC"},
+                                        {"text": bad, "jql": sent}]})
+        self.assertFalse(out["fetch"]["complete"])  # still rejected after its retry, with that reason
+        self.assertIn("key TEST-151 on the last page is not below the key < TEST-151 sent",
+                      "; ".join(out["fetch"]["problems"]))
+        self.assertIsNone(ad.next_page_jql(sent, page(["TEST-150", "TEST-149"])))  # below the cursor
+        self.assertIsNone(ad.next_page_jql(sent, f"No issues found for JQL: {sent}"))  # empty and matching
+
+    def test_a_last_page_with_a_key_outside_the_cursor_project_is_sent_again(self):
+        sent = "(project = TEST) AND key < TEST-151 ORDER BY key DESC"  # a single-project continuation
+        why = "issue OTHER-1 is outside project TEST of the key < TEST-151 sent"
+        bad = page(["TEST-150", "OTHER-1"])
+        self.assertEqual(ad.paging_round({"f": {"jql": sent, "page": bad, "retried": False}})["f"], {"retry": why})
+        self.assertEqual(ad.paging_round({"f": {"jql": sent, "page": bad, "retried": True}})["f"], {"incomplete": why})
+        anywhere = ad.page_jql("project in (TEST, OTHER)")  # no cursor: a whole last page of both projects
+        self.assertIsNone(ad.next_page_jql(anywhere, page(["TEST-3", "OTHER-1"])))
+        with self.assertRaises(ad.SplitByProject):  # a more-match page still splits, as before
+            ad.next_page_jql(anywhere, page(keys_desc("TEST", 200, 25) + keys_desc("OTHER", 99, 25), final=False))
+
+    def test_a_valid_cursor_page_of_another_project_only_is_sent_again(self):
+        sent = "(project = TEST) AND key < TEST-151 ORDER BY key DESC"  # valid: its key < is of its project
+        unknown = "(filter = 5) AND key < TEST-151 ORDER BY key DESC"  # the query names no project
+        last, more = page(["OTHER-1"]), page(keys_desc("OTHER", 200, 50), final=False)
+        for query, answer, key in ((sent, last, "OTHER-1"), (sent, more, "OTHER-200"), (unknown, last, "OTHER-1")):
+            why = f"issue {key} is outside project TEST of the key < TEST-151 sent"
+            with self.subTest(query=query, key=key):
+                self.assertEqual(ad.paging_round({"f": {"jql": query, "page": answer, "retried": False}})["f"],
+                                 {"retry": why})  # not a query error: sent again once
+                self.assertEqual(ad.paging_round({"f": {"jql": query, "page": answer, "retried": True}})["f"],
+                                 {"incomplete": why})  # the exact cause kept
+        good, sends = jira_answer(keys_desc("TEST", 160, 60)), []
+
+        def once(query):  # another project's issue on the first send of the key < page only
+            sends.append(query)
+            return page(["OTHER-1"]) if "key <" in query and query not in sends[:-1] else good(query)
+        out = ad.adapt_fetch({"parts": fetch_by_skill("project = TEST", once)})
+        self.assertEqual((out["fetch"]["complete"], out["fetch"]["fetched"], len(sends)), (True, 60, 3))  # retried
+
+    def test_a_wrong_cursor_is_decided_from_the_query_not_the_page(self):
+        sent = "(project = TESTA) AND key < TESTB-10 ORDER BY key DESC"
+        why = "the key < TESTB-10 sent is not of project TESTA: the query cannot be paged"
+        for answer in (page(["TESTA-3"]), page(["TESTB-3"]), page(keys_desc("TESTB", 60, 50), final=False),
+                       f"No issues found for JQL: {sent}"):  # whatever the page holds, an empty one too
+            with self.subTest(answer=answer[:40]):
+                self.assertEqual(ad.paging_round({"f": {"jql": sent, "page": answer, "retried": False}})["f"],
+                                 {"incomplete": why})  # never sent again
+        for query, why in (
+                ("(project in (TESTA, TESTB)) AND project = TESTA AND key < TESTB-10 ORDER BY key DESC",
+                 "the key < TESTB-10 sent is not of project TESTA: the query cannot be paged"),
+                ("(x = 1) AND project not in (TESTA) AND key < TESTA-10 ORDER BY key DESC",
+                 "the key < TESTA-10 sent is of excluded project TESTA: the query cannot be paged")):
+            with self.subTest(query=query), self.assertRaises(ad.QueryError) as caught:
+                ad.next_page_jql(query, page(["TESTB-3"]))
+            self.assertEqual(str(caught.exception), why)
+        self.assertIsNone(ad.next_page_jql("(project in (TESTA, TESTB)) AND key < TESTA-10 ORDER BY key DESC",
+                                           page(["TESTA-3"])))  # a key < of one of its projects: valid
+        self.assertIsNone(ad.next_page_jql(ad.page_jql("project in (TESTA, TESTB)"),
+                                           page(["TESTB-3", "TESTA-1"])))  # no cursor: whole, as before
+
+    def test_the_reason_paging_stopped_is_kept_and_a_good_retry_leaves_none(self):
+        unordered = page(list(reversed(keys_desc("TEST", 200, 50))), final=False)
+        why = "keys on the page are not in descending order (ORDER BY key DESC not applied)"
+        parts = fetch_by_skill("project = TEST", lambda sent: unordered)
+        self.assertEqual(parts[0]["pages"][-1]["incomplete"], why)  # kept with the page
+        out = ad.adapt_fetch({"parts": parts})
+        self.assertFalse(out["fetch"]["complete"])
+        self.assertIn(why, out["fetch"]["problems"][0])  # the actual cause, not "fetch stopped early"
+        sends = []
+        good = jira_answer(keys_desc("TEST", 60, 60))
+
+        def once(sent):
+            sends.append(sent)
+            return unordered if len(sends) == 1 else good(sent)
+        out = ad.adapt_fetch({"parts": fetch_by_skill("project = TEST", once)})
+        self.assertEqual((out["fetch"]["complete"], out["fetch"]["problems"]), (True, []))  # no stale reason
+
+    def test_split_parts_page_together_under_their_own_slots(self):
+        log = []
+        answer = jira_answer(keys_desc("TESTA", 160, 60) + keys_desc("TESTB", 10, 10), log=log)
+        first = ad.page_jql("project in (TESTA, TESTB)")
+        split = ad.paging_round({"sprint_issues": {"jql": first, "page": answer(first), "retried": False}})
+        parts = {f"sprint_issues/{p['project']}": p for p in split["sprint_issues"]["split"]}
+        self.assertEqual(sorted(parts), ["sprint_issues/TESTA", "sprint_issues/TESTB"])
+        sent = {slot: part["jql"] for slot, part in parts.items()}
+        kept = {slot: [] for slot in parts}
+        while sent:  # both parts in every round, each under its own slot
+            pending = {slot: {"jql": q, "page": answer(q), "retried": False} for slot, q in sent.items()}
+            decisions = ad.paging_round(pending)
+            self.assertEqual(set(decisions), set(sent))  # a decision for every part
+            for slot, decision in decisions.items():  # the very answer decided, with the query sent
+                kept[slot].append({"text": pending[slot]["page"], "jql": pending[slot]["jql"]})
+                if "next" in decision:
+                    sent[slot] = decision["next"]
+                else:
+                    del sent[slot]
+        out = ad.adapt_fetches({"sprint_issues": {"parts": [
+            {"project": parts[slot]["project"], "pages": pages} for slot, pages in kept.items()]}})
+        self.assertEqual((out["sprint_issues"]["fetch"]["complete"], out["sprint_issues"]["fetch"]["fetched"]),
+                         (True, 70))  # one logical fetch under its own name
+        self.assertEqual(sorted(log[1:]), sorted(p["jql"] for pages in kept.values() for p in pages))  # each once
+
+    def test_another_page_size(self):
+        sent = ad.page_jql("project = TEST")
+        self.assertEqual(ad.next_page_jql(sent, page(keys_desc("TEST", 9, 3), final=False), page_size=3),
+                         "(project = TEST) AND key < TEST-7 ORDER BY key DESC")
+        with self.assertRaises(ad.PageNotWhole):  # a full 50 is not a page of 3
+            ad.next_page_jql(sent, self.MORE, page_size=3)
+
+    def test_a_part_that_does_not_advance(self):
+        sent = "(project in (TESTA, TESTB)) AND project = TESTA AND key < TESTA-151 ORDER BY key DESC"
+        with self.assertRaises(ad.PageDidNotAdvance):  # the whole page again
+            ad.next_page_jql(sent, page(keys_desc("TESTA", 200, 50), final=False))
+        with self.assertRaises(ad.PageDidNotAdvance):  # starts above the key < sent, ends below it
+            ad.next_page_jql(sent, page(keys_desc("TESTA", 170, 50), final=False))
+        with self.assertRaises(ad.QueryError):  # a key < of another project: the query itself is wrong
+            ad.next_page_jql("(project = TESTA) AND key < TESTB-10 ORDER BY key DESC",
+                             page(keys_desc("TESTA", 200, 50), final=False))
+
+    def test_every_other_project_part_never_returns_an_excluded_one(self):
+        sent = "(issue in linkedIssues(\"TEST-1\")) AND project not in (TESTA, TESTB) ORDER BY key DESC"
+        with self.assertRaises(ad.PageNotWhole):
+            ad.next_page_jql(sent, page(keys_desc("TESTC", 60, 40) + keys_desc("TESTA", 10, 10), final=False))
+
+    def test_or_and_not_leave_the_projects_unknown(self):
+        more = page(keys_desc("TESTA", 200, 50), final=False)
+        for query in ("project = TESTA OR assignee = x", "project = TESTA AND x = 1 || y = 2",
+                      "project = TESTA AND x = 1 OR(y = 2)", "NOT project = TESTB"):
+            with self.subTest(query=query), self.assertRaises(ad.SplitByProject) as raised:
+                ad.next_page_jql(ad.page_jql(query), more)
+            self.assertIsNone(raised.exception.parts[-1]["project"])  # every other project is fetched too
+        # A NOT clause says nothing, and the rest of the AND still names the project.
+        self.assertEqual(ad.next_page_jql(ad.page_jql("project = TESTA AND NOT status = Closed"), more),
+                         "(project = TESTA AND NOT status = Closed) AND key < TESTA-151 ORDER BY key DESC")
+
+    def test_named_projects_with_a_page_outside_them(self):
+        more = page(keys_desc("TESTC", 200, 50), final=False)  # the query names TESTA, TESTB
+        with self.assertRaises(ad.SplitByProject) as raised:
+            ad.next_page_jql(ad.page_jql("project in (TESTA, TESTB)"), more)
+        self.assertEqual([(p["project"], p["jql"]) for p in raised.exception.parts], [
+            ("TESTC", "(project in (TESTA, TESTB)) AND project = TESTC ORDER BY key DESC"),
+            (None, "(project in (TESTA, TESTB)) AND project not in (TESTC) ORDER BY key DESC")])
+
+    def test_a_quoted_project_part_keeps_paging(self):
+        self.assertEqual(ad.next_page_jql('(x = 1) AND project = "TEST" ORDER BY key DESC', self.MORE),
+                         "(x = 1) AND project = TEST AND key < TEST-151 ORDER BY key DESC")
+
+
+class SkillPagingTest(unittest.TestCase):
+    """Every chai skill with a Jira paging section starts it with the rule, and its worked
+    example is what ``next_page_jql`` does."""
+
+    SKILLS = ("sprint-health", "release-health", "weekly-health-report")
+
+    @staticmethod
+    def section(skill):
+        with open(os.path.join(CHAI, skill, "SKILL.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        start = text.index("## Jira paging\n")
+        return text[start:text.index("\n## ", start + 1)]
+
+    def test_every_paging_section_starts_with_the_rule(self):
+        for skill in self.SKILLS:
+            with self.subTest(skill=skill):
+                lines = [ln for ln in self.section(skill).splitlines()[1:] if ln.strip()]
+                self.assertEqual(lines[0], "> " + SKILL_SENTENCE)
+
+    def test_query_jira_is_paged_only_by_these_skills(self):
+        for name in sorted(os.listdir(CHAI)):
+            with open(os.path.join(CHAI, name, "SKILL.md"), encoding="utf-8") as fh:
+                pages_jira = "query_jira" in fh.read()
+            self.assertEqual(pages_jira, name in self.SKILLS, name)
+
+    def replay(self, skill, query, keys, first=None):
+        log = []
+        parts = fetch_by_skill(query, jira_answer(keys, log=log), first=first)
+        section = self.section(skill)
+        for sent in log:
+            self.assertIn(f"`{sent}`", section)
+        return parts, log, section
+
+    def test_weekly_example(self):
+        parts, log, section = self.replay("weekly-health-report", "project = TESTA AND issuetype = Feature",
+                                          keys_desc("TESTA", 300, 107))
+        self.assertEqual((len(log), len(fetched_keys(parts))), (3, 107))
+        self.assertIn("`Found 7 issues (showing 7):`", section)
+        self.assertIn("Three pages, 107 issues", section)
+
+    def test_sprint_health_example(self):
+        parts, log, section = self.replay("sprint-health", NextPageJqlTest.SPRINT_Q, NextPageJqlTest.SPRINT_KEYS)
+        self.assertEqual((len(log), len(fetched_keys(parts))), (4, 92))
+        self.assertIn("`TESTA-131`", section)
+        self.assertIn("`Found 30 issues (showing 30):`", section)
+        self.assertIn("`Found 12 issues (showing 12):`", section)
+
+    def test_release_health_example(self):
+        query, keys = "project = TESTA AND issuetype = Feature", keys_desc("TESTA", 200, 60)
+        rank_first = f"({query}) ORDER BY Rank ASC"
+        rank_page = jira_answer(keys)(rank_first)
+        self.assertTrue(rank_page.startswith(MORE_MATCH))
+        key_first = ad.next_page_jql(rank_first, rank_page)
+        parts, log, section = self.replay("release-health", query, keys, first=key_first)
+        self.assertIn(f"`{rank_first}`", section)
+        self.assertEqual((len(log), len(fetched_keys(parts))), (2, 60))
+        self.assertIn("`Found 10 issues (showing 10):`", section)
+        self.assertIn("2 pages and 60 features", section)
+
+
+class SharedPagingAdapterTest(unittest.TestCase):
+    """One paging round per sandbox call, one adaptation per logical fetch, extra_fields."""
+
+    def test_paging_round_decides_every_page_of_a_round(self):
+        sent = ad.page_jql("project = TEST")
+        more = page(keys_desc("TEST", 200, 50), final=False)
+        split_sent = ad.page_jql("project in (TESTA, TESTB)")
+        split_page = page(keys_desc("TESTB", 40, 20) + keys_desc("TESTA", 200, 30), final=False)
+        out = ad.paging_round({
+            "more": {"jql": sent, "page": more},
+            "last": {"jql": sent, "page": page(["TEST-3"])},
+            "failed": {"jql": sent, "page": {"error": "timed out"}},
+            "failed again": {"jql": sent, "page": None, "retried": True},
+            "stuck": {"jql": "(project = TEST) AND key < TEST-151 ORDER BY key DESC", "page": more},
+            "split": {"jql": split_sent, "page": split_page}})
+        self.assertEqual(out["more"], {"next": "(project = TEST) AND key < TEST-151 ORDER BY key DESC"})
+        self.assertEqual(out["last"], {"done": True})
+        self.assertEqual(out["failed"], {"retry": "query_jira call failed: timed out"})
+        self.assertEqual(out["failed again"], {"incomplete": "query_jira call failed"})
+        self.assertIn("retry", out["stuck"])  # a page that did not advance: sent again once
+        self.assertEqual([p["project"] for p in out["split"]["split"]], ["TESTA", "TESTB"])
+
+    def test_adapt_fetches_adapts_each_logical_fetch_once(self):
+        out = ad.adapt_fetches({"a": {"pages": [{"text": page(["TEST-1", "TEST-2"])}]},
+                                "b": {"parts": [{"project": "TEST", "pages": [{"text": page(["TEST-9"])}]}]}})
+        self.assertEqual({k: (v["fetch"]["name"], v["fetch"]["fetched"]) for k, v in out.items()},
+                         {"a": ("a", 2), "b": ("b", 1)})
+
+    def test_copies_of_one_issue_from_two_queries_of_a_fetch(self):
+        def epic(parent, status="In Progress", edit=("", "")):  # one "Parent Link" in (...) query's page
+            return {"pages": [{"text": page(["TEST-11"], type_="Epic", status=status, sprints=None, sp=None,
+                                            extra=[f"customfield_10018: {parent}"]).replace(*edit)}]}
+
+        def fetch(second):
+            return ad.adapt_fetch({"name": "epics", "parts": [epic("FEAT-1"), second]})
+        same = fetch(epic("FEAT-1"))  # identical copies (an issue two queries of the fetch both match)
+        self.assertEqual((same["fetch"]["complete"], same["fetch"]["fetched"]), (True, 1))
+        moved = fetch(epic("FEAT-60"))  # its Parent Link changed between the two reads
+        self.assertFalse(moved["fetch"]["complete"])
+        self.assertEqual(moved["fetch"]["problems"],
+                         ["copies of TEST-11 in this fetch differ in customfield_10018 (it changed between reads)"])
+        self.assertEqual(moved["fetch"]["fetched"], 1)
+        self.assertNotIn("FEAT-", " ".join(moved["fetch"]["problems"]))  # field names only, never values
+        closed = fetch(epic("FEAT-60", status="Closed"))
+        self.assertIn("differ in customfield_10018, resolution, status", closed["fetch"]["problems"][0])
+        touched = fetch(epic("FEAT-1", edit=("Updated: 2030-02-01", "Updated: 2030-02-02")))  # staleness reads it
+        self.assertIn("differ in updated (it changed between reads)", touched["fetch"]["problems"][0])
+        unread = fetch(epic("FEAT-1", edit=("Reporter: Sam Sample", "Reporter: Riley Other")))  # no check reads it
+        self.assertEqual((unread["fetch"]["complete"], unread["fetch"]["problems"]), (True, []))
+        stored = "FEAT-60 ... (value stored; read it with result_page)"
+        for second in (epic(stored), None):  # a value not read whole, in the copy dropped or the one kept
+            with self.subTest(dropped=second is not None):
+                out = (fetch(second) if second else
+                       ad.adapt_fetch({"name": "epics", "parts": [epic(stored), epic("FEAT-1")]}))
+                self.assertEqual(out["fetch"]["problems"],  # Jira paging step 7, not compared
+                                 ["TEST-11: customfield_10018 value shortened (not read whole)"])
+
+    def test_extra_fields_are_known_custom_fields_only(self):
+        known = ad.CUSTOM_FIELDS | {"resolutiondate"}
+        for name, fields in ad.EXTRA_FIELDS.items():
+            with self.subTest(fetch=name):
+                self.assertTrue(set(fields) <= known, set(fields) - known)
+                self.assertFalse(set(fields) & set(ad.BASE_FIELDS))  # base fields are always printed
+        self.assertIn("customfield_10018", ad.WHOLE_VALUE_FIELDS)
+        cut = page(["TEST-5"], extra=["customfield_10018: FEAT-1 ... (value stored; read it with result_page)"])
+        out = ad.adapt_fetch({"pages": [{"text": cut}]})
+        self.assertFalse(out["fetch"]["complete"])  # a shortened Parent Link would put an epic in the wrong release
+        self.assertIn("customfield_10018 value shortened", " ".join(out["fetch"]["problems"]))
+
+
+def _spikes_page(keys):
+    return page(keys, type_="Spike")
+
+
+def _links(key, rows):
+    """A whole get_jira_issue(fields="issuelinks") response with these link rows."""
+    section = "".join(f"- {w}: {o} (Blocks) | status: To Do | https://example.invalid/browse/{o}\n" for w, o in rows)
+    state = ad.LINKS_SET if rows else ad.LINKS_EMPTY
+    return (f"Latest Jira State:\n[{key}] Synthetic spike\nType: Spike | Status: To Do\n"
+            + (f"Linked Jira Issues:\n{section}" if rows else "")
+            + f"Attachments: none\nURL: https://example.invalid/browse/{key}\n\nDescription:\nSynthetic.\n\n"
+            f"Requested fields:\nissuelinks: {state}\n\nComments: none\n")
+
+
+class LinkedSpikeBatchTest(unittest.TestCase):
+    """One linked-spike query for many features keeps every association."""
+
+    FEATS = ("FEAT-1", "FEAT-2", "FEAT-3")
+
+    def test_the_batched_query_joins_the_per_feature_queries(self):
+        self.assertEqual(ad.linked_spikes_jql(["FEAT-1", "FEAT-2"]),
+                         'issuetype = Spike AND (issue in linkedIssues("FEAT-1", "is blocked by") OR '
+                         'issue in linkedIssues("FEAT-2", "is blocked by"))')
+        with self.assertRaises(ValueError):
+            ad.linked_spikes_jql([])  # no feature, no query
+
+    def test_each_spike_goes_to_every_feature_it_blocks(self):
+        batch = ad.adapt_fetch({"pages": [{"text": _spikes_page(["TEST-9", "TEST-8"])}]})
+        texts = {"TEST-9": _links("TEST-9", [("blocks", "FEAT-1"), ("blocks", "FEAT-3")]),  # two targets
+                 "TEST-8": _links("TEST-8", [("blocks", "FEAT-2"), ("is blocked by", "FEAT-3")])}  # one each way
+        out = ad.split_linked_spikes(self.FEATS, batch, texts)
+        self.assertEqual({k: [i["key"] for i in v["issues"]] for k, v in out.items()},
+                         {"FEAT-1": ["TEST-9"], "FEAT-2": ["TEST-8"], "FEAT-3": ["TEST-9"]})
+        self.assertTrue(all(v["fetch"]["complete"] for v in out.values()))
+
+    def test_an_unknown_association_fails_the_whole_batch(self):
+        batch = ad.adapt_fetch({"pages": [{"text": _spikes_page(["TEST-9", "TEST-8"])}]})
+        cases = {"links not read": {"TEST-9": _links("TEST-9", [("blocks", "FEAT-1")]), "TEST-8": None},
+                 "blocks none": {"TEST-9": _links("TEST-9", [("blocks", "FEAT-1")]),
+                                 "TEST-8": _links("TEST-8", [("blocks", "FEAT-77")])}}
+        for name, texts in cases.items():
+            with self.subTest(name):
+                out = ad.split_linked_spikes(self.FEATS, batch, texts)
+                self.assertFalse(any(v["fetch"]["complete"] for v in out.values()))
+                self.assertIn("TEST-8", " ".join(out["FEAT-3"]["fetch"]["problems"]))
+        failed = ad.adapt_fetch({"pages": [{"error": "timed out"}]})
+        out = ad.split_linked_spikes(self.FEATS, failed, {})
+        self.assertEqual(out["FEAT-1"]["fetch"]["problems"], ["fetch: page 1: query_jira call failed: timed out"])
 
 
 if __name__ == "__main__":

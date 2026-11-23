@@ -60,9 +60,9 @@ The weekly report uses them automatically, never by prompt:
 
 | From scrum-context | Weekly report shows |
 |---|---|
-| `week` 1 | sprint reply in capacity mode |
+| `week` 1 | sprint reply in capacity mode (a one-week sprint too: week 1 is never the final-week view) |
 | `week` 2 | sprint reply in mid-sprint mode |
-| `week` 3 (the sprint's last week) | mid-sprint mode plus the sprint-end view |
+| `week` = the sprint's last week (from its dates), week 2 or later | mid-sprint mode plus the final-week view |
 | phase `refinement` (the refinement sprint, all three weeks) | refinement checks for every non-Closed Feature targeting that release (week 1: "no refinement spike" as one count) |
 | phase `development`, `pencils-down sprint`, `pre-branch-cut` | release checks (scope vs capacity, schedule, blocks, cut line, staffing, refinement overdue) |
 | `not started` / `finished` for every release | no release reply; the Left out line says "no release in progress" |
@@ -88,19 +88,25 @@ also drops marked sprints.
 Only these Product Pages calls are supported, with the Product Pages
 `list_entities` tool. Each response has `data` (the entities, a list) and
 `cursor` (the next page's cursor, or null on the last page); a response
-without either is not readable, and the lookup failed:
+without either, or with an empty `cursor`, is not readable (cut off). Each
+request is sent at most twice: one that fails or is not readable is sent again
+once, unchanged; if the second answer also fails or is not readable, the
+lookup failed:
 
-1. **OpenShift product:** `list_entities(kind="product", shortname="openshift")`.
-   `ocp_product_id` is the integer `id` of the one `data` entry whose
-   `shortname` is `openshift`. Never hard-code or guess it; no single match, or
-   no integer `id`, means the lookup failed.
+1. **OpenShift product:** `list_entities(kind="product", shortname="openshift")`,
+   then, while the response's `cursor` is set, the same call with
+   `cursor=next_cursor` (the same filters, as for releases below; a cursor
+   already seen means the lookup failed). `ocp_product_id` is the integer `id`
+   of the one entry whose `shortname` is `openshift`, counted across every page
+   read. Never hard-code or guess it; no single match, or no integer `id`, means
+   the lookup failed.
 2. **Releases:** `list_entities(kind="release", public_parent_id=ocp_product_id)`,
    then, while the response's `cursor` is set,
    `list_entities(kind="release", public_parent_id=ocp_product_id, cursor=next_cursor)`
    with `next_cursor` = that `cursor`, the same filters, and **no** `phase__in`
    or other phase filter (phase values are not verified, and a phase label is
-   never used to pick releases). A cursor already seen in this listing, or a
-   call that fails, means the listing failed: do not retry it.
+   never used to pick releases). A cursor already seen in this listing means
+   the listing failed: do not fetch it again.
 3. **Schedules:** read the schedule of each needed `openshift-<X.Y>` release
    from its listed entity, as the persona does.
 
@@ -109,37 +115,61 @@ access to it. The same sequence as code (the tests run this block with a
 stand-in for the tool):
 
 ```python
-def openshift_releases(list_entities):
-    """Every OpenShift release entity Product Pages lists, or None when a lookup failed."""
-    try:
-        found = list_entities(kind="product", shortname="openshift")
-        if not isinstance(found, dict) or not isinstance(found.get("data"), list) or "cursor" not in found:
-            return None  # not a readable page: data must be a list and cursor must be there
-        products = [p for p in found["data"] if isinstance(p, dict) and p.get("shortname") == "openshift"]
-        if len(products) != 1 or type(products[0].get("id")) is not int:
-            return None  # no single OpenShift product with an integer id
-        ocp_product_id = products[0]["id"]
-        page = list_entities(kind="release", public_parent_id=ocp_product_id)
-        releases, seen = [], set()
+def openshift_releases(list_entities, why=None):
+    """Every OpenShift release entity Product Pages lists, or None when a lookup failed
+    (then its reason is appended to ``why``, a list, when given)."""
+    def failed(reason):
+        if why is not None:
+            why.append(reason)
+        return None
+
+    def readable(page):
+        """data a list, and cursor present: null (the last page) or a non-empty value."""
+        return (isinstance(page, dict) and isinstance(page.get("data"), list) and "cursor" in page
+                and page["cursor"] != "")
+
+    def call(**request):
+        """One page. A failed call or a page not readable (cut off) is sent again once,
+        unchanged: each request at most twice. None when the second answer is not
+        readable either; a second failure raises (the lookup failed)."""
+        try:
+            page = list_entities(**request)
+        except Exception:
+            page = None
+        if not readable(page):
+            page = list_entities(**request)
+        return page if readable(page) else None
+
+    def every_page(**filters):
+        """Every entity of a listing, each non-null cursor followed with the same filters;
+        None when a page is still not readable after its retry or a cursor repeats."""
+        entities, seen, page = [], set(), call(**filters)
         while True:
-            if not isinstance(page, dict) or not isinstance(page.get("data"), list) or "cursor" not in page:
-                return None  # not a readable page: data must be a list and cursor must be there
-            releases += page["data"]
+            if page is None:
+                return failed("a listing page still not readable after its retry")
+            entities += page["data"]
             next_cursor = page["cursor"]
             if next_cursor is None:
-                return releases  # an explicit null cursor: the last page
-            if next_cursor == "":
-                return None  # not a readable cursor
+                return entities  # an explicit null cursor: the last page
             if next_cursor in seen:
-                return None  # a cursor already seen: the listing failed; no retry
+                return failed("a listing cursor repeated")  # the listing failed; not fetched again
             seen.add(next_cursor)
-            page = list_entities(kind="release", public_parent_id=ocp_product_id, cursor=next_cursor)
-    except Exception:  # a failed call: the lookup failed; no retry
-        return None
+            page = call(**filters, cursor=next_cursor)
+
+    try:
+        found = every_page(kind="product", shortname="openshift")
+        if found is None:
+            return None  # the product listing was not read whole
+        products = [p for p in found if isinstance(p, dict) and p.get("shortname") == "openshift"]
+        if len(products) != 1 or type(products[0].get("id")) is not int:
+            return failed("no single OpenShift product with an integer id")  # across every page
+        return every_page(kind="release", public_parent_id=products[0]["id"])
+    except Exception as exc:  # the call failed again after its retry: the lookup failed
+        return failed(f"the call failed again after its retry: {' '.join(str(exc).split()) or type(exc).__name__}")
 ```
 
-When it returns None, pass every needed release as
-`{"error": "Product Pages listing failed"}` (below).
+Call it with `why = []`. When it returns None, pass every needed release as
+`{"error": why[0]}` (below): the release section's omission then names that error.
 
 Which releases:
 

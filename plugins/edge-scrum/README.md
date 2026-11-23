@@ -116,6 +116,8 @@ Playbooks under [`chai/`](chai/) are for the chai-bot coordinator, not Claude Co
 | [`release-health`](chai/release-health/SKILL.md) | One release by phase: refinement gaps, or scope vs capacity, schedule, blocks, cut line and staffing (rules in [`bin/_scrum_rules.py`](bin/_scrum_rules.py)); epic Target Version and QA Contact flags (decision 0024) |
 | [`weekly-health-report`](chai/weekly-health-report/SKILL.md) | The weekly report of edge-context decision 0018: 3-line post, details and owner-mentioned actions in the thread |
 
+The weekly report fetches each Jira list once for all its sections (features, epics, stories, links) and pages in rounds, one Python call per round. Velocity can reuse closed-sprint aggregates from an optional persona memory store ([`bin/velocity_cache.py`](bin/velocity_cache.py)). A persona admin must provision that store; without it, velocity is computed from the closed sprints every run. A stored sprint is not read again, so an edit to it after it closed is not seen until its entry is deleted.
+
 #### `scrum-context`
 
 Read-only. Answers "where are we in the sprint and release cycle?" for other chai-bot skills: current sprint and week, a release's refinement / development / pencils-down / branch-cut sprints and phase, next ceremony dates, and next sprint's team availability. Sources: board 11479 sprints, Product Pages, and the OpenShift Edge calendar; date logic runs in [`bin/scrum_context.py`](bin/scrum_context.py). Availability requires the `ROSTER_SOURCE` setting described in [`chai/scrum-context/SKILL.md`](chai/scrum-context/SKILL.md).

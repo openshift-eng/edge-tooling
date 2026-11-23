@@ -427,17 +427,17 @@ class DevelopmentChecksTest(unittest.TestCase):
 
 
 class SprintEndTest(unittest.TestCase):
-    def test_week_3_adds_delivered_and_carry_over(self):
+    def test_final_week_shows_what_is_still_open(self):
         start = START + dt.timedelta(weeks=6)
         sprint = {"name": "Test Sprint 12", "start": start.isoformat(),
                   "end": (start + dt.timedelta(weeks=3)).isoformat(), "week": 3}
         out = cr.sprint_health(_sprint_issues(), sprint, _day(12, 3), "mid-sprint")
-        self.assertEqual(out["sprint_end"], {"delivered_sp": 8, "total_sp": 23, "delivered_pct": 35,
-                                             "carry_over_issues": 5, "carry_over_sp": 12})
-        self.assertIn("carry-over", [f["label"] for f in out["items"] if f["key"] == "TEST-2"])
+        self.assertEqual(out["still_open"], {"open_issues": 5, "open_sp": 12, "review_issues": 0, "review_sp": 0,
+                                             "work_issues": 5, "work_sp": 12, "other_issues": 0, "other_sp": 0})
+        self.assertNotIn("carry-over", [f["label"] for f in out["items"]])  # blockers only
         self.assertNotIn("TEST-5", {f["key"] for f in out["items"]})  # Closed: delivered
         week2 = cr.sprint_health(_sprint_issues(), dict(sprint, week=2), _day(12, 2), "mid-sprint")
-        self.assertNotIn("sprint_end", week2)
+        self.assertNotIn("still_open", week2)
 
 
 class PhaseSelectionTest(unittest.TestCase):
@@ -449,10 +449,12 @@ class PhaseSelectionTest(unittest.TestCase):
                            ("refinement, week 3 (sprint-end view)", "mid-sprint")):
             with self.subTest(case=case):
                 r = self._report(case)
-                self.assertIn(f"Test Sprint 12 (week {case[-1] if case[-1].isdigit() else 3}, {mode}); 9.2 refinement",
-                              r["top_post"][0])
+                when = f"week {case[-1]}, {mode}" if case[-1].isdigit() else "final week"
+                self.assertIn(f"Test Sprint 12 ({when}); 9.2 refinement", r["top_post"][0])
                 self.assertTrue(r["replies"][1].startswith("*9.2 refinement* (refinement sprint 12)"))
-        self.assertIn("delivered 8 of 23 SP (35%)", self._report("refinement, week 3 (sprint-end view)")["replies"][0])
+        self.assertIn("(final week): 8 of 23 SP done, 16.7 expected (Behind); 5 still open (12 SP): "
+                      "0 in review or testing (0 SP), 5 in progress or to do (12 SP)",
+                      self._report("refinement, week 3 (sprint-end view)")["replies"][0])
 
     def test_after_refinement_and_development(self):
         r = self._report("after refinement (first development sprint)")

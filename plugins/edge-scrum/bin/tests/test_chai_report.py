@@ -179,7 +179,7 @@ class ReleaseGateTest(unittest.TestCase):
     def test_incomplete_gate_is_unknown_never_zero(self):
         failed = cr.release_feature_gate(ad.adapt_fetch({"name": "feature_gate", "pages": [{"error": "x"}]}))
         self.assertEqual((failed["complete"], failed["counts"], failed["releases"]), (False, None, []))
-        self.assertEqual(failed["why"], "fetch: page 1: query_jira call failed")
+        self.assertEqual(failed["why"], "fetch: page 1: query_jira call failed: x")
         cut = ad.adapt_fetch({"pages": [{"text": page(keys_desc("TEST", 60, 50), final=False)}]})
         self.assertFalse(cr.release_feature_gate(cut)["complete"])  # stopped after a "more match" page
         no_version = ad.adapt_fetch({"pages": [{"text": page(["TEST-1"])}]})  # Target Version not requested
@@ -189,7 +189,7 @@ class ReleaseGateTest(unittest.TestCase):
         self.assertFalse(cr.release_feature_gate(None)["complete"])
         sections, missing = cr.select_sections({"release_in_progress": [{"release": "9.2", "phase": "development"}]},
                                                [_window("9.2", "development")], failed)
-        why = "release Feature gate incomplete: fetch: page 1: query_jira call failed"
+        why = "release Feature gate incomplete: fetch: page 1: query_jira call failed: x"
         self.assertEqual((sections, missing), ([], [{"what": "Release sections", "why": why}]))
 
     def test_unknown_type_or_status_is_incomplete_before_filtering(self):
@@ -602,10 +602,21 @@ class CurrentSprintCapacityTest(unittest.TestCase):
 
 
 class BurndownWordingTest(unittest.TestCase):
-    def _risk(self, today, done):
+    def _risk(self, today, done, week=2):
         issues = dict(ISSUES, total_done_sp=done, total_remaining_sp=30 - done)
-        out = cr.sprint_health(issues, dict(SPRINT, week=3), today, "mid-sprint")
+        out = cr.sprint_health(issues, dict(SPRINT, week=week), today, "mid-sprint")
         return out["risks"][0]["text"] if out["risks"] else None
+
+    def test_the_final_week_has_no_projection_and_no_re_scope(self):
+        self.assertEqual(self._risk("2030-02-07", 4, week=3), "Burndown behind: 4 of 30 SP done, 15 expected")
+        final = cr.sprint_health(dict(ISSUES, total_done_sp=4, total_remaining_sp=26), dict(SPRINT, week=3),
+                                 "2030-02-07", "mid-sprint")
+        self.assertEqual(final["team_items"], [])  # too late to re-scope
+        self.assertNotIn("projected_finish", final["burndown"])  # nothing for another renderer to show
+        week2 = cr.sprint_health(dict(ISSUES, total_done_sp=4, total_remaining_sp=26), dict(SPRINT, week=2),
+                                 "2030-02-07", "mid-sprint")
+        self.assertEqual(week2["team_items"], ["re-scope the sprint (26 SP left, burndown behind)"])  # unchanged
+        self.assertIn("projected_finish", week2["burndown"])
 
     def test_exact_biggest_risk_string(self):
         self.assertEqual(self._risk("2030-02-07", 4),
@@ -619,6 +630,92 @@ class BurndownWordingTest(unittest.TestCase):
         self.assertIn("projected to finish 2 days after", self._risk("2030-02-07", 14))
         # 11 elapsed; 13 done → 17 SP left need 14.4 days, 3.4 over → 4 days (never "3.4" or "0 days").
         self.assertIn("projected to finish 4 days after", self._risk("2030-02-07", 13))
+
+
+class FinalWeekTest(unittest.TestCase):
+    """The sprint's final week: what is still open, by stage; no carry-over items."""
+
+    def _issue(self, key, status, sp, owner="Alex Example", blocked=()):
+        return {"key": key, "type": "Story", "status": status, "sp": sp, "assignee_display": owner,
+                "epic_key": "TEST-100", "blocked_by": list(blocked), "labels": []}
+
+    def _final(self, issues, week=3, sprint=None):
+        total = sum(i["sp"] or 0 for i in issues)
+        done = sum(i["sp"] or 0 for i in issues if i["status"] in ("Closed", "Done", "Verified"))
+        data = {"total_sp": total, "total_done_sp": done, "total_remaining_sp": total - done, "issues": issues}
+        return cr.sprint_health(data, dict(sprint or SPRINT, week=week), "2030-02-14", "mid-sprint")
+
+    def test_still_open_by_stage_adds_up(self):
+        issues = [self._issue("TEST-1", "Review", 2), self._issue("TEST-2", "ON_QA", 1),
+                  self._issue("TEST-3", "MODIFIED", 1), self._issue("TEST-4", "In Progress", 3, blocked=["TEST-9"]),
+                  self._issue("TEST-5", "To Do", None), self._issue("TEST-6", "ASSIGNED", 2),
+                  self._issue("TEST-7", "NEW", 1), self._issue("TEST-8", "Code Review", 2),  # not a law 07 status
+                  self._issue("TEST-9", "", 1), self._issue("TEST-10", "Closed", 5),
+                  self._issue("TEST-11", "Verified", 1)]
+        out = self._final(issues)
+        self.assertEqual(out["still_open"], {"open_issues": 9, "open_sp": 13, "review_issues": 3, "review_sp": 4,
+                                             "work_issues": 4, "work_sp": 6, "other_issues": 2, "other_sp": 3})
+        self.assertEqual(cr._still_open_text(out["still_open"]),
+                         "9 still open (13 SP): 3 in review or testing (4 SP), 4 in progress or to do (6 SP), "
+                         "2 other status (3 SP)")
+        self.assertEqual([(f["key"], f["label"]) for f in out["items"]],
+                         [("TEST-4", "blocked by TEST-9")])  # no carry-over
+        header = cr._sprint_header(out, [])
+        self.assertTrue(header.startswith("*Sprint health: Test Sprint 11* (final week): "))
+        self.assertNotIn("delivered", header)
+        self.assertNotIn("carry-over", header)
+
+    def test_nothing_still_open_and_no_other_bucket_when_every_status_is_known(self):
+        done = self._final([self._issue("TEST-1", "Closed", 3)])
+        self.assertEqual(cr._still_open_text(done["still_open"]), "0 still open (0 SP)")
+        known = self._final([self._issue("TEST-1", "Review", 1.5), self._issue("TEST-2", "To Do", 2)])
+        self.assertEqual(cr._still_open_text(known["still_open"]),
+                         "2 still open (3.5 SP): 1 in review or testing (1.5 SP), 1 in progress or to do (2 SP)")
+
+    def test_the_last_week_comes_from_the_sprint_dates(self):
+        two = {"name": "Test Sprint 11", "start": "2030-01-28", "end": "2030-02-11"}
+        four = {"name": "Test Sprint 11", "start": "2030-01-28", "end": "2030-02-25"}
+        self.assertTrue(cr.final_week(dict(two, week=2)))  # a 2-week sprint's week 2 is its final week
+        self.assertFalse(cr.final_week(dict(four, week=3)))  # a 4-week sprint's week 3 is not
+        self.assertTrue(cr.final_week(dict(four, week=4)))
+        self.assertTrue(cr.final_week(dict(SPRINT, week=3)))
+        self.assertFalse(cr.final_week(dict(SPRINT, week=2)))
+        self.assertFalse(cr.final_week({"name": "Test Sprint 11", "week": 3}))  # no dates: not known
+        self.assertNotIn("still_open", self._final([self._issue("TEST-1", "To Do", 1)], week=3, sprint=four))
+        self.assertTrue(cr.final_week(dict(four, week=5)))  # a week past the last is still the end
+
+    def test_a_one_week_sprint_stays_in_capacity_mode(self):
+        one = {"name": "Test Sprint 11", "number": 11, "start": "2030-01-28", "end": "2030-02-04"}
+        self.assertTrue(cr.final_week(dict(one, week=1)))  # by its dates, week 1 is also its last week
+        self.assertEqual(cr.sprint_mode(1), "capacity")  # but week 1 takes capacity mode (the documented rule)
+        out = cr.sprint_health(ISSUES, dict(one, week=1), "2030-01-29", "capacity", velocity=24, availability=0.9)
+        self.assertNotIn("final_week", out)  # no final-week view, label or still-open line
+        self.assertNotIn("still_open", out)
+        self.assertIn("capacity", out)  # the capacity view: sprint SP vs capacity
+        self.assertTrue(cr.build_report(out, [])["top_post"][0].endswith("Test Sprint 11 (week 1, capacity)"))
+
+    def test_a_two_week_sprint_takes_the_final_week_view_in_week_2(self):
+        two = {"name": "Test Sprint 11", "start": "2030-01-28", "end": "2030-02-11"}
+        issues = dict(ISSUES, total_done_sp=4, total_remaining_sp=26)
+        out = cr.sprint_health(issues, dict(two, week=2), "2030-02-07", "mid-sprint")
+        self.assertTrue(out["final_week"])  # final-week suppression takes precedence over week 2
+        self.assertEqual(out["team_items"], [])
+        self.assertEqual(out["risks"][0]["text"], "Burndown behind: 4 of 30 SP done, 22 expected")
+        report = cr.build_report(out, [])
+        self.assertTrue(report["top_post"][0].endswith("Test Sprint 11 (final week)"))
+        self.assertTrue(report["replies"][0].startswith("*Sprint health: Test Sprint 11* (final week): "))
+        self.assertNotIn("mid-sprint", report["top_post_text"] + report["replies"][0])
+
+    def test_status_names_match_in_any_case(self):
+        out = self._final([self._issue("TEST-1", "review", 1), self._issue("TEST-2", "in progress", 2)])
+        self.assertEqual((out["still_open"]["review_issues"], out["still_open"]["work_issues"]), (1, 1))
+
+    def test_an_on_track_final_week_says_so_without_a_projection(self):
+        out = self._final([self._issue("TEST-1", "Closed", 8), self._issue("TEST-2", "Review", 1)])
+        report = cr.build_report(out, [])
+        self.assertEqual(report["top_post"][0], "🟢 Edge weekly health: Test Sprint 11 (final week)")
+        self.assertEqual(report["top_post"][1], "No risks this week: 8 of 9 SP done, 7.4 expected (On Track)")
+        self.assertNotIn("projected", report["top_post_text"] + "".join(report["replies"]))
 
 
 class CodeRabbitFixesTest(unittest.TestCase):
@@ -711,6 +808,258 @@ class CodeRabbitFixesTest(unittest.TestCase):
             cr.build_report(None, sections)
 
 
+class LinksLeftOutTest(unittest.TestCase):
+    """Blocked-by links that could not be read: left out with the failed fetch and its error."""
+
+    def test_sprint_links_left_out_with_the_error(self):
+        sprint = dict(SPRINT, week=2)
+        named = cr.sprint_health(ISSUES, sprint, "2030-02-07", "mid-sprint", links_complete=False,
+                                 links_problems=["blocked items fetch incomplete: fetch: page 1: x",
+                                                 "TEST-2: get_jira_issue failed"])
+        self.assertIn({"what": "blocked-by links",
+                       "why": "blocked items fetch incomplete: fetch: page 1: x; TEST-2: get_jira_issue failed"},
+                      named["left_out"])
+        plain = cr.sprint_health(ISSUES, sprint, "2030-02-07", "mid-sprint", links_complete=False)
+        self.assertIn({"what": "blocked-by links", "why": "issue link details incomplete (get_jira_issue)"},
+                      plain["left_out"])
+        # A problem alone makes the links incomplete: the blocked signal is never guessed.
+        problem_only = cr.sprint_health(ISSUES, sprint, "2030-02-07", "mid-sprint",
+                                        links_problems=["TEST-2: get_jira_issue failed"])
+        self.assertEqual((problem_only["links_complete"], problem_only["items"]),
+                         (plain["links_complete"], plain["items"]))
+        one = cr.sprint_health(ISSUES, sprint, "2030-02-07", "mid-sprint",
+                               links_problems="TEST-2: get_jira_issue failed")  # one string, one problem
+        self.assertIn({"what": "blocked-by links", "why": "TEST-2: get_jira_issue failed"}, one["left_out"])
+        blank = cr.sprint_health(ISSUES, sprint, "2030-02-07", "mid-sprint", links_problems=["", " "])
+        self.assertEqual(blank["links_complete"], True)  # no problem named: nothing changes
+
+    def test_release_links_left_out_with_the_error(self):
+        section = {"release": "9.1", "phase": "development"}
+        kw = {"features": {"features": []}, "epics": {"epics": []}, "spikes": {}, "stories": {"stories": []}}
+        not_run = cr.release_health(CHECKS, section, links=None,
+                                    links_problems=["block candidates fetch incomplete: fetch: page 1: x"], **kw)
+        self.assertIn({"what": "9.1 feature and epic blocks",
+                       "why": "block candidates fetch incomplete: fetch: page 1: x"}, not_run["left_out"])
+        unread = cr.release_health(CHECKS, section, links={}, links_unread=["FEAT-3"],
+                                   links_problems=["FEAT-3: get_jira_issue failed"], **kw)
+        self.assertIn({"what": "9.1 blocks of FEAT-3", "why": "FEAT-3: get_jira_issue failed"}, unread["left_out"])
+        default = cr.release_health(CHECKS, section, links=None, **kw)
+        self.assertIn({"what": "9.1 feature and epic blocks", "why": "issue links not read"}, default["left_out"])
+        keyless = cr.release_health(CHECKS, section, links={}, links_problems=["a problem with no key"], **kw)
+        self.assertEqual(keyless["blocks_unchecked"], "all")  # never counted as checked
+        self.assertIn({"what": "9.1 feature and epic blocks", "why": "a problem with no key"}, keyless["left_out"])
+
+
+def _fetch(blocks_text, complete=True):
+    """An adapt_fetch result of one final page of these issue blocks."""
+    text = f"Found {len(blocks_text)} issues (showing {len(blocks_text)}):\n" + "\n".join(blocks_text) + "\n"
+    out = ad.adapt_fetch({"name": "shared", "pages": [{"text": text}]})
+    if not complete:
+        out["fetch"].update(complete=False, problems=["fetch: page 1: query_jira call failed: x"])
+    return out
+
+
+def _issue(key, type_="Feature", status="In Progress", extra=(), resolution=None):
+    lines = [f"  [{key}] Synthetic {type_.lower()}",
+             f"    Type: {type_} | Status: {status} | Priority: Major | Assignee: Alex Example | Reporter: Sam Sample"
+             + (f" | Resolution: {resolution}" if resolution else ""),
+             "    Created: 2030-01-02 | Updated: 2030-02-01"]
+    return "\n".join(lines + [f"    {e}" for e in extra])
+
+
+class SharedFetchTest(unittest.TestCase):
+    """The shared fetch plan's partitions reproduce each old query exactly."""
+
+    GATE = _fetch([
+        _issue("FEAT-1", extra=["Labels: ocpedge-plan", "customfield_10855: openshift-9.2"]),
+        _issue("FEAT-2", extra=["Labels: ocpedge-plan", "customfield_10855: openshift-9.2, openshift-9.3"]),
+        _issue("FEAT-3", extra=["Labels: microshift", "customfield_10855: openshift-9.3"]),
+        _issue("FEAT-4", extra=["Labels: ocpedge-plan", "customfield_10855: openshift-9.2"], resolution="Duplicate"),
+    ])
+
+    def test_gate_features_are_the_refinement_features_query(self):
+        self.assertEqual([i["key"] for i in cr.gate_features(self.GATE, "9.2")["issues"]], ["FEAT-1", "FEAT-2"])
+        self.assertEqual([i["key"] for i in cr.gate_features(self.GATE, "9.3")["issues"]], ["FEAT-2", "FEAT-3"])
+        self.assertTrue(cr.gate_features(self.GATE, "9.2")["fetch"]["complete"])
+
+    EPICS = _fetch([
+        _issue("TEST-10", "Epic", "Closed", ["customfield_10018: FEAT-1"]),  # a Closed epic of a release feature
+        _issue("TEST-11", "Epic", extra=["Parent: FEAT-1", "customfield_10018: FEAT-1"]),
+        _issue("TEST-12", "Epic", "To Do", ["Parent: FEAT-2"]),  # Jira Cloud: the feature is the native parent
+        _issue("USH-14", "Epic", extra=["Parent: FEAT-99", "customfield_10018: FEAT-2"]),  # matched its Parent Link
+        _issue("TEST-15", "Story", extra=["customfield_10018: FEAT-2"]),  # Parent Link query has no type filter
+        _issue("TEST-16", "Epic", extra=["Parent: FEAT-5"]),  # a feature of both releases
+    ])
+    RELEASES = (("9.2", ("FEAT-1", "FEAT-5")), ("9.3", ("FEAT-2", "FEAT-5")))
+
+    def test_epics_partition_by_parent_link(self):
+        parts = cr.partition_epics(self.EPICS, dict(self.RELEASES))
+        self.assertEqual([i["key"] for i in parts["9.2"]["issues"]], ["TEST-10", "TEST-11", "TEST-16"])
+        self.assertEqual([i["key"] for i in parts["9.3"]["issues"]], ["TEST-12", "USH-14", "TEST-15", "TEST-16"])
+        self.assertTrue(all(part["fetch"]["complete"] for part in parts.values()))
+        failed = cr.partition_epics(_fetch([], complete=False), dict(self.RELEASES))
+        self.assertFalse(any(part["fetch"]["complete"] for part in failed.values()))  # fails every part
+
+    def test_an_epic_whose_copies_disagree_goes_to_no_release(self):
+        def query(parent):  # one "Parent Link" in (...) query of the shared epics fetch
+            return {"pages": [{"text": page(["TEST-11"], type_="Epic", sprints=None, sp=None,
+                                            extra=[f"customfield_10018: {parent}"])}]}
+        releases = {"9.2": ["FEAT-1"], "9.3": ["FEAT-2"]}
+        moved = ad.adapt_fetches({"epics": {"parts": [query("FEAT-1"), query("FEAT-2")]}})["epics"]
+        why = "copies of TEST-11 in this fetch differ in customfield_10018 (it changed between reads)"
+        for parts in (cr.partition_epics(moved, releases), cr.partition_epics(moved, {"9.2": ["FEAT-1"]})):
+            self.assertEqual({r: (p["fetch"]["complete"], p["fetch"]["problems"]) for r, p in parts.items()},
+                             {r: (False, [why]) for r in parts})  # neither release takes either copy silently
+        same = ad.adapt_fetches({"epics": {"parts": [query("FEAT-1"), query("FEAT-1")]}})["epics"]
+        self.assertEqual({r: (p["fetch"]["complete"], [i["key"] for i in p["issues"]])
+                          for r, p in cr.partition_epics(same, releases).items()},
+                         {"9.2": (True, ["TEST-11"]), "9.3": (True, [])})  # identical copies: kept once
+
+    def test_one_release_takes_every_returned_issue(self):
+        odd = _fetch([_issue("TEST-17", "Epic"), _issue("TEST-18", "Epic", extra=["Parent: FEAT-7"])])
+        part = cr.partition_epics(odd, {"9.2": ["FEAT-1"]})["9.2"]
+        self.assertEqual([i["key"] for i in part["issues"]], ["TEST-17", "TEST-18"])
+        self.assertTrue(part["fetch"]["complete"])
+        cut = _fetch([_issue("TEST-19", "Epic", extra=["Parent: FEAT-1", "customfield_10018: (value stored)"])])
+        self.assertTrue(cr.partition_epics(cut, {"9.2": ["FEAT-1"]})["9.2"]["fetch"]["complete"])  # parent read
+        cut = _fetch([_issue("TEST-19", "Epic", extra=["customfield_10018: (value stored)"])])
+        self.assertFalse(cr.partition_epics(cut, {"9.2": ["FEAT-1"]})["9.2"]["fetch"]["complete"])  # feature unknown
+
+    def test_stories_are_grouped_per_release(self):
+        stories = _fetch([_issue("TESTA-1", "Story", extra=["Parent: TEST-11"]),
+                          _issue("TESTB-2", "Story", extra=["Parent: TEST-20"])])
+        groups = cr.group_stories(stories, {"9.2": ["TEST-11"], "9.3": ["TEST-11", "TEST-20"]})
+        self.assertEqual([i["key"] for i in groups["9.2"]["issues"]], ["TESTA-1"])
+        self.assertEqual([i["key"] for i in groups["9.3"]["issues"]], ["TESTA-1", "TESTB-2"])  # in both releases
+
+    def test_parents_are_reused_only_with_full_coverage(self):
+        batch, missing = cr.reuse_parents(["FEAT-1", "FEAT-7", "FEAT-2"], [self.GATE])
+        self.assertEqual((batch["keys"], missing), (["FEAT-1", "FEAT-2"], ["FEAT-7"]))
+        gaps_fetch = _fetch([_issue("TEST-30", "Epic", extra=["Parent: FEAT-1"])])
+        gaps = cr.epic_field_gaps(gaps_fetch, [batch])
+        self.assertEqual(gaps["checks"]["no_target_version"][0]["key"], "TEST-30")  # parent read from the gate
+        cut = dict(self.GATE, fetch=dict(self.GATE["fetch"], complete=False,
+                                         problems=["FEAT-1: customfield_10475 value shortened (not read whole)"]))
+        self.assertEqual(cr.reuse_parents(["FEAT-1", "FEAT-2"], [cut])[1], ["FEAT-1"])  # its own problem: read again
+        paged = dict(self.GATE, fetch=dict(self.GATE["fetch"], complete=False, problems=["fetch: page 2: cut off"]))
+        self.assertEqual(cr.reuse_parents(["FEAT-1"], [paged]), (None, ["FEAT-1"]))  # a page problem: nothing reused
+
+    def test_the_newest_whole_parent_copy_wins(self):
+        older = _fetch([_issue("FEAT-1", extra=["customfield_10855: openshift-9.2",
+                                                "customfield_10470: Quinn Quality"])])
+        newer = _fetch([_issue("FEAT-1", extra=["customfield_10855: openshift-9.2"])])  # QA Contact removed since
+        batch, _ = cr.reuse_parents(["FEAT-1"], [newer, older])  # the recipe: the latest read first
+        self.assertNotIn("customfield_10470", batch["result"]["issues"][0])
+        batch, _ = cr.reuse_parents(["FEAT-1"], [older, newer])  # the first whole copy wins
+        self.assertIn("customfield_10470", batch["result"]["issues"][0])
+
+    def test_reused_parents_keep_their_own_source_status(self):
+        cut = _fetch([_issue("FEAT-1", extra=["customfield_10855: openshift-9.2"]),
+                      _issue("FEAT-2", extra=["customfield_10855: openshift-9.2"])])
+        cut["fetch"].update(complete=False, problems=["FEAT-2: customfield_10470 value shortened (not read whole)"])
+        whole = _fetch([_issue("FEAT-2", extra=["customfield_10855: openshift-9.2"])])
+        batch, missing = cr.reuse_parents(["FEAT-1", "FEAT-2"], [cut, whole])
+        self.assertEqual((batch["keys"], missing), (["FEAT-1", "FEAT-2"], []))  # FEAT-2 taken whole from the second
+        self.assertTrue(batch["result"]["fetch"]["complete"])  # not the first source's FEAT-2 problem
+        self.assertEqual(batch["result"]["fetch"]["problems"], [])
+        self.assertEqual(cr.reuse_parents(["FEAT-2"], [cut])[1], ["FEAT-2"])  # cut everywhere: read again
+
+    def test_a_release_with_no_features_has_no_epics(self):
+        one = _fetch([_issue("TEST-10", "Epic", "Closed", ["customfield_10018: FEAT-1"]),
+                      _issue("TEST-17", "Epic")])  # one release with keys: all its query returned
+        parts = cr.partition_epics(one, {"9.2": ["FEAT-1"], "9.3": []})
+        self.assertEqual(([i["key"] for i in parts["9.3"]["issues"]], parts["9.3"]["fetch"]["complete"]), ([], True))
+        self.assertEqual([i["key"] for i in parts["9.2"]["issues"]], ["TEST-10", "TEST-17"])
+        self.assertTrue(parts["9.2"]["fetch"]["complete"])
+        none_sent = cr.partition_epics(None, {"9.3": []})  # no feature at all: no epics query
+        self.assertEqual((none_sent["9.3"]["issues"], none_sent["9.3"]["fetch"]["complete"]), ([], True))
+        failed = cr.partition_epics(_fetch([], complete=False), {"9.2": ["FEAT-1"], "9.3": []})
+        self.assertFalse(failed["9.2"]["fetch"]["complete"])  # attempted and failed: still incomplete
+        self.assertTrue(failed["9.3"]["fetch"]["complete"])  # nothing of 9.3 was in it
+
+    def test_a_release_with_no_epics_needs_no_stories(self):
+        failed = _fetch([], complete=False)
+        groups = cr.group_stories(failed, {"9.2": [], "9.3": ["TEST-40"]})
+        self.assertEqual((groups["9.2"]["issues"], groups["9.2"]["fetch"]["complete"]), ([], True))
+        self.assertFalse(groups["9.3"]["fetch"]["complete"])  # its epics were queried: the failure is its own
+        self.assertEqual(cr.group_stories(None, {"9.2": []})["9.2"]["fetch"]["complete"], True)  # nothing sent
+
+    def test_empty_epic_check_names_the_failed_fetch(self):
+        failed = _fetch([], complete=False)
+        counts, why = cr.epic_issue_counts(failed, ["TEST-11"])
+        self.assertEqual((counts, why), (None, "epic issues not fetched (fetch: page 1: query_jira call failed: x)"))
+        out = cr.refinement_gaps([], [], {"release": "9.3", "phase": "refinement"}, epics={"epic_keys": []},
+                                 epic_issue_counts=counts, epic_issue_counts_why=why)
+        self.assertIn({"what": "9.3 empty-epic check", "why": why}, out["left_out"])
+        stray = _fetch([_issue("TESTA-4", "Story")])
+        self.assertEqual(cr.epic_issue_counts(stray, ["TEST-11"]),
+                         (None, "epic issues not attributable (TESTA-4: returned with no readable parent)"))
+        whole = _fetch([_issue("TESTA-1", "Story", extra=["Parent: TEST-11"])])
+        self.assertEqual(cr.epic_issue_counts(whole, ["TEST-11"]), ({"TEST-11": 1}, None))
+        self.assertEqual(cr.epic_issue_counts(failed, []), ({}, None))  # no epic: no story needed
+        other = _fetch([_issue("TESTA-5", "Story", extra=["Parent: TEST-99"])])
+        self.assertEqual(cr.epic_issue_counts(other, ["TEST-11"])[1],
+                         "epic issues not attributable (TESTA-5: returned with a parent of no queried epic (TEST-99))")
+
+    def test_unknown_membership_fails_every_part_it_could_be_in(self):
+        for title, extra in (("Parent Link shortened", ["Parent: FEAT-1", "customfield_10018: (value stored)"]),
+                             ("parent and Parent Link name features of different releases",
+                              ["Parent: FEAT-1", "customfield_10018: FEAT-2"]),
+                             ("no selected feature named", ["Parent: FEAT-99"]),
+                             ("neither printed", [])):
+            with self.subTest(title):
+                parts = cr.partition_epics(_fetch([_issue("TEST-20", "Epic", extra=extra)]), dict(self.RELEASES))
+                for part in parts.values():
+                    self.assertFalse(part["fetch"]["complete"])
+                    self.assertIn("TEST-20: returned by the epics fetch, release unknown",
+                                  part["fetch"]["problems"][-1])
+        stories = _fetch([_issue("TESTA-9", "Story", extra=["Parent: TEST-99"])])  # a parent of no selected epic
+        self.assertFalse(cr.group_stories(stories, {"9.2": ["TEST-11"]})["9.2"]["fetch"]["complete"])
+
+    def test_epic_issue_counts_need_whole_pages_only(self):
+        stories = _fetch([_issue("TESTA-1", "Story", extra=["Parent: TEST-11"]),
+                          _issue("TESTA-2", "Story", extra=["Parent: TEST-11"]),
+                          _issue("TESTA-3", "Story", extra=["Parent: TEST-12"])])
+        self.assertEqual(cr.epic_issue_counts(stories, ["TEST-11", "TEST-12"]), ({"TEST-11": 2, "TEST-12": 1}, None))
+        cut = dict(stories, fetch=dict(stories["fetch"], complete=False,
+                                       problems=["TESTA-1: customfield_10028 value shortened (not read whole)"]))
+        both = ["TEST-11", "TEST-12"]  # the epic keys the query used
+        self.assertEqual(cr.epic_issue_counts(cut, ["TEST-11"], both)[0], {"TEST-11": 2})  # the points do not matter
+        paged = dict(stories, fetch=dict(stories["fetch"], complete=False, problems=["fetch: page 2: cut off"]))
+        self.assertIsNone(cr.epic_issue_counts(paged, ["TEST-11"])[0])
+
+    def test_epic_issue_counts_unknown_when_a_story_cannot_be_attributed(self):
+        queried = ["TEST-11", "TEST-12", "TEST-20"]  # every section's epics, as the query sent them
+        for title, row in (("no readable parent", _issue("TESTA-4", "Story")),
+                           ("a parent of no queried epic", _issue("TESTA-5", "Story", extra=["Parent: TEST-99"]))):
+            with self.subTest(title):
+                stories = _fetch([_issue("TESTA-1", "Story", extra=["Parent: TEST-11"]), row])
+                self.assertIsNone(cr.epic_issue_counts(stories, ["TEST-11", "TEST-12"], queried)[0])  # never "empty"
+        other = _fetch([_issue("TESTA-1", "Story", extra=["Parent: TEST-11"]),
+                        _issue("TESTA-6", "Story", extra=["Parent: TEST-20"])])  # another section's epic
+        self.assertEqual(cr.epic_issue_counts(other, ["TEST-11", "TEST-12"], queried), ({"TEST-11": 1}, None))
+
+    def test_subsets_keep_unexplained_incompleteness_and_their_fields(self):
+        odd = dict(self.GATE, fetch=dict(self.GATE["fetch"], complete=False, linked_spike_problems=["FEAT-1: x"],
+                                         problems=["FEAT-3: customfield_10475 value shortened (not read whole)"]))
+        self.assertFalse(cr.gate_features(odd, "9.2")["fetch"]["complete"])  # not only its problems: stays incomplete
+        batch, missing = cr.reuse_parents(["FEAT-1", "FEAT-1", "FEAT-7"], [self.GATE])
+        self.assertEqual((batch["keys"], len(batch["result"]["issues"]), missing), (["FEAT-1"], 1, ["FEAT-7"]))
+
+    def test_a_problem_of_one_issue_stays_with_its_part(self):
+        cut = dict(self.GATE, fetch=dict(self.GATE["fetch"], complete=False,
+                                         problems=["FEAT-3: customfield_10475 value shortened (not read whole)"]))
+        self.assertTrue(cr.gate_features(cut, "9.2")["fetch"]["complete"])  # FEAT-3 targets 9.3 only
+        self.assertFalse(cr.gate_features(cut, "9.3")["fetch"]["complete"])
+        gate = cr.release_feature_gate(cut)  # the gate does not read the SME
+        self.assertEqual((gate["complete"], gate["releases"]), (True, ["9.2", "9.3"]))
+        tv_cut = dict(cut, fetch=dict(cut["fetch"],
+                                      problems=["FEAT-3: customfield_10855 value shortened (not read whole)"]))
+        self.assertFalse(cr.release_feature_gate(tv_cut)["complete"])  # it reads the Target Version
+        self.assertEqual(cr._scoped_problems(["fetch: page 1: x", "FEAT-1: a", "FEAT-2: b"], keys={"FEAT-2"}),
+                         ["fetch: page 1: x", "FEAT-2: b"])
+
+
 class UnknownSprintModeTest(unittest.TestCase):
     def test_unknown_week_leaves_sprint_health_out(self):
         for week in (None, "three"):
@@ -726,6 +1075,56 @@ class UnknownSprintModeTest(unittest.TestCase):
             self.assertNotIn("None mode", text)
             self.assertNotIn("Sprint health: Test Sprint", text)
             self.assertTrue(report["top_post"][0].endswith("sprint data not available"))
+            # The weekly report posts none of it.
+            self.assertEqual(cr.sprint_health_failure(out),
+                             "Weekly health report not posted: Sprint health incomplete: sprint week unknown")
+
+
+class SprintHealthFailureTest(unittest.TestCase):
+    """The weekly report's guard: no post without a complete sprint health."""
+
+    def test_complete_sprint_health_is_posted(self):
+        for mode, week in (("capacity", 1), ("mid-sprint", 2)):
+            sprint = cr.sprint_health(ISSUES, dict(SPRINT, week=week), "2030-02-07", mode, velocity=24)
+            self.assertIsNone(cr.sprint_health_failure(sprint, [{"what": "9.2 release section", "why": "x"}]))
+
+    def test_failed_sprint_fetch_names_the_fetch_and_error(self):
+        missing = [{"what": "9.2 release section", "why": "features fetch incomplete: fetch: page 1: x"},
+                   {"what": "Sprint health",
+                    "why": "sprint issue fetch incomplete: fetch: page 1: query_jira call failed: 403 Forbidden"}]
+        self.assertEqual(cr.sprint_health_failure(None, missing),
+                         "Weekly health report not posted: Sprint health incomplete: sprint issue fetch incomplete: "
+                         "fetch: page 1: query_jira call failed: 403 Forbidden")
+
+    def test_sprint_health_not_run_is_not_posted(self):
+        for sprint in (None, {}, {"sprint": "Test Sprint 11"}, "not a result"):
+            for missing in ([], None):
+                with self.subTest(sprint=sprint, missing=missing):
+                    self.assertEqual(cr.sprint_health_failure(sprint, missing),
+                                     "Weekly health report not posted: Sprint health incomplete: "
+                                     "no sprint health result")
+
+    def test_skipped_result_and_missing_reasons_are_named_once(self):
+        skipped = cr.sprint_health(ISSUES, dict(SPRINT, week=None), "2030-02-07", None)
+        missing = [{"what": "Sprint health", "why": "sprint week unknown"},
+                   {"what": "Sprint health", "why": "current sprint is not on the board yet"}]
+        self.assertEqual(cr.sprint_health_failure(skipped, missing),
+                         "Weekly health report not posted: Sprint health incomplete: sprint week unknown; "
+                         "current sprint is not on the board yet")
+
+
+    def test_every_reason_is_one_line_before_it_is_joined(self):
+        missing = [{"what": "Sprint health",
+                    "why": "board sprint fetch failed: list_jira_board_sprints failed:\n  timeout"},
+                   {"what": "Sprint health",
+                    "why": "board sprint fetch failed:  list_jira_board_sprints failed: timeout"},
+                   {"what": "Sprint health", "why": "sprint issue fetch incomplete:\tx"},
+                   {"what": "Sprint health", "why": "  \n "}]  # blank: not a reason
+        self.assertEqual(cr.sprint_health_failure(None, missing),
+                         "Weekly health report not posted: Sprint health incomplete: board sprint fetch failed: "
+                         "list_jira_board_sprints failed: timeout; sprint issue fetch incomplete: x")
+        self.assertEqual(cr.sprint_health_failure(None, [{"what": "Sprint health", "why": " "}]),
+                         "Weekly health report not posted: Sprint health incomplete: no sprint health result")
 
 
 class TeamOwnerTest(unittest.TestCase):

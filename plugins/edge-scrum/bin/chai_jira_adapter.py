@@ -29,7 +29,9 @@ unset custom field prints no line at all::
         issuelinks: (set, but query_jira cannot render this field's structure)
         resolutiondate: <iso>
 
-A truncated page ends with a "... More issues match than the N shown ..." hint.
+A page with more issues after it (``Showing the first N matching issues; more
+match:``) ends with a "... More issues match than the N shown ..." hint. That page
+is whole: :func:`next_page_jql` gives the query for the next one.
 A query with no results returns ``No issues found for JQL: <jql>``. Output may
 be wrapped as ``{"result": "<text>"}``.
 
@@ -85,6 +87,7 @@ from _jira_transforms import (  # noqa: E402
 )
 
 PAGE_SIZE = 50
+ERROR_CHARS = 160  # a failed call's error message is cut to this length, before Slack escaping
 KEY_PATTERN = r"[A-Z][A-Z0-9_]*-\d+"
 _HEADER_RE = re.compile(r"^\s*\[(" + KEY_PATTERN + r")\]\s*(.*?)\s*$")
 _KEY_RE = re.compile(r"^(?P<project>[A-Z][A-Z0-9_]*)-(?P<num>\d+)$")
@@ -234,6 +237,7 @@ def parse_sprint_value(value):
 # note as the SME), so the fetch is incomplete until the value is read whole.
 WHOLE_VALUE_FIELDS = (
     "assignee", "labels", "components", "fixVersions",
+    "customfield_10018",  # Parent Link: a shared epics fetch is partitioned by it
     "customfield_10028",  # Story Points
     "customfield_10470",  # QA Contact
     "customfield_10473",  # Docs approver
@@ -552,6 +556,18 @@ def unwrap(text):
     return text
 
 
+def call_failed(error=None):
+    """Reason for a failed ``query_jira`` call, naming the tool's error message when
+    there is one (``{"error": "<message>"}`` in the page slot): one line, cut to
+    :data:`ERROR_CHARS` characters, with ``&``, ``<`` and ``>`` escaped so the
+    tool's text never becomes Slack markup (a mention or a link)."""
+    message = "" if error is None or isinstance(error, bool) else " ".join(str(error).split())
+    if len(message) > ERROR_CHARS:
+        message = message[:ERROR_CHARS - 1] + "…"
+    message = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return f"query_jira call failed: {message}" if message else "query_jira call failed"
+
+
 def parse_page(text, error=None, page_size=PAGE_SIZE, jql=None):
     """Parse one ``query_jira`` page and check it positively.
 
@@ -570,20 +586,29 @@ def parse_page(text, error=None, page_size=PAGE_SIZE, jql=None):
 
     Every issue must also carry its ``Type: … | Status: …`` line (chai-bot always
     prints it), so a page cut inside its last issues is caught even when the
-    issue count still matches. Anything else is ``incomplete``. ``text`` may be
-    wrapped as ``{"result": "<text>"}`` (see :func:`unwrap`).
+    issue count still matches; no issue may be listed twice; every page must stay
+    within the restriction paging added to ``jql`` (``AND project = P``, ``AND
+    project not in (...)``) and below its ``key <`` cursor, in the cursor's project (a
+    more-match page that is not below it: ``did_not_advance``). A ``key <`` that is not of
+    the query's own project, decided from the query alone, any page (an empty one too):
+    ``query_error``. Anything else is ``incomplete``. ``text`` may be
+    wrapped as ``{"result": "<text>"}`` (see :func:`unwrap`). ``error`` (a failed
+    call) gives ``error`` with the tool's message as the reason (:func:`call_failed`).
     """
     if error:
-        return {"status": "error", "reason": "query_jira call failed", "final": False,
+        return {"status": "error", "reason": call_failed(error), "final": False,
                 "blocks": [], "unknown": [], "rejected": [], "unknown_fields": []}
     text = unwrap(text)
     empty = _NO_RESULTS_RE.match(text or "")
     if empty:
         out = {"status": "ok", "reason": None, "final": True, "blocks": [], "unknown": [],
                "rejected": [], "unknown_fields": []}
+        wrong = _cursor_mismatch(*_page_query(jql)[:4]) if jql else None
         if jql is None:
             out.update(status="incomplete", final=False,
                        reason="'No issues found' page without the sent JQL to compare")
+        elif wrong:  # no issues because the query's own key < is wrong: not a whole answer
+            out.update(status="incomplete", final=False, reason=wrong, query_error=True)
         elif empty.group(1).strip() != str(jql).strip():
             out.update(status="incomplete", final=False,
                        reason="'No issues found' names a different JQL than the query sent")
@@ -622,6 +647,34 @@ def parse_page(text, error=None, page_size=PAGE_SIZE, jql=None):
     cut = [raw["key"] for raw in parsed if "issue_type" not in raw or "status" not in raw]
     if cut:
         return incomplete(f"issue {cut[0]} has no 'Type: … | Status: …' line (page cut off)")
+    keys = [raw["key"] for raw in parsed]
+    twice = next((k for i, k in enumerate(keys) if k in keys[:i]), None)
+    if twice:  # in any order (a rank page too): never one issue silently dropped
+        return incomplete(f"issue {twice} is listed twice on the page")
+    if jql:  # the restriction paging added to the query sent, on every page (the last one too)
+        predicate, excluded, project, cursor, _ = _page_query(jql)
+        wrong = _cursor_mismatch(predicate, excluded, project, cursor)
+        if wrong:  # the query's own key < is wrong, whatever the page holds (QueryError)
+            out["query_error"] = True
+            return incomplete(wrong)
+        outside = _restriction_problem(keys, project, excluded)
+        if outside:
+            return incomplete(outside)
+        if cursor:  # the key < sent: a page with a key not below it cannot be used
+            part, below = _key_sort(cursor)
+            stale = next((k for k, (p, n) in ((k, _key_sort(k)) for k in keys) if p == part and n >= below), None)
+            if stale and out["final"]:
+                return incomplete(f"key {stale} on the last page is not below the key < {cursor} sent")
+            outside = next((k for k in keys if _key_sort(k)[0] != part), None)
+            # Jira's key < keeps its own project: a last page with another project's key, or
+            # any page with none of its project's keys, is not this query's answer (sent again
+            # once). A more-match page that also holds the cursor's project splits, as before.
+            if outside and (out["final"] or part not in {_key_sort(k)[0] for k in keys}):
+                return incomplete(f"issue {outside} is outside project {part} of the key < {cursor} sent")
+            if stale:  # a more-match page that did not advance (PageDidNotAdvance)
+                out["did_not_advance"] = True
+                return incomplete(f"key {stale} on the page is not below the key < {cursor} sent "
+                                  "(the tool did not apply it)")
     return out
 
 
@@ -848,22 +901,78 @@ def attach_linked_spike_fetches(features, fetches_by_feature):
 
     ``fetches_by_feature`` maps feature key → the ``adapt_fetch`` output of that
     feature's ``linkedIssues(...)`` query. An incomplete one is recorded in
-    ``features["fetch"]["linked_spike_problems"]`` (feature and reason) and makes
-    ``features["fetch"]["complete"]`` False: a missed spike would report a false
-    missing-spike gap. Returns the problems.
+    ``features["fetch"]["linked_spike_problems"]`` and in its ``problems`` (feature and
+    reason, so the Left out line names them) and makes ``features["fetch"]["complete"]``
+    False: a missed spike would report a false missing-spike gap. Returns the problems.
     """
-    problems = []
+    problems, by_reason = [], {}
     for fkey, fetch in (fetches_by_feature or {}).items():
         status = (fetch or {}).get("fetch") or {}
         if not status.get("complete", False):
             why = "; ".join(status.get("problems") or []) or "fetch status missing"
             problems.append(f"{fkey}: linked-spike fetch incomplete ({why})")
+            by_reason.setdefault(why, []).append(fkey)
     out = features.setdefault("fetch", {})
     out.setdefault("linked_spike_problems", []).extend(problems)
-    if problems:
+    if problems:  # named once per reason (one batch's features share it)
+        out["problems"] = [*(out.get("problems") or []),
+                           *(f"{', '.join(keys)}: linked-spike fetch incomplete ({why})"
+                             for why, keys in by_reason.items())]
         out["complete"] = False
     attach_linked_spikes(features, {k: (v or {}).get("issues", []) for k, v in (fetches_by_feature or {}).items()})
     return problems
+
+
+LINKED_SPIKE_BATCH = 20  # features per batched linked-spike query
+
+
+def linked_spikes_jql(feature_keys):
+    """One query for the spikes that block any of ``feature_keys``: the per-feature
+    ``issue in linkedIssues("<key>", "is blocked by") AND issuetype = Spike`` queries
+    joined by OR, so the same issues, link direction and filter."""
+    if not feature_keys:
+        raise ValueError("linked_spikes_jql needs at least one feature key")
+    clauses = " OR ".join(f'issue in linkedIssues("{k}", "is blocked by")' for k in feature_keys)
+    return f"issuetype = Spike AND ({clauses})"
+
+
+def _blocked_by_spike(spike):
+    """The keys a spike ``blocks`` (its outward Blocks links)."""
+    return {(link.get("outward_issue") or {}).get("key") for link in spike.get("issuelinks") or []
+            if (link.get("type") or {}).get("name") == "Blocks" and link.get("outward_issue")}
+
+
+def split_linked_spikes(feature_keys, batch_fetch, link_texts):
+    """Per-feature linked-spike fetches, as :func:`attach_linked_spike_fetches` takes
+    them, from one batched query (:func:`linked_spikes_jql`).
+
+    Each returned spike is attributed by its own links (``link_texts``: key →
+    ``get_jira_issue(<spike>, fields="issuelinks")`` text, None for a failed call). It
+    belongs to every feature of the batch it ``blocks`` (that feature "is blocked by"
+    it), so a spike that blocks two features is in both; a link in the other direction
+    does not count. When the batch fetch is incomplete, a spike's links cannot be
+    read, or a returned spike blocks none of the batch's features, every feature of the
+    batch is incomplete with that reason: the association is unknown, never guessed.
+    """
+    batch_fetch = batch_fetch if isinstance(batch_fetch, dict) else {}
+    status = batch_fetch.get("fetch") or {"complete": False, "problems": ["fetch status missing"]}
+    spikes = json.loads(json.dumps({"issues": batch_fetch.get("issues") or [], "fetch": {}}))
+    problems = [] if status.get("complete") else list(status.get("problems") or ["fetch status missing"])
+    problems += attach_issue_links(spikes, {i["key"]: link_texts.get(i["key"]) for i in spikes["issues"]})
+    keys, unread = set(feature_keys), {p.split(":")[0] for p in problems}
+    targets = {}
+    for spike in spikes["issues"]:
+        targets[spike["key"]] = _blocked_by_spike(spike) & keys
+        if not targets[spike["key"]] and spike["key"] not in unread:
+            problems.append(f"{spike['key']}: returned for {', '.join(feature_keys)} but blocks none of them")
+    out = {}
+    for fkey in feature_keys:
+        issues = json.loads(json.dumps([i for i in batch_fetch.get("issues") or []
+                                        if fkey in targets.get(i.get("key"), set())]))
+        out[fkey] = {"issues": issues, "left_out": [], "skipped_signals": [], "warnings": [],
+                     "fetch": dict(status, name=f"linked_{fkey}", fetched=len(issues),
+                                   complete=bool(status.get("complete")) and not problems, problems=list(problems))}
+    return out
 
 
 # ---------------------------------------------------------------- paging
@@ -875,19 +984,359 @@ def _key_sort(key):
     return (m.group("project"), int(m.group("num"))) if m else (key or "", 0)
 
 
+def _scan_top(text):
+    """Yield ``(index, char)`` for each character of ``text`` outside quotes and parentheses."""
+    depth, quote, i = 0, None, 0
+    while i < len(text):
+        c = text[i]
+        if quote:
+            if c == "\\":
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c in "\"'":
+            quote = c
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        elif depth == 0:
+            yield i, c
+        i += 1
+
+
+def _split_top(text, word):
+    """``text`` split on the JQL keyword ``word`` (AND, OR) outside quotes and parentheses,
+    as a word of its own (``x OR(y)`` splits; ``COLOR`` does not)."""
+    pattern = re.compile(r"(?<![\w.\-])" + word + r"(?![\w.\-])", re.IGNORECASE)
+    parts, start, skip_to = [], 0, 0
+    for i, _ in _scan_top(text):
+        if i < skip_to:
+            continue
+        m = pattern.match(text, i)
+        if m:
+            parts.append(text[start:i].strip())
+            start = skip_to = m.end()
+    return [*parts, text[start:].strip()]
+
+
+def _split_order(jql):
+    """``(query, order clause or "")``: a trailing ORDER BY outside quotes and parentheses."""
+    text = (jql or "").strip()
+    pattern = re.compile(r"\s+ORDER\s+BY\s+", re.IGNORECASE)
+    for i, _ in _scan_top(text):
+        m = pattern.match(text, i)
+        if m:
+            return text[:i].strip(), text[m.end():].strip()
+    return text, ""
+
+
 def strip_order_by(jql):
-    """JQL without a trailing ORDER BY clause."""
-    return re.sub(r"\s+ORDER\s+BY\s+.*$", "", jql.strip(), flags=re.I | re.S).strip()
+    """JQL without a trailing ORDER BY clause (one inside a quoted value stays)."""
+    return _split_order(jql)[0]
 
 
-def page_jql(jql, project=None, last_key=None):
-    """JQL for the next key-ordered page of ``jql`` (one project at a time)."""
+def page_jql(jql, project=None, last_key=None, excluded=()):
+    """JQL for a key-ordered page of ``jql``: ``(<predicate>)``, then ``AND project not in
+    (<excluded>)``, ``AND project = <project>`` and ``AND key < <last_key>`` when given,
+    then ``ORDER BY key DESC``."""
     out = f"({strip_order_by(jql)})"
+    if excluded:
+        out += f" AND project not in ({', '.join(excluded)})"
     if project:
         out += f" AND project = {project}"
     if last_key:
         out += f" AND key < {last_key}"
     return out + " ORDER BY key DESC"
+
+
+class PageNotWhole(ValueError):
+    """The page cannot be used as it is: the call failed; the text is cut off or not
+    readable; it lists an issue twice or one outside the restriction paging added; a last
+    page has a key not below its ``key <`` or of another project; or a page under a valid
+    ``key <`` holds no key of its project. Send the same query again once; if it is still
+    not whole, the fetch is incomplete, with this reason."""
+
+
+class PageDidNotAdvance(PageNotWhole):
+    """A key on a more-match page is not below the ``key <`` sent: the tool did not apply
+    it, so the page cannot be used. Like any :class:`PageNotWhole`, the same query is sent
+    again once; if it still does not advance, the fetch is incomplete with this reason."""
+
+
+class QueryError(ValueError):
+    """The query sent cannot be paged as it is: its ``key <`` is not of the project(s) the
+    query is restricted to, or is of one it excludes (decided from the query, whatever the
+    page holds). Sending it again unchanged cannot help, so it is not retried; the fetch is
+    incomplete with this reason."""
+
+
+class SplitByProject(Exception):
+    """A key-ordered page over several projects says more match. Jira's ``key <`` compares
+    keys within one project, so the query goes on per project: ``parts`` is a list of
+    ``{"project": <P or None>, "jql": <that part's first page>}`` (``None``: every project
+    not listed before it). Not a failure: fetch each part from its first page with
+    :func:`next_page_jql`, pass each as its own manifest part to :func:`adapt_fetch`, and
+    leave out the pages of the query that raised this (the parts fetch them again)."""
+
+    def __init__(self, parts):
+        self.parts = parts
+        super().__init__("page each project separately: " + "; ".join(p["jql"] for p in parts))
+
+
+_PROJECT_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+_PROJECT_CLAUSE_RE = re.compile(r"^project\s*(?:=\s*(\S+)|in\s*\(([^()]*)\))$", re.IGNORECASE)
+_KEY_LIST_RE = re.compile(r"^(?:key|issuekey|issue)\s+in\s*\(([^()]*)\)$", re.IGNORECASE)
+_EXCLUDED_RE = re.compile(r"^project\s+not\s+in\s*\(([^()]*)\)$", re.IGNORECASE)
+_PART_RE = re.compile(r"^project\s*=\s*\"?([A-Z][A-Z0-9_]*)\"?$", re.IGNORECASE)
+_CURSOR_RE = re.compile(r"^key\s*<\s*(" + KEY_PATTERN + r")$", re.IGNORECASE)
+
+
+def _group_inner(text):
+    """The inside of ``text`` when one pair of parentheses encloses all of it, else None."""
+    if not text.startswith("("):
+        return None
+    depth, quote, escaped = 0, None, False
+    for i, c in enumerate(text):
+        if quote:
+            if escaped:
+                escaped = False
+            elif c == "\\":
+                escaped = True
+            elif c == quote:
+                quote = None
+        elif c in "\"'":
+            quote = c
+        elif c in "()":
+            depth += 1 if c == "(" else -1
+            if depth == 0:
+                return text[1:i].strip() if i == len(text) - 1 else None
+    return None
+
+
+def _names(values, pattern):
+    """Upper-cased comma-separated values that all match ``pattern``, else None."""
+    names = [v.strip().strip("\"'").upper() for v in values.split(",")]
+    return names if names and all(pattern.match(n) for n in names) else None
+
+
+def _scope(predicate):
+    """Projects every result of ``predicate`` must be in (a set), or None when the JQL does
+    not say: only ``project = P``, ``project in (...)`` and ``key in (...)`` clauses joined by
+    top-level AND count; a top-level OR (also ``||``) makes it unknown, and a NOT clause
+    says nothing."""
+    if len(_split_top(predicate, "OR")) > 1 or any(c == "|" for _, c in _scan_top(predicate)):
+        return None
+    scope = None
+    for clause in _split_top(predicate, "AND"):
+        inner = _group_inner(clause)
+        if inner is not None:
+            found = _scope(inner)
+        elif re.match(r"^(?:NOT\b|!)", clause, re.IGNORECASE):
+            found = None
+        else:
+            found = None
+            m = _PROJECT_CLAUSE_RE.match(clause)
+            keys = _KEY_LIST_RE.match(clause)
+            if m:
+                names = _names(m.group(1) or m.group(2), _PROJECT_KEY_RE)
+                found = set(names) if names else None
+            elif keys:
+                listed = _names(keys.group(1), _KEY_RE)
+                found = {_key_sort(k)[0] for k in listed} if listed else None
+        if found is not None:
+            scope = found if scope is None else scope & found
+    return scope
+
+
+def _page_query(jql):
+    """``(predicate, excluded, project, cursor, key_ordered)`` of a query sent for a page.
+    The clauses :func:`page_jql` adds after ``(<predicate>)`` are read back; any other query
+    is a predicate of its own."""
+    body, order = _split_order(jql)
+    key_ordered = re.fullmatch(r"key\s+DESC", order, re.IGNORECASE) is not None
+    clauses = _split_top(body, "AND")
+    inner = _group_inner(clauses[0]) if clauses else None
+    tail = clauses[1:]
+    excluded = project = cursor = None
+    if inner is not None:
+        rest = list(tail)
+        m = _EXCLUDED_RE.match(rest[0]) if rest else None
+        if m and _names(m.group(1), _PROJECT_KEY_RE):
+            excluded, rest = _names(m.group(1), _PROJECT_KEY_RE), rest[1:]
+        m = _PART_RE.match(rest[0]) if rest else None
+        if m:
+            project, rest = m.group(1).upper(), rest[1:]
+        m = _CURSOR_RE.match(rest[0]) if rest else None
+        if m:
+            cursor, rest = m.group(1), rest[1:]
+        if not rest:
+            return inner, excluded or [], project, cursor, key_ordered
+    return body, [], None, None, key_ordered
+
+
+def _query_scope(predicate, excluded, project):
+    """Projects every result of a page query must be in (a set), or None when unknown: the
+    part's ``AND project = P``, else (no ``project not in``) what the predicate names."""
+    return {project} if project else (None if excluded else _scope(predicate))
+
+
+def _cursor_mismatch(predicate, excluded, project, cursor):
+    """Why the ``key <`` of a query sent (read back by :func:`_page_query`) cannot page it
+    (:class:`QueryError`), or None. It is decided from the query alone, never from the page:
+    a ``key <`` of a project the query excludes, or not of the projects it is restricted to."""
+    if not cursor:
+        return None
+    part, scope = _key_sort(cursor)[0], _query_scope(predicate, excluded, project)
+    if part in excluded:
+        return f"the key < {cursor} sent is of excluded project {part}: the query cannot be paged"
+    if scope is not None and part not in scope:
+        return f"the key < {cursor} sent is not of project {', '.join(sorted(scope))}: the query cannot be paged"
+    return None
+
+
+def _restriction_problem(keys, project, excluded):
+    """Why a page breaks the restriction paging added to its query (``AND project = P``,
+    or ``AND project not in (...)``), or None."""
+    on_page = {_key_sort(k)[0] for k in keys}
+    if project and on_page - {project}:
+        outside = next(k for k in keys if _key_sort(k)[0] != project)
+        return f"issue {outside} is outside project {project}"
+    if excluded and on_page & set(excluded):
+        return f"issues of excluded project(s) {', '.join(sorted(on_page & set(excluded)))} returned"
+    return None
+
+
+def next_page_jql(jql, page_text, page_size=PAGE_SIZE):
+    """The query for the page after ``page_text``, or None when it was the last page.
+
+    ``jql`` is the exact query sent for that page (the first page:
+    ``page_jql(<query>)``); ``page_text`` is ``query_jira``'s answer, bare or wrapped, or
+    ``{"error": "<message>"}`` / None for a failed call.
+
+    * ``Showing the first 50 matching issues; more match:`` (a whole page with more after
+      it) → ``(<predicate>) AND key < <last key> ORDER BY key DESC``, keeping a part's
+      ``AND project = P``. It never raises for such a page, except to split it by project.
+    * ``Found N issues (showing N):`` or ``No issues found for JQL: <the query sent>`` →
+      None: the fetch has all its pages (once the page is whole, as below).
+    * A failed call, a cut-off or unreadable page, an issue listed twice, or (any page,
+      the last one too) an issue outside the part's project or of an excluded project, a
+      last page with a key not below its ``key <`` or of another project, or a page with
+      no key of the ``key <``'s project → :class:`PageNotWhole` (never None, so it is sent
+      again once); on a more-match page also keys not in descending order.
+    * A more-match page with a key not below the ``key <`` sent → :class:`PageDidNotAdvance`
+      (a :class:`PageNotWhole`: sent again once); a ``key <`` not of the query's own
+      project, decided from the query (the query itself is wrong) → :class:`QueryError`
+      (not sent again).
+    * More match over several projects → :class:`SplitByProject`: one part per project the
+      query names (``project in (...)``, or the projects of ``key in (...)``); when the
+      query does not name them, one per project on the page and one for every other
+      project, so no result is dropped.
+    * More match on a page not ordered by key (the rank-ordered features page) → the
+      first key-ordered page, ``(<predicate>) ORDER BY key DESC``: the fetch starts again
+      by key.
+    """
+    error = None
+    if isinstance(page_text, dict) and (page_text.get("error") is not None or "text" in page_text):  # page slot
+        error = page_text.get("error") or page_text.get("text") is None
+        page_text = page_text.get("text")
+    elif isinstance(page_text, dict):  # the answer already parsed, e.g. {"result": "<text>"}
+        page_text = json.dumps(page_text)
+    page = parse_page(page_text, error=error or page_text is None, page_size=page_size, jql=jql)
+    if page["status"] != "ok":
+        if page.get("query_error"):
+            raise QueryError(page["reason"])
+        raise (PageDidNotAdvance if page.get("did_not_advance") else PageNotWhole)(page["reason"])
+    if page["final"]:
+        return None
+    predicate, excluded, project, cursor, key_ordered = _page_query(jql)
+    keys = [b["key"] for b in page["blocks"]]
+    if not key_ordered:
+        return page_jql(predicate, project=project, excluded=excluded)
+    on_page = list(dict.fromkeys(_key_sort(k)[0] for k in keys))
+    scope = _query_scope(predicate, excluded, project)
+    if scope is not None and len(scope) == 1 and set(on_page) <= scope:
+        numbers = [_key_sort(k)[1] for k in keys]
+        if numbers != sorted(set(numbers), reverse=True):
+            raise PageNotWhole("keys on the page are not in descending order (ORDER BY key DESC not applied)")
+        last = keys[-1]  # a key < of another project never gets here (parse_page: query_error)
+        if cursor and numbers[0] >= _key_sort(cursor)[1]:
+            raise PageDidNotAdvance(f"key {keys[0]} on the page is not below the key < {cursor} sent "
+                                    "(the tool did not apply it)")
+        return page_jql(predicate, project=project, last_key=last, excluded=excluded)
+    if scope is not None and set(on_page) <= scope:
+        raise SplitByProject([{"project": p, "jql": page_jql(predicate, project=p)} for p in sorted(scope)])
+    parts = [{"project": p, "jql": page_jql(predicate, project=p)} for p in on_page]
+    parts.append({"project": None, "jql": page_jql(predicate, excluded=list(excluded) + on_page)})
+    raise SplitByProject(parts)
+
+
+# query_jira prints these base fields on every issue (title, the Type / Status line,
+# the dates line, the Components / Labels / Fix Versions / Parent line); they cannot be
+# chosen. Every other field is requested with ``extra_fields``.
+BASE_FIELDS = ("summary", "issuetype", "status", "priority", "assignee", "reporter", "resolution",
+               "created", "updated", "duedate", "resolved", "components", "labels", "fixVersions", "parent")
+# The extra_fields each logical fetch requests: only what its checks read, with
+# max_results 50 (PAGE_SIZE) on every page.
+EXTRA_FIELDS = {
+    # The release Feature gate also serves the refinement features, so it
+    # requests their fields.
+    "feature_gate": ("customfield_10855", "customfield_10795", "customfield_10470", "customfield_10473",
+                     "customfield_10475"),
+    "features": ("customfield_10795", "customfield_10855", "customfield_10470", "customfield_10473",
+                 "customfield_10475"),
+    "epics": ("customfield_10028", "customfield_10795", "customfield_10855", "customfield_10018",
+              "customfield_10470"),
+    "field_epics": ("customfield_10855", "customfield_10470"),
+    "parents": ("customfield_10855", "customfield_10470"),
+    "stories": ("customfield_10028", "customfield_10020"),
+    "epic_issue_counts": (),
+    "bugs": (),
+    "spikes": (),
+    "sprint_issues": ("customfield_10028", "customfield_10014", "customfield_10470"),
+    "sprint_blocked": (),
+    "blocks": (),
+    "velocity": ("resolutiondate", "customfield_10028", "customfield_10470", "customfield_10020"),
+}
+
+
+def paging_round(pending, page_size=PAGE_SIZE):
+    """The continuation decision for every page received in one paging round, in one
+    sandbox call (a sandbox cannot call Jira: the pages are fetched by the tool calls
+    of the round, then passed here).
+
+    ``pending`` maps a name to ``{"jql": <query sent>, "page": <answer text, or
+    {"error": ...}>, "retried": <bool>}``. Returns name → one of:
+
+    * ``{"next": <query>}``: a whole page with more after it; send that query now;
+    * ``{"done": True}``: a whole last page;
+    * ``{"retry": <reason>}``: not whole, first time: send the same query again;
+    * ``{"incomplete": <reason>}``: not whole after the retry (a page that did not advance
+      included), or a query that cannot be paged (:class:`QueryError`, not sent again):
+      keep the page and stop that part;
+    * ``{"split": <parts>}``: page each project's part from its first page
+      (:class:`SplitByProject`), and drop the pages of that query.
+    """
+    out = {}
+    for name, item in pending.items():
+        try:
+            nxt = next_page_jql(item["jql"], item["page"], page_size)
+            out[name] = {"next": nxt} if nxt else {"done": True}
+        except PageNotWhole as exc:  # a page that did not advance too: sent again once
+            out[name] = {"incomplete": str(exc)} if item.get("retried") else {"retry": str(exc)}
+        except QueryError as exc:
+            out[name] = {"incomplete": str(exc)}
+        except SplitByProject as exc:
+            out[name] = {"split": exc.parts}
+    return out
+
+
+def adapt_fetches(manifests, roster=None):
+    """:func:`adapt_fetch` for every logical fetch that finished, in one call:
+    ``{name: manifest}`` → ``{name: adapted}``. Each fetch is adapted once, from all
+    its pages."""
+    return {name: adapt_fetch(dict(manifest, name=manifest.get("name") or name), roster)
+            for name, manifest in manifests.items()}
 
 
 def _load_page_text(page):
@@ -903,9 +1352,10 @@ def _load_page_text(page):
 def check_part(pages, project=None, order="key"):
     """Completeness problems of one fetch part, given parsed pages in fetch order.
 
-    Key order: every page ok; every page but the last is non-final ("more match"
+    A part of one project holds only that project's keys (one page or several, either
+    order). Key order: every page ok; every page but the last is non-final ("more match"
     header, or a full page with no header); the last page is final ("Found N
-    issues" header, or fewer than 50 issues). Across pages, keys must stay in one
+    issues" header, or fewer than 50 issues); across pages, keys must stay in one
     project and strictly descend. Rank order: a single final page.
     """
     if not pages:
@@ -913,6 +1363,10 @@ def check_part(pages, project=None, order="key"):
     problems = [f"page {i}: {p['reason']}" for i, p in enumerate(pages, 1) if p["status"] != "ok"]
     if problems:
         return problems
+    keys = [b["key"] for p in pages for b in p["blocks"]]
+    projects = {_key_sort(k)[0] for k in keys}
+    if project and projects - {project}:  # one page or several, a rank page too
+        problems.append(f"issues from other projects in a {project}-only fetch")
     if order == "rank":
         if len(pages) != 1 or not pages[0]["final"]:
             problems.append("rank-ordered fetch did not fit on one page; rank order not available")
@@ -922,12 +1376,8 @@ def check_part(pages, project=None, order="key"):
             problems.append(f"page {i} was the last page, but more pages were fetched")
     if not pages[-1]["final"]:
         problems.append("last page says more issues match; fetch stopped early")
-    keys = [b["key"] for p in pages for b in p["blocks"]]
     if len(pages) > 1:
-        projects = {_key_sort(k)[0] for k in keys}
-        if project and projects - {project}:
-            problems.append(f"issues from other projects in a {project}-only fetch")
-        elif len(projects) > 1:
+        if not project and len(projects) > 1:
             problems.append("key paging spans several projects (Jira's 'key <' pages within one "
                             "project only); page each project separately")
         nums = [_key_sort(k) for k in keys]
@@ -935,6 +1385,26 @@ def check_part(pages, project=None, order="key"):
             problems.append("keys are not strictly descending across pages "
                             "(duplicate or out-of-order page)")
     return problems
+
+
+# Parsed but read by no check or transform: two copies of an issue may differ in them.
+UNREAD_FIELDS = ("reporter", "duedate")
+
+
+def _differing_fields(kept, other):
+    """The fields two copies of one issue (parsed blocks) disagree on: every field a check
+    or transform reads (``updated`` too: staleness), not :data:`UNREAD_FIELDS`, and not a
+    value that is not whole in either copy (a shortened value, an unreadable sprint): it
+    cannot be compared, and :func:`adapt_fetch` reports it for any copy. Names only."""
+    def not_whole(raw):
+        sprint = raw.get("customfield_10020")
+        unreadable = sprint is not None and parse_sprint_value(sprint)[1]
+        return set(shortened_fields(raw)) | ({"customfield_10020"} if unreadable else set())
+
+    def norm(value):
+        return " ".join((_clean(value) or "").split())
+    skip = {"key", *UNREAD_FIELDS} | not_whole(kept) | not_whole(other)
+    return sorted(f for f in kept.keys() | other.keys() if f not in skip and norm(kept.get(f)) != norm(other.get(f)))
 
 
 def adapt_fetch(manifest, roster=None):
@@ -950,13 +1420,18 @@ def adapt_fetch(manifest, roster=None):
 
     ``text`` may be bare or wrapped as ``{"result": "<text>"}``. ``jql`` (the exact
     query sent for that page) is needed to accept a ``No issues found for JQL``
-    page as complete.
+    page as complete. ``incomplete`` (the reason ``paging_round`` stopped that part,
+    kept with its last page) makes the fetch incomplete with that reason.
 
     ``"pages"`` at the top level is shorthand for a single part. The fetch is
     ``complete`` only if every page succeeded and every part reached its last
-    page; callers must not compute figures from an incomplete fetch. A value
+    page; callers must not compute figures from an incomplete fetch. An issue listed by
+    two of the fetch's queries or parts is kept once; if its copies differ in a field the
+    report reads (Parent Link, status, …), the whole fetch is incomplete (a problem
+    of the fetch, not of that issue: every part a shared fetch is split into), naming the
+    issue and the field(s), never their values: which copy is current is unknown. A value
     that still looks shortened in a field the checks read
-    (:data:`WHOLE_VALUE_FIELDS`, and the sprint) makes the fetch incomplete.
+    (:data:`WHOLE_VALUE_FIELDS`, and the sprint), in any copy, makes the fetch incomplete.
     ``fetch.order`` is the order the pages were checked against: PM rank is
     available only from a complete ``"rank"`` fetch. A date
     that is not readable is dropped (never raises) and listed in ``left_out``
@@ -968,7 +1443,8 @@ def adapt_fetch(manifest, roster=None):
     if parts is None:
         parts = [{"project": manifest.get("project"), "pages": manifest.get("pages") or []}]
     people = PeopleMatcher(roster)
-    problems, unknown, issues, seen, date_problems, shortened = [], [], [], set(), [], []
+    problems, unknown, issues, seen, date_problems, shortened = [], [], [], {}, [], []
+    conflicts, copy_sprint = {}, {}
     rejected, unknown_fields = set(), set()
     page_count = 0
     for part in parts:
@@ -982,6 +1458,8 @@ def adapt_fetch(manifest, roster=None):
                 continue
             parsed.append(parse_page(text, error=page.get("error") or text is None,
                                      page_size=page_size, jql=page.get("jql")))
+            if page.get("incomplete") and parsed[-1]["status"] == "ok":  # the reason paging stopped there
+                parsed[-1].update(status="incomplete", reason=str(page["incomplete"]), final=False)
             rejected.update(parsed[-1].get("rejected", []))
             unknown_fields.update(parsed[-1].get("unknown_fields", []))
         page_count += len(parsed)
@@ -990,13 +1468,25 @@ def adapt_fetch(manifest, roster=None):
         for page in parsed:
             unknown.extend(page["unknown"])
             for raw in page["blocks"]:
-                if raw["key"] in seen:
-                    continue
-                seen.add(raw["key"])
-                issues.append(to_issue(raw, people, date_problems))
-                cut = shortened_fields(raw)
-                if cut:
-                    shortened.append(f"{raw['key']}: {', '.join(cut)} value shortened (not read whole)")
+                key = raw["key"]
+                if key not in seen:
+                    seen[key] = raw
+                    issues.append(to_issue(raw, people, date_problems))
+                else:  # a second copy (another query or part of this fetch), kept once
+                    differ = _differing_fields(seen[key], raw)
+                    # Which copy is current is unknown, so this concerns the whole fetch (not
+                    # "KEY: ..."): a shared fetch's every part, wherever either copy would go.
+                    if differ and key not in conflicts:
+                        conflicts[key] = (f"copies of {key} in this fetch differ in "
+                                          f"{', '.join(differ)} (it changed between reads)")
+                    sprint = raw.get("customfield_10020")
+                    why = parse_sprint_value(sprint)[1] if sprint is not None else None
+                    if why:  # not comparable, so not whole either
+                        copy_sprint.setdefault(key, why)
+                cut = shortened_fields(raw)  # a value not read whole, in any copy (Jira paging step 7)
+                note = f"{key}: {', '.join(cut)} value shortened (not read whole)"
+                if cut and note not in shortened:
+                    shortened.append(note)
 
     # An issue whose sprint value is not whole: its sprint data is incomplete, so
     # nothing that depends on sprints (velocity, activity) is computed from it.
@@ -1004,7 +1494,9 @@ def adapt_fetch(manifest, roster=None):
                       for i in issues if i.get("sprint_data_incomplete")}
     sprint_incomplete = list(incomplete_why)
     problems.extend(f"{key}: {why}" for key, why in incomplete_why.items())
+    problems.extend(f"{key}: {why}" for key, why in copy_sprint.items() if key not in incomplete_why)
     problems.extend(shortened)
+    problems.extend(conflicts.values())
     signals = set(manifest.get("signals") or [])
     skipped = []
     # Unset custom fields print no line, so a missing Flagged line means "not

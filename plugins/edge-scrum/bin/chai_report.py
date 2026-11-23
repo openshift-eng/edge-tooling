@@ -13,6 +13,7 @@ Output is **team-level only**: no per-person load, SP or PTO. A person's name
 appears only as the owner of a specific action item (decision 0018).
 """
 
+import copy
 import math
 import os
 import re
@@ -21,7 +22,13 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 import _scrum_rules as rules  # noqa: E402
 from _jira_transforms import DONE_STATUSES_SPRINT, normalize_name, sprint_day_counts  # noqa: E402
-from scrum_context import NOT_SCHEDULED, PHASE_LOOKUP_FAILED, to_date, working_days  # noqa: E402
+from scrum_context import (  # noqa: E402
+    NOT_SCHEDULED,
+    PHASE_LOOKUP_FAILED,
+    sprint_weeks,
+    to_date,
+    working_days,
+)
 
 NOT_PTO_ADJUSTED = "not PTO-adjusted"
 REFINEMENT, RELEASE_HEALTH = "refinement", "release-health"
@@ -32,6 +39,8 @@ REFINEMENT_NOT_PLACED = "refinement sprint could not be placed on a sprint"
 # per Target Version "openshift-X.Y".
 EDGE_FEATURE_LABELS = ("ocpedge-plan", "microshift")
 GATE_INCOMPLETE = "release Feature gate incomplete"
+SPRINT_HEALTH = "Sprint health"
+NOT_POSTED = "Weekly health report not posted"
 _TARGET_RELEASE_RE = re.compile(r"^openshift-(\d+\.\d+)$", re.IGNORECASE)
 RED, YELLOW, GREEN = "🔴", "🟡", "🟢"
 
@@ -160,6 +169,30 @@ def _readable_name(field):
     return name.strip() if isinstance(name, str) and name.strip() else None
 
 
+GATE_FIELDS = ("labels", "customfield_10855")  # the gate's whole-value fields: labels, Target Version
+_KEYED_PROBLEM_RE = re.compile(r"^([A-Z][A-Z0-9_]*-\d+): (.*)$")
+_SHORTENED_PROBLEM_RE = re.compile(r"^(.*) value shortened \(not read whole\)$")
+
+
+def _scoped_problems(problems, keys=None, fields=None):
+    """The fetch problems that concern a part of it: the page-level ones, and the
+    problems of single issues only for ``keys`` (when given), and a shortened value only
+    when one of ``fields`` (when given) is among the shortened fields."""
+    out = []
+    for problem in problems or []:
+        m = _KEYED_PROBLEM_RE.match(str(problem))
+        if m is None:
+            out.append(problem)
+            continue
+        if keys is not None and m.group(1) not in keys:
+            continue
+        cut = _SHORTENED_PROBLEM_RE.match(m.group(2))
+        if fields is not None and cut and not {f.strip() for f in cut.group(1).split(",")} & set(fields):
+            continue
+        out.append(problem)
+    return out
+
+
 def release_feature_gate(gate_fetch):
     """Releases with at least one Edge Feature, from the gate query's ``adapt_fetch`` output.
 
@@ -174,8 +207,13 @@ def release_feature_gate(gate_fetch):
     """
     status = gate_fetch.get("fetch") if isinstance(gate_fetch, dict) else None
     issues = gate_fetch.get("issues") if isinstance(gate_fetch, dict) else None
-    if not isinstance(status, dict) or status.get("complete") is not True or not isinstance(issues, list):
-        why = "; ".join(status.get("problems") or []) if isinstance(status, dict) else ""
+    # The gate also brings the features' fields (shared fetch plan); a shortened value in
+    # a field the gate does not read leaves the gate complete (that feature's section
+    # sees it, as its own features fetch did).
+    problems = _scoped_problems(status.get("problems"), fields=GATE_FIELDS) if isinstance(status, dict) else []
+    if (not isinstance(status, dict) or not isinstance(issues, list)
+            or (status.get("complete") is not True and (problems or not status.get("problems")))):
+        why = "; ".join(problems) if isinstance(status, dict) else ""
         return {"complete": False, "counts": None, "releases": [], "why": why or "fetch status missing"}
     counts = {}
     for issue in issues:
@@ -258,8 +296,9 @@ def select_sections(context, windows=(), gate=None):
         label = f"{release} release section"
         if phase in SKIP_PHASES:
             continue
-        if phase == PHASE_LOOKUP_FAILED:
-            missing.append({"what": label, "why": PHASE_LOOKUP_FAILED})
+        if phase == PHASE_LOOKUP_FAILED:  # with the lookup's own error when it gave one
+            error = " ".join(str(w.get("lookup_error") or "").split())
+            missing.append({"what": label, "why": f"{PHASE_LOOKUP_FAILED}: {error}" if error else PHASE_LOOKUP_FAILED})
         elif phase == NOT_SCHEDULED:
             missing.append({"what": label, "why": _not_scheduled_reason(w)})
         elif phase == REFINEMENT:
@@ -296,8 +335,48 @@ def _owner(issue):
     return rules.person(issue.get("assignee_display"))
 
 
+# Open sprint issues by stage in the final week, from the statuses law 07 names for
+# stories, spikes, tasks and bugs (OCPEDGE and OCPBUGS); any other open status is
+# counted as "other status", never guessed into a stage.
+REVIEW_STATUSES = ("Review", "MODIFIED", "ON_QA")
+WORK_STATUSES = ("To Do", "In Progress", "NEW", "ASSIGNED")
+
+
+def final_week(sprint):
+    """Whether ``sprint["week"]`` is the sprint's last week, by its dates (as scrum-context
+    numbers the weeks, so any sprint length works); False when either is not readable."""
+    week = _num(sprint.get("week"))
+    try:
+        weeks = sprint_weeks(sprint)
+    except (KeyError, TypeError, ValueError):
+        return False
+    return week is not None and week >= weeks
+
+
+def _still_open(open_issues):
+    """The final week's open issues and SP: all, in review or testing, in progress or to
+    do, and any other status. The buckets add up to the totals (unpointed issues count
+    with 0 SP)."""
+    def sp(items):
+        return round(sum(i.get("sp") or 0 for i in items), 1)
+    review = [i for i in open_issues if _status_is(i, *REVIEW_STATUSES)]
+    work = [i for i in open_issues if _status_is(i, *WORK_STATUSES)]
+    other = [i for i in open_issues if not _status_is(i, *REVIEW_STATUSES, *WORK_STATUSES)]
+    out = {"review_issues": len(review), "review_sp": sp(review), "work_issues": len(work), "work_sp": sp(work),
+           "other_issues": len(other), "other_sp": sp(other)}
+    # The total is the sum of the shown buckets, so the figures always add up.
+    return {"open_issues": len(open_issues), "open_sp": round(out["review_sp"] + out["work_sp"] + out["other_sp"], 1),
+            **out}
+
+
+def _problems(value):
+    """``links_problems`` as a list of non-empty strings (a single string is one problem)."""
+    items = [value] if isinstance(value, str) else list(value or ())
+    return [str(p) for p in items if str(p).strip()]
+
+
 def sprint_health(sprint_issues, sprint, today, mode, velocity=None, availability=None,
-                  skipped_signals=(), links_complete=True, goal=None, velocity_reason=None):
+                  skipped_signals=(), links_complete=True, goal=None, velocity_reason=None, links_problems=()):
     """Team-level sprint health for capacity or mid-sprint mode.
 
     ``sprint_issues`` is ``transform-sprint-issues.py`` output; ``sprint`` is
@@ -307,12 +386,18 @@ def sprint_health(sprint_issues, sprint, today, mode, velocity=None, availabilit
     unpointed, no epic; mid-sprint → explicit blocks only, i.e. open "is
     blocked by" links and ``Blocked`` / ``Parked`` labels) and ``team_items``
     (re-plan / re-scope the sprint, owned by the Scrum Master). In the sprint's
-    last week (week 3 or later) mid-sprint mode adds ``sprint_end``: delivered
-    SP and %, and likely carry-over (open issues, listed as "carry-over" items).
+    final week (:func:`final_week`, by its dates) mid-sprint mode adds ``final_week``
+    and ``still_open``: the issues and SP still open, by stage (:func:`_still_open`);
+    there are no carry-over items, no re-scope item and no projected finish.
     ``velocity_reason`` is :func:`usable_velocity`'s reason when velocity was
     rejected; it is shown as the reason capacity is left out. ``goal`` is an
-    optional ``{"rating", "note"}`` shown in the sprint reply.
+    optional ``{"rating", "note"}`` shown in the sprint reply. ``links_problems``
+    names the blocked-by fetches that failed and their errors (the blocked items
+    query, or ``attach_issue_links`` problems): the Left out reason when the links
+    are incomplete; any problem makes them incomplete.
     """
+    links_problems = _problems(links_problems)
+    links_complete = links_complete and not links_problems
     issues = sprint_issues.get("issues", [])
     skipped = list(skipped_signals)
     out = {"mode": mode, "sprint": sprint.get("name"), "week": sprint.get("week"),
@@ -323,7 +408,7 @@ def sprint_health(sprint_issues, sprint, today, mode, velocity=None, availabilit
         # sprint_mode() returned None (week missing or not numeric): run neither
         # analysis; the section is left out with the reason.
         out.update(mode=None, skipped=True)
-        out["left_out"].append({"what": "Sprint health", "why": "sprint week unknown"})
+        out["left_out"].append({"what": SPRINT_HEALTH, "why": "sprint week unknown"})
         return out
     if mode == "capacity":
         by_type = {}
@@ -349,6 +434,7 @@ def sprint_health(sprint_issues, sprint, today, mode, velocity=None, availabilit
             if keys:
                 out["risks"].append({"severity": YELLOW, "text": f"{len(keys)} sprint issue(s) {label}"})
     else:
+        final = final_week(sprint)
         elapsed, remaining, total_days = _days(sprint, today)
         total = sprint_issues.get("total_sp", 0)
         done = sprint_issues.get("total_done_sp", 0)
@@ -370,32 +456,29 @@ def sprint_health(sprint_issues, sprint, today, mode, velocity=None, availabilit
                 over = math.ceil(need - remaining) if need > remaining else 0
                 finish = ("on time" if over == 0 else
                           f"{over} day{'s' if over != 1 else ''} after the sprint ends")
-            burndown.update(expected_done_sp=expected, delta_sp=delta, status=status, projected_finish=finish)
+            burndown.update(expected_done_sp=expected, delta_sp=delta, status=status)
+            if not final:  # the final week ends with the sprint: no projected finish
+                burndown["projected_finish"] = finish
             if status != "On Track":
                 out["risks"].append({"severity": RED if status == "Behind" else YELLOW, "text": (
-                    f"Burndown {status.lower()}: {done} of {total} SP done, {expected:g} expected; "
-                    f"projected to finish {finish}")})
-                if status == "Behind":
+                    f"Burndown {status.lower()}: {done} of {total} SP done, {expected:g} expected"
+                    + ("" if final else f"; projected to finish {finish}"))})
+                if status == "Behind" and not final:  # too late to re-scope in the final week
                     out["team_items"].append(f"re-scope the sprint ({left} SP left, burndown behind)")
         out["burndown"] = burndown
-        week = _num(sprint.get("week"))
-        sprint_end = week is not None and week >= 3
-        out["items"] = rules.sprint_findings(issues, "mid-sprint", sprint_end, links_complete)
+        out["items"] = rules.sprint_findings(issues, "mid-sprint", links_complete=links_complete)
         blocks = {}
         for f in out["items"]:
-            if f["check"] != "carry_over":
-                blocks.setdefault(f["key"], []).append(f["label"])
+            blocks.setdefault(f["key"], []).append(f["label"])
         out["blockers"] = [{"key": k, "reasons": v} for k, v in blocks.items()]
         open_issues = [i for i in issues if i.get("status") not in DONE_STATUSES_SPRINT]
         out["ready"] = len(open_issues) - len(blocks)
-        if sprint_end:
-            out["sprint_end"] = {"delivered_sp": done, "total_sp": total,
-                                 "delivered_pct": round(done / total * 100) if total else None,
-                                 "carry_over_issues": len(open_issues),
-                                 "carry_over_sp": sum(i.get("sp") or 0 for i in open_issues)}
+        if final:
+            out["final_week"] = True
+            out["still_open"] = _still_open(open_issues)
         if not links_complete:
-            out["left_out"].append({"what": "blocked-by links",
-                                    "why": "issue link details incomplete (get_jira_issue)"})
+            why = "; ".join(links_problems) or "issue link details incomplete (get_jira_issue)"
+            out["left_out"].append({"what": "blocked-by links", "why": why})
         if goal and goal.get("rating") == GREEN and not links_complete:
             # No visible blocker is not proof the goal work is unblocked when links are missing.
             out["goal"] = {"rating": None,
@@ -467,7 +550,7 @@ def rank_order_available(features_fetch):
 
 def release_health(checks, section, capacity=None, rank_available=True, velocity_reason=None,
                    features=None, epics=None, spikes=None, stories=None, links=None, current_sprint_number=None,
-                   links_unread=()):
+                   links_unread=(), links_problems=()):
     """Team-level release health for development, pencils-down and pre-branch-cut.
 
     Scope vs capacity and the cut line come from ``run-checks.py`` output
@@ -484,6 +567,9 @@ def release_health(checks, section, capacity=None, rank_available=True, velocity
     ``links=None`` means the block check did not run, and
     ``links_unread`` lists the keys whose links could not be read: both are left
     out, and the header's on-track count says the blocks were not checked.
+    ``links_problems`` names the failed fetches and their errors (the block
+    candidates query, or ``attach_issue_links`` problems): the Left out reason;
+    a problem with no unread key still leaves the blocks unchecked.
     ``capacity`` is :func:`release_capacity` output, for its
     label. ``rank_available=False`` leaves the cut line out, since key order is
     not PM rank: pass :func:`rank_order_available` of the features fetch.
@@ -549,13 +635,15 @@ def release_health(checks, section, capacity=None, rank_available=True, velocity
         if spikes is None:
             out["not_checked"].append("refinement spikes")
             out["left_out"].append({"what": f"{tag} refinement-overdue check", "why": "refinement spikes not fetched"})
-        if links is None:
+        problems = _problems(links_problems)
+        if links is None or (problems and not links_unread):
             out["blocks_unchecked"] = "all"
-            out["left_out"].append({"what": f"{tag} feature and epic blocks", "why": "issue links not read"})
+            out["left_out"].append({"what": f"{tag} feature and epic blocks",
+                                    "why": "; ".join(problems) or "issue links not read"})
         elif links_unread:
             out["blocks_unchecked"] = len(links_unread)
             out["left_out"].append({"what": f"{tag} blocks of {', '.join(links_unread)}",
-                                    "why": "issue links could not be read"})
+                                    "why": "; ".join(problems) or "issue links could not be read"})
         result = rules.development_findings(features, epics, spikes, stories, links, exact,
                                             out["below_cut_line"], FEATURE_TYPES)
         out.update(items=result["findings"], checked=result["checked"], clean=result["clean"])
@@ -567,14 +655,15 @@ def release_health(checks, section, capacity=None, rank_available=True, velocity
 
 
 def refinement_gaps(features, spikes, section, refinement_sprint_closed=False, epics=None, epic_issue_counts=None,
-                    week=None):
+                    week=None, epic_issue_counts_why=None):
     """Feature checks for the release in its refinement sprint (``_scrum_rules.refinement_findings``).
 
     ``features`` is ``transform-features.py`` output for every non-Closed
     feature targeting the release (any status); ``spikes`` is
     ``transform-spikes.py`` output; ``epics`` is ``transform-epics.py`` output
     (None leaves the epic checks out); ``epic_issue_counts`` maps epic key →
-    issue count (None leaves "empty epic" out). Owners: the SME, the QE Lead
+    issue count (None leaves "empty epic" out, with ``epic_issue_counts_why``, the
+    failed fetch and its error, as the reason). Owners: the SME, the QE Lead
     for test plan spikes; features with no SME only count as "no SME".
     Only Features are checked (:data:`FEATURE_TYPES`). In the refinement
     sprint's first ``week`` "no refinement spike" is expected: it becomes one
@@ -595,7 +684,8 @@ def refinement_gaps(features, spikes, section, refinement_sprint_closed=False, e
     if epics is None:
         out["left_out"].append({"what": f"{tag} epic checks", "why": "epics not fetched"})
     elif epic_issue_counts is None:
-        out["left_out"].append({"what": f"{tag} empty-epic check", "why": "epic issues not fetched"})
+        out["left_out"].append({"what": f"{tag} empty-epic check",
+                                "why": epic_issue_counts_why or "epic issues not fetched"})
     return out
 
 # ---------------------------------------------------------------- epic Target Version and QA Contact
@@ -989,8 +1079,26 @@ def _no_sme_line(keys, who):
     return head + f"(+{len(keys)})"
 
 
+def _sprint_when(s):
+    """``week N, mode``; ``final week`` (in place of both) in the sprint's last week."""
+    return "final week" if s.get("final_week") else f"week {s['week']}, {s['mode']}"
+
+
+def _still_open_text(end):
+    """``N still open (X SP): A in review or testing (B SP), C in progress or to do (D SP)``,
+    plus ``E other status (F SP)`` when any open issue has another status."""
+    text = f"{end['open_issues']} still open ({end['open_sp']:g} SP)"
+    if not end["open_issues"]:
+        return text
+    parts = [f"{end['review_issues']} in review or testing ({end['review_sp']:g} SP)",
+             f"{end['work_issues']} in progress or to do ({end['work_sp']:g} SP)"]
+    if end["other_issues"]:
+        parts.append(f"{end['other_issues']} other status ({end['other_sp']:g} SP)")
+    return f"{text}: {', '.join(parts)}"
+
+
 def _sprint_header(s, owners):
-    head = f"*Sprint health: {s['sprint']}* (week {s['week']}, {s['mode']}): "
+    head = f"*Sprint health: {s['sprint']}* ({_sprint_when(s)}): "
     if s["mode"] == "capacity":
         cap = s.get("capacity") or {}
         cap_txt = (f"{cap['capacity_sp']:g} SP ({cap['label']})" if cap.get("capacity_sp") is not None
@@ -1001,12 +1109,9 @@ def _sprint_header(s, owners):
         b = s.get("burndown", {})
         head += (f"{b['done_sp']} of {b['total_sp']} SP done, {b['expected_done_sp']:g} expected ({b['status']})"
                  if "expected_done_sp" in b else f"{s['committed_sp']} SP committed ({b.get('status', 'burndown not available')})")
-        end = s.get("sprint_end")
-        if end:
-            pct = f" ({end['delivered_pct']}%)" if end["delivered_pct"] is not None else ""
-            head += (f"; delivered {end['delivered_sp']} of {end['total_sp']} SP{pct}; likely carry-over "
-                     f"{end['carry_over_issues']} issue{'s' if end['carry_over_issues'] != 1 else ''} "
-                     f"({end['carry_over_sp']} SP)")
+        still_open = s.get("still_open")
+        if still_open:
+            head += f"; {_still_open_text(still_open)}"
         else:
             head += (f"; ✓ {s.get('ready', 0)} open issues not blocked" if s.get("links_complete", True)
                      else "; blocked-by links not checked")
@@ -1073,6 +1178,25 @@ def _epic_header(sec, owners):
 
 def _left_out_line(entries):
     return "Left out: " + "; ".join(f"{x['what']}: {x['why']}" for x in entries)
+
+
+def sprint_health_failure(sprint, missing=()):
+    """The weekly report's one-line run status when sprint health is not complete, else None.
+
+    ``sprint`` is :func:`sprint_health` output, or None when sprint health has no
+    result (its fetch failed after the retry, or it did not run). A skipped result
+    (sprint week unknown) is not complete either. When this returns a line, the
+    weekly report posts no report: no top post and no replies (a scheduled run
+    delivers only this line), so never a top post without sprint health.
+    The line names the failed fetch and its error, from the "Sprint health"
+    entries of ``missing`` and of the skipped result.
+    """
+    if isinstance(sprint, dict) and "risks" in sprint and not sprint.get("skipped"):
+        return None
+    left_out = (sprint.get("left_out") or []) if isinstance(sprint, dict) else []
+    whys = dict.fromkeys(" ".join(str(x["why"]).split()) for x in list(left_out) + list(missing or [])
+                         if isinstance(x, dict) and x.get("what") == SPRINT_HEALTH and str(x.get("why") or "").strip())
+    return f"{NOT_POSTED}: {SPRINT_HEALTH} incomplete: " + ("; ".join(whys) or "no sprint health result")
 
 
 def build_report(sprint, sections, missing=(), mentions=None, team_owner=None, epic_gaps=None):
@@ -1189,7 +1313,7 @@ def build_report(sprint, sections, missing=(), mentions=None, team_owner=None, e
 
     where = []
     if sprint:
-        where.append(f"{sprint['sprint']} (week {sprint['week']}, {sprint['mode']})")
+        where.append(f"{sprint['sprint']} ({_sprint_when(sprint)})")
     where += [f"{s['release']} {s['phase']}" for s in sections]
     top = [f"{status} Edge weekly health: " + ("; ".join(where) or "sprint data not available")]
     if risks:
@@ -1205,3 +1329,203 @@ def build_report(sprint, sections, missing=(), mentions=None, team_owner=None, e
     action_count = sum(len(p.get("items", [])) + len(p.get("team_items", [])) for p in parts)
     return {"top_post": top, "top_post_text": "\n".join(top), "replies": ["\n".join(r) for r in replies],
             "action_count": action_count, "people": ranked}
+
+
+# ---------------------------------------------------------------- shared fetches (weekly report)
+
+EXCLUDED_RESOLUTIONS = ("Duplicate", "Obsolete")
+
+
+def _subset(fetch, issues, name, fields=None, extra_problems=()):
+    """``fetch`` (an ``adapt_fetch`` result) narrowed to ``issues``, named ``name``: the
+    shared fetch's page-level problems, the problems of these issues only (of a
+    shortened value, only in ``fields`` when given), and ``extra_problems``. Never
+    complete when the shared fetch is incomplete for a reason not in its problems. Its
+    Left out entries stay with the shared fetch, so they are listed once."""
+    fetch = fetch if isinstance(fetch, dict) else {}
+    status = dict(fetch.get("fetch") or {"complete": False, "problems": ["result not readable"]})
+    original = list(status.get("problems") or [])
+    if original or extra_problems:  # a problem of one issue concerns only the parts holding it
+        status["problems"] = (_scoped_problems(original, keys={i.get("key") for i in issues}, fields=fields)
+                              + list(extra_problems))
+        status["complete"] = (not status["problems"] and not status.get("linked_spike_problems")
+                              and (bool(status.get("complete")) or bool(original)))
+    status.update(name=name, fetched=len(issues))
+    return {"issues": copy.deepcopy(list(issues)), "fetch": status,
+            "skipped_signals": list(fetch.get("skipped_signals") or []),
+            "people": fetch.get("people") or {}, "warnings": [], "left_out": []}
+
+
+def _whole(issues, name):
+    """A complete fetch result of ``issues``, named ``name``: records already known whole
+    (or none at all)."""
+    return _subset({"issues": issues, "fetch": {"complete": True, "problems": []}}, issues, name)
+
+
+def _shortened_in(problems, field):
+    """The keys whose problem is a shortened value of ``field``."""
+    keys = set()
+    for problem in problems or []:
+        m = _KEYED_PROBLEM_RE.match(str(problem))
+        cut = _SHORTENED_PROBLEM_RE.match(m.group(2)) if m else None
+        if cut and field in {f.strip() for f in cut.group(1).split(",")}:
+            keys.add(m.group(1))
+    return keys
+
+
+def _targets(issue, release):
+    return f"openshift-{release}".casefold() in {v.casefold() for v in _versions(issue.get("customfield_10855"))}
+
+
+def _kept_resolution(issue):
+    name = _text(issue.get("resolution"))
+    return name is None or name.casefold() not in {r.casefold() for r in EXCLUDED_RESOLUTIONS}
+
+
+def gate_features(gate_fetch, release):
+    """A release's non-Closed Features from the release Feature gate fetch: the gate's
+    predicate (an Edge-labelled OCPSTRAT Feature, not Closed, with a Target Version)
+    narrowed to Target Version ``openshift-<release>`` and a resolution that is empty
+    or not Duplicate / Obsolete. That is exactly the refinement features query, so the
+    refinement section needs no features fetch of its own. The gate requests the
+    features' fields for this (``chai_jira_adapter.EXTRA_FIELDS["feature_gate"]``)."""
+    issues = [i for i in (gate_fetch or {}).get("issues") or []
+              if isinstance(i, dict) and not _status_is(i, "Closed") and _targets(i, release) and _kept_resolution(i)]
+    return _subset(gate_fetch, issues, "features")
+
+
+def _parent_links(issue):
+    """The values the release epics query's ``"Parent Link"`` may have matched for an
+    issue: its printed Parent Link (``customfield_10018``) and its native parent (Jira
+    Cloud keeps an epic's feature there; transform-epics reads it first)."""
+    return [k for k in (issue.get("customfield_10018"), (issue.get("parent") or {}).get("key")) if k]
+
+
+def partition_epics(epics_fetch, features_by_release):
+    """The shared release epics fetch split per release: ``{release: that release's
+    epics query}``, ``project in (OCPEDGE, USHIFT) AND "Parent Link" in (<its feature
+    keys>)``, any status (Closed epics included) and any issue type.
+
+    A release with no feature keys has no epics (complete, empty). With one release
+    with keys, every returned issue is its epic, as with its own query. With several,
+    an issue goes to each release whose features include its Parent Link:
+    the printed Parent Link or the native parent, whichever names a selected feature
+    (the query matched one of them). When that is not known (the Parent Link
+    shortened, neither naming a selected feature, or the two naming features of
+    different releases), every part is incomplete. The decision 0024 epics are their
+    own fetch: a different predicate, so neither decides the other's rows.
+    """
+    issues = [i for i in (epics_fetch or {}).get("issues") or [] if isinstance(i, dict) and i.get("key")]
+    problems = ((epics_fetch or {}).get("fetch") or {}).get("problems")
+    link_cut = _shortened_in(problems, "customfield_10018")
+    # A shortened Parent Link is handled here: the release checks read an epic's feature
+    # from its parent, and from the Parent Link only without one.
+    read = set()
+    for problem in problems or []:
+        m = _KEYED_PROBLEM_RE.match(str(problem))
+        cut = _SHORTENED_PROBLEM_RE.match(m.group(2)) if m else None
+        if cut:
+            read |= {f.strip() for f in cut.group(1).split(",")}
+    read.discard("customfield_10018")
+    # A release with no features has no epics: complete and empty, whatever the fetch.
+    out = {release: _whole([], "epics") for release, keys in features_by_release.items() if not keys}
+    releases = [release for release, keys in features_by_release.items() if keys]
+    if len(releases) == 1:
+        no_feature = [f"{i['key']}: Parent Link value shortened and no parent, feature unknown"
+                      for i in issues if i["key"] in link_cut and not (i.get("parent") or {}).get("key")]
+        out[releases[0]] = _subset(epics_fetch, issues, "epics", fields=read, extra_problems=no_feature)
+    if len(releases) <= 1:
+        return {release: out[release] for release in features_by_release}
+    wanted = {release: set(features_by_release[release]) for release in releases}
+    members, unknown = {release: [] for release in releases}, []
+    for issue in issues:
+        takers = {frozenset(r for r in releases if link in wanted[r]) for link in _parent_links(issue)} - {frozenset()}
+        if issue["key"] in link_cut or len(takers) != 1:
+            unknown.append(f"{issue['key']}: returned by the epics fetch, release unknown "
+                           "(Parent Link not read whole, or naming no single set of selected features)")
+            continue
+        for release in releases:
+            if release in next(iter(takers)):
+                members[release].append(issue)
+    out.update({release: _subset(epics_fetch, members[release], "epics", fields=read, extra_problems=unknown)
+                for release in releases})
+    return {release: out[release] for release in features_by_release}
+
+
+def group_stories(stories_fetch, epics_by_release):
+    """The shared stories fetch (``parent in`` every selected release's epics) grouped
+    per release: the issues whose parent is one of that release's epics. An issue
+    counts in every release whose epics include its parent. A release with no epics has
+    no stories (complete, empty), even when the fetch for the others failed."""
+    issues = [i for i in (stories_fetch or {}).get("issues") or [] if isinstance(i, dict)]
+    every = {key for keys in epics_by_release.values() for key in keys}
+    unplaced = [f"{i.get('key')}: returned by the stories fetch with a parent of no selected epic"
+                for i in issues if (i.get("parent") or {}).get("key") not in every]
+    out = {}
+    for release, keys in epics_by_release.items():
+        wanted = set(keys)
+        out[release] = (_subset(stories_fetch, [i for i in issues if (i.get("parent") or {}).get("key") in wanted],
+                                "stories", extra_problems=unplaced)
+                        if wanted else _whole([], "stories"))  # no epic: no story needed, whatever the fetch
+    return out
+
+
+def epic_issue_counts(stories_fetch, epic_keys, queried_keys=None):
+    """``(counts, why)`` for a refinement section from the shared stories fetch: its issue
+    count per epic (``{epic key: count}``, ``why`` None), or ``(None, why)`` when a page
+    of the fetch is not whole or a returned issue cannot be attributed (no readable
+    parent, or a parent of none of ``queried_keys``, the epic keys the query used;
+    default ``epic_keys``): an epic it might belong to is never called empty, and ``why``
+    (pass it to :func:`refinement_gaps` as ``epic_issue_counts_why``) names the fetch
+    problem. Only which epic an issue is under counts (its ``parent``, a base field), so
+    a story's shortened value or sprint problem does not make the count incomplete, as
+    with the count-only query. A section with no epic needs no story: ``({}, None)``."""
+    if not epic_keys:
+        return {}, None
+    status = ((stories_fetch or {}).get("fetch") if isinstance(stories_fetch, dict) else None) or {}
+    problems = status.get("problems") or []
+    page_level = _scoped_problems(problems, keys=set())
+    if not status.get("complete") and (page_level or not problems):
+        return None, f"epic issues not fetched ({'; '.join(map(str, page_level)) or 'reason not given'})"
+    wanted, queried, counts = set(epic_keys), set(queried_keys or epic_keys), {}
+    for issue in (stories_fetch or {}).get("issues") or []:
+        parent = ((issue or {}).get("parent") or {}).get("key")
+        if parent not in queried:
+            what = f"a parent of no queried epic ({parent})" if parent else "no readable parent"
+            return None, f"epic issues not attributable ({(issue or {}).get('key')}: returned with {what})"
+        if parent in wanted:
+            counts[parent] = counts.get(parent, 0) + 1
+    return counts, None
+
+
+def reuse_parents(parent_keys, fetches):
+    """The epic-field parent lookups that need no query: ``(batch, missing)``.
+
+    A parent key is reused only when a fetch in ``fetches`` with every page whole
+    returned it with no problem of its own (no shortened value), and that fetch
+    requested the parents' fields (Target Version and QA Contact; the
+    caller passes only such fetches: the release Feature gate and the features
+    fetches). Its type and status are base fields. ``batch`` is a parent batch for
+    :func:`epic_field_gaps` (``{"keys": [...], "result": ...}``), or None when no key
+    is reused; ``missing`` lists the keys still to read with ``key in (...)``, in order.
+    The first fetch that returned a key whole wins: list the latest read first.
+    """
+    parent_keys = list(dict.fromkeys(parent_keys))
+    wanted = set(parent_keys)
+    found = {}
+    for fetch in fetches:
+        status = (fetch or {}).get("fetch") if isinstance(fetch, dict) else None
+        if not isinstance(status, dict) or (not status.get("complete") and not status.get("problems")):
+            continue
+        if _scoped_problems(status.get("problems"), keys=set()):  # a page-level problem: nothing is whole
+            continue
+        for issue in fetch.get("issues") or []:
+            if (isinstance(issue, dict) and issue.get("key") in wanted and issue["key"] not in found
+                    and not _scoped_problems(status.get("problems"), keys={issue["key"]})):
+                found[issue["key"]] = issue
+    reused = [k for k in parent_keys if k in found]
+    missing = [k for k in parent_keys if k not in found]
+    # Each record was taken whole from its own source, so the batch is whole: no other
+    # source's problem (of another copy of the same key) carries over.
+    batch = {"keys": reused, "result": _whole([found[k] for k in reused], "parents")} if reused else None
+    return batch, missing
