@@ -11,6 +11,7 @@
 #   BMC_USER, BMC_PASS — BMC credentials (required if BMC_0/BMC_1 set)
 #   SSH_KEY         — Path to SSH private key (default: ~/.ssh/id_rsa if it exists)
 #   KUBECONFIG      — Path to kubeconfig (bare metal mode; hypervisor mode auto-detects)
+#   PROXY_ENV       — Path to a proxy env file sourced before oc commands (bare metal mode)
 #   DEBUG           — Set to "1" to show SSH/command stderr (default: suppressed)
 #
 # Collects:
@@ -83,7 +84,10 @@ run_on_node() {
 
 run_oc() {
     if [ "$ACCESS_MODE" = "direct" ]; then
-        if [ -n "${KUBECONFIG:-}" ]; then
+        if [ -n "${PROXY_ENV:-}" ] && [ -f "$PROXY_ENV" ]; then
+            # shellcheck source=/dev/null
+            (source "$PROXY_ENV" > /dev/null 2>&1; oc "$@") 2>"$STDERR_REDIRECT"
+        elif [ -n "${KUBECONFIG:-}" ]; then
             KUBECONFIG="$KUBECONFIG" oc "$@" 2>"$STDERR_REDIRECT"
         else
             oc "$@" 2>"$STDERR_REDIRECT"
