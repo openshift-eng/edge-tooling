@@ -254,8 +254,8 @@ update_catalog() {
     jq -n \
         --arg name "edge-tooling" \
         --arg desc "Claude Code plugins for OpenShift and edge computing workflows" \
-        --arg owner_name "brandisher" \
-        --arg owner_email "chad@redhat.com" \
+        --arg owner_name "ggiguash" \
+        --arg owner_email "ggiguash@redhat.com" \
         --argjson plugins "$plugins_json" \
         '{"name": $name, "description": $desc, "owner": {"name": $owner_name, "email": $owner_email}, "plugins": ($plugins | sort_by(.name))}' \
         > "$MARKETPLACE_FILE"

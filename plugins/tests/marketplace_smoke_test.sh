@@ -57,7 +57,7 @@ run_test "catalog-update succeeds" "$MARKETPLACE catalog-update" "Catalog update
 run_test "marketplace.json exists" "test -f ${REPO_ROOT}/.claude-plugin/marketplace.json && echo exists" "exists"
 run_test "marketplace.json is valid JSON" "jq empty ${REPO_ROOT}/.claude-plugin/marketplace.json && echo valid" "valid"
 run_test "marketplace.json has plugins array" "jq -e '.plugins | length > 0' ${REPO_ROOT}/.claude-plugin/marketplace.json" "true"
-run_test "marketplace.json has owner" "jq -r '.owner.name' ${REPO_ROOT}/.claude-plugin/marketplace.json" "brandisher"
+run_test "marketplace.json has owner" "jq -r '.owner.name' ${REPO_ROOT}/.claude-plugin/marketplace.json" "ggiguash"
 run_test "marketplace.json plugins use source field" "jq -e '.plugins[0].source' ${REPO_ROOT}/.claude-plugin/marketplace.json" "./plugins/"
 
 # --- List ---
