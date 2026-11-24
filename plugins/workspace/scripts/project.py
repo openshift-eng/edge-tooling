@@ -40,6 +40,7 @@ SCRIPTS = Path(__file__).resolve().parent
 TYPES = ("bug", "feature", "ci-testing", "docs", "analysis")
 LINE_CAP = 100
 JIRA_RE = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
+NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 GITIGNORE = "# Large files that shouldn't be committed\n*.log\n*.txt.gz\n*.tar.gz\n"
 
 
@@ -58,7 +59,30 @@ def git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
                           capture_output=True, text=True)
 
 
+def check_name(value: str, label: str) -> str:
+    """Allow-list for values that become a path component."""
+    if not NAME_RE.fullmatch(value) or ".." in value:
+        raise ProjectError("error", f"Invalid {label} '{value}': use letters, digits, "
+                           "'.', '_' and '-' only. Ask the user for a valid value.")
+    return value
+
+
+def check_branch(value: str) -> str:
+    if value.startswith("-") or git(Path("."), "check-ref-format", "--branch",
+                                    value).returncode != 0:
+        raise ProjectError("error", f"Invalid branch name '{value}'. Ask the user "
+                           "for a valid git branch name.")
+    return value
+
+
+def check_line(value: str, label: str) -> str:
+    if re.search(r"[\r\n]", value):
+        raise ProjectError("error", f"{label} must be a single line.")
+    return value
+
+
 def project_dir(root: Path, name: str) -> Path:
+    check_name(name, "project name")
     d = root / "projects" / name
     if not (d / "CLAUDE.md").is_file():
         raise ProjectError("not_found", f"Project '{name}' has no CLAUDE.md under "
@@ -97,24 +121,45 @@ def add_exclude(repo: Path, pattern: str) -> None:
                            + pattern + "\n")
 
 
+def note_if_stale(repo_dir: Path, path: Path, pr: int, result: dict) -> None:
+    """Flag an existing PR checkout that is behind the PR head; never modify it."""
+    fetch = git(repo_dir, "fetch", "origin", f"pull/{pr}/head")
+    head = git(repo_dir, "rev-parse", "FETCH_HEAD")
+    if fetch.returncode != 0 or head.returncode != 0:
+        result["warning"] = (f"Could not fetch PR {pr} to check for newer commits: "
+                             f"{fetch.stderr.strip()}. Tell the user the checkout may be stale.")
+        return
+    current = git(path, "rev-parse", "HEAD").stdout.strip()
+    if current != head.stdout.strip():
+        result.update(stale=True, pr_head=head.stdout.strip(), checkout_head=current,
+                      warning=f"{path} is not at the current head of PR {pr}. Tell the "
+                      "user. To refresh it, they must commit or discard local work in "
+                      "the worktree, then pull the PR head there.")
+
+
 def create_worktree(root: Path, repo: str | None, branch: str,
                     pr: int | None = None) -> dict:
     """Create (or find) a worktree. ``repo=None`` means the self repo."""
     if repo is None:
         repo_dir, rel, pattern = root, Path(".claude/worktrees"), ".claude/worktrees/"
     else:
+        check_name(repo, "repo name")
         repo_dir, rel, pattern = root / "repos" / repo, Path(".worktrees"), ".worktrees/"
     if git(repo_dir, "rev-parse", "--git-dir").returncode != 0:
         raise ProjectError("error", f"{repo_dir} is not a git checkout. Check the "
                            "repo name against dev-env.yaml.")
     if pr is not None:
         branch = f"pr/{pr}"
+    else:
+        check_branch(branch)
     path = repo_dir / rel / branch
     result = {"status": "ok", "repo": repo or "(self)", "branch": branch,
               "path": str(path), "existed": False}
     add_exclude(repo_dir, pattern)
     if path.is_dir():
         result["existed"] = True
+        if pr is not None:
+            note_if_stale(repo_dir, path, pr, result)
         return result
 
     if pr is not None:
@@ -193,6 +238,10 @@ def cmd_new(root: Path, a: argparse.Namespace) -> dict:
     name = a.name or jira_id or slugify(a.title)
     if not name:
         raise ProjectError("error", "Cannot derive a project name. Give --name.")
+    check_name(name, "project name")
+    for label, value in (("--jira", jira_url), ("--links", a.links or ""),
+                         ("--repos", a.repos or ""), ("--title", a.title)):
+        check_line(value, label)
     pdir = root / "projects" / name
     if pdir.exists():
         n = 2
@@ -224,6 +273,8 @@ def cmd_new(root: Path, a: argparse.Namespace) -> dict:
             warnings.append(f"{repo or 'self'}: {exc}")
             continue
         branch = wt["branch"]
+        if wt.get("warning"):
+            warnings.append(f"{repo or 'self'}: {wt['warning']}")
         if repo is None:
             worktree_path = wt["path"]
         else:
@@ -317,7 +368,9 @@ def cmd_close(root: Path, a: argparse.Namespace) -> dict:
             git(repo, "worktree", "prune")
             removed.append(s["path"])
             b = s["branch"]
-            if b:
+            if b and not s["exists"]:
+                branches_kept.append(b)  # nothing to inspect: never delete unseen commits
+            elif b:
                 flag = "-D" if b.startswith("pr/") or a.force else "-d"
                 if git(repo, "rev-parse", "--verify", f"refs/heads/{b}").returncode == 0 \
                         and git(repo, "branch", flag, b).returncode != 0:
@@ -450,6 +503,9 @@ def main() -> None:
         result = handlers[a.cmd](root, a)
     except ProjectError as exc:
         result = exc.payload
+    except Exception as exc:  # noqa: BLE001  (the contract is JSON, always)
+        result = {"status": "error", "error_message":
+                  f"Unexpected {type(exc).__name__}: {exc}. Tell the user; do not retry."}
     print(json.dumps(result, indent=2, default=str))
 
 

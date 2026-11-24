@@ -174,12 +174,20 @@ def set_frontmatter_field(text: str, key: str, value: str | None,
 
 def write_atomic(path: Path, text: str) -> None:
     """Write ``text`` to ``path`` via a temp file and os.replace."""
+    import shutil
     import tempfile
 
+    path = Path(os.path.realpath(path))  # keep a symlinked target a symlink
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
     try:
         with os.fdopen(fd, "w") as f:
             f.write(text)
+        if path.exists():
+            shutil.copymode(path, tmp)
+        else:
+            umask = os.umask(0)
+            os.umask(umask)
+            os.chmod(tmp, 0o666 & ~umask)
         os.replace(tmp, path)
     except BaseException:
         try:

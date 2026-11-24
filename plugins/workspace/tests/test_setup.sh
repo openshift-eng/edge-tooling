@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Test suite for scripts/setup.sh (workspace plugin)
 # ==================================================
@@ -467,7 +467,7 @@ assert_contains "--ignore-projects adds projects/ to .gitignore" "$ws/.gitignore
 assert_contains "existing .gitignore lines kept" "$ws/.gitignore" "^build/$"
 cleanup "$ws"
 
-ws=$(new_workspace)
+ws=$(cd "$(new_workspace)" && pwd -P)
 git init -q -b main "$ws"
 mkdir -p "$ws/sub"
 out=$(run_setup "$plugin" "$ws/sub" detect 2>/dev/null)

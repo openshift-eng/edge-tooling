@@ -11,6 +11,8 @@ a separate directory. Pass `--workspace "$WS"` to every `setup.sh` call,
 because the current directory is the launch directory, not `$WS`.
 
 Below, `setup.sh` means `bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh"`.
+If any `setup.sh` call fails, show its error and stop. Do not run `clone`
+after a failed `init`.
 
 ## Step 1: Detect the Mode
 

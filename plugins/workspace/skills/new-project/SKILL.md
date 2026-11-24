@@ -46,7 +46,8 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/project.py" new --type <type> \
 
 The project name comes from the JIRA key, else a slug of the title; pass
 `--name` to override. Run with `--dry-run` first if the name is not yet
-agreed. On `status: exists`, offer `suggestion` or
+agreed. If `status` is `error`, show `error_message` and stop. Step 3 needs
+a real (not `--dry-run`) result with `claude_md`. On `status: exists`, offer `suggestion` or
 `/workspace:resume-project`. Report any `warnings` (a worktree that
 failed): work then happens in the main checkout.
 

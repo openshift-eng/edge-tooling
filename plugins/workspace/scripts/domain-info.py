@@ -20,13 +20,20 @@ import sys
 from pathlib import Path
 from typing import Any
 
+
+def dumps(result: Any, **kw: Any) -> str:
+    """json.dumps that mirrors ``error`` into ``error_message`` for callers."""
+    if isinstance(result, dict) and "error" in result:
+        result.setdefault("error_message", result["error"])
+    return json.dumps(result, **kw)
+
 # Plugins cannot declare python dependencies. PyYAML is required to parse
 # dev-env.yaml and project frontmatter — emit a self-describing JSON error
 # (that the calling skill can relay) instead of a raw ImportError traceback.
 try:
     import yaml
 except ImportError:
-    print(json.dumps({
+    print(dumps({
         "status": "error",
         "error": "PyYAML is required (dev-env.yaml and project frontmatter are "
                  "YAML). Tell the user to install it with: pip3 install pyyaml. "
@@ -222,7 +229,7 @@ def main() -> None:
 
     root = workspace_lib.resolve_workspace_root()
     if root is None:
-        print(json.dumps({
+        print(dumps({
             "status": "error",
             "error": "Could not determine the workspace root. Tell the user to "
                      "launch claude inside a workspace (a directory with "
@@ -233,7 +240,7 @@ def main() -> None:
     domain_name, source_block, project_info = resolve_domain_name(project_arg, root)
 
     if not domain_name:
-        print(json.dumps({
+        print(dumps({
             "status": "no_domain",
             "error": "This workspace was not built from a domain (no domain: "
                      "block in dev-env.yaml, and no project domain recorded). "
@@ -243,7 +250,7 @@ def main() -> None:
 
     domain_dir = find_domain_dir(domain_name, root)
     if domain_dir is None:
-        print(json.dumps({
+        print(dumps({
             "status": "not_found",
             "error": f"Domain '{domain_name}' is recorded but no directory "
                      f"was found for it (checked workspace and bundled domains/). "
@@ -253,10 +260,10 @@ def main() -> None:
 
     if record:
         if not entries:
-            print(json.dumps({"status": "error",
+            print(dumps({"status": "error",
                               "error": "--record needs at least one --entry"}))
             return
-        print(json.dumps(record_updates(domain_name, domain_dir, root,
+        print(dumps(record_updates(domain_name, domain_dir, root,
                                         project_arg or "", entries), indent=2))
         return
 
@@ -278,7 +285,7 @@ def main() -> None:
                 if not cleanup_ok:
                     msg += (f" (warning: partial directory at {dest} could not be"
                             " removed — delete it manually before retrying)")
-                print(json.dumps({"status": "error", "error": msg}))
+                print(dumps({"status": "error", "error": msg}))
                 return
             domain_dir = dest
             action = "copied"
@@ -287,7 +294,7 @@ def main() -> None:
     else:
         report = build_domain_report(domain_name, domain_dir, root, source_block)
 
-    print(json.dumps({
+    print(dumps({
         "status": "ok",
         "workspace_root": str(root),
         "project": project_info,

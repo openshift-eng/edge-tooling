@@ -21,6 +21,13 @@ from typing import Any
 
 import workspace_lib
 
+
+def dumps(result: Any, **kw: Any) -> str:
+    """json.dumps that mirrors ``error`` into ``error_message`` for callers."""
+    if isinstance(result, dict) and "error" in result:
+        result.setdefault("error_message", result["error"])
+    return json.dumps(result, **kw)
+
 THRESHOLD = 10
 KEEP_RECENT = 3
 ARCHIVE_FILENAME = "progress-archive.md"
@@ -383,7 +390,7 @@ def main():
         args.remove("--dry-run")
 
     if not args:
-        print(json.dumps({
+        print(dumps({
             "status": "error",
             "error": "Usage: consolidate-project.py [--dry-run] <project-name>",
         }))
@@ -392,7 +399,7 @@ def main():
     project_name = args[0]
     root = workspace_lib.resolve_workspace_root()
     if root is None:
-        print(json.dumps({
+        print(dumps({
             "status": "error",
             "error": "Could not determine the workspace root. Set WORKSPACE_ROOT "
                        "or run inside a workspace (a directory containing dev-env.yaml).",
@@ -401,14 +408,14 @@ def main():
     project_dir = root / "projects" / project_name
 
     if not project_dir.is_dir():
-        print(json.dumps({
+        print(dumps({
             "status": "error",
             "error": f"Project directory not found: {project_dir}",
         }))
         sys.exit(0)
 
     result = consolidate(project_dir, dry_run=dry_run)
-    print(json.dumps(result, indent=2))
+    print(dumps(result, indent=2))
 
 
 if __name__ == "__main__":

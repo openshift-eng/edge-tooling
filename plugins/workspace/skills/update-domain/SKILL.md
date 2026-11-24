@@ -116,6 +116,8 @@ bundled one automatically; `source: bundled` stays untouched in
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/domain-info.py" --copy-on-write <project-name>
 ```
 
+If `status` is not `ok`, show `error_message` and stop: edit nothing.
+
 Use the `domain.dir` from **this** response for every Edit/Write in Step
 7 — not the original bundled path.
 
@@ -126,8 +128,13 @@ redistribute in one call, with one `--entry` per changed file:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/domain-info.py" --record <project-name> \
-  --entry "context/<repo>.md: <what changed and why>" [--entry ...]
+  --entry 'context/<repo>.md: <what changed and why>' [--entry ...]
 ```
+
+Single-quote each `--entry`, writing an embedded `'` as `'\''`; double
+quotes would expand any `$(...)` or backticks in the lesson text. If
+`status` is not `ok`, show `error_message` and stop; do not re-run, since
+`UPDATES.md` may already have an entry.
 
 It appends an entry to the domain's `UPDATES.md` and copies each edited
 `context/<repo>.md` over `repos/<repo>/DOMAIN-CONTEXT.md` when that file

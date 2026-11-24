@@ -261,6 +261,78 @@ class TestResumeProject(Fixture):
         self.assertEqual(out["alternatives"], ["d"])
 
 
+class TestReviewRegressions(Fixture):
+    def test_unsafe_names_are_rejected(self):
+        for args in (("new", "--type", "bug", "--title", "T", "--name", "../x"),
+                     ("new", "--type", "bug", "--title", "T", "--jira", "A-1\nx: y"),
+                     ("worktree", "create", "--repo", "../r1", "--branch", "b"),
+                     ("worktree", "create", "--repo", "r1", "--branch", "-bad"),
+                     ("worktree", "create", "--repo", "r1", "--branch", "a..b"),
+                     ("close", "../x", "--dry-run")):
+            out = self.project(*args)
+            self.assertEqual(out["status"], "error", args)
+            self.assertIn("error_message", out)
+        self.assertFalse((self.tmp / "x").exists())
+
+    def test_missing_worktree_keeps_unpublished_pr_branch(self):
+        repo = self.ws / "repos" / "r1"
+        wt = self.project("worktree", "create", "--repo", "r1", "--branch", "pr/7")
+        (Path(wt["path"]) / "fix.txt").write_text("unpublished\n")
+        git(Path(wt["path"]), "add", "-A")
+        git(Path(wt["path"]), "commit", "-q", "-m", "fix")
+        git(repo, "worktree", "remove", wt["path"])
+        p = self.project("new", "--type", "bug", "--title", "B", "--repos", "r1")
+        text = Path(p["claude_md"]).read_text().replace(
+            "repos:", "worktrees:\n  - r1\nbranch: pr/7\nrepos:", 1)
+        Path(p["claude_md"]).write_text(text)
+        out = self.project("close", p["name"])
+        self.assertEqual(out["status"], "ok", out)
+        self.assertIn("pr/7", out["branches_kept"])
+        git(repo, "rev-parse", "--verify", "refs/heads/pr/7")
+
+    def test_existing_pr_worktree_reports_stale_head(self):
+        repo = self.ws / "repos" / "r1"
+        origin = Path(git(repo, "remote", "get-url", "origin").strip())
+        git(origin, "update-ref", "refs/pull/7/head", "HEAD")
+        a = self.project("worktree", "create", "--repo", "r1", "--pr", "7")
+        self.assertEqual(a["status"], "ok", a)
+        self.assertNotIn("stale", a)
+        (origin / "new.txt").write_text("n\n")
+        git(origin, "add", "-A")
+        git(origin, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "n")
+        git(origin, "update-ref", "refs/pull/7/head", "HEAD")
+        b = self.project("worktree", "create", "--repo", "r1", "--pr", "7")
+        self.assertTrue(b["existed"])
+        self.assertTrue(b["stale"], b)
+        self.assertIn("warning", b)
+
+    def test_unexpected_failure_is_json(self):
+        p = self.project("new", "--type", "bug", "--title", "T")
+        Path(p["claude_md"]).write_bytes(b"\xff\xfe not utf-8")
+        out = self.project("touch", p["name"])
+        self.assertEqual(out["status"], "error")
+        self.assertIn("error_message", out)
+
+    def test_write_atomic_preserves_mode_and_symlink(self):
+        real = self.tmp / "real.md"
+        real.write_text("a\n")
+        real.chmod(0o644)
+        link = self.tmp / "link.md"
+        link.symlink_to(real)
+        workspace_lib.write_atomic(link, "b\n")
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(real.read_text(), "b\n")
+        self.assertEqual(real.stat().st_mode & 0o777, 0o644)
+
+    def test_error_results_carry_error_message(self):
+        r = subprocess.run([sys.executable, str(SCRIPTS / "consolidate-project.py"),
+                            "no-such-project"], capture_output=True, text=True,
+                           env={**os.environ, "WORKSPACE_ROOT": str(self.ws)})
+        out = json.loads(r.stdout)
+        self.assertEqual(out["status"], "error")
+        self.assertEqual(out["error_message"], out["error"])
+
+
 class TestFrontmatterHelpers(unittest.TestCase):
     TEXT = "---\nproject: x\nstatus: active\nworktrees:\n  - a\n---\n# body\n"
 

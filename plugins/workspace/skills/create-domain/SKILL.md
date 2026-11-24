@@ -21,11 +21,12 @@ a separate directory. Pass `--workspace "$WS"` to every `setup.sh` call.
    your suggestions from the description. Each repo needs `name`, `url`,
    `branch`, `category`, and `summary`.
 4. Write `$WS/dev-env.yaml` with the schema in
-   `${CLAUDE_PLUGIN_ROOT}/templates/dev-env.yaml.template`.
+   `${CLAUDE_PLUGIN_ROOT}/templates/dev-env.yaml.template`. If it already
+   exists, ask before replacing it.
 5. Ask whether to save this as a reusable domain. If yes, also create
    `$WS/domains/<name>/` with `domain.yaml` (name, description) and a copy
-   of `dev-env.yaml`. A workspace domain shadows a bundled one with the same
-   name.
+   of `dev-env.yaml`, asking first if that directory exists. A workspace
+   domain shadows a bundled one with the same name.
 
 ## Step 2: Clone
 
@@ -34,7 +35,8 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh" --workspace "$WS" clone
 ```
 
 This also applies the settings template, links repo skills, and writes
-`$WS/CLAUDE.md` with the repo table.
+`$WS/CLAUDE.md` with the repo table. If it fails, show the error and
+stop; explore only repos that cloned.
 
 ## Step 3: Generate Repo Context
 

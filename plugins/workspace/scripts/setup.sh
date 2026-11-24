@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Workspace Setup Script (workspace plugin)
 # =========================================
@@ -951,6 +951,7 @@ write_root_claude_md() {
     local rows
     rows=$(parse_yaml_repos "$REPO_SOURCE" | while IFS='|' read -r url dir _b name cat summary; do
         [[ -z "$url" || -z "$dir" ]] && continue
+        # shellcheck disable=SC2016  # backticks are literal markdown
         printf '| `%s` | %s | %s |\n' "${name:-$dir}" "$cat" "$summary"
     done)
     python3 - "$WORKSPACE_ROOT_RESOLVED/CLAUDE.md" "$TEMPLATES_DIR/workspace-CLAUDE.md.template" \
@@ -1145,7 +1146,11 @@ main() {
             fi
             apply_settings_template "$(find_domain_dir "$ACTIVE_DOMAIN_NAME")"
             link_repo_skills
-            log_info "Root CLAUDE.md: $(write_root_claude_md)"
+            if ! root_md=$(write_root_claude_md 2>&1); then
+                log_error "Could not write the root CLAUDE.md: $root_md"
+                exit 1
+            fi
+            log_info "Root CLAUDE.md: $root_md"
             ;;
         update)
             resolve_workspace_root require
