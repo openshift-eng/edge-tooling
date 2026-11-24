@@ -170,6 +170,10 @@ def create_worktree(root: Path, repo: str | None, branch: str,
         if not (path / ".git").exists():
             raise ProjectError("error", f"{path} exists but is not a git worktree. "
                                "Ask the user to move or remove it.")
+        current = git(path, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        if current != branch:
+            raise ProjectError("error", f"{path} exists but has '{current}' checked out, "
+                               f"not '{branch}'. Ask the user to resolve it by hand.")
         result["existed"] = True
         if pr is not None:
             note_if_stale(path, pr, *fetch_pr(repo_dir, pr), result)

@@ -37,7 +37,7 @@ the domains, and ask the user to pick one, or an external domain by git
 URL (a `#subdir` fragment selects a domain in a multi-domain pack). Then:
 
 ```bash
-setup.sh --workspace "$WS" init <domain-name-or-url>
+setup.sh --workspace "$WS" init '<domain-name-or-url>'
 ```
 
 ## Step 3: Clone

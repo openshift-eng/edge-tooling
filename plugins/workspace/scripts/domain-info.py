@@ -206,13 +206,21 @@ def record_updates(domain_name: str, domain_dir: Path, root: Path,
             repo_root = (root / "repos" / repo).resolve()
             if (src.is_file() and dest.is_file() and not dest.is_symlink()
                     and dest.resolve().parent == repo_root):
-                shutil.copyfile(src, dest)
+                try:
+                    shutil.copyfile(src, dest)
+                except OSError as exc:
+                    return {"status": "error",
+                            "error": f"Copied {len(redistributed)} file(s), then failed on "
+                                     f"{dest}: {exc}. The entry was already written to "
+                                     f"{updates}; tell the user, and do not re-run --record.",
+                            "updates_file": str(updates),
+                            "redistributed": redistributed}
                 redistributed.append(str(dest))
     return {"status": "ok", "updates_file": str(updates),
             "redistributed": redistributed}
 
 
-def main() -> None:
+def run() -> None:
     args = sys.argv[1:]
     copy_on_write = "--copy-on-write" in args
     record = "--record" in args
@@ -302,6 +310,14 @@ def main() -> None:
         "project": project_info,
         "domain": report,
     }, indent=2, default=str))
+
+
+def main() -> None:
+    try:
+        run()
+    except Exception as exc:  # noqa: BLE001  (the contract is JSON, always)
+        print(dumps({"status": "error", "error_message":
+                     f"Unexpected {type(exc).__name__}: {exc}. Tell the user; do not retry."}))
 
 
 if __name__ == "__main__":

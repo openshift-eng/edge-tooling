@@ -41,11 +41,10 @@ pasted `$(...)`, backticks or `"`, which double quotes would expand.
 
    It removes the worktrees and their local branches, sets
    `status: done` and `closed:`, and writes `## Closing Notes`. Report
-   `branches_kept` and any `remove_errors`. Unmerged branches are kept
-   unless `--force` was used. A `pr/*` branch is deleted only when all its
-   commits are on a remote ref, so its worktree can be removed without
-   losing work. A branch is also kept when its worktree was already missing
-   or had a different branch checked out.
+   `branches_kept` and any `remove_errors`. An unmerged branch is kept
+   unless it is a `pr/*` branch whose commits are all on a remote ref, or
+   `--force` was passed. A branch is also kept when its worktree was already
+   missing or had a different branch checked out.
 
 The project directory stays. `/workspace:resume-project <name>` can still
 open it. If the project produced durable domain knowledge, suggest

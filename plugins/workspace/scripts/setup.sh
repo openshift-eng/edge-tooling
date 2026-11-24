@@ -1098,6 +1098,18 @@ usage() {
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
+# python3 with PyYAML is required (mode detection, root CLAUDE.md, skill
+# links); yq alone is not enough. Fail before anything is written.
+require_python() {
+    local out
+    if out=$(python3 -c 'import yaml' 2>&1); then
+        return 0
+    fi
+    log_error "Python 3 with PyYAML is required: ${out:-python3 not found}"
+    log_error "Install it (dnf install python3-pyyaml, or pip3 install pyyaml) and re-run."
+    return 1
+}
+
 main() {
     # Parse --workspace anywhere on the command line, before the subcommand.
     local positionals=()
@@ -1118,6 +1130,7 @@ main() {
 
     case "$action" in
         init)
+            require_python || exit 1
             resolve_workspace_root create
             if [[ "$target" == "--self" ]]; then
                 shift 2
@@ -1136,6 +1149,7 @@ main() {
             refresh_domain
             ;;
         clone)
+            require_python || exit 1
             resolve_workspace_root require
             ensure_skills_dir
             detect_repo_source

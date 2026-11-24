@@ -372,6 +372,13 @@ class TestReviewRegressions(Fixture):
         self.assertIn("pr/7", out["branches_kept"])
         git(repo, "rev-parse", "--verify", "refs/heads/pr/7")
 
+    def test_reused_directory_must_be_on_the_branch(self):
+        wt = self.project("worktree", "create", "--repo", "r1", "--branch", "b")
+        git(Path(wt["path"]), "switch", "-q", "-c", "other")
+        out = self.project("worktree", "create", "--repo", "r1", "--branch", "b")
+        self.assertEqual(out["status"], "error", out)
+        self.assertIn("error_message", out)
+
     def test_plain_directory_is_not_a_worktree(self):
         d = self.ws / "repos" / "r1" / ".worktrees" / "b"
         d.mkdir(parents=True)
@@ -432,10 +439,16 @@ class TestFrontmatterParsersNegative(unittest.TestCase):
 
     def test_malformed_yaml(self):
         path = self.parse("---\nproject: [unclosed\n---\n")
+        self.assertEqual(workspace_lib.read_frontmatter_lines(path),
+                         ["project: [unclosed"])
         self.assertEqual(workspace_lib.parse_frontmatter(path), {})
+        # The flat parser does not validate YAML; it returns the raw value.
+        self.assertEqual(workspace_lib.parse_frontmatter_flat(path),
+                         {"project": "[unclosed"})
 
     def test_non_mapping_yaml(self):
         path = self.parse("---\n- a\n- b\n---\n")
+        self.assertEqual(workspace_lib.read_frontmatter_lines(path), ["- a", "- b"])
         self.assertEqual(workspace_lib.parse_frontmatter(path), {})
         self.assertEqual(workspace_lib.parse_frontmatter_flat(path), {})
 
@@ -443,6 +456,7 @@ class TestFrontmatterParsersNegative(unittest.TestCase):
         path = self.parse("# just a body\n")
         self.assertIsNone(workspace_lib.read_frontmatter_lines(path))
         self.assertEqual(workspace_lib.parse_frontmatter(path), {})
+        self.assertEqual(workspace_lib.parse_frontmatter_flat(path), {})
 
 
 if __name__ == "__main__":
