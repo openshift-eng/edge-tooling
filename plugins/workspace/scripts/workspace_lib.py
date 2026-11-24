@@ -156,10 +156,13 @@ def set_frontmatter_field(text: str, key: str, value: str | None,
         for i in range(1, end):
             if lines[i].startswith(f"{name}:"):
                 j = i + 1
-                while j < end and (lines[j][:1] in (" ", "\t") or
-                                   lines[j].startswith("- ")):
+                last = i + 1
+                while j < end and (not lines[j].strip() or lines[j][:1] in (" ", "\t")
+                                   or lines[j].startswith("- ")):
+                    if lines[j].strip():
+                        last = j + 1
                     j += 1
-                return i, j
+                return i, last
         return None
 
     new = [] if value is None else [f"{key}: {value}\n" if value != "" else f"{key}:\n"]
@@ -276,6 +279,8 @@ def worktree_status(wt: dict[str, str]) -> dict:
         parts.append(f"ahead by {entry['ahead']}")
     elif entry["no_upstream"] and entry["unpushed"]:
         parts.append(f"no upstream, {entry['unpushed']} unpushed commits")
-    entry["needs_attention"] = bool(parts)
+    # Commits another remote branch already holds are published, even if ahead of upstream.
+    entry["needs_attention"] = bool(entry["error"] or entry["dirty_count"]
+                                    or entry["unpushed"])
     entry["status_text"] = ", ".join(parts) or "clean"
     return entry

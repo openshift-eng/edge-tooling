@@ -63,10 +63,11 @@ Never read or modify the repo's own `CLAUDE.md`.
    confirm the summary, the workspace name (the repo basename, unless it is
    generic such as `src`), and whether `projects/` is tracked in git
    (recommended) or ignored.
-2. Run:
+2. Run, passing the summary and name single-quoted with each embedded `'`
+   written as `'\''` (double quotes would expand `$(...)` and backticks):
 
    ```bash
-   setup.sh --workspace "$WS" init --self <name> --summary "<summary>" \
+   setup.sh --workspace "$WS" init --self '<name>' --summary '<summary>' \
      [--ignore-projects]
    ```
 

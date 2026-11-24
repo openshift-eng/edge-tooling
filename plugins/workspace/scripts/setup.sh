@@ -952,7 +952,7 @@ write_root_claude_md() {
     rows=$(parse_yaml_repos "$REPO_SOURCE" | while IFS='|' read -r url dir _b name cat summary; do
         [[ -z "$url" || -z "$dir" ]] && continue
         # shellcheck disable=SC2016  # backticks are literal markdown
-        printf '| `%s` | %s | %s |\n' "${name:-$dir}" "$cat" "$summary"
+        printf '| `%s` | %s | %s |\n' "${name:-$dir}" "$cat" "${summary//|/\\|}"
     done)
     python3 - "$WORKSPACE_ROOT_RESOLVED/CLAUDE.md" "$TEMPLATES_DIR/workspace-CLAUDE.md.template" \
         "${ACTIVE_DOMAIN_NAME:-custom}" "$rows" << 'PYEOF'

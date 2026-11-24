@@ -333,6 +333,58 @@ class TestReviewRegressions(Fixture):
         self.assertEqual(out["error_message"], out["error"])
 
 
+    def test_untouched_pr_worktree_is_published(self):
+        repo = self.ws / "repos" / "r1"
+        origin = Path(git(repo, "remote", "get-url", "origin").strip())
+        git(origin, "update-ref", "refs/pull/7/head", "HEAD")
+        wt = self.project("worktree", "create", "--repo", "r1", "--pr", "7")
+        status = workspace_lib.worktree_status({"repo": "r1", "path": wt["path"],
+                                                "branch": "pr/7"})
+        self.assertFalse(status["needs_attention"], status)
+
+    def test_pr_branch_with_local_commit_needs_attention(self):
+        repo = self.ws / "repos" / "r1"
+        origin = Path(git(repo, "remote", "get-url", "origin").strip())
+        git(origin, "update-ref", "refs/pull/7/head", "HEAD")
+        wt = self.project("worktree", "create", "--repo", "r1", "--pr", "7")
+        (Path(wt["path"]) / "fix.txt").write_text("local\n")
+        git(Path(wt["path"]), "add", "-A")
+        git(Path(wt["path"]), "commit", "-q", "-m", "fix")
+        status = workspace_lib.worktree_status({"repo": "r1", "path": wt["path"],
+                                                "branch": "pr/7"})
+        self.assertTrue(status["needs_attention"], status)
+
+    def test_close_keeps_pr_branch_when_checkout_differs(self):
+        repo = self.ws / "repos" / "r1"
+        origin = Path(git(repo, "remote", "get-url", "origin").strip())
+        git(origin, "update-ref", "refs/pull/7/head", "HEAD")
+        wt = self.project("worktree", "create", "--repo", "r1", "--pr", "7")
+        (Path(wt["path"]) / "fix.txt").write_text("local\n")
+        git(Path(wt["path"]), "add", "-A")
+        git(Path(wt["path"]), "commit", "-q", "-m", "fix")
+        git(Path(wt["path"]), "switch", "-q", "--detach", "origin/main")
+        p = self.project("new", "--type", "bug", "--title", "B", "--repos", "r1")
+        text = Path(p["claude_md"]).read_text().replace(
+            "repos:", "worktrees:\n  - r1\nbranch: pr/7\nrepos:", 1)
+        Path(p["claude_md"]).write_text(text)
+        out = self.project("close", p["name"])
+        self.assertEqual(out["status"], "ok", out)
+        self.assertIn("pr/7", out["branches_kept"])
+        git(repo, "rev-parse", "--verify", "refs/heads/pr/7")
+
+    def test_plain_directory_is_not_a_worktree(self):
+        d = self.ws / "repos" / "r1" / ".worktrees" / "b"
+        d.mkdir(parents=True)
+        out = self.project("worktree", "create", "--repo", "r1", "--branch", "b")
+        self.assertEqual(out["status"], "error", out)
+        self.assertIn("error_message", out)
+
+    def test_exclude_file_is_updated(self):
+        self.project("worktree", "create", "--repo", "r1", "--branch", "b")
+        exclude = self.ws / "repos" / "r1" / ".git" / "info" / "exclude"
+        self.assertIn(".worktrees/", exclude.read_text().splitlines())
+
+
 class TestFrontmatterHelpers(unittest.TestCase):
     TEXT = "---\nproject: x\nstatus: active\nworktrees:\n  - a\n---\n# body\n"
 
@@ -352,6 +404,45 @@ class TestFrontmatterHelpers(unittest.TestCase):
 
     def test_no_frontmatter_unchanged(self):
         self.assertEqual(workspace_lib.set_frontmatter_field("# x\n", "a", "b"), "# x\n")
+
+    def test_replace_block_list_with_blank_lines(self):
+        text = "---\nproject: x\nworktrees:\n  - r1\n\n  - r2\nstatus: active\n---\n"
+        out = workspace_lib.set_frontmatter_field(text, "worktrees", "[]")
+        self.assertEqual(out, "---\nproject: x\nworktrees: []\nstatus: active\n---\n")
+
+    def test_trailing_blank_line_is_kept(self):
+        text = "---\nworktrees:\n  - r1\n\nstatus: a\n---\n"
+        out = workspace_lib.set_frontmatter_field(text, "worktrees", "[]")
+        self.assertEqual(out, "---\nworktrees: []\n\nstatus: a\n---\n")
+
+
+class TestFrontmatterParsersNegative(unittest.TestCase):
+    def parse(self, body: str):
+        d = Path(tempfile.mkdtemp(prefix="fm-test-"))
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        path = d / "CLAUDE.md"
+        path.write_text(body)
+        return path
+
+    def test_unterminated_frontmatter(self):
+        path = self.parse("---\nproject: x\n# no closing delimiter\n")
+        self.assertIsNone(workspace_lib.read_frontmatter_lines(path))
+        self.assertEqual(workspace_lib.parse_frontmatter_flat(path), {})
+        self.assertEqual(workspace_lib.parse_frontmatter(path), {})
+
+    def test_malformed_yaml(self):
+        path = self.parse("---\nproject: [unclosed\n---\n")
+        self.assertEqual(workspace_lib.parse_frontmatter(path), {})
+
+    def test_non_mapping_yaml(self):
+        path = self.parse("---\n- a\n- b\n---\n")
+        self.assertEqual(workspace_lib.parse_frontmatter(path), {})
+        self.assertEqual(workspace_lib.parse_frontmatter_flat(path), {})
+
+    def test_no_frontmatter(self):
+        path = self.parse("# just a body\n")
+        self.assertIsNone(workspace_lib.read_frontmatter_lines(path))
+        self.assertEqual(workspace_lib.parse_frontmatter(path), {})
 
 
 if __name__ == "__main__":

@@ -165,9 +165,10 @@ structure visible, blob contents fetched on demand.
 ## Requirements
 
 - Git (2.27+ for blobless clones)
-- Python 3.9+ with **PyYAML** (`pip3 install pyyaml`), *or* `yq` — needed to
-  parse `dev-env.yaml`/project frontmatter. The project tooling reports a clear
-  message if PyYAML is missing.
+- Python 3.9+ with **PyYAML** (`pip3 install pyyaml`) — required by
+  `setup.sh` (mode detection, root `CLAUDE.md`, skill linking) and the project
+  tooling, which report a clear message if PyYAML is missing. `yq` is an
+  optional alternative parser for the repo list in `dev-env.yaml`.
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview)
 
 ## Upgrading from the pre-plugin version

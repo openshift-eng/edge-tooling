@@ -37,9 +37,12 @@ modify).
 
 ## Step 2: Create
 
+Pass the title and every other user-supplied text single-quoted, writing each
+embedded `'` as `'\''`; double quotes would expand `$(...)` and backticks.
+
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/project.py" new --type <type> \
-  --title "<title>" [--jira <key-or-url>] [--repos r1,r2] \
+  --title '<title>' [--jira <key-or-url>] [--repos r1,r2] \
   [--branch <branch> --worktrees r1 | --branch <branch> --self-worktree] \
   [--pr <number> --worktrees <repo>] [--links url1,url2]
 ```

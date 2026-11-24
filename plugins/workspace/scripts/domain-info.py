@@ -182,7 +182,7 @@ def build_domain_report(name: str, domain_dir: Path, root: Path, source_block: d
 def record_updates(domain_name: str, domain_dir: Path, root: Path,
                    project: str, entries: list[str]) -> dict:
     """Append an UPDATES.md entry and redistribute edited context files."""
-    if domain_dir.parent != root / "domains":
+    if domain_dir.resolve().parent != (root / "domains").resolve():
         return {"status": "error",
                 "error": "The domain is not a workspace copy. Run "
                          "--copy-on-write first, then edit that copy."}
@@ -203,7 +203,9 @@ def record_updates(domain_name: str, domain_dir: Path, root: Path,
             repo = Path(rel).stem
             src = domain_dir / rel
             dest = root / "repos" / repo / "DOMAIN-CONTEXT.md"
-            if src.is_file() and dest.is_file():
+            repo_root = (root / "repos" / repo).resolve()
+            if (src.is_file() and dest.is_file() and not dest.is_symlink()
+                    and dest.resolve().parent == repo_root):
                 shutil.copyfile(src, dest)
                 redistributed.append(str(dest))
     return {"status": "ok", "updates_file": str(updates),

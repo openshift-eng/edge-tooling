@@ -117,21 +117,31 @@ def add_exclude(repo: Path, pattern: str) -> None:
     exclude.parent.mkdir(parents=True, exist_ok=True)
     text = exclude.read_text() if exclude.is_file() else ""
     if pattern not in text.splitlines():
-        exclude.write_text(text + ("" if text.endswith("\n") or not text else "\n")
-                           + pattern + "\n")
+        wl.write_atomic(exclude, text + ("" if text.endswith("\n") or not text else "\n")
+                        + pattern + "\n")
 
 
-def note_if_stale(repo_dir: Path, path: Path, pr: int, result: dict) -> None:
-    """Flag an existing PR checkout that is behind the PR head; never modify it."""
-    fetch = git(repo_dir, "fetch", "origin", f"pull/{pr}/head")
-    head = git(repo_dir, "rev-parse", "FETCH_HEAD")
-    if fetch.returncode != 0 or head.returncode != 0:
+def fetch_pr(repo_dir: Path, pr: int) -> tuple[str | None, str]:
+    """Mirror the PR head into refs/remotes/origin/pr/N; return (sha, error).
+
+    A remote-tracking ref lets worktree_status see fetched commits as published.
+    """
+    ref = f"refs/remotes/origin/pr/{pr}"
+    fetch = git(repo_dir, "fetch", "origin", f"+pull/{pr}/head:{ref}")
+    if fetch.returncode != 0:
+        return None, fetch.stderr.strip()
+    return git(repo_dir, "rev-parse", ref).stdout.strip(), ""
+
+
+def note_if_stale(path: Path, pr: int, head: str | None, err: str, result: dict) -> None:
+    """Flag a PR checkout that is not at the PR head; never modify it."""
+    if head is None:
         result["warning"] = (f"Could not fetch PR {pr} to check for newer commits: "
-                             f"{fetch.stderr.strip()}. Tell the user the checkout may be stale.")
+                             f"{err}. Tell the user the checkout may be stale.")
         return
     current = git(path, "rev-parse", "HEAD").stdout.strip()
-    if current != head.stdout.strip():
-        result.update(stale=True, pr_head=head.stdout.strip(), checkout_head=current,
+    if current != head:
+        result.update(stale=True, pr_head=head, checkout_head=current,
                       warning=f"{path} is not at the current head of PR {pr}. Tell the "
                       "user. To refresh it, they must commit or discard local work in "
                       "the worktree, then pull the PR head there.")
@@ -157,17 +167,25 @@ def create_worktree(root: Path, repo: str | None, branch: str,
               "path": str(path), "existed": False}
     add_exclude(repo_dir, pattern)
     if path.is_dir():
+        if not (path / ".git").exists():
+            raise ProjectError("error", f"{path} exists but is not a git worktree. "
+                               "Ask the user to move or remove it.")
         result["existed"] = True
         if pr is not None:
-            note_if_stale(repo_dir, path, pr, result)
+            note_if_stale(path, pr, *fetch_pr(repo_dir, pr), result)
         return result
 
     if pr is not None:
-        fetch = git(repo_dir, "fetch", "origin", f"pull/{pr}/head:pr/{pr}")
-        if fetch.returncode != 0 and git(repo_dir, "rev-parse", "--verify",
-                                         f"refs/heads/pr/{pr}").returncode != 0:
-            raise ProjectError("error", f"Cannot fetch PR {pr}: {fetch.stderr.strip()}")
-        add = git(repo_dir, "worktree", "add", str(path), branch)
+        head, err = fetch_pr(repo_dir, pr)
+        local = git(repo_dir, "rev-parse", "--verify", f"refs/heads/pr/{pr}").returncode == 0
+        if head is None and not local:
+            raise ProjectError("error", f"Cannot fetch PR {pr}: {err}")
+        if local:  # keep any local commits; a stale tip is reported below
+            add = git(repo_dir, "worktree", "add", str(path), branch)
+        else:
+            add = git(repo_dir, "worktree", "add", "-b", branch, str(path), head)
+        if add.returncode == 0:
+            note_if_stale(path, pr, head, err, result)
     elif git(repo_dir, "rev-parse", "--verify", f"refs/heads/{branch}").returncode == 0:
         add = git(repo_dir, "worktree", "add", str(path), branch)
     else:
@@ -357,7 +375,10 @@ def cmd_close(root: Path, a: argparse.Namespace) -> dict:
     if not a.keep_worktrees:
         for s in statuses:
             repo = repo_of(root, s)
+            checked_out = ""
             if s["exists"]:
+                checked_out = git(Path(s["path"]), "rev-parse", "--abbrev-ref",
+                                  "HEAD").stdout.strip()
                 args = ["worktree", "remove", s["path"]]
                 if a.force:
                     args.insert(2, "--force")
@@ -371,9 +392,17 @@ def cmd_close(root: Path, a: argparse.Namespace) -> dict:
             if b and not s["exists"]:
                 branches_kept.append(b)  # nothing to inspect: never delete unseen commits
             elif b:
+                if git(repo, "rev-parse", "--verify", f"refs/heads/{b}").returncode != 0:
+                    continue
+                # Status described the checked-out branch, so only delete that one.
+                unpublished = git(repo, "rev-list", "--count", b, "--not",
+                                  "--remotes").stdout.strip() != "0"
+                if checked_out != b or (b.startswith("pr/") and unpublished
+                                        and not a.force):
+                    branches_kept.append(b)
+                    continue
                 flag = "-D" if b.startswith("pr/") or a.force else "-d"
-                if git(repo, "rev-parse", "--verify", f"refs/heads/{b}").returncode == 0 \
-                        and git(repo, "branch", flag, b).returncode != 0:
+                if git(repo, "branch", flag, b).returncode != 0:
                     branches_kept.append(b)
     else:
         kept = statuses
