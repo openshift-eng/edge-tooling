@@ -1,0 +1,61 @@
+repos:
+  # --- Tier 1: core (things that actually change) ---
+  - name: cluster-config-operator
+    url: https://github.com/openshift/cluster-config-operator.git
+    branch: main
+    category: development
+    summary: "Hosts the new topology transition controller — THE repo for mutable topology"
+  - name: api
+    url: https://github.com/openshift/api.git
+    branch: master
+    category: development
+    summary: "Infrastructure spec.controlPlaneTopology field + MutableTopology feature gate"
+  - name: oc
+    url: https://github.com/openshift/oc.git
+    branch: main
+    category: development
+    summary: "OpenShift CLI — new 'oc adm transition topology' command"
+  - name: cluster-etcd-operator
+    url: https://github.com/openshift/cluster-etcd-operator.git
+    branch: main
+    category: development
+    summary: "Etcd 1→2→3 node scaling relied on as a transition precondition (no code change)"
+  - name: library-go
+    url: https://github.com/openshift/library-go.git
+    branch: master
+    category: development
+    summary: "FeatureGateAccess / ForceExit patterns used by the transition controller"
+
+  # --- Tier 2: reconcile on topology status / considered as controller home ---
+  - name: machine-config-operator
+    url: https://github.com/openshift/machine-config-operator.git
+    branch: main
+    category: development
+    summary: "Considered as controller home (rejected); renders config for new control-plane nodes"
+  - name: cluster-version-operator
+    url: https://github.com/openshift/cluster-version-operator.git
+    branch: main
+    category: development
+    summary: "Considered as home (rejected); upgrade-blocking (Upgradeable=False) interaction"
+
+  # --- Tier 3: classic support repos ---
+  - name: enhancements
+    url: https://github.com/openshift/enhancements.git
+    branch: master
+    category: docs
+    summary: "Enhancement proposals — authoritative mutable-topology design spec"
+  - name: openshift-docs
+    url: https://github.com/openshift/openshift-docs.git
+    branch: main
+    category: docs
+    summary: "Official OpenShift documentation (AsciiDoc) — customer-facing transition docs"
+  - name: origin
+    url: https://github.com/openshift/origin.git
+    branch: main
+    category: testing
+    summary: "E2E test suite — topology transition scenarios"
+  - name: release
+    url: https://github.com/openshift/release.git
+    branch: main
+    category: testing
+    summary: "CI/CD configuration — Prow jobs and step registry for transition testing"

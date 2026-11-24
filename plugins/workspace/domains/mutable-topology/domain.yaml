@@ -1,0 +1,7 @@
+name: mutable-topology
+description: >-
+  Day-2 in-place OpenShift topology transitions (initially SNO → 3-node
+  compact HA on platform:none). Complexity is concentrated in a new topology
+  transition controller in cluster-config-operator, driven by a new
+  Infrastructure spec.controlPlaneTopology field gated behind the
+  MutableTopology feature gate. Tracked in OCPEDGE-2280 / OCPEDGE-2640.
