@@ -2,8 +2,8 @@
   "name": "edge-tooling",
   "description": "Claude Code plugins for OpenShift and edge computing workflows",
   "owner": {
-    "name": "brandisher",
-    "email": "chad@redhat.com"
+    "name": "ggiguash",
+    "email": "ggiguash@redhat.com"
   },
   "plugins": [
     {
