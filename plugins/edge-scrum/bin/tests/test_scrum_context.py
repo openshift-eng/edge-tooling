@@ -653,16 +653,48 @@ SCRUM_CONTEXT_SKILL = os.path.join(os.path.dirname(__file__), "..", "..", "chai"
 class FakeProductPages:
     """A stand-in for the Product Pages ``list_entities`` tool, with synthetic entities only."""
 
-    def __init__(self, products=({"id": 990001, "shortname": "openshift"},), pages=(), fail_on=None):
-        self.products, self.pages, self.fail_on, self.calls = list(products), list(pages), fail_on, []
+    def __init__(self, products=({"id": 990001, "shortname": "openshift"},), pages=(), fail_on=(),
+                 product_pages=None):
+        """``fail_on``: the numbers (1 = first) of the calls that fail. ``product_pages``: the
+        product listing's pages, in order (default: one page of ``products``)."""
+        self.products, self.pages, self.calls, self.served = list(products), list(pages), [], 0
+        self.product_pages, self.products_served = product_pages, 0
+        self.fail_on = {fail_on} if isinstance(fail_on, int) else set(fail_on)
 
     def __call__(self, **kwargs):
         self.calls.append(kwargs)
-        if self.fail_on is not None and len(self.calls) == self.fail_on:
+        if len(self.calls) in self.fail_on:
             raise RuntimeError("tool call failed")
         if kwargs.get("kind") == "product":
+            if self.product_pages is not None:
+                self.products_served += 1
+                return self.product_pages[self.products_served - 1]
             return getattr(self, "product_response", None) or {"data": self.products, "cursor": None}
-        return self.pages[len(self.calls) - 2]
+        self.served += 1
+        return self.pages[self.served - 1]
+
+
+OTHER_PRODUCT = {"id": 990007, "shortname": "openshift-other"}  # synthetic Product Pages entities
+OCP_PRODUCT = {"id": 990001, "shortname": "openshift"}
+PRODUCT_CALL = {"kind": "product", "shortname": "openshift"}
+RELEASE_CALL = {"kind": "release", "public_parent_id": 990001}  # the first release page
+CURSOR_CALL = dict(RELEASE_CALL, cursor="c1")  # the release page after it
+NEXT_PRODUCTS = dict(PRODUCT_CALL, cursor="p2")  # the product page after the first
+
+
+class TestLastClosedSprints(unittest.TestCase):
+    """The velocity sprints from the shared all-states board listing (no second listing)."""
+
+    def test_the_old_selection(self):
+        raw = [{"id": str(490 + n), "name": f"Test Sprint {n}", "state": "closed" if n < 14 else "active",
+                "start_date": f"2030-{n - 9:02d}-01", "end_date": f"2030-{n - 9:02d}-21", "originBoardId": 1000}
+               for n in range(10, 15)]
+        raw.append({"id": "777", "name": "Other Team Sprint 13", "state": "closed", "start_date": "2030-04-01",
+                    "end_date": "2030-04-21", "originBoardId": 2000})  # another board's sprint: dropped
+        picked = sc.last_closed_sprints(raw, 1000, 14)
+        self.assertEqual([s["number"] for s in picked], [11, 12, 13])  # the highest three below 14, oldest first
+        self.assertEqual(sc.last_closed_sprints(raw, 1000, 12, count=3)[-1]["number"], 11)
+        self.assertEqual(sc.last_closed_sprints(raw, 1000, 10), [])
 
 
 class TestProductPagesCalls(unittest.TestCase):
@@ -685,31 +717,142 @@ class TestProductPagesCalls(unittest.TestCase):
                                     {"kind": "release", "public_parent_id": 990001, "cursor": "c1"}])
         self.assertFalse(any(k.startswith("phase") for call in pp.calls for k in call))
 
-    def test_repeated_cursor_or_failed_call_fails_without_retry(self):
+    def test_repeated_cursor_fails_without_fetching_it_again(self):
         repeat = FakeProductPages(pages=({"data": [], "cursor": "c1"}, {"data": [], "cursor": "c1"}))
         self.assertIsNone(self._releases(repeat))
-        self.assertEqual(len(repeat.calls), 3)  # never asked again for a cursor already seen
+        self.assertEqual(repeat.calls, [PRODUCT_CALL, RELEASE_CALL, CURSOR_CALL])  # c1 never asked for again
+
+    def test_failed_call_is_sent_again_once(self):
         for fail_on in (1, 2, 3):  # the product call, the first release page, a cursor page
             with self.subTest(fail_on=fail_on):
-                failed = FakeProductPages(pages=self.PAGES, fail_on=fail_on)
-                self.assertIsNone(self._releases(failed))
-                self.assertEqual(len(failed.calls), fail_on)  # no retry after the failed call
+                sequence = [PRODUCT_CALL, RELEASE_CALL, CURSOR_CALL]
+                flaky = FakeProductPages(pages=self.PAGES, fail_on=fail_on)
+                self.assertEqual(self._releases(flaky), [{"id": 1}, {"id": 2}, {"id": 3}])
+                self.assertEqual(flaky.calls, sequence[:fail_on] + sequence[fail_on - 1:])
+                self.assertEqual(flaky.calls[fail_on - 1], flaky.calls[fail_on])  # sent again, unchanged
+                failed = FakeProductPages(pages=self.PAGES, fail_on=(fail_on, fail_on + 1))
+                self.assertIsNone(self._releases(failed))  # failed again: the lookup failed
+                self.assertEqual(failed.calls, sequence[:fail_on] + [sequence[fail_on - 1]])  # never a third
+
+    def test_an_unreadable_page_is_sent_again_once(self):
+        for bad in ({"data": "abc", "cursor": None}, {"data": [{"id": 1}]}, {"data": [], "cursor": ""}):
+            with self.subTest(bad=bad):
+                once = FakeProductPages(pages=(bad, {"data": [{"id": 1}], "cursor": None}))
+                self.assertEqual(self._releases(once), [{"id": 1}])  # the retry was whole
+                self.assertEqual(once.calls[1], once.calls[2])  # sent again, unchanged
+                self.assertEqual(once.calls, [PRODUCT_CALL, RELEASE_CALL, RELEASE_CALL])
+                twice = FakeProductPages(pages=(bad, bad))
+                self.assertIsNone(self._releases(twice))  # still not readable: the listing failed
+                self.assertEqual(twice.calls, [PRODUCT_CALL, RELEASE_CALL, RELEASE_CALL])  # never a third request
+                later = FakeProductPages(pages=self.PAGES[:1] + (bad, self.PAGES[1]))
+                self.assertEqual(self._releases(later), [{"id": 1}, {"id": 2}, {"id": 3}])  # a cursor page too
+                self.assertEqual(later.calls[2], later.calls[3])
+                self.assertEqual(later.calls, [PRODUCT_CALL, RELEASE_CALL, CURSOR_CALL, CURSOR_CALL])
+        failed_then_bad = FakeProductPages(pages=({"data": "abc", "cursor": None}, self.PAGES[1]), fail_on=2)
+        self.assertIsNone(self._releases(failed_then_bad))  # one retry per request, whatever went wrong
+        self.assertEqual(failed_then_bad.calls, [PRODUCT_CALL, RELEASE_CALL, RELEASE_CALL])  # never a third
+        product = FakeProductPages(pages=self.PAGES, product_pages=[{"data": [OCP_PRODUCT]}, {"data": [OCP_PRODUCT],
+                                                                                            "cursor": None}])
+        self.assertEqual(self._releases(product), [{"id": 1}, {"id": 2}, {"id": 3}])  # the product listing too
+        self.assertEqual(product.calls[0], product.calls[1])
+        self.assertEqual(product.calls, [PRODUCT_CALL, PRODUCT_CALL, RELEASE_CALL, CURSOR_CALL])
+
+    def test_a_failed_listing_names_its_reason(self):
+        from tests.test_chai_epic_fields import skill_snippet
+        scope = {}
+        exec(skill_snippet("def openshift_releases(", path=SCRUM_CONTEXT_SKILL), scope)  # noqa: S102
+        for pp, why in ((FakeProductPages(pages=self.PAGES, fail_on=(2, 3)),
+                         "the call failed again after its retry: tool call failed"),
+                        (FakeProductPages(pages=({"data": "abc", "cursor": None},) * 2),
+                         "a listing page still not readable after its retry"),
+                        (FakeProductPages(pages=({"data": [], "cursor": "c1"}, {"data": [], "cursor": "c1"})),
+                         "a listing cursor repeated"),
+                        (FakeProductPages(products=[], pages=self.PAGES),
+                         "no single OpenShift product with an integer id")):
+            with self.subTest(why=why):
+                reasons = []
+                self.assertIsNone(scope["openshift_releases"](pp, reasons))
+                self.assertEqual(reasons, [why])
+        ok = []
+        self.assertEqual(scope["openshift_releases"](FakeProductPages(pages=self.PAGES), ok),
+                         [{"id": 1}, {"id": 2}, {"id": 3}])
+        self.assertEqual(ok, [])
+
+    def test_a_failed_lookup_keeps_its_error_for_the_omission(self):
+        failed = {}
+        sc.clean_schedules({"9.2": {"error": "the call failed\nagain: timeout"}, "9.3": []}, [], failed)
+        self.assertEqual(failed, {"9.2": "the call failed again: timeout"})
+        window = sc.release_window("9.2", {}, [], dt.date(2030, 1, 1), failed=failed)
+        self.assertEqual((window["phase"], window["lookup_error"]),
+                         (sc.PHASE_LOOKUP_FAILED, "the call failed again: timeout"))
+        self.assertNotIn("lookup_error", sc.release_window("9.2", {}, [], dt.date(2030, 1, 1), failed={"9.2"}))
+
+    def test_the_product_found_on_a_later_page(self):
+        pp = FakeProductPages(pages=self.PAGES, product_pages=[{"data": [OTHER_PRODUCT], "cursor": "p2"},
+                                                              {"data": [OCP_PRODUCT], "cursor": None}])
+        self.assertEqual(self._releases(pp), [{"id": 1}, {"id": 2}, {"id": 3}])
+        self.assertEqual(pp.calls, [PRODUCT_CALL, NEXT_PRODUCTS,  # the same filters, plus cursor
+                                    RELEASE_CALL, CURSOR_CALL])
+
+    def test_one_product_across_every_page(self):
+        duplicate = FakeProductPages(pages=self.PAGES, product_pages=[{"data": [OCP_PRODUCT], "cursor": "p2"},
+                                                                     {"data": [dict(OCP_PRODUCT, id=990002)],
+                                                                      "cursor": None}])
+        self.assertIsNone(self._releases(duplicate))
+        self.assertEqual(duplicate.calls, [PRODUCT_CALL, NEXT_PRODUCTS])  # both product pages; no release listing
+        none = FakeProductPages(pages=self.PAGES, product_pages=[{"data": [OTHER_PRODUCT], "cursor": "p2"},
+                                                                {"data": [], "cursor": None}])
+        self.assertIsNone(self._releases(none))
+        self.assertEqual(none.calls, [PRODUCT_CALL, NEXT_PRODUCTS])
+
+    def test_a_later_product_page_that_fails(self):
+        pages = [{"data": [OTHER_PRODUCT], "cursor": "p2"}, {"data": [OCP_PRODUCT], "cursor": None}]
+        once = FakeProductPages(pages=self.PAGES, product_pages=list(pages), fail_on=2)
+        self.assertEqual(self._releases(once), [{"id": 1}, {"id": 2}, {"id": 3}])
+        self.assertEqual(once.calls[1], once.calls[2])  # the failed page is sent again, unchanged
+        self.assertEqual(once.calls, [PRODUCT_CALL, NEXT_PRODUCTS, NEXT_PRODUCTS, RELEASE_CALL, CURSOR_CALL])
+        twice = FakeProductPages(pages=self.PAGES, product_pages=list(pages), fail_on=(2, 3))
+        self.assertIsNone(self._releases(twice))
+        self.assertEqual(twice.calls, [PRODUCT_CALL, NEXT_PRODUCTS, NEXT_PRODUCTS])  # never a third request
+
+    def test_an_incomplete_product_listing_is_a_failed_lookup(self):
+        # The match is on page 1: only a product listing read whole may use it.
+        for later, calls in (({"data": [], "cursor": "p2"}, 2),  # the cursor repeats: not fetched again
+                             ({"data": "abc", "cursor": None}, 3),  # not readable: sent again once
+                             ({"data": []}, 3)):  # no cursor member: sent again once
+            with self.subTest(later=later):
+                pp = FakeProductPages(pages=self.PAGES,
+                                      product_pages=[{"data": [OCP_PRODUCT], "cursor": "p2"}, later, later])
+                self.assertIsNone(self._releases(pp))
+                self.assertEqual(pp.calls, [PRODUCT_CALL] + [NEXT_PRODUCTS] * (calls - 1))  # no release listing
 
     def test_missing_cursor_member_is_malformed_but_null_is_the_last_page(self):
         self.assertEqual(self._releases(FakeProductPages(pages=({"data": [{"id": 1}], "cursor": None},))), [{"id": 1}])
-        for pages in (({"data": [{"id": 1}]},), ({"data": [{"id": 1}], "cursor": "c1"}, {"data": [{"id": 2}]}),
-                      ({"data": [{"id": 1}], "cursor": ""},)):
+        no_cursor, empty_cursor = {"data": [{"id": 1}]}, {"data": [{"id": 1}], "cursor": ""}
+        twice = [PRODUCT_CALL, RELEASE_CALL, RELEASE_CALL]
+        for pages, calls in (((no_cursor, no_cursor), twice), (({"data": [{"id": 1}], "cursor": "c1"},
+                                                              {"data": [{"id": 2}]}, {"data": [{"id": 2}]}),
+                                                             [PRODUCT_CALL, RELEASE_CALL, CURSOR_CALL, CURSOR_CALL]),
+                             ((empty_cursor, empty_cursor), twice)):
             with self.subTest(pages=pages):
-                self.assertIsNone(self._releases(FakeProductPages(pages=pages)))
+                pp = FakeProductPages(pages=pages)  # the malformed page twice: its retry is malformed too
+                self.assertIsNone(self._releases(pp))
+                self.assertEqual(pp.calls, calls)
         product_without_cursor = FakeProductPages(pages=self.PAGES)
         product_without_cursor.product_response = {"data": [{"id": 990001, "shortname": "openshift"}]}
         self.assertIsNone(self._releases(product_without_cursor))
+        self.assertEqual(len(product_without_cursor.calls), 2)  # sent again once; no release listing
 
     def test_unreadable_listing_is_a_failed_lookup(self):
-        for pages in (({"data": "abc", "cursor": None},), ({"data": [{"id": 1}], "cursor": "c1"}, {"cursor": None})):
+        bad, no_data = {"data": "abc", "cursor": None}, {"cursor": None}
+        for pages, calls in (((bad, bad), 3), (({"data": [{"id": 1}], "cursor": "c1"}, no_data, no_data), 4)):
             with self.subTest(pages=pages):
-                self.assertIsNone(self._releases(FakeProductPages(pages=pages)))
-        self.assertIsNone(self._releases(FakeProductPages(products="abc", pages=self.PAGES)))
+                pp = FakeProductPages(pages=pages)
+                self.assertIsNone(self._releases(pp))
+                self.assertEqual(len(pp.calls), calls)  # the unreadable page sent again once, never a third time
+        products = FakeProductPages(products="abc", pages=self.PAGES)  # a readable page of no product entity
+        self.assertIsNone(self._releases(products))
+        self.assertEqual(len(products.calls), 1)  # no OpenShift product: no release listing
 
     def test_no_single_openshift_product_is_a_failed_lookup(self):
         for products in ([], [{"id": 1, "shortname": "openshift"}, {"id": 2, "shortname": "openshift"}],

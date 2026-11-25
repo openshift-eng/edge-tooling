@@ -203,6 +203,17 @@ def board_sprints(raw_sprints, board_id=None, warnings=None):
     return out
 
 
+def last_closed_sprints(raw_sprints, board_id=None, before_number=None, count=3):
+    """The ``count`` closed sprints of the board with the highest number below
+    ``before_number``, oldest first: the velocity sprints (sprint-health step 4),
+    from the same all-states board listing as :func:`board_sprints` (the board's own
+    sprints only), so no second, closed-only listing is needed."""
+    closed = [s for s in board_sprints(raw_sprints, board_id)
+              if str(s.get("state") or "").lower() == "closed" and s["number"] is not None
+              and (before_number is None or s["number"] < before_number)]
+    return sorted(closed, key=lambda s: s["number"])[-count:] if count > 0 else []
+
+
 def project_sprints(sprints, until):
     """Extend ``sprints`` at the last sprint's cadence until one starts on/after ``until``.
 
@@ -281,11 +292,15 @@ def current_sprint(sprints, day):
     return sprint_on(project_sprints(sprints, day), day)
 
 
+def sprint_weeks(sprint):
+    """How many weeks ``sprint`` spans (its dates): the number of its last week."""
+    return max(1, -(-(to_date(sprint["end"]) - to_date(sprint["start"])).days // 7))
+
+
 def sprint_week(sprint, day):
     """Week 1-3 of ``day`` within ``sprint`` (the end day counts as the last week)."""
     day = to_date(day)
-    weeks = max(1, -(-(sprint["end"] - sprint["start"]).days // 7))
-    return min(weeks, max(1, (day - sprint["start"]).days // 7 + 1))
+    return min(sprint_weeks(sprint), max(1, (day - sprint["start"]).days // 7 + 1))
 
 
 def _index(sprints, sprint):
@@ -645,8 +660,9 @@ def _development_window(mapping):
     return [_sprint_out(s) for s in mapping["sprints"][lo + 1:hi + 1]]
 
 
-def _lookup_failed_window(version):
-    return {"release": version, "phase": PHASE_LOOKUP_FAILED,
+def _lookup_failed_window(version, error=None):
+    extra = {"lookup_error": error} if error else {}
+    return {"release": version, "phase": PHASE_LOOKUP_FAILED, **extra,
             "refinement_sprint": NOT_AVAILABLE, "development_sprints": NOT_AVAILABLE,
             "pencils_down_sprint": NOT_AVAILABLE, "branch_cut_sprint": NOT_AVAILABLE,
             "development_sprints_remaining": NOT_AVAILABLE, "milestones": NOT_AVAILABLE}
@@ -662,12 +678,13 @@ def release_window(version, schedules, sprints, today, current=None, failed=()):
     if not is_valid_release(version):
         return {"release": version, "phase": INVALID_RELEASE}
     version = version.strip()
+    errors = failed if isinstance(failed, dict) else {}
     if version in failed:
-        return _lookup_failed_window(version)
+        return _lookup_failed_window(version, errors.get(version))
     if failed and find_milestone(schedules.get(version) or [], "development branch opens") is None:
         prev = previous_version(version, set(schedules) | set(failed))
         if prev in failed:
-            return _lookup_failed_window(version)
+            return _lookup_failed_window(version, f"{prev}: {errors[prev]}" if errors.get(prev) else None)
     if not schedules.get(version) and release_milestones(version, schedules)["dev_branch_opens"] is None:
         return {"release": version, "phase": NOT_SCHEDULED,
                 "refinement_sprint": NOT_SCHEDULED, "development_sprints": NOT_SCHEDULED,
@@ -729,15 +746,18 @@ def clean_schedules(raw, warnings, failed=None):
 
     A release passed as anything but a milestone list (``{"error": "<reason>"}``)
     had its Product Pages lookup fail: it is left out of the schedules and added
-    to ``failed`` (a set, when given). ``None`` or ``[]`` is a successful lookup
-    with no dates."""
+    to ``failed`` (a set, or a dict that keeps each release's error, when given).
+    ``None`` or ``[]`` is a successful lookup with no dates."""
     out = {}
     for key, milestones in (raw or {}).items():
         if not is_valid_release(str(key)):
             continue  # ignored rather than crashing version ordering
         version, kept = str(key).strip(), []
         if milestones is not None and not isinstance(milestones, list):
-            if failed is not None:
+            if isinstance(failed, dict):
+                error = milestones.get("error") if isinstance(milestones, dict) else None
+                failed[version] = " ".join(str(error).split()) if error else None
+            elif failed is not None:
                 failed.add(version)
             warnings.append(f"Product Pages lookup failed for {version}")
             continue
@@ -788,7 +808,7 @@ def build_context(data):
     """
     today = strict_today(data.get("today"))
     warnings = []
-    failed = set()
+    failed = {}  # release -> its Product Pages lookup error (None when not given)
     schedules = clean_schedules(data.get("schedules"), warnings, failed)
     events = clean_events(data.get("events"), warnings)
     absences = clean_absences(data.get("absences"), warnings)

@@ -16,13 +16,18 @@ the per-person "above the guideline" flags of release-planning are dropped.
 | Tool | Used for |
 |------|----------|
 | `scrum-context` skill | The release's window, phase and per-sprint availability |
-| `list_jira_board_sprints` | Closed sprints on board 11479 (velocity) |
+| `list_jira_board_sprints` | Board 11479's sprints: scrum-context's one listing (velocity sprints, the refinement sprint's state) |
 | `query_jira` | Features, epics, stories, bugs, spikes (paged; see Jira paging) |
-| `get_jira_issue` | Issue links of refinement-sprint spikes |
+| `get_jira_issue` | Issue links of refinement-sprint spikes, linked spikes and block candidates only; whole-value reads (Jira paging step 7) |
 | `sandbox_exec` (Python) | `plugins/edge-scrum/bin/` scripts on the fetched data |
 
 Jira credentials are not available in the sandbox: fetch with the tools above,
 then pass the text into `sandbox_exec`.
+
+**Run by the weekly report**, this skill uses the weekly report's shared
+fetches (its step 2b: features, epics, stories, bugs, spikes, block candidates
+and links) in place of the fetches below, which are for a run on its own; the
+checks are the same.
 
 ## Configuration
 
@@ -44,58 +49,105 @@ fields:  # request fields by id only
 
 ## Jira paging
 
-`query_jira` returns text with no total count. Fetch every query this way:
+> `Showing the first 50 matching issues; more match:` is normal. It is never an error, never partial data and never a reason to stop: call `next_page_jql` and fetch that page now, until it returns `None`.
 
-1. First page: `(<JQL>) ORDER BY key DESC` with `max_results: 50`.
-2. While the results header — the first such line, after any "Create metadata"
-   block — is `Showing the first 50 matching issues; more match:` (the page then
-   ends with the "... More issues match" hint), fetch the next page:
-   `(<JQL>) AND key < <last key on the page> ORDER BY key DESC`.
-3. Stop when a page has the header `Found N issues (showing N):` or fewer than
-   50 issues. Also stop when the number of a page's last key is not lower than
-   the number of the previous page's last key (same project; the page did not
-   advance): the fetch is then incomplete; do not fetch it again.
-4. **More than one project:** Jira's `key <` compares keys within one project
-   only. When a query over several projects does not fit on one page, page each
-   project separately by adding `AND project = <P>`, and pass each project as its
-   own manifest part.
-5. The fetch is complete only if every page succeeded. Pass all pages to
-   `chai_jira_adapter.adapt_fetch`; it rechecks headers, page sizes and key order
-   and returns `fetch.complete`. If a call failed or a page was cut off, the fetch
-   is **incomplete**: compute nothing from it and list it as left out, with the
-   reason.
-6. A "Create metadata …" block may come before the results. If it says
+`query_jira` returns text with no total count. Fetch every query this way, with
+`max_results: 50` on every call:
+
+1. First page: `chai_jira_adapter.page_jql(<JQL>)`, that is
+   `(<JQL>) ORDER BY key DESC`.
+2. Send the pages of every fetch that is ready together (a **paging round**),
+   then decide all of them in **one** sandbox call (the sandbox cannot call
+   Jira; never one call per page):
+   `decisions = chai_jira_adapter.paging_round({slot: {"jql": sent, "page": page_text, "retried": <bool>}})`, `slot` unique per fetch part (a split's parts go out together: `sprint_issues/TESTA`, `sprint_issues/TESTB`; the fetch's name stays for `adapt_fetches`),
+   with `sent` the exact query sent for that page, `page_text` its answer (a failed call: `{"error": "<message>"}`)
+   and `retried` true only on that same query's second send. It runs `next_page_jql` on each page:
+   `{"next": <query>}` is the next page (send it in the next round),
+   `{"done": True}` means that page was the last one, and step 3 says what
+   `{"retry": ...}`, `{"incomplete": ...}` and `{"split": [...]}` mean. Keep each
+   page with its query: `{"text": page_text, "jql": sent}` (a failed call:
+   `{"error": "<message>", "jql": sent}`); a page kept by an `incomplete` decision also keeps `"incomplete": <its reason>`.
+3. `next_page_jql` raises only for these, never for a whole page that says more
+   match (`paging_round` returns them as `retry` or `incomplete`, and `split`):
+   - `PageNotWhole`: the call failed, the page is cut off or not readable, it lists an issue twice or one outside the project restriction paging added, a last page has a key not below its `key <` or of another project, or a page under a valid `key <` has none of that project's keys.
+     Send the same query again once; if it raises again, keep the retry's
+     answer (with that reason, step 2) and stop: the fetch is incomplete, with that reason.
+   - `PageDidNotAdvance` (a `PageNotWhole`): the tool ignored `key <` (a key not below it). Send the same
+     query again once; if it does not advance again, keep that answer and stop: incomplete, with that reason.
+   - `QueryError`: the query's own `key <` is of another project; sending it again cannot help: stop, incomplete.
+   - `SplitByProject` (not a failure): Jira's `key <` compares keys within one
+     project, so a query over several projects goes on per project. Fetch each
+     part in `split.parts` (from `paging_round`: `decisions[name]["split"]`)
+     from its first page (`part["jql"]`) with steps 2–3,
+     keep its pages as a manifest part with `"project": part["project"]`, and
+     drop the pages of the query that raised it (the parts fetch them again).
+     `part["project"]` is `None` for the part that covers every other project:
+     fetch it like the others. A part can raise `SplitByProject` again: drop
+     its pages too; its parts take its place. A query whose `project =` or
+     `project in (...)` clause is joined to the rest by AND can also be split
+     before its first call: start with `page_jql(<JQL>, project=<P>)` for each
+     project that clause names.
+4. When every part of a fetch has ended (`done`, or stopped by step 3 with its last page or failed slot kept),
+   adapt it **once**, every page and part in order, in that round's sandbox call (the kept page gives the reason):
+   `chai_jira_adapter.adapt_fetches({name: {"parts": [...]}}, roster)` (or
+   `adapt_fetch` for one): it rechecks headers, page sizes and key order and
+   returns `fetch.complete`. Process a fetch only after that, never page by
+   page. Every page uses `max_results: 50` and `extra_fields` =
+   `chai_jira_adapter.EXTRA_FIELDS[<fetch>]` only (base fields such as summary,
+   type, status, assignee, labels and parent are always printed). A fetch with
+   several pages or parts is complete when each part ended at `None` and
+   `adapt_fetch` gives `fetch.complete`. It is
+   incomplete only as step 3 or steps 5–7 say: then compute nothing from it;
+   list it as left out, with the reason.
+5. A "Create metadata …" block may come before the results. If it says
    `Invalid extra_fields entries: …`, those fields were not returned: the fetch
    counts as incomplete, except for Flagged (`customfield_10021`), which is then
    reported as an unavailable signal. Unset custom fields print no line, so a
    missing Flagged line means "not flagged".
-7. Output may be wrapped as `{"result": "<text>"}`; the adapter unwraps it. A
+6. Output may be wrapped as `{"result": "<text>"}`; the adapter unwraps it. A
    query with no results returns `No issues found for JQL: <jql>`: pass the JQL
    sent with each page as `"jql"` in the manifest page
    (`{"text": ..., "jql": "<query sent>"}`). The page counts as complete and
-   empty only when that JQL matches the query sent; otherwise the fetch is
-   incomplete.
-8. When `query_jira` says a field value was shortened or stored, read it whole
-   once (with `result_page` for a stored result, or with the `get_jira_issue`
-   call the note names) and put the whole value in place of the shortened one
-   in that page's text before passing it to the script. If it cannot be read
-   whole, pass the page as it is: the adapter marks the fetch incomplete (for
-   example `<KEY>: <field> value shortened`), and it is left out like any
-   incomplete fetch, never guessed.
-9. Labels `query_jira` prints that the adapter doesn't know are ignored with a
+   empty only when that JQL matches the query sent; otherwise
+   `next_page_jql` raises `PageNotWhole` (step 3).
+7. When `query_jira` says a field value was shortened or stored, read it whole
+   with one call, retried once if it fails (`result_page` for a stored result,
+   or the `get_jira_issue` call the note names), and put the whole value in
+   place of the shortened one in that page's text before passing it to the
+   script. If it cannot be read whole, pass the page as it is: the adapter
+   marks the fetch incomplete (for example `<KEY>: <field> value shortened`),
+   and it is left out like any incomplete fetch, never guessed.
+8. Labels `query_jira` prints that the adapter doesn't know are ignored with a
    warning; they never change a known field. A date that isn't readable is
    dropped, never guessed, and listed in the adapted fetch's `left_out`: add
    every fetch's `left_out` to the report's `missing` so it appears under
    "Left out".
 
-**Features keep PM rank.** Fetch features once with `(<JQL>) ORDER BY Rank ASC`,
-`max_results: 50`, and adapt with `"order": "rank"`. If that page has the
-`Found N issues (showing N):` header, the order is the PM rank. If it shows only
-the first 50 ("more match"), do not page on from it; fetch the features again
-from step 1 of the key recipe above. Scope and risk can still be computed, but
-the **cut line is left out** (`release_health(..., rank_available=False)`),
-since key order is not rank. Keep the `adapt_fetch` result of the features fetch
-you used as `features_fetch`; `chai_report.rank_order_available(features_fetch)`
+**Example** (synthetic project `TESTA`, the features fetch):
+
+1. Send `(project = TESTA AND issuetype = Feature) ORDER BY Rank ASC`. The answer
+   starts `Showing the first 50 matching issues; more match:`: `next_page_jql`
+   returns `(project = TESTA AND issuetype = Feature) ORDER BY key DESC`. Fetch
+   the features by key, starting with that query; the Rank page is not passed
+   to `adapt_fetch` ("Features keep PM rank").
+2. It shows the first 50, last issue `TESTA-151`: send
+   `(project = TESTA AND issuetype = Feature) AND key < TESTA-151 ORDER BY key DESC`.
+3. That page starts `Found 10 issues (showing 10):`: `None`. The key fetch has
+   2 pages and 60 features: complete.
+
+**Features keep PM rank.** Fetch features first with
+`(<JQL>) ORDER BY Rank ASC`, `max_results: 50`. When `next_page_jql` returns
+`None` for it (`Found N issues (showing N):`), adapt that page with
+`"order": "rank"`: the order is the PM rank. When it says more match,
+`next_page_jql` returns the first key-ordered page, `(<JQL>) ORDER BY key DESC`:
+fetch the features by key from there with the recipe above, starting with that
+query, and adapt that fetch with `"order": "key"`; the Rank page is not one of
+its pages and is not passed to `adapt_fetch`. It is complete as step 4 says,
+and scope and risk are computed from it; only the **cut line is left out**
+(`release_health(..., rank_available=False)`), since key order is not rank and
+`query_jira` cannot page in rank order (run by the weekly report too). Keep
+the `adapt_fetch` result of the
+features fetch you used as `features_fetch`; `chai_report.rank_order_available(features_fetch)`
 is true only for a complete `"order": "rank"` fetch, and is the `rank_available`
 to pass (never assume rank order).
 
@@ -132,24 +184,25 @@ are not checked.
 
 1. **Features**, paged:
    `project = OCPSTRAT AND issuetype = Feature AND labels in ("ocpedge-plan", "microshift") AND "Target Version" = "openshift-X.Y" AND status != Closed AND (resolution is EMPTY OR resolution not in (Duplicate, Obsolete))`
-   — fields `summary, status, issuetype, priority, assignee, fixVersions, labels,
-   customfield_10795, customfield_10470, customfield_10473, customfield_10475`
-   (Size, QA Contact, Doc Contact, SME; each prints as `customfield_N: value`,
-   and an unset field prints no line). None → the section says "0 feature(s)
+   — `extra_fields` `customfield_10795, customfield_10855, customfield_10470, customfield_10473,
+   customfield_10475` (`chai_jira_adapter.EXTRA_FIELDS["features"]`; summary, type, status, priority,
+   assignee, fix versions and labels are base fields)
+   (Size, Target Version, QA Contact, Doc Contact, SME; each prints as
+   `customfield_N: value`, and an unset field prints no line). None → the section says "0 feature(s)
    checked".
 2. **Epics**, paged, in batches of 50 feature keys:
-   `project in (OCPEDGE, USHIFT) AND "Parent Link" in (<keys>)` — fields
-   `summary, status, assignee, labels, parent, updated, fixVersions,
-   customfield_10028, customfield_10795, customfield_10855, customfield_10018,
-   customfield_10470`. Run `transform-epics.py`.
+   `project in (OCPEDGE, USHIFT) AND "Parent Link" in (<keys>)` — `extra_fields`
+   `customfield_10028, customfield_10795, customfield_10855, customfield_10018,
+   customfield_10470` (`EXTRA_FIELDS["epics"]`). Run `transform-epics.py`.
    **Epic issue counts** (for "empty epic"), paged, in batches of 20 epic keys:
-   `project in (OCPEDGE, USHIFT, OCPBUGS) AND parent in (<epic keys>)` — field
-   `parent`; count the issues per parent epic: `{epic key: count}`. Incomplete →
-   pass `None` (the empty-epic check is left out).
+   `project in (OCPEDGE, USHIFT, OCPBUGS) AND parent in (<epic keys>)` — no
+   `extra_fields` (`parent` is a base field); count the issues per parent epic:
+   `{epic key: count}`. Incomplete → pass `None`, and as `epic_issue_counts_why`
+   `epic issues not fetched (<the fetch's problems>)` (the empty-epic check is left out with it); complete → `why = None`.
 3. **Refinement-sprint spikes**, paged:
    `project in (OCPEDGE, USHIFT) AND issuetype = Spike AND sprint = <refinement sprint id>`
-   — fields `summary, status, assignee, resolution`. `query_jira` cannot return
-   issue links, so call `get_jira_issue(<spike key>, fields="issuelinks")` on
+   — no `extra_fields` (summary, status, assignee and resolution are base
+   fields). `query_jira` cannot return issue links, so call `get_jira_issue(<spike key>, fields="issuelinks")` on
    each spike (`fields="customfield_10020,issuelinks"` when the same read also
    supplies a whole Sprint value) and attach its links with
    `attach_issue_links` (needed to see spikes that block a child epic instead of
@@ -163,22 +216,30 @@ are not checked.
    ("spike links incomplete"): a missed link would report a false missing spike. A
    projected refinement sprint (no id) → refinement section missing
    ("refinement sprint is not on the board yet").
-4. **Spikes that block each feature**, one paged query per feature:
-   `issue in linkedIssues("<feature key>", "is blocked by") AND issuetype = Spike`
-   — fields `summary, status, assignee, resolution`. Attach them with
+4. **Spikes that block each feature**, one paged query per 20 features:
+   `chai_jira_adapter.linked_spikes_jql(<feature keys>)`, which is
+   `issuetype = Spike AND (issue in linkedIssues("<key>", "is blocked by") OR ...)`,
+   the per-feature queries joined by OR (no `extra_fields`). Read the links of
+   each returned spike not read in step 3 (`get_jira_issue(<spike key>,
+   fields="issuelinks")`) and split each query per feature with
+   `chai_jira_adapter.split_linked_spikes(<its feature keys>, fetch, {spike key: text})`:
+   a spike counts for every feature it **blocks**, by its own links (a link the
+   other way does not count). A spike whose links cannot be read, or that
+   blocks none of the query's features, leaves every feature of that query
+   incomplete: the association is never guessed. Attach them with
    `chai_jira_adapter.attach_linked_spike_fetches(features, {feature_key: adapted_fetch})`
    (the whole `adapt_fetch` result per feature; an incomplete one marks the
    features fetch incomplete, so the refinement section is left out)
    **before** `transform-features.py`; they merge with the refinement-sprint
    spikes in `transform-spikes.py`.
-5. Read the refinement sprint's state from `list_jira_board_sprints` for board
-   11479 (all states; match the refinement sprint's id): scrum-context's window
-   has no state. Write `{"refinement_sprint_closed": <that state is closed>}` as
+5. Read the refinement sprint's state from scrum-context's board listing
+   (`list_jira_board_sprints` for board 11479, all states, read once; match the
+   refinement sprint's id): scrum-context's window has no state. Write `{"refinement_sprint_closed": <that state is closed>}` as
    `sprints.json`, then run `transform-features.py`, and `transform-spikes.py`
    with `--input <refinement-sprint spikes> --linked-spikes <all linked spikes>
    --features-file --epics-file --sprints-file`.
 6. `chai_report.refinement_gaps(features, spikes, section, refinement_sprint_closed,
-   epics=epics, epic_issue_counts=counts, week=<current sprint week>)` runs
+   epics=epics, epic_issue_counts=counts, week=<current sprint week>, epic_issue_counts_why=why)` runs
    `_scrum_rules.refinement_findings` on Features only. A feature with **no SME**
    (`customfield_10475` empty) gets only "no SME": all of them go on one line,
    "Leads, assign SMEs (@Scrum Master): N feature(s) have no SME: KEY, …
@@ -202,19 +263,18 @@ and the feature checks of `_scrum_rules.development_findings`.
 
 1. **Features**, rank-ordered (see Jira paging):
    `project = OCPSTRAT AND issuetype = Feature AND labels in ("ocpedge-plan", "microshift") AND "Target Version" = "openshift-X.Y" AND (resolution is EMPTY OR resolution not in (Duplicate, Obsolete))`
-   — fields `summary, status, issuetype, priority, assignee, fixVersions, labels,
-   customfield_10795, customfield_10855, customfield_10470, customfield_10473,
-   customfield_10475`. Run `transform-features.py`. No features → section missing
+   — `extra_fields` `customfield_10795, customfield_10855, customfield_10470, customfield_10473,
+   customfield_10475` (`chai_jira_adapter.EXTRA_FIELDS["features"]`; summary, type, status, priority,
+   assignee, fix versions and labels are base fields). Run `transform-features.py`. No features → section missing
    ("no features target X.Y").
 2. **Epics** as in refinement step 2; `transform-epics.py`.
 3. **Stories**, paged, in batches of 20 epic keys:
-   `project in (OCPEDGE, USHIFT, OCPBUGS) AND parent in (<keys>)` — fields
-   `summary, status, issuetype, priority, assignee, labels, updated, parent,
-   customfield_10028, customfield_10020`. `transform-stories.py --today`.
+   `project in (OCPEDGE, USHIFT, OCPBUGS) AND parent in (<keys>)` — `extra_fields`
+   `customfield_10028, customfield_10020` (`EXTRA_FIELDS["stories"]`).
+   `transform-stories.py --today`.
 4. **Unlinked bugs**, paged:
    `project = OCPBUGS AND component in ("Installer / Single Node OpenShift", "Two Node with Arbiter", "Two Node Fencing", "Logical Volume Manager Storage", "MicroShift", "MicroShift / Networking", "MicroShift / Storage") AND fixVersion in ("X.Y", "X.Y.0") AND "Epic Link" is EMPTY`
-   — fields `summary, status, priority, assignee, components, labels, updated`.
-   `transform-bugs.py --today`.
+   — no `extra_fields` (all base fields). `transform-bugs.py --today`.
 5. **Velocity**: `compute-velocity.py` over the last 3 closed board sprints, as in
    the sprint-health skill (step 4). The weekly report computes it once and
    passes it in. Incomplete, or `chai_report.usable_velocity` returns a reason
@@ -265,12 +325,15 @@ and the feature checks of `_scrum_rules.development_findings`.
    confirmed blockers are kept.
    If the candidate query itself is incomplete, pass `links=None` (block check
    not run). Either way the header's on-track count says the blocks were not
-   checked, and the Left out line says for which keys.
+   checked, and the Left out line says for which keys. Pass `links_problems`:
+   the problems `attach_issue_links` returns, or `block candidates fetch
+   incomplete: <the fetch's problems>` when the candidate query is incomplete;
+   they are the Left out reason.
 10. `chai_report.release_health(checks, section, capacity,
     chai_report.rank_order_available(features_fetch),
     velocity_reason, features=features, epics=epics, spikes=spikes,
     stories=stories, links=links, links_unread=links_unread,
-    current_sprint_number=<current sprint number>)`:
+    current_sprint_number=<current sprint number>, links_problems=links_problems)`:
     scope vs capacity (header), and per Feature (owner: the SME only; a feature
     with no SME gets only "no SME", on the leads' line): "refinement overdue", "behind schedule: X% done vs Y% expected",
     "blocked by KEY", "epic KEY blocked by KEY", "Blocked label", "Parked",
@@ -301,12 +364,12 @@ New or Planning, which are still being refined, and not Closed).
 
 1. **Active epics with a parent**, paged by key until complete (see Jira paging):
    `project = OCPEDGE AND issuetype = Epic AND status in ("To Do", "In Progress", "Dev Complete", "Testing", "Release Pending") AND parent is not EMPTY`
-   — fields `summary, status, assignee, parent, customfield_10855,
-   customfield_10470`. Adapt with `adapt_fetch` (name `epics`).
+   — `extra_fields` `customfield_10855, customfield_10470`
+   (`EXTRA_FIELDS["field_epics"]`). Adapt with `adapt_fetch` (name `epics`).
 2. **Their parents**, by key, in batches of up to 40 distinct parent keys (so
    each batch fits on one page):
-   `key in (<parent keys>)` — fields `summary, issuetype, status,
-   customfield_10855, customfield_10470`. Adapt each batch with `adapt_fetch`
+   `key in (<parent keys>)` — `extra_fields` `customfield_10855,
+   customfield_10470` (`EXTRA_FIELDS["parents"]`). Adapt each batch with `adapt_fetch`
    and keep the keys it asked for: `{"keys": [<keys sent>], "result": <adapted>}`.
    If a batch call fails or its fetch is incomplete (for example a JQL error
    naming a key you cannot see), query that batch's keys again one at a time
@@ -335,8 +398,8 @@ New or Planning, which are still being refined, and not Closed).
    Never reconstruct the previous set. If the persona can keep memory, store
    `gaps["flagged_keys"]` after the **scheduled channel** report, for next
    week (never after a DM run), **only when
-   `gaps["complete"]` is true** (a failed or partial run would make next
-   week's returning flags look new).
+   `gaps["complete"]` is true** (a run with an incomplete fetch, Jira paging
+   step 3 or 5–7, would make next week's returning flags look new).
 
    An empty field prints no line, so a missing line is an empty field.
 4. Parents that could not be read (restricted, deleted, no permission, a failed
@@ -373,9 +436,9 @@ Release testing (EC/RC validation after branch cut, decision 0017) is out of sco
 | Missing | Result |
 |---------|--------|
 | Release not scheduled, an anchor not placeable, or phase not in progress | No section; returned as missing with the reason |
-| Any fetch of the section incomplete | Section left out (`<fetch> incomplete: <problem>`); nothing computed from it |
+| Any fetch of the section incomplete (Jira paging step 3 or 5–7; never because it had several pages) | Section left out (`<fetch> incomplete: <problem>`); nothing computed from it |
 | A field value still shortened (not read whole) | That fetch is incomplete (for example `<KEY>: <field> value shortened`); left out as above |
-| Features did not fit on one rank-ordered page | Cut line left out; scope and risk still reported |
+| Features did not fit on one rank-ordered page | Features fetched by key (complete as Jira paging step 4 says); cut line left out; scope and risk still reported |
 | Velocity | Scope only; capacity and cut line left out; feature checks still run |
 | A remaining sprint's availability | That sprint not adjusted, labelled "not PTO-adjusted" |
 | Open-epic fetch incomplete | No epic flags; "Epic Target Version and QA Contact checks" left out with the reason |
