@@ -4,6 +4,9 @@
 Usage:
   domain-info.py [project-name]                    # resolve + report
   domain-info.py --copy-on-write [project-name]    # ensure writable workspace copy
+  domain-info.py --record [project-name] --entry "<file>: <summary>" [...]
+      # after edits: append an UPDATES.md entry and copy each edited
+      # context/<repo>.md over repos/<repo>/DOMAIN-CONTEXT.md (if present)
 
 Output: JSON to stdout, always exit 0.
 """
@@ -17,47 +20,28 @@ import sys
 from pathlib import Path
 from typing import Any
 
+
+def dumps(result: Any, **kw: Any) -> str:
+    """json.dumps that mirrors ``error`` into ``error_message`` for callers."""
+    if isinstance(result, dict) and "error" in result:
+        result.setdefault("error_message", result["error"])
+    return json.dumps(result, **kw)
+
 # Plugins cannot declare python dependencies. PyYAML is required to parse
 # dev-env.yaml and project frontmatter — emit a self-describing JSON error
 # (that the calling skill can relay) instead of a raw ImportError traceback.
 try:
     import yaml
 except ImportError:
-    print(json.dumps({
+    print(dumps({
         "status": "error",
-        "error": "PyYAML is required by domain-info.py (dev-env.yaml / project "
-                 "frontmatter is YAML). Install with: pip3 install pyyaml",
+        "error": "PyYAML is required (dev-env.yaml and project frontmatter are "
+                 "YAML). Tell the user to install it with: pip3 install pyyaml. "
+                 "Stop.",
     }))
     sys.exit(0)
 
 import workspace_lib
-
-
-def parse_frontmatter(path: Path) -> dict[str, Any]:
-    """Extract YAML frontmatter between --- delimiters."""
-    try:
-        lines = path.read_text().splitlines()
-    except OSError:
-        return {}
-    if not lines or lines[0].strip() != "---":
-        return {}
-    fm_lines: list[str] = []
-    for line in lines[1:]:
-        if line.strip() == "---":
-            break
-        fm_lines.append(line)
-    else:
-        return {}
-    try:
-        result = yaml.safe_load("\n".join(fm_lines))
-    except yaml.YAMLError:
-        return {}
-    if not isinstance(result, dict):
-        return {}
-    for k, v in result.items():
-        if isinstance(v, (datetime.date, datetime.datetime)):
-            result[k] = str(v)
-    return result
 
 
 def parse_domain_block(yaml_file: Path) -> dict[str, str]:
@@ -113,7 +97,7 @@ def resolve_domain_name(project_arg: str | None, root: Path) -> tuple[str, dict,
         project_dir = root / "projects" / project_arg
         if project_dir.is_dir():
             project_info = {"name": project_arg, "dir": str(project_dir)}
-            fm = parse_frontmatter(project_dir / "CLAUDE.md")
+            fm = workspace_lib.parse_frontmatter(project_dir / "CLAUDE.md")
             # Prefer the new `domain:` field; fall back to legacy `preset:`.
             raw = fm.get("domain") or fm.get("preset", "")
             if isinstance(raw, list):
@@ -195,38 +179,102 @@ def build_domain_report(name: str, domain_dir: Path, root: Path, source_block: d
     }
 
 
-def main() -> None:
+def record_updates(domain_name: str, domain_dir: Path, root: Path,
+                   project: str, entries: list[str]) -> dict:
+    """Append an UPDATES.md entry and redistribute edited context files."""
+    if domain_dir.resolve().parent != (root / "domains").resolve():
+        return {"status": "error",
+                "error": "The domain is not a workspace copy. Run "
+                         "--copy-on-write first, then edit that copy."}
+    updates = domain_dir / "UPDATES.md"
+    today = datetime.date.today().isoformat()
+    block = f"\n## {today} — {project or 'workspace'}\n" + "".join(
+        f"- {e}\n" for e in entries)
+    if not updates.is_file():
+        block = f"# {domain_name} — local domain updates\n" + block
+    with updates.open("a") as f:
+        f.write(block)
+
+    redistributed = []
+    for e in entries:
+        rel = e.split(":", 1)[0].strip().strip("`")
+        parts = Path(rel).parts
+        if len(parts) == 2 and parts[0] == "context" and rel.endswith(".md"):
+            repo = Path(rel).stem
+            src = domain_dir / rel
+            dest = root / "repos" / repo / "DOMAIN-CONTEXT.md"
+            repo_root = (root / "repos" / repo).resolve()
+            if (src.is_file() and dest.is_file() and not dest.is_symlink()
+                    and dest.resolve().parent == repo_root):
+                try:
+                    shutil.copyfile(src, dest)
+                except OSError as exc:
+                    return {"status": "error",
+                            "error": f"Copied {len(redistributed)} file(s), then failed on "
+                                     f"{dest}: {exc}. The entry was already written to "
+                                     f"{updates}; tell the user, and do not re-run --record.",
+                            "updates_file": str(updates),
+                            "redistributed": redistributed}
+                redistributed.append(str(dest))
+    return {"status": "ok", "updates_file": str(updates),
+            "redistributed": redistributed}
+
+
+def run() -> None:
     args = sys.argv[1:]
     copy_on_write = "--copy-on-write" in args
-    args = [a for a in args if a != "--copy-on-write"]
-    project_arg = args[0] if args else None
+    record = "--record" in args
+    entries: list[str] = []
+    rest: list[str] = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--entry" and i + 1 < len(args):
+            entries.append(args[i + 1])
+            i += 2
+            continue
+        if args[i] not in ("--copy-on-write", "--record"):
+            rest.append(args[i])
+        i += 1
+    project_arg = rest[0] if rest else None
 
     root = workspace_lib.resolve_workspace_root()
     if root is None:
-        print(json.dumps({
+        print(dumps({
             "status": "error",
-            "error": "Could not determine the workspace root. Set WORKSPACE_ROOT "
-                     "or run inside a workspace (a directory containing dev-env.yaml).",
+            "error": "Could not determine the workspace root. Tell the user to "
+                     "launch claude inside a workspace (a directory with "
+                     "dev-env.yaml). Stop.",
         }))
         return
 
     domain_name, source_block, project_info = resolve_domain_name(project_arg, root)
 
     if not domain_name:
-        print(json.dumps({
+        print(dumps({
             "status": "no_domain",
             "error": "This workspace was not built from a domain (no domain: "
-                     "block in dev-env.yaml, and no project domain recorded).",
+                     "block in dev-env.yaml, and no project domain recorded). "
+                     "Tell the user there is no domain to update. Stop.",
         }))
         return
 
     domain_dir = find_domain_dir(domain_name, root)
     if domain_dir is None:
-        print(json.dumps({
+        print(dumps({
             "status": "not_found",
             "error": f"Domain '{domain_name}' is recorded but no directory "
-                     f"was found for it (checked workspace and bundled domains/).",
+                     f"was found for it (checked workspace and bundled domains/). "
+                     f"Tell the user. Stop.",
         }))
+        return
+
+    if record:
+        if not entries:
+            print(dumps({"status": "error",
+                              "error": "--record needs at least one --entry"}))
+            return
+        print(dumps(record_updates(domain_name, domain_dir, root,
+                                        project_arg or "", entries), indent=2))
         return
 
     if copy_on_write:
@@ -247,7 +295,7 @@ def main() -> None:
                 if not cleanup_ok:
                     msg += (f" (warning: partial directory at {dest} could not be"
                             " removed — delete it manually before retrying)")
-                print(json.dumps({"status": "error", "error": msg}))
+                print(dumps({"status": "error", "error": msg}))
                 return
             domain_dir = dest
             action = "copied"
@@ -256,12 +304,20 @@ def main() -> None:
     else:
         report = build_domain_report(domain_name, domain_dir, root, source_block)
 
-    print(json.dumps({
+    print(dumps({
         "status": "ok",
         "workspace_root": str(root),
         "project": project_info,
         "domain": report,
     }, indent=2, default=str))
+
+
+def main() -> None:
+    try:
+        run()
+    except Exception as exc:  # noqa: BLE001  (the contract is JSON, always)
+        print(dumps({"status": "error", "error_message":
+                     f"Unexpected {type(exc).__name__}: {exc}. Tell the user; do not retry."}))
 
 
 if __name__ == "__main__":

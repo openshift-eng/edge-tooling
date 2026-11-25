@@ -4,7 +4,7 @@
 Standalone: python3 tests/test_skills.py
 Requires PyYAML (as does the script under test).
 
-Each test builds a throwaway workspace (dev-env.yaml + repos/ + projects/)
+Each test builds a throwaway workspace (dev-env.yaml + repos/)
 in a temp dir and drives skills.py as a subprocess with WORKSPACE_ROOT set,
 mirroring how tests/test_setup.sh isolates setup.sh.
 """
@@ -59,22 +59,6 @@ class SkillsFixture(unittest.TestCase):
             f"---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n"
         )
         return skill_dir
-
-    def make_project(self, name: str, status: str = "active",
-                     skills: list[dict] | None = None) -> Path:
-        """Create projects/<name>/CLAUDE.md with frontmatter; return the dir."""
-        project_dir = self.ws / "projects" / name
-        project_dir.mkdir(parents=True)
-        lines = ["---", f"project: {name}", "type: feature",
-                 f"status: {status}"]
-        if skills:
-            lines.append("skills:")
-            for s in skills:
-                lines.append(f"  - name: {s['name']}")
-                lines.append(f"    source: {s['source']}")
-        lines += ["---", "", f"# {name}", ""]
-        (project_dir / "CLAUDE.md").write_text("\n".join(lines))
-        return project_dir
 
     def ws_entry(self, name: str) -> Path:
         return self.ws / ".claude" / "skills" / name
@@ -291,136 +275,44 @@ class TestWorkspaceResolution(unittest.TestCase):
         self.assertIn("workspace", out["error"].lower())
 
 
-class TestVerify(SkillsFixture):
+class TestLinkAll(SkillsFixture):
 
-    def verify_one(self, project: str) -> dict:
-        out = run_skills(self.ws, "verify", project)
+    def test_links_every_unique_skill(self):
+        self.make_repo_skill("repo-a", "one", "one")
+        self.make_repo_skill("repo-b", "two", "two")
+        out = run_skills(self.ws, "link-all")
         self.assertEqual(out["status"], "ok")
-        self.assertEqual(len(out["skills"]), 1)
-        return out["skills"][0]
+        self.assertEqual(sorted(s["name"] for s in out["linked"]), ["one", "two"])
+        self.assertTrue(self.ws_entry("one").is_symlink())
+        self.assertTrue(self.ws_entry("two").is_symlink())
 
-    def test_verify_ok(self):
-        self.make_repo_skill("repo-a", "vet-review", "vet-review")
-        self.link("vet-review", "repo-a")
-        self.make_project("proj", skills=[
-            {"name": "vet-review", "source": "repo-a"}])
-        entry = self.verify_one("proj")
-        self.assertEqual(entry["state"], "ok")
-        self.assertEqual(entry["source"], "repo-a")
+    def test_is_idempotent(self):
+        self.make_repo_skill("repo-a", "one", "one")
+        run_skills(self.ws, "link-all")
+        out = run_skills(self.ws, "link-all")
+        self.assertEqual(out["linked"], [])
+        self.assertEqual([s["name"] for s in out["reused"]], ["one"])
 
-    def test_verify_missing(self):
-        self.make_repo_skill("repo-a", "vet-review", "vet-review")
-        self.make_project("proj", skills=[
-            {"name": "vet-review", "source": "repo-a"}])
-        self.assertEqual(self.verify_one("proj")["state"], "missing")
+    def test_skips_name_conflict_between_repos(self):
+        self.make_repo_skill("repo-a", "dup", "dup")
+        self.make_repo_skill("repo-b", "dup", "dup")
+        out = run_skills(self.ws, "link-all")
+        self.assertEqual(out["linked"], [])
+        self.assertEqual(len(out["skipped"]), 2)
+        self.assertFalse(os.path.lexists(self.ws_entry("dup")))
 
-    def test_verify_broken_dangling(self):
-        self.make_repo_skill("repo-a", "vet-review", "vet-review")
-        self.link("vet-review", "repo-a")
-        shutil.rmtree(self.ws / "repos" / "repo-a" / ".claude" / "skills"
-                      / "vet-review")
-        self.make_repo_skill("repo-a", "vet-review-2", "vet-review")
-        self.make_project("proj", skills=[
-            {"name": "vet-review", "source": "repo-a"}])
-        entry = self.verify_one("proj")
-        self.assertEqual(entry["state"], "broken")
-        self.assertNotIn("detail", entry)
+    def test_skips_collision_with_real_dir(self):
+        self.make_repo_skill("repo-a", "taken", "taken")
+        self.ws_entry("taken").mkdir(parents=True)
+        out = run_skills(self.ws, "link-all")
+        self.assertEqual([s["name"] for s in out["skipped"]], ["taken"])
+        self.assertFalse(self.ws_entry("taken").is_symlink())
 
-    def test_verify_broken_points_elsewhere(self):
-        self.make_repo_skill("repo-a", "vet-review", "vet-review")
-        other = self.make_repo_skill("repo-b", "other-skill", "other-skill")
-        entry_path = self.ws_entry("vet-review")
-        entry_path.parent.mkdir(parents=True)
-        entry_path.symlink_to(other)
-        self.make_project("proj", skills=[
-            {"name": "vet-review", "source": "repo-a"}])
-        entry = self.verify_one("proj")
-        self.assertEqual(entry["state"], "broken")
-        self.assertEqual(entry["detail"], "points_elsewhere")
-
-    def test_verify_real_dir_is_points_elsewhere(self):
-        self.make_repo_skill("repo-a", "vet-review", "vet-review")
-        self.ws_entry("vet-review").mkdir(parents=True)
-        self.make_project("proj", skills=[
-            {"name": "vet-review", "source": "repo-a"}])
-        entry = self.verify_one("proj")
-        self.assertEqual(entry["state"], "broken")
-        self.assertEqual(entry["detail"], "points_elsewhere")
-
-    def test_verify_source_gone(self):
-        self.make_repo_skill("repo-a", "vet-review", "vet-review")
-        self.link("vet-review", "repo-a")
-        shutil.rmtree(self.ws / "repos" / "repo-a" / ".claude" / "skills"
-                      / "vet-review")
-        self.make_project("proj", skills=[
-            {"name": "vet-review", "source": "repo-a"}])
-        self.assertEqual(self.verify_one("proj")["state"], "source_gone")
-
-    def test_verify_project_without_skills(self):
-        self.make_project("proj")
-        out = run_skills(self.ws, "verify", "proj")
+    def test_no_repos_dir_is_ok(self):
+        shutil.rmtree(self.ws / "repos")
+        out = run_skills(self.ws, "link-all")
         self.assertEqual(out["status"], "ok")
-        self.assertEqual(out["skills"], [])
-
-    def test_verify_unknown_project_is_error(self):
-        out = run_skills(self.ws, "verify", "nope")
-        self.assertEqual(out["status"], "error")
-
-
-class TestUnlinkCheck(SkillsFixture):
-
-    def check_one(self, project: str) -> dict:
-        out = run_skills(self.ws, "unlink-check", project)
-        self.assertEqual(out["status"], "ok")
-        self.assertEqual(len(out["skills"]), 1)
-        return out["skills"][0]
-
-    def _linked_project(self, project: str = "closing") -> None:
-        self.make_repo_skill("repo-a", "vet-review", "vet-review")
-        self.link("vet-review", "repo-a")
-        self.make_project(project, skills=[
-            {"name": "vet-review", "source": "repo-a"}])
-
-    def test_exclusive_skill_is_removable(self):
-        self._linked_project()
-        entry = self.check_one("closing")
-        self.assertTrue(entry["removable"])
-        self.assertTrue(entry["is_symlink"])
-        self.assertFalse(entry["missing"])
-        self.assertEqual(entry["used_by"], [])
-
-    def test_shared_with_active_project_is_kept(self):
-        self._linked_project()
-        self.make_project("other", status="active", skills=[
-            {"name": "vet-review", "source": "repo-a"}])
-        entry = self.check_one("closing")
-        self.assertFalse(entry["removable"])
-        self.assertEqual(entry["used_by"], ["other"])
-
-    def test_shared_only_with_done_project_is_removable(self):
-        self._linked_project()
-        self.make_project("finished", status="done", skills=[
-            {"name": "vet-review", "source": "repo-a"}])
-        entry = self.check_one("closing")
-        self.assertTrue(entry["removable"])
-        self.assertEqual(entry["used_by"], [])
-
-    def test_real_dir_is_not_removable(self):
-        self.make_repo_skill("repo-a", "vet-review", "vet-review")
-        self.ws_entry("vet-review").parent.mkdir(parents=True, exist_ok=True)
-        self.ws_entry("vet-review").mkdir()
-        self.make_project("closing", skills=[
-            {"name": "vet-review", "source": "repo-a"}])
-        entry = self.check_one("closing")
-        self.assertFalse(entry["removable"])
-        self.assertFalse(entry["is_symlink"])
-
-    def test_absent_entry_is_missing_not_removable(self):
-        self.make_project("closing", skills=[
-            {"name": "vet-review", "source": "repo-a"}])
-        entry = self.check_one("closing")
-        self.assertTrue(entry["missing"])
-        self.assertFalse(entry["removable"])
+        self.assertEqual(out["linked"], [])
 
 
 if __name__ == "__main__":

@@ -17,9 +17,9 @@
 #
 # `self:` and `domain:` are mutually exclusive.
 #
-# Isolation model: edit-in-place. /workspace:new-project creates pure
-# context/tracking projects under projects/; you edit this checkout directly
-# on whatever branch you choose.
+# Isolation model: /workspace:new-project can give a project its own git
+# worktree under .claude/worktrees/<branch>; otherwise you edit this
+# checkout directly.
 
 self:
   name: __SELF_NAME__

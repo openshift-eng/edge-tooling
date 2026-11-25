@@ -21,6 +21,13 @@ from typing import Any
 
 import workspace_lib
 
+
+def dumps(result: Any, **kw: Any) -> str:
+    """json.dumps that mirrors ``error`` into ``error_message`` for callers."""
+    if isinstance(result, dict) and "error" in result:
+        result.setdefault("error_message", result["error"])
+    return json.dumps(result, **kw)
+
 THRESHOLD = 10
 KEEP_RECENT = 3
 ARCHIVE_FILENAME = "progress-archive.md"
@@ -306,19 +313,19 @@ def consolidate(project_dir: Path, dry_run: bool = False) -> dict[str, Any]:
                 continue
             new_blocks.append(block)
         if new_blocks:
-            with archive_path.open("a") as f:
-                f.write("\n" + "\n".join(new_blocks))
+            workspace_lib.write_atomic(
+                archive_path, existing + "\n" + "\n".join(new_blocks))
         archive_action = "appended"
     else:
         header = (
             "# Progress Archive\n"
             "\n"
             "_Completed checklist items archived from CLAUDE.md by\n"
-            "`/workspace:consolidate-project`. Items grouped by source section,\n"
+            "`consolidate-project.py`. Items grouped by source section,\n"
             "ordered chronologically (oldest first)._\n"
             "\n"
         )
-        archive_path.write_text(header + "\n".join(archive_blocks))
+        workspace_lib.write_atomic(archive_path, header + "\n".join(archive_blocks))
         archive_action = "created"
 
     # Rebuild CLAUDE.md with consolidated sections
@@ -356,7 +363,7 @@ def consolidate(project_dir: Path, dry_run: bool = False) -> dict[str, Any]:
             new_text += "\n"
         ref_updated = True
 
-    claude_md.write_text(new_text)
+    workspace_lib.write_atomic(claude_md, new_text)
 
     return {
         "status": "consolidated",
@@ -383,7 +390,7 @@ def main():
         args.remove("--dry-run")
 
     if not args:
-        print(json.dumps({
+        print(dumps({
             "status": "error",
             "error": "Usage: consolidate-project.py [--dry-run] <project-name>",
         }))
@@ -392,7 +399,7 @@ def main():
     project_name = args[0]
     root = workspace_lib.resolve_workspace_root()
     if root is None:
-        print(json.dumps({
+        print(dumps({
             "status": "error",
             "error": "Could not determine the workspace root. Set WORKSPACE_ROOT "
                        "or run inside a workspace (a directory containing dev-env.yaml).",
@@ -401,14 +408,14 @@ def main():
     project_dir = root / "projects" / project_name
 
     if not project_dir.is_dir():
-        print(json.dumps({
+        print(dumps({
             "status": "error",
             "error": f"Project directory not found: {project_dir}",
         }))
         sys.exit(0)
 
     result = consolidate(project_dir, dry_run=dry_run)
-    print(json.dumps(result, indent=2))
+    print(dumps(result, indent=2))
 
 
 if __name__ == "__main__":
