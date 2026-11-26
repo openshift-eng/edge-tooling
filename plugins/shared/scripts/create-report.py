@@ -351,12 +351,30 @@ function finishedISO(v) {
 function fmtEpoch(v) {
     return finishedISO(v).replace('T', ' ').substring(0, 16);
 }
+var DURATION_UNIT_SECONDS = {h: 3600, m: 60, s: 1, ms: 1e-3, us: 1e-6, '\\u00b5s': 1e-6, '\\u03bcs': 1e-6, ns: 1e-9};
+function durationSeconds(v) {
+    if (typeof v === 'number') return v;
+    if (typeof v !== 'string') return NaN;
+    var value = v.trim();
+    if (/^\\d+(?:\\.\\d+)?$/.test(value)) return Number(value);
+    var seconds = 0;
+    var rest = value.replace(/(\\d+(?:\\.\\d+)?)(h|ms|m|us|\\u00b5s|\\u03bcs|ns|s)/g, function(match, amount, unit) {
+        seconds += Number(amount) * DURATION_UNIT_SECONDS[unit];
+        return '';
+    });
+    return value && !rest ? seconds : NaN;
+}
 function fmtDuration(v) {
-    try {
-        var s = Math.floor(parseFloat(v));
-        if (s >= 3600) return Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm';
-        return Math.floor(s/60) + 'm ' + (s%60) + 's';
-    } catch(e) { return String(v || ''); }
+    var s = Math.floor(durationSeconds(v));
+    if (!Number.isSafeInteger(s) || s < 0) return '\\u2014';
+    if (s >= 3600) return Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm';
+    return Math.floor(s/60) + 'm ' + (s%60) + 's';
+}
+function showJobPassRate(el, jobs) {
+    var total = jobs.length, passed = jobs.filter(function(j){return j.status==='success';}).length;
+    var rate = total ? Math.round(passed/total*100) : null;
+    el.textContent = passed + '/' + total + ' passed' + (rate === null ? '' : ' (' + rate + '%)');
+    el.className = 'jobs-pass-rate' + (rate === null ? '' : rate >= 90 ? ' status-pass' : (rate < 70 ? ' status-fail' : ''));
 }
 function badgeClass(total, hasCritical) {
     if (total === 0) return 'badge-ok';
@@ -962,13 +980,11 @@ function renderReleaseSection(parent, version, rdata, status, jim) {
     var panels = h('div', 'section-panels');
     // All Jobs table
     if (status && status.length) {
-        var totalS = status.length, passedS = status.filter(function(j){return j.status==='success';}).length;
-        var rateS = totalS > 0 ? Math.round(passedS/totalS*100) : 0;
-        var rateCss = rateS >= 90 ? 'status-pass' : (rateS < 70 ? 'status-fail' : '');
         var jobsDet = document.createElement('details'); jobsDet.className = 'section-toggle';
         var jobsSum = document.createElement('summary');
         jobsSum.appendChild(document.createTextNode('All Jobs \\u2014 '));
-        var rateSpan = h('span', rateCss, passedS + '/' + totalS + ' passed (' + rateS + '%)');
+        var rateSpan = h('span');
+        showJobPassRate(rateSpan, status);
         jobsSum.appendChild(rateSpan);
         jobsDet.appendChild(jobsSum);
         var jTable = h('table', 'data-table jobs-table');
@@ -1297,6 +1313,12 @@ function updatePeriodicSummaries(day) {
         if (tocEl) tocEl.textContent = tocAnalysisSummary((D.releases_data || {})[id], counts, stats);
         var statusEl = document.querySelector('.toc-status[data-release="' + id + '"]');
         if (statusEl) statusEl.textContent = ' \\u2014 ' + tocStatusSummary(stats);
+        var passRate = sec.querySelector('.jobs-pass-rate');
+        if (passRate) {
+            showJobPassRate(passRate, Array.from(sec.querySelectorAll('.job-row')).filter(function(row) {
+                return row.style.display !== 'none';
+            }).map(function(row) { return row.reportJob; }));
+        }
         var badge = sec.querySelector('.release-badge');
         if (badge) { badge.textContent = summary; badge.className = 'badge release-badge ' + badgeClass(counts.groups, counts.hasCritical); }
         var analysis = sec.querySelector('.failure-analysis-summary');

@@ -189,6 +189,7 @@ function skeleton(tag, id, cls, parent = body) {
 const container = skeleton('div', 'container', 'container');
 ['report-title', 'report-timestamp', 'diagnostics-slot', 'overview-slot', 'loading', 'filter-count', 'report-filter', 'report-filter-error', 'export-json', 'export-csv'].forEach(id => skeleton('div', id, '', container));
 const reportHTML = fs.readFileSync(process.argv[5], 'utf8');
+const jobsTableTests = process.argv[6] === '--jobs-table-tests' ? require('./test_report_jobs_table.js')(data, reportHTML, process.argv[7]) : null;
 assert(!reportHTML.includes('id="filter-regex"'));
 assert.equal(document.getElementById('filter-regex'), null);
 ['periodics', 'pull-requests', 'bugs', 'images'].forEach((tab, index) => {
@@ -253,6 +254,10 @@ assertFailureHeaders(document.getElementById('tab-periodics'));
 assertFailureHeaders(document.getElementById('tab-pull-requests'));
 if (finishedTests) {
     await finishedTests({document, reportTest});
+    return;
+}
+if (jobsTableTests) {
+    await jobsTableTests({document, reportTest});
     return;
 }
 assert(document.querySelector('#tab-periodics .issues-table'));
