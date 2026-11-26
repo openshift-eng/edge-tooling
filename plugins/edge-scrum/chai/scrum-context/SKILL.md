@@ -174,11 +174,11 @@ Call it with `why = []`. When it returns None, pass every needed release as
 Which releases:
 
 - **Release argument:** that release and the **previous** one, the highest
-  listed release below it (its "Master Branch Open for <X.Y>" is used when the
+  listed release below it (its "Main Branch Open for <X.Y>" is used when the
   release has no "Development Branch opens" of its own).
 - **No argument:** the caller's candidate releases, plus the **previous**
   release of each (the highest listed release below it). The weekly report's candidates are the releases its Feature
-  gate names (weekly-health-report step 1). With no candidates, pass no
+  gate names (the weekly-report script). With no candidates, pass no
   schedules: `release_in_progress` is then "not available".
 
 Pass each release's result in `schedules`:
@@ -186,10 +186,10 @@ Pass each release's result in `schedules`:
 | Product Pages result | Pass | Window phase |
 |----------------------|------|--------------|
 | Schedule read, with milestones | the milestone list | from the milestones (below) |
-| Lookup succeeded, but no dates (or the release is not listed) | `[]` | "not scheduled yet", unless the previous release's "Master Branch Open for <X.Y>" places it |
+| Lookup succeeded, but no dates (or the release is not listed) | `[]` | "not scheduled yet", unless the previous release's "Main Branch Open for <X.Y>" places it |
 | Product lookup, listing or schedule lookup failed | `{"error": "<reason>"}` | "release phase unknown: Product Pages lookup failed" |
 
-A release that needs a failed previous release's "Master Branch Open for
+A release that needs a failed previous release's "Main Branch Open for
 <X.Y>" (it has no "Development Branch opens" of its own) is also "release
 phase unknown: Product Pages lookup failed". Never guess dates for it.
 
@@ -201,7 +201,7 @@ prefix, ignoring a leading version and case:
 |--------|-----------------------|----------------|
 | Refinement sprint | `<X.Y> Development Branch opens` | Sprint starting that day, or the first sprint starting within the next 7 days |
 | Pencils-down sprint | `Pencils Down…` (e.g. "Pencils Down / Stabilization", "… Stabilization Gate") | Last sprint ending on or before it |
-| Branch-cut sprint | `Master Branch Open for <next>` | Sprint containing it |
+| Branch-cut sprint | `Main Branch Open for <next>` (older schedules: `Master Branch Open for <next>`) | Sprint containing it |
 
 For the pencils-down and branch-cut sprints, a date exactly on a sprint boundary
 belongs to the sprint **ending** that day. The refinement sprint is the exception:
@@ -326,7 +326,7 @@ an event title. A malformed `today` is an error, not a warning.
 - **Phase:** `not started` before the refinement sprint; `refinement`,
   `development`, or `pencils-down sprint` by today's sprint;
   `pre-branch-cut` after the pencils-down sprint until the day before
-  "Master Branch Open"; `finished` from that date on.
+  "Main Branch Open"; `finished` from that date on.
 - **Ceremonies in a sprint:** Sprint Demos and Retrospective are looked up from
   the day after the sprint starts through its end day; Sprint Planning and the
   readback from its start day through the day before its end. A neighbouring

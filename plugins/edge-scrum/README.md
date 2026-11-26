@@ -107,16 +107,15 @@ Output is saved to `.reports/release_planning_{version}_{YYYY-MM-DD}.md`.
 
 ### chai-bot Skills
 
-Playbooks under [`chai/`](chai/) are for the chai-bot coordinator, not Claude Code. Register them with chai-bot from `plugins/edge-scrum/chai/`. They are read-only, ask no questions, use no sub-agents, and run the [`bin/`](bin/) scripts in `sandbox_exec` on data fetched with chai-bot's Jira tools ([`bin/chai_jira_adapter.py`](bin/chai_jira_adapter.py) converts `query_jira` text into the scripts' input).
+Playbooks under [`chai/`](chai/) are for the chai-bot coordinator, not Claude Code. Register them with chai-bot from `plugins/edge-scrum/chai/`. They are read-only, ask no questions and use no sub-agents.
 
 | Skill | What it does |
 |-------|--------------|
 | [`scrum-context`](chai/scrum-context/SKILL.md) | Current sprint and week, release phases, ceremonies, team availability per sprint |
-| [`sprint-health`](chai/sprint-health/SKILL.md) | Team-level sprint health: capacity mode in week 1, mid-sprint mode after |
-| [`release-health`](chai/release-health/SKILL.md) | One release by phase: refinement gaps, or scope vs capacity, schedule, blocks, cut line and staffing (rules in [`bin/_scrum_rules.py`](bin/_scrum_rules.py)); epic Target Version and QA Contact flags (decision 0024) |
-| [`weekly-health-report`](chai/weekly-health-report/SKILL.md) | The weekly report of edge-context decision 0018: 3-line post, details and owner-mentioned actions in the thread |
+| [`weekly-report`](chai/weekly-report/SKILL.md) | The weekly report of edge-context decision 0018 (3-line post, details and owner-mentioned actions in the thread), and the sprint-end check-in's data |
+| `weekly-health-report`, `sprint-health`, `release-health` | Deprecated: replaced by `weekly-report`; removed once ship-help-bot#1415 is deployed |
 
-The weekly report fetches each Jira list once for all its sections (features, epics, stories, links) and pages in rounds, one Python call per round. Velocity can reuse closed-sprint aggregates from an optional persona memory store ([`bin/velocity_cache.py`](bin/velocity_cache.py)). A persona admin must provision that store; without it, velocity is computed from the closed sprints every run. A stored sprint is not read again, so an edit to it after it closed is not seen until its entry is deleted.
+`weekly-report` runs [`bin/weekly_report_files.py`](bin/weekly_report_files.py) in the code sandbox. The script decides every Jira query, its paging and its retries; chai-bot fetches one round of requests at a time, stores the results by reference with `compact` (nothing retyped), and the script returns the next round or the finished report, which chai-bot posts exactly as returned. The steps are the weekly report's shared fetch plan (each Jira list fetched once for all sections, in waves), with [`bin/chai_jira_adapter.py`](bin/chai_jira_adapter.py) parsing `query_jira` pages and the other [`bin/`](bin/) scripts computing the report. [`bin/tests/test_weekly_report_files.py`](bin/tests/test_weekly_report_files.py) runs every scenario of the chain test through the script and requires the same output.
 
 #### `scrum-context`
 

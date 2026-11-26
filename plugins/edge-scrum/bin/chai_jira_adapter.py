@@ -58,7 +58,7 @@ matches the roster (``_jira_transforms.roster_match``) gets the roster username
 as its ``email``, so roster-keyed scripts work; an unmatched name is kept as
 ``name`` so its work still shows up (as roster drift) instead of as unassigned.
 
-Paging recipe (see the SKILLs): ``(<JQL>) ORDER BY key DESC`` with max_results
+Paging recipe (``weekly_report_files.py`` follows it): ``(<JQL>) ORDER BY key DESC`` with max_results
 50, then ``(<JQL>) AND key < <last key> ORDER BY key DESC`` until a page has the
 "Found N issues" header or fewer than 50 issues. Jira's ``key <`` compares keys
 within one project only, so when a multi-project query needs more than one page,

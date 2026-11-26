@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Team-level figures and Slack text for the chai-bot weekly health report.
 
-Pure functions used by the chai-bot skills ``sprint-health``, ``release-health``
-and ``weekly-health-report`` (edge-context decision 0018) inside
-``sandbox_exec``. Inputs are the outputs of the existing edge-scrum scripts
+Pure functions used by ``weekly_report_files.py`` (the chai-bot ``weekly-report``
+skill, edge-context decision 0018) inside ``sandbox_exec``. Inputs are the outputs of the existing edge-scrum scripts
 (``scrum_context.py``, ``transform-*.py``, ``compute-velocity.py``,
 ``run-checks.py``); nothing here fetches data. The feature and sprint checks
 themselves live in ``_scrum_rules.py`` (shared with the Claude Code skills);
@@ -196,7 +195,7 @@ def _scoped_problems(problems, keys=None, fields=None):
 def release_feature_gate(gate_fetch):
     """Releases with at least one Edge Feature, from the gate query's ``adapt_fetch`` output.
 
-    The gate query (weekly-health-report SKILL) asks for every non-Closed
+    The gate query (``weekly_report_files.GATE_JQL``) asks for every non-Closed
     OCPSTRAT Feature with an Edge label and a Target Version. Counted here,
     rechecked per issue: type Feature (Initiatives do not count), status not
     Closed, an :data:`EDGE_FEATURE_LABELS` label (any case), once per Target Version
@@ -245,7 +244,21 @@ def _not_scheduled_reason(window):
     if milestones.get("development_branch_opens") not in (None, NOT_SCHEDULED):
         return REFINEMENT_NOT_PLACED
     return (f'Product Pages schedule has no readable "Development Branch opens" milestone '
-            f'(nor a previous release\'s "Master Branch Open for {window.get("release")}")')
+            f'(nor a previous release\'s "Main Branch Open for {window.get("release")}")')
+
+
+def _milestone_not_placed(window):
+    """Which release milestone could not be placed on a sprint, and its Product Pages name, so
+    a renamed or missing milestone is visible from the report itself."""
+    milestones = window.get("milestones")
+    if not isinstance(milestones, dict) or not milestones:  # no schedule read for it at all
+        return "a release milestone could not be placed on a sprint"
+    if not isinstance(window.get("branch_cut_sprint"), dict):
+        if milestones.get("master_branch_open") in (None, NOT_SCHEDULED):
+            return ('the branch-cut milestone ("Main Branch Open for <next release>") is not in the '
+                    f'{window.get("release")} Product Pages schedule')
+        return f'the branch-cut milestone ({milestones["master_branch_open"]}) could not be placed on a sprint'
+    return "the refinement sprint could not be placed on a sprint"
 
 
 def select_sections(context, windows=(), gate=None):
@@ -309,8 +322,7 @@ def select_sections(context, windows=(), gate=None):
                              "pencils_down": False, "window": w})
         elif phase in DEV_PHASES:
             if not isinstance(w.get("branch_cut_sprint"), dict) or not isinstance(w.get("refinement_sprint"), dict):
-                missing.append({"what": label,
-                                "why": "a release milestone could not be placed on a sprint"})
+                missing.append({"what": label, "why": _milestone_not_placed(w)})
                 continue
             sections.append({"release": release, "phase": phase, "kind": RELEASE_HEALTH,
                              "pencils_down": phase == "pencils-down sprint", "window": w})
@@ -335,11 +347,12 @@ def _owner(issue):
     return rules.person(issue.get("assignee_display"))
 
 
-# Open sprint issues by stage in the final week, from the statuses law 07 names for
-# stories, spikes, tasks and bugs (OCPEDGE and OCPBUGS); any other open status is
-# counted as "other status", never guessed into a stage.
-REVIEW_STATUSES = ("Review", "MODIFIED", "ON_QA")
-WORK_STATUSES = ("To Do", "In Progress", "NEW", "ASSIGNED")
+# Open sprint issues by stage in the final week. Every open status of the sprint issue
+# types in OCPEDGE, USHIFT and OCPBUGS has a stage (their workflows, read 2026-11-26):
+# OCPEDGE/USHIFT To Do, In Progress, Code Review, Review; OCPBUGS New, ASSIGNED, POST,
+# MODIFIED, ON_QA. Any other open status is counted as "other status", never guessed.
+REVIEW_STATUSES = ("Code Review", "Review", "POST", "MODIFIED", "ON_QA")
+WORK_STATUSES = ("To Do", "In Progress", "New", "ASSIGNED")
 
 
 def final_week(sprint):

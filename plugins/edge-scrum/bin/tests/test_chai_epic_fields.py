@@ -18,11 +18,12 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import chai_jira_adapter as ad  # noqa: E402
 import chai_report as cr  # noqa: E402
+import weekly_report_files as wr  # noqa: E402
 from _jira_transforms import normalize_name  # noqa: E402
 from tests.test_chai_jira_adapter import ROSTER_MD  # noqa: E402
 from tests.test_chai_report import CHECKS, ISSUES, SPRINT  # noqa: E402
 
-WEEKLY_SKILL = os.path.join(os.path.dirname(__file__), "..", "..", "chai", "weekly-health-report", "SKILL.md")
+SCRUM_CONTEXT_SKILL = os.path.join(os.path.dirname(__file__), "..", "..", "chai", "scrum-context", "SKILL.md")
 
 EPICS_JQL = ('project = OCPEDGE AND issuetype = Epic AND status in ("To Do", "In Progress", '
              '"Dev Complete", "Testing", "Release Pending") AND parent is not EMPTY')
@@ -453,16 +454,11 @@ class InformationalTest(unittest.TestCase):
         self.assertIn("result not readable", report["replies"][-1])
 
 
-def skill_snippet(*needles, path=WEEKLY_SKILL):
-    """The first python code block of a SKILL.md (weekly-health-report by default) containing every needle."""
+def skill_snippet(*needles, path=SCRUM_CONTEXT_SKILL):
+    """The first python code block of a SKILL.md (scrum-context by default) containing every needle."""
     with open(path, encoding="utf-8") as fh:
         blocks = re.findall(r"```python\n(.*?)```", fh.read(), re.S)
     return textwrap.dedent(next(b for b in blocks if all(n in b for n in needles)))
-
-
-def skill_owner_snippet():
-    """The owner-collection code block from weekly-health-report/SKILL.md, verbatim."""
-    return skill_snippet("owners", 'gaps["epics"]')
 
 
 class PerOwnerLinesTest(unittest.TestCase):
@@ -642,14 +638,12 @@ class RejectedRecordsAndKeysTest(unittest.TestCase):
 
 
 class MentionsFromSkillTest(unittest.TestCase):
-    """Builds the mentions map exactly as the SKILL tells chai-bot to."""
+    """Builds the mentions map as the weekly report script does (``report_owners``)."""
 
     SLACK = {"aexample@redhat.com": "U000TEST1", "mmanager@redhat.com": "U000TEST2"}
 
     def _owners(self, sprint, computed, gaps, scrum_master=None):
-        scope = {"sprint": sprint, "computed": computed, "gaps": gaps, "scrum_master": scrum_master}
-        exec(skill_owner_snippet(), {}, scope)  # noqa: S102 - our own SKILL text
-        return scope["owners"]
+        return wr.report_owners(sprint, computed, gaps, scrum_master)
 
     def _mentions(self, owners):
         # SKILL step 5, items 1-4: roster row by display name → email → Slack user.

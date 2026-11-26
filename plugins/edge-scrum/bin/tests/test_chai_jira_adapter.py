@@ -1013,9 +1013,6 @@ class RosterTest(unittest.TestCase):
 # ---------------------------------------------------------------- the SKILL paging loop
 
 MORE_MATCH = "Showing the first 50 matching issues; more match:"
-SKILL_SENTENCE = ("`Showing the first 50 matching issues; more match:` is normal. It is never an error, never "
-                  "partial data and never a reason to stop: call `next_page_jql` and fetch that page now, until "
-                  "it returns `None`.")
 CHAI = os.path.join(BIN, "..", "chai")
 
 
@@ -1570,63 +1567,17 @@ class NextPageJqlEdgeTest(unittest.TestCase):
 
 
 class SkillPagingTest(unittest.TestCase):
-    """Every chai skill with a Jira paging section starts it with the rule, and its worked
-    example is what ``next_page_jql`` does."""
+    """Paging is the weekly report script's (``weekly_report_files``: every page it needs is a
+    request of a round); no chai skill tells the coordinator to page ``query_jira`` itself."""
 
-    SKILLS = ("sprint-health", "release-health", "weekly-health-report")
+    DEPRECATED = ("weekly-health-report", "sprint-health", "release-health")  # removed after #1415 deploys
 
-    @staticmethod
-    def section(skill):
-        with open(os.path.join(CHAI, skill, "SKILL.md"), encoding="utf-8") as fh:
-            text = fh.read()
-        start = text.index("## Jira paging\n")
-        return text[start:text.index("\n## ", start + 1)]
-
-    def test_every_paging_section_starts_with_the_rule(self):
-        for skill in self.SKILLS:
-            with self.subTest(skill=skill):
-                lines = [ln for ln in self.section(skill).splitlines()[1:] if ln.strip()]
-                self.assertEqual(lines[0], "> " + SKILL_SENTENCE)
-
-    def test_query_jira_is_paged_only_by_these_skills(self):
-        for name in sorted(os.listdir(CHAI)):
-            with open(os.path.join(CHAI, name, "SKILL.md"), encoding="utf-8") as fh:
-                pages_jira = "query_jira" in fh.read()
-            self.assertEqual(pages_jira, name in self.SKILLS, name)
-
-    def replay(self, skill, query, keys, first=None):
-        log = []
-        parts = fetch_by_skill(query, jira_answer(keys, log=log), first=first)
-        section = self.section(skill)
-        for sent in log:
-            self.assertIn(f"`{sent}`", section)
-        return parts, log, section
-
-    def test_weekly_example(self):
-        parts, log, section = self.replay("weekly-health-report", "project = TESTA AND issuetype = Feature",
-                                          keys_desc("TESTA", 300, 107))
-        self.assertEqual((len(log), len(fetched_keys(parts))), (3, 107))
-        self.assertIn("`Found 7 issues (showing 7):`", section)
-        self.assertIn("Three pages, 107 issues", section)
-
-    def test_sprint_health_example(self):
-        parts, log, section = self.replay("sprint-health", NextPageJqlTest.SPRINT_Q, NextPageJqlTest.SPRINT_KEYS)
-        self.assertEqual((len(log), len(fetched_keys(parts))), (4, 92))
-        self.assertIn("`TESTA-131`", section)
-        self.assertIn("`Found 30 issues (showing 30):`", section)
-        self.assertIn("`Found 12 issues (showing 12):`", section)
-
-    def test_release_health_example(self):
-        query, keys = "project = TESTA AND issuetype = Feature", keys_desc("TESTA", 200, 60)
-        rank_first = f"({query}) ORDER BY Rank ASC"
-        rank_page = jira_answer(keys)(rank_first)
-        self.assertTrue(rank_page.startswith(MORE_MATCH))
-        key_first = ad.next_page_jql(rank_first, rank_page)
-        parts, log, section = self.replay("release-health", query, keys, first=key_first)
-        self.assertIn(f"`{rank_first}`", section)
-        self.assertEqual((len(log), len(fetched_keys(parts))), (2, 60))
-        self.assertIn("`Found 10 issues (showing 10):`", section)
-        self.assertIn("2 pages and 60 features", section)
+    def test_no_skill_pages_query_jira(self):
+        for name in sorted(n for n in os.listdir(CHAI) if n not in self.DEPRECATED):
+            with self.subTest(skill=name), open(os.path.join(CHAI, name, "SKILL.md"), encoding="utf-8") as fh:
+                text = fh.read()
+            self.assertNotIn("AND key <", text)
+            self.assertNotIn("## Jira paging", text)
 
 
 class SharedPagingAdapterTest(unittest.TestCase):

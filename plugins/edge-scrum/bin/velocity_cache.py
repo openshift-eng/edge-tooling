@@ -1,7 +1,7 @@
 """Optional velocity cache for the chai weekly report: closed-sprint aggregates.
 
 Opt-in. The weekly report uses it only when a dedicated persona memory namespace
-has been provisioned for it (``VELOCITY_STORE`` in the weekly SKILL). With no
+has been provisioned for it (the optional velocity store; the weekly-report script runs without it). With no
 store, or a store that cannot be read, velocity is computed cold: every closed
 sprint is fetched, exactly as without this module. The store only saves the
 fetches of sprints already measured (see below for edits after a sprint closed).
