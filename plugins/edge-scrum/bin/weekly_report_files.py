@@ -101,7 +101,12 @@ def load_round(state_dir, compact_obj):
         raise StateError("no round is waiting for its results")
     rnd = state["rounds"][-1]
     if isinstance(compact_obj, str):
-        compact_obj = json.loads(compact_obj)
+        try:
+            compact_obj = json.loads(compact_obj)
+        except ValueError as exc:
+            raise StateError(f"round {rnd['round']}: the compact object is not readable JSON ({exc})") from None
+    if not isinstance(compact_obj, dict):
+        raise StateError(f"round {rnd['round']}: the compact object is not a JSON object")
     labels = _labels(compact_obj)
     if len(labels) != len(rnd["requests"]):
         raise StateError(f"round {rnd['round']}: the compact object holds {len(labels)} result(s), "
@@ -195,6 +200,8 @@ def parse_board_sprints(text):
         m = _SPRINT_LINE.match(line)
         if not m:
             return None, f"board sprint listing has an unreadable line: {line[:120]}"
+        if not re.search(r"(?:^|,\s*)id \d+(?:,|$)", m.group("details")):
+            return None, f"board sprint listing has a row without a sprint id: {line[:120]}"
         sprint = {"name": m.group("name")}
         for part in (p.strip() for p in m.group("details").split(",")):
             if part.startswith("id "):
@@ -605,14 +612,37 @@ class Engine:
         self.board_problem = problem
         return sprints or []
 
-    def read_roster(self):
-        repo, path = self.q.roster
-        text = self.ask([("github_file_content", {"repo": repo, "path": path}, 1)])[0]
+    def ask_retrying(self, calls, ok):
+        """Answers for ``calls`` (``(tool, args)``): each call whose answer is not ``ok`` is sent
+        again once, and its second answer is used."""
+        first = self.ask([(t, a, 1) for t, a in calls])
+        again = [i for i, text in enumerate(first) if not ok(text)]
+        if not again:
+            return first
+        second = self.ask([(calls[i][0], calls[i][1], 2) for i in again])
+        out = list(first)
+        for i, text in zip(again, second):
+            out[i] = text
+        return out
+
+    @staticmethod
+    def _roster_text(text):
         value = parse_json_answer(text)
         if isinstance(value, dict):
+            if value.get("error") is not None:
+                return None
             text = value.get("content") or value.get("text") or value.get("result")
-        roster = ad.parse_team_roster(text) if isinstance(text, str) and text.strip() else None
-        if not roster or not roster.get("members"):
+        return text if isinstance(text, str) and text.strip() else None
+
+    def read_roster(self):
+        repo, path = self.q.roster
+
+        def ok(text):
+            roster = ad.parse_team_roster(self._roster_text(text) or "")
+            return bool(roster.get("members"))
+        text = self.ask_retrying([("github_file_content", {"repo": repo, "path": path})], ok)[0]
+        roster = ad.parse_team_roster(self._roster_text(text) or "")
+        if not roster.get("members"):
             raise Incomplete(f"team roster ({repo}: {path}) not readable")
         return roster
 
@@ -620,8 +650,10 @@ class Engine:
         """One Product Pages listing page, sent again once when it fails or is not readable;
         None when the second answer is not readable either."""
         def readable(page):
+            cursor = page.get("cursor", "") if isinstance(page, dict) else ""
             return (isinstance(page, dict) and isinstance(page.get("data"), list) and "cursor" in page
-                    and page["cursor"] != "")
+                    and (cursor is None or (isinstance(cursor, (str, int)) and not isinstance(cursor, bool)
+                                            and str(cursor) != "")))
         page = parse_json_answer(self.ask([("list_product_pages_entities", args, 1)])[0])
         if not readable(page):
             page = parse_json_answer(self.ask([("list_product_pages_entities", args, 2)])[0])
@@ -668,8 +700,10 @@ class Engine:
             if lower:
                 needed.add(max(lower, key=sc.parse_version))
         needed = sorted(needed, key=sc.parse_version)
-        calls = [("browse_product_pages_schedule", {"entity_id": listed[r]}, 1) for r in needed if r in listed]
-        answers = dict(zip([r for r in needed if r in listed], self.ask(calls))) if calls else {}
+        calls = [("browse_product_pages_schedule", {"entity_id": listed[r]}) for r in needed if r in listed]
+        answers = (dict(zip([r for r in needed if r in listed],
+                            self.ask_retrying(calls, lambda t: not isinstance(schedule_tasks(t), dict))))
+                   if calls else {})
         out = {}
         for r in needed:
             if r not in listed:
@@ -992,14 +1026,21 @@ class Engine:
                   if normalize_name(o) in contacts and contacts[normalize_name(o)].get("email")}
         if not emails:
             return {}
-        calls = [("resolve_identity", {"identifier": e}, 1) for e in emails.values()]
+        calls = [("resolve_identity", {"identifier": e}) for e in emails.values()]
         out = {}
-        for owner, text in zip(emails, self.ask(calls)):
+        for owner, text in zip(emails, self.ask_retrying(calls, identity_answered)):
             value = parse_json_answer(text)
             mention = value.get("slack_mention") if isinstance(value, dict) else None
             if isinstance(mention, str) and re.fullmatch(r"<@[UW][A-Z0-9]+>", mention):
                 out[owner] = mention
         return out
+
+
+def identity_answered(text):
+    """A resolve_identity answer (a person found or not found), not a failed call."""
+    value = parse_json_answer(text)
+    return isinstance(value, dict) and value.get("error") is None and (
+        value.get("status") in ("ok", "not_found") or "slack_mention" in value)
 
 
 def report_owners(sprint, computed, gaps, scrum_master=None):
@@ -1065,9 +1106,10 @@ JIRA_BROWSE = "https://redhat.atlassian.net/browse/"
 
 
 def is_done(issue):
-    """Done: Closed; an OCPBUGS issue also when Verified (QE decides)."""
+    """Done: Closed; an OCPBUGS issue also when Verified or Release Pending (QE decides; Release
+    Pending counts as done, as in the report)."""
     status = ((issue.get("status") or {}).get("name") or "").strip()
-    return status == "Closed" or (issue["key"].startswith("OCPBUGS-") and status == "Verified")
+    return status == "Closed" or (issue["key"].startswith("OCPBUGS-") and status in ("Verified", "Release Pending"))
 
 
 def remote_pr_links(text):
@@ -1103,6 +1145,12 @@ def create_meta_components(text):
 
 def link(key):
     return f"<{JIRA_BROWSE}{key}|{key}>"
+
+
+def slack_text(value):
+    """Jira text for a Slack message: ``&``, ``<`` and ``>`` escaped, so a summary cannot make
+    a link or a special mention (``<!channel>``). Links and mentions are added unescaped."""
+    return str(value or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 class CheckinEngine(Engine):
@@ -1172,8 +1220,15 @@ class CheckinEngine(Engine):
             return self.stop(f"Sprint-end check-in not posted: {failed[0]} fetch incomplete: "
                              f"{'; '.join(f['fetch']['problems'])}")
 
+        # An issue whose status changed between the queries (To Do in one, In Progress in
+        # another) gets no buttons: it is listed as not checked, in one reply only.
+        def keys_of(prefix):
+            return {i["key"] for p in CHECKIN_PROJECTS for i in got[f"{prefix}_{p}"]["issues"]}
+        conflict = keys_of("not_started") & (keys_of("candidates") | keys_of("in_progress"))
+
         def issues(prefix):
-            return [i for p in CHECKIN_PROJECTS for i in got[f"{prefix}_{p}"]["issues"]]
+            return [i for p in CHECKIN_PROJECTS for i in got[f"{prefix}_{p}"]["issues"] if i["key"] not in conflict]
+        conflicted = [i for p in CHECKIN_PROJECTS for i in got[f"in_progress_{p}"]["issues"] if i["key"] in conflict]
         candidates = issues("candidates")
         cand_keys = [i["key"] for i in candidates]
         epic_keys = sorted({(i.get("parent") or {}).get("key") for i in got["issues_no_component"]["issues"]}
@@ -1205,6 +1260,7 @@ class CheckinEngine(Engine):
                 why[issue["key"]] = len(prs[issue["key"]])
             elif verdict == "undecided":
                 not_checked.append(issue)
+        not_checked += conflicted
         out_keys = {i["key"] for i in looks_done + not_checked}
         carrying = [i for i in issues("in_progress") if i["key"] not in out_keys]
         no_sprint = [i for i in got["no_open_sprint"]["issues"] if not self.in_open_sprint(i)]
@@ -1267,6 +1323,8 @@ class CheckinEngine(Engine):
         undecided = False
         if detail is None:
             undecided = True
+        elif re.search(r"(?m)^- \.\.\. and \d+ more remote links", detail):
+            undecided = True  # remote links cut off: a code pull request may be missing
         elif not remote_pr_links(detail) or not prs:
             return "no"  # check 1: no linked code pull request
         for pr in prs:
@@ -1299,9 +1357,9 @@ class CheckinEngine(Engine):
         emails = sorted({(i.get("assignee") or {}).get("email") for i in issues} - {None})
         if not emails:
             return {}
-        calls = [("resolve_identity", {"identifier": e.split("@")[0], "kind": "kerberos"}, 1) for e in emails]
+        calls = [("resolve_identity", {"identifier": e.split("@")[0], "kind": "kerberos"}) for e in emails]
         out = {}
-        for e, text in zip(emails, self.ask(calls)):
+        for e, text in zip(emails, self.ask_retrying(calls, identity_answered)):
             value = parse_json_answer(text)
             mention = value.get("slack_mention") if isinstance(value, dict) else None
             if isinstance(mention, str) and re.fullmatch(r"<@[UW][A-Z0-9]+>", mention):
@@ -1315,12 +1373,12 @@ class CheckinEngine(Engine):
         replies = []
         for i in not_started:
             replies.append({"kind": "not_started", "key": i["key"], "buttons": ["Move to backlog", "Carry over"],
-                            "text": f"{link(i['key'])} {i['summary']}, {owner(i)}: not started. "
+                            "text": f"{link(i['key'])} {slack_text(i['summary'])}, {owner(i)}: not started. "
                                     "If nobody clicks, it carries over."})
         for i in looks_done:
             n = why[i["key"]]
             replies.append({"kind": "looks_done", "key": i["key"], "buttons": ["Close it", "Keep open"],
-                            "text": f"{link(i['key'])} {i['summary']}, {owner(i)}: looks done ({n} linked code pull "
+                            "text": f"{link(i['key'])} {slack_text(i['summary'])}, {owner(i)}: looks done ({n} linked code pull "
                                     f"request{'s' if n != 1 else ''} merged, child issues done, no open blockers). "
                                     "If nobody clicks, it stays open."})
         if not_checked:
@@ -1330,7 +1388,7 @@ class CheckinEngine(Engine):
             replies.append({"kind": "no_open_sprint", "buttons": [], "text": "\n".join(
                 ["In progress but in no open sprint: owners, please add each to the next sprint, move it back, "
                  "or close it (nothing was changed):"]
-                + [f"{link(i['key'])} {i['summary']} ({status(i)}), {owner(i)}" for i in no_sprint])})
+                + [f"{link(i['key'])} {slack_text(i['summary'])} ({status(i)}), {owner(i)}" for i in no_sprint])})
         if carrying:
             by_owner = {}
             for i in carrying:
@@ -1341,7 +1399,7 @@ class CheckinEngine(Engine):
         if unassigned:
             replies.append({"kind": "unassigned", "buttons": [], "text": "\n".join(
                 ["Unassigned and not done, for a manager to assign or move (nothing was changed):"]
-                + [f"{link(i['key'])} {i['summary']} ({status(i)})" for i in unassigned])})
+                + [f"{link(i['key'])} {slack_text(i['summary'])} ({status(i)})" for i in unassigned])})
         counts = {"not started": len(not_started), "look done": len(looks_done), "carrying over": len(carrying),
                   "unassigned": len(unassigned), "in progress with no sprint": len(no_sprint)}
         candidates = {

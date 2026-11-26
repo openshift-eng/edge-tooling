@@ -330,13 +330,19 @@ def _milestone_date(m):
 
 # The branch-cut milestone: Product Pages renamed "Master Branch Open for <X.Y>" to
 # "Main Branch Open for <X.Y>" (seen 2026-11-26 for 5.1); older schedules keep the old name.
-BRANCH_OPEN_PREFIXES = ("main branch open for", "master branch open for")
-BRANCH_OPEN_RE = r"(?:main|master) branch open for\s+(\d+\.\d+)"
+# Anchored to the (normalized) milestone name, the whole X.Y token captured; any suffix may follow.
+BRANCH_OPEN_RE = r"^(?:main|master) branch open for\s+(\d+\.\d+)(?![\d.])"
 
 
-def find_milestone_any(milestones, prefixes):
-    """Earliest-dated milestone whose normalized name starts with any of ``prefixes``."""
-    hits = [h for h in (find_milestone(milestones, p) for p in prefixes) if h]
+def find_branch_open(milestones, version=None):
+    """Earliest-dated "Main (or Master) Branch Open for <X.Y>" milestone, for that exact
+    ``version`` when given (9.3 never takes 9.30's date)."""
+    hits = []
+    for m in milestones or []:
+        match = re.match(BRANCH_OPEN_RE, _normalize_name(m.get("name")))
+        d = _milestone_date(m) if match else None
+        if d is not None and (version is None or match.group(1) == version):
+            hits.append((d, m))
     return min(hits, key=lambda h: h[0]) if hits else None
 
 
@@ -369,7 +375,7 @@ def release_milestones(version, schedules):
     else:
         prev = previous_version(version, schedules)
         if prev:
-            hit = find_milestone_any(schedules[prev], [f"{p} {version}" for p in BRANCH_OPEN_PREFIXES])
+            hit = find_branch_open(schedules[prev], version)
             if hit:
                 result["dev_branch_opens"] = hit[0]
                 result["dev_branch_source"] = f"{prev} main branch open for {version}"
@@ -378,10 +384,10 @@ def release_milestones(version, schedules):
     if hit:
         result["pencils_down"] = hit[0]
 
-    hit = find_milestone_any(own, BRANCH_OPEN_PREFIXES)
+    hit = find_branch_open(own)
     if hit:
         result["master_branch_open"] = hit[0]
-        match = re.search(BRANCH_OPEN_RE,
+        match = re.match(BRANCH_OPEN_RE,
                           _normalize_name(hit[1].get("name")))
         result["next_version"] = match.group(1) if match else None
     return result
@@ -731,8 +737,7 @@ def candidate_releases(schedules):
     versions = set(schedules)
     for milestones in schedules.values():
         for m in milestones or []:
-            match = re.search(BRANCH_OPEN_RE,
-                              _normalize_name(m.get("name")))
+            match = re.match(BRANCH_OPEN_RE, _normalize_name(m.get("name")))
             if match:
                 versions.add(match.group(1))
     return sorted(versions, key=parse_version)

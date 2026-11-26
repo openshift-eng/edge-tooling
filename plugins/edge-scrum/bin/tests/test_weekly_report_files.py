@@ -152,10 +152,6 @@ class SameReportTest(unittest.TestCase):
         self.check(ch.day(14, 3), 14)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 SKIPPED = []  # scenarios the script does not model: (reason, today, active)
 
 
@@ -191,7 +187,10 @@ def compare_every_chain_scenario():
     ch.cached_run.cache_clear()
     try:
         suite = unittest.defaultTestLoader.loadTestsFromModule(ch)
-        unittest.TextTestRunner(stream=open(os.devnull, "w"), verbosity=0).run(suite)
+        with open(os.devnull, "w") as devnull:
+            result = unittest.TextTestRunner(stream=devnull, verbosity=0).run(suite)
+        for test, trace in result.failures + result.errors:  # a chain test that fails here fails the sweep
+            mismatches.append(("chain test failed", str(test), trace.strip().splitlines()[-1], None, None))
     finally:
         ch.weekly_run = original
         ch._unchanged.cache_clear()
@@ -541,3 +540,98 @@ class ScheduleAnswerTest(unittest.TestCase):
         self.assertEqual({"error": "timed out"}, wr.schedule_tasks(json.dumps({"error": "timed out"})))
         self.assertEqual({"error": "schedule answer not readable (keys: count)"},
                          wr.schedule_tasks(json.dumps({"count": 0})))
+
+
+
+# ---------------------------------------------------------------- review hardening (#351)
+
+class ReviewHardeningTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.dir))
+        self.engine = wr.Engine(self.dir, {"today": "2030-02-01"})
+        self.given = {}
+        self.engine.answers.get = lambda key: self.given.get(key)
+
+    def give(self, tool, args, attempt, answer):
+        self.given[wr.request_key(tool, args, attempt)] = answer if isinstance(answer, str) else json.dumps(answer)
+
+    def test_unreadable_compact_json_asks_for_the_round_again(self):
+        with open(os.path.join(self.dir, "inputs.json"), "w", encoding="utf-8") as fh:
+            json.dump({"today": "2030-01-08"}, fh)
+        wr.step(self.dir, queries=wr.Queries(roster=("x/y", "r.md")))
+        out = wr.step(self.dir, '{"T1": {"tool": ')
+        self.assertEqual("fetch", out["status"])
+        self.assertIn("not readable JSON", out["redo"])
+
+    def test_a_board_row_without_an_id_is_not_a_listing(self):
+        sprints, problem = wr.parse_board_sprints("Board 1: 1 sprints.\n- Edge Sprint 42 (active)")
+        self.assertIsNone(sprints)
+        self.assertIn("without a sprint id", problem)
+        sprints, problem = wr.parse_board_sprints("Board 1: 1 sprints.\n- Edge Sprint 300 (id 90266, future)")
+        self.assertEqual(([{"name": "Edge Sprint 300", "id": "90266", "state": "future"}], None), (sprints, problem))
+
+    def test_a_failed_roster_read_is_sent_again_once(self):
+        args = {"repo": "openshift-eng/edge-context", "path": "people/team-roster.md"}
+        self.give("github_file_content", args, 1, {"error": "timed out"})
+        with self.assertRaises(wr.NeedRound) as need:
+            self.engine.read_roster()
+        self.assertEqual([("github_file_content", args, 2)], need.exception.requests)
+        self.give("github_file_content", args, 2, ROSTER_MD)
+        self.assertTrue(self.engine.read_roster()["members"])
+
+    def test_a_failed_schedule_and_identity_lookup_are_sent_again_once(self):
+        calls = [("browse_product_pages_schedule", {"entity_id": 1}), ("browse_product_pages_schedule", {"entity_id": 2})]
+        self.give(*calls[0], 1, {"data": []})
+        self.give(*calls[1], 1, {"error": "timed out"})
+        with self.assertRaises(wr.NeedRound) as need:
+            self.engine.ask_retrying(calls, lambda t: not isinstance(wr.schedule_tasks(t), dict))
+        self.assertEqual([(calls[1][0], calls[1][1], 2)], need.exception.requests)  # only the failed one
+        self.assertFalse(wr.identity_answered(json.dumps({"error": "LDAP timed out"})))
+        self.assertTrue(wr.identity_answered(json.dumps({"status": "not_found"})))
+
+    def test_a_product_pages_cursor_must_be_null_or_a_value(self):
+        args = {"kind": "product", "shortname": "openshift"}
+        self.give("list_product_pages_entities", args, 1, {"data": [], "cursor": []})
+        self.give("list_product_pages_entities", args, 2, {"data": [], "cursor": []})
+        self.assertIsNone(self.engine._pp(args))
+
+    def test_branch_open_needs_the_name_to_start_with_it_and_the_exact_version(self):
+        self.assertEqual(["9.2"], ch.sc.candidate_releases({"9.2": [{"name": "Reminder: Main Branch Open for 9.3",
+                                                                    "date": "2030-03-01"}]}))
+        prev = [{"name": "Main Branch Open for 9.30", "date": "2030-03-01"}]
+        self.assertIsNone(ch.sc.release_milestones("9.3", {"9.2": prev, "9.3": []})["dev_branch_opens"])
+        prev.append({"name": "Main Branch Open for 9.3 (planned)", "date": "2030-02-01"})
+        self.assertEqual("2030-02-01", ch.sc.release_milestones("9.3", {"9.2": prev, "9.3": []})["dev_branch_opens"].isoformat())
+
+
+class CheckinHardeningTest(unittest.TestCase):
+    def test_release_pending_counts_as_done(self):
+        self.assertTrue(wr.is_done({"key": "OCPBUGS-1", "status": {"name": "Release Pending"}}))
+        self.assertFalse(wr.is_done({"key": "OCPEDGE-1", "status": {"name": "Release Pending"}}))
+
+    def test_cut_remote_links_are_undecided_not_a_missing_pr(self):
+        detail = detail_text("OCPEDGE-10", [], None).replace(
+            "Attachments: none", "Remote Links:\n- ... and 3 more remote links\nAttachments: none")
+        self.assertEqual("undecided", wr.CheckinEngine.looks_done({"key": "OCPEDGE-10"}, detail, [], {}, []))
+
+    def test_summaries_cannot_make_slack_markup(self):
+        cw = checkin_world()
+        cw["not_started"]["OCPEDGE"]["OCPEDGE-1"] = B("OCPEDGE-1", status="To Do", summary="Ping <!channel> & <x|y>")
+        out, _ = run_checkin(cw)
+        text = next(r["text"] for r in out["replies"] if r.get("key") == "OCPEDGE-1")
+        self.assertIn("Ping &lt;!channel&gt; &amp; &lt;x|y&gt;", text)
+        self.assertTrue(text.startswith("<https://redhat.atlassian.net/browse/OCPEDGE-1|OCPEDGE-1> "))
+
+    def test_an_issue_in_two_states_is_listed_once_as_not_checked(self):
+        cw = checkin_world()
+        cw["not_started"]["OCPEDGE"]["OCPEDGE-10"] = B("OCPEDGE-10", status="To Do", summary="Moved")
+        out, _ = run_checkin(cw)
+        kinds = [r["kind"] for r in out["replies"] if r.get("key") == "OCPEDGE-10"]
+        self.assertEqual([], kinds)  # neither a not-started nor a looks-done reply
+        self.assertIn("|OCPEDGE-10>", next(r["text"] for r in out["replies"] if r["kind"] == "not_checked"))
+        self.assertNotIn("|OCPEDGE-10>", next(r["text"] for r in out["replies"] if r["kind"] == "carrying_over"))
+
+
+if __name__ == "__main__":
+    unittest.main()

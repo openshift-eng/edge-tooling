@@ -18,6 +18,9 @@ through `compact`, so you never retype a Jira page.
 
 - `today`: today's date, `YYYY-MM-DD` (UTC).
 - `mode`: `"weekly"` (the weekly health report) or `"checkin"` (the sprint-end check-in's data).
+- Weekly only: `scrum_master`, the Scrum Master's display name as the team roster or the
+  edge-context role documents name it (team actions are theirs). Leave it out when neither
+  names one: team actions then say "no owner set".
 - Weekly only, for team availability: `absences`, `absence_window` and
   `engineer_count`, built exactly as the **scrum-context** skill's step 3 says (calendar
   absences mapped to anonymized ids outside the sandbox; never names, emails or event
@@ -44,8 +47,10 @@ if not os.path.exists(os.path.join(SRC, "bin", "weekly_report_files.py")):
 sys.path.insert(0, os.path.join(SRC, "bin"))
 import weekly_report_files as wr
 out = wr.step(STATE, inputs=INPUTS)  # INPUTS: the dict of section 1
-results.store(json.dumps(out), label="round", kind="text")
-print(json.dumps(out)[:3500])
+rid = results.store(json.dumps(out), label="round", kind="text")
+# Only these fields go to stdout: never Jira data, names or the report.
+print(json.dumps({"status": out["status"], "round": out.get("round"), "redo": bool(out.get("redo")),
+                  "requests": len(out.get("requests", [])), "result_id": rid}))
 ```
 
 If the download fails, the run cannot start: say so as in section 5 with
@@ -65,17 +70,19 @@ While `out["status"] == "fetch"`:
 
 ```python
 out = wr.step(STATE, results.get("<that object ID>"))
-results.store(json.dumps(out), label="round", kind="text")
-print(json.dumps(out)[:3500])
+rid = results.store(json.dumps(out), label="round", kind="text")
+# Only these fields go to stdout: never Jira data, names or the report.
+print(json.dumps({"status": out["status"], "round": out.get("round"), "redo": bool(out.get("redo")),
+                  "requests": len(out.get("requests", [])), "result_id": rid}))
 ```
 
 If `out` has a `redo` key, the round's results did not match its requests (a call was left
 out, added or made for another tool). Make **all** of the round's calls again, in order, then
 `compact` and the `sandbox_exec` above. The script asks for a round again only once.
 
-When the printed output is cut (it ends before the closing `}`), read the whole JSON
-from the stored result with `result_head(<its ID>, count=200000, as_chars=True)`. Copy
-each request's `tool` and `args` from it exactly.
+The printed line is only a summary. Read the step's whole JSON from its stored result with
+`result_head(<result_id>, count=200000, as_chars=True)`, and copy each request's `tool` and
+`args` from it exactly. The output is never printed: it holds Jira data and names.
 
 ## 4. The result
 
@@ -84,7 +91,7 @@ each request's `tool` and `args` from it exactly.
   the owners' mentions already in it. Post it **exactly as returned**: no edits, no
   reformatting, nothing added or left out. In a scheduled run, register it as the one
   response element and call `send_response(mode="report", result_ids=[])`; in a DM, reply
-  with it. Read it with `result_head` when the printed output is cut.
+  with it. Read it from the stored result with `result_head`.
 - `"status": "checkin"`: the sprint-end check-in's data: `sprint`, `counts`,
   `first_message_parts`, `replies` (each with `kind`, `key`, `buttons` and its `text`) and
   `component_candidates`. Follow the `sprint_end_checkin` task's instructions for the
