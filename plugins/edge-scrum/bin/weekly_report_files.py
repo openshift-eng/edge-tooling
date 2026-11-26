@@ -113,7 +113,7 @@ def load_round(state_dir, compact_obj):
                          f"{len(rnd['requests'])} were requested")
     pages = os.path.join(state_dir, "answers")
     os.makedirs(pages, exist_ok=True)
-    for label, req in zip(labels, rnd["requests"]):
+    for label, req in zip(labels, rnd["requests"], strict=True):
         entry = compact_obj[label]
         tool = entry.get("tool") if isinstance(entry, dict) else None
         if tool != req["tool"]:
@@ -438,7 +438,7 @@ class Engine:
     def ask(self, calls):
         """Answers for ``calls`` (``(tool, args, attempt)``), in order; NeedRound when any is missing."""
         got = [self.answers.get(request_key(t, a, n)) for t, a, n in calls]
-        missing = [c for c, g in zip(calls, got) if g is None]
+        missing = [c for c, g in zip(calls, got, strict=True) if g is None]
         if missing:
             raise NeedRound(missing)
         return got
@@ -488,7 +488,7 @@ class Engine:
     def _take_reads(self, calls, answers):
         """File read answers; True when a read needs its retry (one more round)."""
         again = False
-        for (_, args, attempt), text in zip(calls, answers):
+        for (_, args, attempt), text in zip(calls, answers, strict=True):
             key = args["issue_key"]
             page = as_page(text)
             failed = isinstance(page, dict)  # an error answer: no text to check
@@ -564,7 +564,7 @@ class Engine:
             pending = {f"{n}/{s['project'] or 'other'}#{i}": {"jql": s["sent"], "page": as_page(answers[i]),
                                                               "retried": s["retried"]}
                        for i, (n, s) in enumerate(open_slots)}
-            slots = dict(zip(pending, open_slots))
+            slots = dict(zip(pending, open_slots, strict=True))
             for key, decision in ad.paging_round(pending).items():
                 name, slot = slots[key]
                 page = pending[key]["page"]
@@ -621,7 +621,7 @@ class Engine:
             return first
         second = self.ask([(calls[i][0], calls[i][1], 2) for i in again])
         out = list(first)
-        for i, text in zip(again, second):
+        for i, text in zip(again, second, strict=True):
             out[i] = text
         return out
 
@@ -702,7 +702,7 @@ class Engine:
         needed = sorted(needed, key=sc.parse_version)
         calls = [("browse_product_pages_schedule", {"entity_id": listed[r]}) for r in needed if r in listed]
         answers = (dict(zip([r for r in needed if r in listed],
-                            self.ask_retrying(calls, lambda t: not isinstance(schedule_tasks(t), dict))))
+                            self.ask_retrying(calls, lambda t: not isinstance(schedule_tasks(t), dict)), strict=True))
                    if calls else {})
         out = {}
         for r in needed:
@@ -1028,7 +1028,7 @@ class Engine:
             return {}
         calls = [("resolve_identity", {"identifier": e}) for e in emails.values()]
         out = {}
-        for owner, text in zip(emails, self.ask_retrying(calls, identity_answered)):
+        for owner, text in zip(emails, self.ask_retrying(calls, identity_answered), strict=True):
             value = parse_json_answer(text)
             mention = value.get("slack_mention") if isinstance(value, dict) else None
             if isinstance(mention, str) and re.fullmatch(r"<@[UW][A-Z0-9]+>", mention):
@@ -1293,7 +1293,7 @@ class CheckinEngine(Engine):
             calls = [("get_jira_issue", {"issue_key": k}, tries.get(k, 1)) for k in keys if k not in out]
             if not calls:
                 return out
-            for (_, args, attempt), text in zip(calls, self.ask(calls)):
+            for (_, args, attempt), text in zip(calls, self.ask(calls), strict=True):
                 k, page = args["issue_key"], as_page(text)
                 whole = not isinstance(page, dict) and ad.issue_text_complete(ad.unwrap(page), k)
                 if whole or attempt >= 2:
@@ -1309,7 +1309,7 @@ class CheckinEngine(Engine):
                      for r, n in prs if (r, n) not in out]
             if not calls:
                 return out
-            for (_, args, attempt), text in zip(calls, self.ask(calls)):
+            for (_, args, attempt), text in zip(calls, self.ask(calls), strict=True):
                 pr, value = (args["repo"], args["pr_number"]), parse_json_answer(text)
                 state = value.get("pr_state") if isinstance(value, dict) and value.get("status") == "ok" else None
                 if state or attempt >= 2:
@@ -1359,7 +1359,7 @@ class CheckinEngine(Engine):
             return {}
         calls = [("resolve_identity", {"identifier": e.split("@")[0], "kind": "kerberos"}) for e in emails]
         out = {}
-        for e, text in zip(emails, self.ask_retrying(calls, identity_answered)):
+        for e, text in zip(emails, self.ask_retrying(calls, identity_answered), strict=True):
             value = parse_json_answer(text)
             mention = value.get("slack_mention") if isinstance(value, dict) else None
             if isinstance(mention, str) and re.fullmatch(r"<@[UW][A-Z0-9]+>", mention):
