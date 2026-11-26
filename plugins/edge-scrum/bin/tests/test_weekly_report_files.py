@@ -228,19 +228,31 @@ class RoundMechanicsTest(unittest.TestCase):
         self.assertEqual(["list_jira_board_sprints", "github_file_content", "list_product_pages_entities",
                           "query_jira"], tools)
 
-    def test_a_compact_object_with_another_count_is_not_matched(self):
-        self.first_round()
+    def test_a_compact_object_with_another_count_asks_for_the_round_again_once(self):
+        reqs = self.first_round()
+        out = wr.step(self.dir, {"T1": {"tool": "list_jira_board_sprints", "result": "x"}})
+        self.assertEqual(("fetch", 1, reqs), (out["status"], out["round"], out["requests"]))
+        self.assertIn("holds 1 result(s), 4 were requested", out["redo"])
         out = wr.step(self.dir, {"T1": {"tool": "list_jira_board_sprints", "result": "x"}})
         self.assertEqual("incomplete", out["status"])
-        self.assertIn("holds 1 result(s), 4 were requested", out["text"])
+        self.assertEqual("Weekly health report not posted: round 1: the compact object holds 1 result(s), "
+                         "4 were requested", out["text"])
+
+    def test_the_round_asked_again_is_filed_when_it_matches(self):
+        reqs = self.first_round()
+        wr.step(self.dir, {"T1": {"tool": "list_jira_board_sprints", "result": "x"}})
+        compact = {f"T{n}": {"tool": r["tool"], "result": "x"} for n, r in enumerate(reqs, 1)}
+        out = wr.step(self.dir, compact)
+        self.assertNotIn("redo", out)
+        self.assertTrue(wr.load_state(self.dir)["rounds"][0]["loaded"])
 
     def test_a_result_of_another_tool_is_not_matched(self):
         reqs = self.first_round()
         compact = {f"T{n}": {"tool": r["tool"], "result": "x"} for n, r in enumerate(reqs, 1)}
         compact["T2"]["tool"] = "query_jira"
         out = wr.step(self.dir, compact)
-        self.assertEqual("incomplete", out["status"])
-        self.assertIn("T2 is a query_jira result, request r1.2 is github_file_content", out["text"])
+        self.assertEqual("fetch", out["status"])
+        self.assertIn("T2 is a query_jira result, request r1.2 is github_file_content", out["redo"])
 
     def test_labels_sort_numerically(self):
         self.assertEqual(["T1", "T2", "T10"], wr._labels({"T10": 0, "T2": 0, "T1": 0, "kept": 0}))

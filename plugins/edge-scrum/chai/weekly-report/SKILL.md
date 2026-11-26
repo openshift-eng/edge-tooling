@@ -67,6 +67,10 @@ results.store(json.dumps(out), label="round", kind="text")
 print(json.dumps(out)[:3500])
 ```
 
+If `out` has a `redo` key, the round's results did not match its requests (a call was left
+out, added or made for another tool). Make **all** of the round's calls again, in order, then
+`compact` and the `sandbox_exec` above. The script asks for a round again only once.
+
 When the printed output is cut (it ends before the closing `}`), read the whole JSON
 from the stored result with `result_head(<its ID>, count=200000, as_chars=True)`. Copy
 each request's `tool` and `args` from it exactly.

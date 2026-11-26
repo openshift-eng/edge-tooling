@@ -138,6 +138,26 @@ def new_round(state_dir, needed):
     return number, [{k: r[k] for k in ("id", "tool", "args")} for r in requests]
 
 
+def _not_posted(inputs):
+    return ("Sprint-end check-in not posted" if inputs.get("mode") == "checkin"
+            else "Weekly health report not posted")
+
+
+def redo_round(state_dir, reason):
+    """The last round once more, with all its calls, when its compact object did not match
+    (a call left out, added or of another tool); None when it was already asked again."""
+    state = load_state(state_dir)
+    if not state["rounds"] or state["rounds"][-1].get("loaded"):
+        return None
+    rnd = state["rounds"][-1]
+    if rnd.get("redone"):
+        return None
+    rnd["redone"] = reason
+    save_state(state_dir, state)
+    return {"status": "fetch", "round": rnd["round"], "redo": reason, "compact_match": COMPACT_MATCH,
+            "requests": [{k: r[k] for k in ("id", "tool", "args")} for r in rnd["requests"]]}
+
+
 class Answers:
     """The answers received so far, read from the state directory."""
 
@@ -924,7 +944,10 @@ def step(state_dir, compact_obj=None, inputs=None, queries=None, mode=None):
         try:
             load_round(state_dir, compact_obj)
         except StateError as exc:
-            return {"status": "incomplete", "text": f"Weekly health report not posted: {exc}"}
+            redo = redo_round(state_dir, str(exc))
+            if redo is None:
+                return {"status": "incomplete", "text": f"{_not_posted(inputs)}: {exc}"}
+            return redo
     mode = mode or inputs.get("mode") or "weekly"
     engine = CheckinEngine if mode == "checkin" else Engine
     try:
