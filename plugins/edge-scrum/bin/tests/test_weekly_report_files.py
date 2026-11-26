@@ -468,3 +468,76 @@ class CheckinTest(unittest.TestCase):
         out, _ = run_checkin(cw)
         self.assertEqual("incomplete", out["status"])
         self.assertIn("in_progress_USHIFT fetch incomplete", out["text"])
+
+
+# ---------------------------------------------------------------- shortened values, schedules
+
+SPRINTS_WHOLE = ("Test Sprint 10 (id 500, closed, board 1000, start 2030-01-07T12:00:00.000Z, end 2030-01-28T12:00:00.000Z); "
+                 "Test Sprint 11 (id 501, active, board 1000, start 2030-01-28T12:00:00.000Z, end 2030-02-18T12:00:00.000Z)")
+STORED = "    customfield_10020: Test Sprint 10 (id 500, clo (continues: 30 of 205 characters; the full value is [buffer:query#3]; read the rest with result_page or result_tail)"
+POINTER = '    customfield_10020: Test Sprint 10 (id 500, clo (cut at 30 of 205 characters; read it whole with get_jira_issue("TEST-7", fields="customfield_10020"))'
+
+
+def page_with(line):
+    return ("Found 1 issues (showing 1):\n  [TEST-7] Synthetic\n    Type: Story | Status: In Progress | Priority: Major\n"
+            f"{line}\n")
+
+
+class ShortenedValueTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.dir))
+        self.engine = wr.Engine(self.dir, {"today": "2030-02-01"})
+        self.given = {}
+        self.engine.answers.get = lambda key: self.given.get(key)
+
+    def test_both_notes_name_their_read(self):
+        self.assertEqual([(3, ("result_head", {"result_id": "[buffer:query#3]", "count": 1000000, "as_chars": True}))],
+                         wr.shortened_value_calls(page_with(STORED)))
+        self.assertEqual([(3, ("get_jira_issue", {"issue_key": "TEST-7", "fields": "customfield_10020"}))],
+                         wr.shortened_value_calls(page_with(POINTER)))
+
+    def test_a_stored_value_is_read_in_the_next_round_and_put_in_place(self):
+        with self.assertRaises(wr.NeedRound) as need:
+            self.engine.with_whole_values([page_with(STORED)])
+        (tool, args, attempt), = need.exception.requests
+        self.assertEqual(("result_head", 1), (tool, attempt))
+        self.given[wr.request_key(tool, args, 1)] = json.dumps({"text": SPRINTS_WHOLE, "truncated": False})
+        page = self.engine.with_whole_values([page_with(STORED)])[0]
+        self.assertIn(f"    customfield_10020: {SPRINTS_WHOLE}\n".rstrip("\n"), page)
+        self.assertEqual("ok", ad.parse_page(page)["status"])
+        self.assertEqual([], ad.shortened_fields(ad.parse_page(page)["blocks"][0]))
+
+    def test_a_pointed_value_is_read_with_get_jira_issue(self):
+        call = ("get_jira_issue", {"issue_key": "TEST-7", "fields": "customfield_10020"})
+        answer = ("[TEST-7] Synthetic\nType: Story | Status: In Progress\n\nRequested fields:\n"
+                  f"customfield_10020: {SPRINTS_WHOLE}\n\nComments: none\n")
+        self.given[wr.request_key(*call, 1)] = answer
+        page = self.engine.with_whole_values([page_with(POINTER)])[0]
+        self.assertIn(SPRINTS_WHOLE, page)
+
+    def test_a_failed_read_is_sent_again_once_then_the_value_stays_shortened(self):
+        call = ("result_head", {"result_id": "[buffer:query#3]", "count": 1000000, "as_chars": True})
+        self.given[wr.request_key(*call, 1)] = json.dumps({"error": "not found"})
+        with self.assertRaises(wr.NeedRound) as need:
+            self.engine.with_whole_values([page_with(STORED)])
+        self.assertEqual([(call[0], call[1], 2)], need.exception.requests)
+        self.given[wr.request_key(*call, 2)] = json.dumps({"error": "not found"})
+        page = self.engine.with_whole_values([page_with(STORED)])[0]
+        self.assertIn("(continues:", page)  # the adapter then makes the fetch incomplete
+
+
+class ScheduleAnswerTest(unittest.TestCase):
+    def test_an_empty_schedule_is_no_dates_not_a_failure(self):
+        self.assertEqual([], wr.schedule_tasks(json.dumps({"data": []})))
+        self.assertEqual([], wr.schedule_tasks("[]"))
+
+    def test_milestones_are_kept(self):
+        tasks = [{"name": "Main Branch Open for 9.3", "date_start": "2030-03-01", "date_finish": "2030-03-01", "id": 7}]
+        self.assertEqual([{"name": "Main Branch Open for 9.3", "date_start": "2030-03-01", "date_finish": "2030-03-01"}],
+                         wr.schedule_tasks(json.dumps({"results": tasks})))
+
+    def test_errors_and_unknown_shapes(self):
+        self.assertEqual({"error": "timed out"}, wr.schedule_tasks(json.dumps({"error": "timed out"})))
+        self.assertEqual({"error": "schedule answer not readable (keys: count)"},
+                         wr.schedule_tasks(json.dumps({"count": 0})))

@@ -247,6 +247,13 @@ whose title matches a ceremony.
   engineer (every engineer for a team-wide holiday; the engineers in that
   country or region for a regional one). Drop entries for anyone not on the
   roster. Pass `engineer_count` = number of roster engineers.
+- **Fixed rules for calendar entries (never stop to ask):**
+  - A company-wide day off (a Red Hat Recharge Day, a company holiday) is a
+    team-wide holiday: one entry per roster engineer.
+  - ShiftWeek is not time off: no entry.
+  - Any other entry these rules do not classify (an all-day event that names no
+    person and is not a known day off, an unclear title) is **not** an absence:
+    leave it out. Never pause a run to ask whether it counts.
 - **Never pass names, emails, event titles, or event descriptions into the
   sandbox or the output.** Only ceremony labels, anonymized ids, and dates.
 

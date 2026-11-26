@@ -42,7 +42,7 @@ STATE_FILE = "state.json"
 # Tools the coordinator calls for this script; the compact ``match`` names them all.
 TOOLS = ("query_jira", "get_jira_issue", "list_jira_board_sprints", "list_product_pages_entities",
          "browse_product_pages_schedule", "github_file_content", "resolve_identity",
-         "get_jira_create_meta", "github_pr_checks")
+         "get_jira_create_meta", "github_pr_checks", "result_head")
 COMPACT_MATCH = ",".join(f"{t}*" for t in TOOLS)
 
 
@@ -238,6 +238,76 @@ def as_page(text):
     return text
 
 
+def schedule_tasks(text):
+    """``browse_product_pages_schedule``'s answer → its milestones (``[]``: listed, no dates), or
+    ``{"error": ...}`` when the call failed or the answer cannot be read."""
+    value = parse_json_answer(text)
+    if isinstance(value, dict) and value.get("error") is not None:
+        return {"error": str(value["error"])}
+    if isinstance(value, dict):
+        lists = [value[k] for k in ("data", "results", "tasks", "schedule", "items", "result")
+                 if isinstance(value.get(k), list)]
+        if not lists:
+            return {"error": f"schedule answer not readable (keys: {', '.join(sorted(value)) or 'none'})"}
+        value = lists[0]
+    if not isinstance(value, list):
+        return {"error": "schedule answer not readable"}
+    keep = ("name", "date", "date_start", "date_finish", "start", "end")
+    return [{k: t.get(k) for k in keep if t.get(k) is not None} for t in value if isinstance(t, dict)]
+
+
+# A field value query_jira shortened at its inline limit, with where the whole value is:
+# a stored result (up to 10 per call), else the get_jira_issue call that reads it whole.
+_STORED_NOTE = re.compile(r" \(continues: [\d,]+ of [\d,]+ characters; the full value is (\[[^\]\s]+\]); "
+                          r"read the rest with result_page or result_tail\)$")
+_POINTER_NOTE = re.compile(r' \(cut at [\d,]+ of [\d,]+ characters; read it whole with '
+                           r'get_jira_issue\("([A-Z][A-Z0-9_]*-\d+)", fields="([\w.]+)"\)\)$')
+_FIELD_LINE = re.compile(r"^(\s+)([\w.]+): (.*)$")
+
+
+def shortened_value_calls(text):
+    """The reads that give the whole value of each shortened field on a query_jira page:
+    ``[(line, call)]``, ``call`` a ``result_head`` of the stored value or a
+    ``get_jira_issue(fields=...)``."""
+    out = []
+    for n, line in enumerate((text or "").splitlines()):
+        m = _FIELD_LINE.match(line)
+        if not m:
+            continue
+        stored, pointer = _STORED_NOTE.search(line), _POINTER_NOTE.search(line)
+        if stored:
+            out.append((n, ("result_head", {"result_id": stored.group(1), "count": 1000000, "as_chars": True})))
+        elif pointer:
+            out.append((n, ("get_jira_issue", {"issue_key": pointer.group(1), "fields": pointer.group(2)})))
+    return out
+
+
+def whole_value(call, text):
+    """The whole value from a read's answer, or None (failed, cut, or not found)."""
+    tool, args = call
+    if tool == "result_head":
+        value = parse_json_answer(text)
+        if isinstance(value, dict) and isinstance(value.get("text"), str) and not value.get("truncated"):
+            return value["text"]
+        return None
+    page = as_page(text)
+    if isinstance(page, dict):
+        return None
+    lines = ad.unwrap(page).splitlines()
+    try:
+        start = next(i for i, ln in enumerate(lines) if ln.strip() == "Requested fields:")
+    except StopIteration:
+        return None
+    prefix = f"{args['fields']}: "
+    for line in lines[start + 1:]:
+        if line.startswith(prefix):
+            value = line[len(prefix):]
+            return None if _STORED_NOTE.search(" " + value) or _POINTER_NOTE.search(" " + value) else value
+        if not line.strip():
+            break
+    return None
+
+
 # ---------------------------------------------------------------- scripts, in-process
 
 
@@ -425,6 +495,41 @@ class Engine:
                 again = True
         return again
 
+    def with_whole_values(self, pages):
+        """Each page with its shortened field values read whole (Jira paging step 7): one more
+        round for the reads, each sent again once when it fails. A value still not read whole
+        stays shortened, and the adapter makes its fetch incomplete."""
+        wanted = [(i, n, call) for i, text in enumerate(pages) if isinstance(text, str)
+                  for n, call in shortened_value_calls(ad.unwrap(text))]
+        if not wanted:
+            return pages
+        calls, got = [], {}
+        for _, _, call in wanted:
+            key = request_key(call[0], call[1], 1)
+            first = self.answers.get(key)
+            if first is not None and whole_value(call, first) is not None:
+                got[key] = whole_value(call, first)
+                continue
+            attempt = 2 if first is not None else 1
+            if attempt == 2:
+                again = self.answers.get(request_key(call[0], call[1], 2))
+                if again is not None:
+                    got[key] = whole_value(call, again)  # None: still not whole after its retry
+                    continue
+            calls.append((call[0], call[1], attempt))
+        if calls:  # one read per stored value, even when two pages name it
+            raise NeedRound(list({request_key(*c): c for c in calls}.values()))
+        out = list(pages)
+        for i, n, call in wanted:
+            value = got.get(request_key(call[0], call[1], 1))
+            if value is None:
+                continue
+            lines = ad.unwrap(out[i]).splitlines()
+            m = _FIELD_LINE.match(lines[n])
+            lines[n] = f"{m.group(1)}{m.group(2)}: {value}"
+            out[i] = "\n".join(lines)
+        return out
+
     def wave(self, specs, reads=()):
         """Send ``specs`` (logical fetches; ``logical`` joins several into one) and ``reads``
         together; page every part in lock-step rounds; return the adapted fetches by
@@ -448,6 +553,7 @@ class Engine:
             answers = self.ask(page_calls + read_calls)
             if read_calls:
                 self._take_reads(read_calls, answers[len(page_calls):])
+            answers[:len(page_calls)] = self.with_whole_values(answers[:len(page_calls)])
             pending = {f"{n}/{s['project'] or 'other'}#{i}": {"jql": s["sent"], "page": as_page(answers[i]),
                                                               "retried": s["retried"]}
                        for i, (n, s) in enumerate(open_slots)}
@@ -569,15 +675,7 @@ class Engine:
             if r not in listed:
                 out[r] = []
                 continue
-            value = parse_json_answer(answers[r])
-            if isinstance(value, dict) and value.get("error") is not None:
-                out[r] = {"error": str(value["error"])}
-                continue
-            if isinstance(value, dict):
-                value = value.get("data") or value.get("results") or value.get("tasks") or value.get("result")
-            out[r] = ([{k: t.get(k) for k in ("name", "date", "date_start", "date_finish", "start", "end")
-                        if t.get(k) is not None} for t in value if isinstance(t, dict)]
-                      if isinstance(value, list) else {"error": "schedule not readable"})
+            out[r] = schedule_tasks(answers[r])
         return out
 
     # -- computations (ported from the chain test's WeeklyRun)

@@ -21,7 +21,9 @@ through `compact`, so you never retype a Jira page.
 - Weekly only, for team availability: `absences`, `absence_window` and
   `engineer_count`, built exactly as the **scrum-context** skill's step 3 says (calendar
   absences mapped to anonymized ids outside the sandbox; never names, emails or event
-  titles in the sandbox). Leave out a key whose source was not available.
+  titles in the sandbox), including its fixed rules for calendar entries (a Recharge Day
+  is a team-wide day off, ShiftWeek is not time off, anything else unclear is not an
+  absence). Leave out a key whose source was not available.
 
 ## 2. Start (one `sandbox_exec`)
 
@@ -105,6 +107,9 @@ interactive run (DM): 1. no_action_required(reason=failure)
 
 ## Rules
 
+- Never pause to ask a question: a scheduled run has nobody to answer. Decide by these
+  rules and the scrum-context skill's; what they cannot decide is left out (an input
+  key) or reported by the script under Left out.
 - Never retype or summarize a Jira page, a script output or the report.
 - Never change a request's arguments, and never fetch anything the script did not ask for.
 - The script's line is the whole explanation of a failure; do not add figures or guesses.
