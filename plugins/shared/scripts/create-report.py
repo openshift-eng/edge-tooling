@@ -364,9 +364,15 @@ function durationSeconds(v) {
     });
     return value && !rest ? seconds : NaN;
 }
+// Seconds for a duration the table can show, or null when it shows a dash.
+function knownDurationSeconds(v) {
+    var seconds = durationSeconds(v);
+    return seconds >= 0 && Number.isSafeInteger(Math.floor(seconds)) ? seconds : null;
+}
 function fmtDuration(v) {
-    var s = Math.floor(durationSeconds(v));
-    if (!Number.isSafeInteger(s) || s < 0) return '\\u2014';
+    var seconds = knownDurationSeconds(v);
+    if (seconds === null) return '\\u2014';
+    var s = Math.floor(seconds);
     if (s >= 3600) return Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm';
     return Math.floor(s/60) + 'm ' + (s%60) + 's';
 }
@@ -992,7 +998,7 @@ function renderReleaseSection(parent, version, rdata, status, jim) {
         var thead = document.createElement('thead');
         var thRow = document.createElement('tr');
         ['Status','Job Name','Finished','Duration','Issues'].forEach(function(t) {
-            var th2 = document.createElement('th'); th2.textContent = t; thRow.appendChild(th2);
+            thRow.appendChild(setAttr(h('th', '', t), {'data-sort-type': t === 'Duration' ? 'number' : null}));
         });
         thead.appendChild(thRow); jTable.appendChild(thead);
         var tbody = document.createElement('tbody');
@@ -1013,7 +1019,7 @@ function renderReleaseSection(parent, version, rdata, status, jim) {
             else { nameTd.textContent = sj.job || ''; }
             tr.appendChild(nameTd);
             tr.appendChild(setAttr(h('td', '', fmtEpoch(sj.finished)), {'data-sort-value': finishedISO(sj.finished)}));
-            tr.appendChild(h('td', '', fmtDuration(sj.duration)));
+            tr.appendChild(setAttr(h('td', '', fmtDuration(sj.duration)), {'data-sort-value': knownDurationSeconds(sj.duration)}));
             // Issues cross-reference
             var issTd = document.createElement('td'); issTd.style.fontSize = '0.85em';
             var refs = jim[sj.job || ''];
@@ -1396,6 +1402,14 @@ document.getElementById('loading').style.display = 'none';
 document.querySelector('.container').style.display = '';
 
 // === Table sorting ===
+// Numeric columns (th data-sort-type="number") compare data-sort-value as numbers;
+// cells without a finite value sort after the others in both directions.
+function numericSortValue(cell) {
+    var value = cell.getAttribute('data-sort-value');
+    // Number('') is 0, so an empty value must not become a zero duration.
+    var number = value === null || value === '' ? NaN : Number(value);
+    return Number.isFinite(number) ? number : null;
+}
 document.querySelectorAll('.data-table').forEach(function(table) {
     var headers = table.querySelectorAll('th');
     function sortBy(colIdx, asc) {
@@ -1403,7 +1417,14 @@ document.querySelectorAll('.data-table').forEach(function(table) {
         headers[colIdx].classList.add(asc ? 'sort-asc' : 'sort-desc');
         var tbody = table.querySelector('tbody');
         var rows = Array.from(tbody.querySelectorAll('tr'));
+        var numeric = headers[colIdx].getAttribute('data-sort-type') === 'number';
         rows.sort(function(a, b) {
+            if (numeric) {
+                var an = numericSortValue(a.cells[colIdx]), bn = numericSortValue(b.cells[colIdx]);
+                if (an === null) return bn === null ? 0 : 1;
+                if (bn === null) return -1;
+                return asc ? an - bn : bn - an;
+            }
             var av = (a.cells[colIdx].getAttribute('data-sort-value') || a.cells[colIdx].textContent).trim().toLowerCase();
             var bv = (b.cells[colIdx].getAttribute('data-sort-value') || b.cells[colIdx].textContent).trim().toLowerCase();
             return asc ? av.localeCompare(bv) : bv.localeCompare(av);

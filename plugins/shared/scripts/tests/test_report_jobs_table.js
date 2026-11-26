@@ -3,7 +3,8 @@ const vm = require('node:vm');
 
 // Loads REPORT_DATA from a generated report into the harness data before rendering,
 // then records the All Jobs tables (duration cells, pass summary, visible rows) while
-// the Today only toggle and the search query change.
+// the Today only toggle and the search query change, and the row order after clicking
+// each column header twice (ascending and descending).
 module.exports = function(data, reportHTML, searchQuery) {
     const sandbox = {window: {}};
     vm.runInNewContext(reportHTML.match(/<script>(window\.REPORT_DATA = [\s\S]*?;)<\/script>/)[1], sandbox);
@@ -48,8 +49,27 @@ module.exports = function(data, reportHTML, searchQuery) {
             await change();
             states[name] = observe();
         }
-        console.log('JOBS TABLE ' + JSON.stringify({durations, states}));
+        const sorts = Object.fromEntries(versions.map(version => {
+            const table = section(version).querySelector('.jobs-table');
+            const order = () => table.querySelectorAll('.job-row').map(row => row.reportJob.job);
+            const clicks = {initial: order()};
+            table.querySelectorAll('th').forEach(header => {
+                const directions = clicks[header.textContent] = {};
+                for (let click = 0; click < 2; click++) {
+                    header.click();
+                    directions[header.classList.contains('sort-asc') ? 'asc' : 'desc'] = order();
+                }
+                assert.deepEqual(Object.keys(directions).sort(), ['asc', 'desc'], header.textContent);
+            });
+            return [version, clicks];
+        }));
+        today(true);
+        states.sortedToday = observe();
+        today(false);
+        states.sortedReset = observe();
+        console.log('JOBS TABLE ' + JSON.stringify({durations, states, sorts}));
         assert(!document.getElementById('tab-periodics').textContent.includes('NaN'));
-        console.log(`PASS All Jobs table: ${Object.keys(durations).length} duration cells, ${Object.keys(states).length} Today/search states`);
+        const headers = section(versions[0]).querySelectorAll('.jobs-table th').length;
+        console.log(`PASS All Jobs table: ${Object.keys(durations).length} duration cells, ${Object.keys(states).length} Today/search states, ${headers} headers sorted both ways`);
     };
 };
