@@ -21,10 +21,12 @@ Rules (see the SKILL for the reasoning):
   sprint **ending** that day.
 * Refinement sprint: the sprint starting on "<X.Y> Development Branch opens", or
   the first sprint starting within the 7 days after it. When the release has no
-  such milestone, the previous release's "Master Branch Open for <X.Y>" is used
+  such milestone, the previous release's "Main Branch Open for <X.Y>" (or the older name,
+  "Master Branch Open for <X.Y>") is used
   instead, mapped to the first sprint starting on or after it.
 * Pencils-down sprint: the last sprint ending on or before "Pencils Down…".
-* Branch-cut sprint: the sprint containing "Master Branch Open for <next>".
+* Branch-cut sprint: the sprint containing "Main Branch Open for <next>" (Product Pages
+  renamed it from "Master Branch Open for <next>"; both names match).
 * Milestone names match by prefix, case-insensitively, after dropping a leading
   version ("5.1 ", "OpenShift 5.1 ").
 * A milestone after the last board sprint maps to a sprint projected at the
@@ -33,7 +35,7 @@ Rules (see the SKILL for the reasoning):
   release whose Product Pages lookup failed (``{"error": ...}`` instead of a
   milestone list) has the phase "release phase unknown: Product Pages lookup
   failed", as does a release that needs a failed previous release's
-  "Master Branch Open for <X.Y>"; a successful lookup with no dates is
+  "Main (or Master) Branch Open for <X.Y>"; a successful lookup with no dates is
   "not scheduled yet".
 * A source item (sprint, milestone, event, absence) with a malformed date is
   skipped and reported in ``warnings`` without the raw value. A malformed
@@ -326,6 +328,24 @@ def _milestone_date(m):
                    or m.get("end") or m.get("date_finish"))
 
 
+# The branch-cut milestone: Product Pages renamed "Master Branch Open for <X.Y>" to
+# "Main Branch Open for <X.Y>" (seen 2026-11-26 for 5.1); older schedules keep the old name.
+# Anchored to the (normalized) milestone name, the whole X.Y token captured; any suffix may follow.
+BRANCH_OPEN_RE = r"^(?:main|master) branch open for\s+(\d+\.\d+)(?![\d.])"
+
+
+def find_branch_open(milestones, version=None):
+    """Earliest-dated "Main (or Master) Branch Open for <X.Y>" milestone, for that exact
+    ``version`` when given (9.3 never takes 9.30's date)."""
+    hits = []
+    for m in milestones or []:
+        match = re.match(BRANCH_OPEN_RE, _normalize_name(m.get("name")))
+        d = _milestone_date(m) if match else None
+        if d is not None and (version is None or match.group(1) == version):
+            hits.append((d, m))
+    return min(hits, key=lambda h: h[0]) if hits else None
+
+
 def find_milestone(milestones, prefix):
     """Earliest-dated milestone whose normalized name starts with ``prefix``."""
     prefix = _normalize_name(prefix)
@@ -355,19 +375,19 @@ def release_milestones(version, schedules):
     else:
         prev = previous_version(version, schedules)
         if prev:
-            hit = find_milestone(schedules[prev], f"master branch open for {version}")
+            hit = find_branch_open(schedules[prev], version)
             if hit:
                 result["dev_branch_opens"] = hit[0]
-                result["dev_branch_source"] = f"{prev} master branch open for {version}"
+                result["dev_branch_source"] = f"{prev} main branch open for {version}"
 
     hit = find_milestone(own, "pencils down")
     if hit:
         result["pencils_down"] = hit[0]
 
-    hit = find_milestone(own, "master branch open for")
+    hit = find_branch_open(own)
     if hit:
         result["master_branch_open"] = hit[0]
-        match = re.search(r"master branch open for\s+(\d+\.\d+)",
+        match = re.match(BRANCH_OPEN_RE,
                           _normalize_name(hit[1].get("name")))
         result["next_version"] = match.group(1) if match else None
     return result
@@ -672,7 +692,7 @@ def release_window(version, schedules, sprints, today, current=None, failed=()):
     """A release's window: anchor sprints, dev sprints left, phase, and milestones.
 
     ``failed`` names the releases whose Product Pages lookup failed: such a
-    release, or one that needs a failed previous release's "Master Branch Open
+    release, or one that needs a failed previous release's "Main Branch Open
     for <X.Y>" (it has no "Development Branch opens" of its own), has the phase
     ``PHASE_LOOKUP_FAILED``."""
     if not is_valid_release(version):
@@ -713,12 +733,11 @@ def release_window(version, schedules, sprints, today, current=None, failed=()):
 
 
 def candidate_releases(schedules):
-    """Releases with a schedule, plus any named by "Master Branch Open for <X.Y>"."""
+    """Releases with a schedule, plus any named by "Main (or Master) Branch Open for <X.Y>"."""
     versions = set(schedules)
     for milestones in schedules.values():
         for m in milestones or []:
-            match = re.search(r"master branch open for\s+(\d+\.\d+)",
-                              _normalize_name(m.get("name")))
+            match = re.match(BRANCH_OPEN_RE, _normalize_name(m.get("name")))
             if match:
                 versions.add(match.group(1))
     return sorted(versions, key=parse_version)
@@ -728,7 +747,7 @@ def releases_in_progress(schedules, sprints, today, current=None, failed=()):
     """Releases whose phase on ``today`` is refinement through pre-branch-cut.
 
     Includes a release with an empty or missing schedule when its refinement
-    sprint can be inferred from the previous release's "Master Branch Open".
+    sprint can be inferred from the previous release's "Main Branch Open".
     """
     out = []
     for version in candidate_releases(schedules):

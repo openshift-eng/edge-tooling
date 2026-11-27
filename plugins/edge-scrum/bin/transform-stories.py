@@ -25,7 +25,7 @@ from _jira_transforms import (
 )
 
 DONE_STATUSES_STORIES = {"Closed"}
-DONE_STATUSES_OCPBUGS = {"Closed", "Verified"}
+DONE_STATUSES_OCPBUGS = {"Closed", "Verified", "Release Pending"}
 
 
 def transform_story(raw, today):

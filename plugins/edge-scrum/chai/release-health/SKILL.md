@@ -5,6 +5,8 @@ description: Read-only coordinator skill that reports team-level feature health 
 
 # Release Health (chai-bot coordinator)
 
+> **Deprecated.** Replaced by [`weekly-report`](../weekly-report/SKILL.md), which runs the report as a script (`bin/weekly_report_files.py`). Kept only while the live persona still registers this playbook; it is removed once ship-help-bot#1415 (OCPEDGE-3276) is deployed.
+
 This playbook is for the **chai-bot coordinator**, not for Claude Code. For one
 release (`X.Y`) it reports the release section of the weekly health report
 (edge-context decision 0018), chosen by the release's phase. It is **read-only**

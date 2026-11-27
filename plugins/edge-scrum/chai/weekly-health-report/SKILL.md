@@ -5,6 +5,8 @@ description: Read-only coordinator skill that posts the weekly OpenShift Edge sp
 
 # Weekly Health Report (chai-bot coordinator)
 
+> **Deprecated.** Replaced by [`weekly-report`](../weekly-report/SKILL.md), which runs the report as a script (`bin/weekly_report_files.py`). Kept only while the live persona still registers this playbook; it is removed once ship-help-bot#1415 (OCPEDGE-3276) is deployed.
+
 This playbook is for the **chai-bot coordinator**, not for Claude Code. It
 implements edge-context decision 0018 end to end: sprint health for the current
 sprint plus one release section per release in progress, posted as one message

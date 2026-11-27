@@ -11,8 +11,9 @@ from datetime import datetime, date, timedelta
 # --- Status Constants ---
 
 # "Done" is defensive: the OCPEDGE and USHIFT workflows have no Done status (law 07: Closed).
-DONE_STATUSES_SPRINT = {"Done", "Closed", "Verified"}
-DONE_STATUSES_OCPBUGS = {"Closed", "Verified"}
+# OCPBUGS "Release Pending" is done: the fix is verified and waits for its release (team decision, 2026-11-26).
+DONE_STATUSES_SPRINT = {"Done", "Closed", "Verified", "Release Pending"}
+DONE_STATUSES_OCPBUGS = {"Closed", "Verified", "Release Pending"}
 DONE_STATUSES_BLOCKER = {"Closed", "Verified", "Done", "Won't Fix"}
 IN_PROGRESS_STATUSES = {"In Progress", "Review"}
 KNOWN_ISSUE_TYPES = {"Story", "Bug", "Spike", "Task"}

@@ -296,7 +296,7 @@ class SectionSelectionTest(unittest.TestCase):
         self.assertEqual([m["why"] for m in missing], [
             "no Product Pages schedule yet",
             'Product Pages schedule has no readable "Development Branch opens" milestone '
-            '(nor a previous release\'s "Master Branch Open for 9.3")',
+            '(nor a previous release\'s "Main Branch Open for 9.3")',
             "refinement sprint could not be placed on a sprint"])
 
     def test_in_progress_entry_without_window_uses_context(self):
@@ -649,15 +649,15 @@ class FinalWeekTest(unittest.TestCase):
         issues = [self._issue("TEST-1", "Review", 2), self._issue("TEST-2", "ON_QA", 1),
                   self._issue("TEST-3", "MODIFIED", 1), self._issue("TEST-4", "In Progress", 3, blocked=["TEST-9"]),
                   self._issue("TEST-5", "To Do", None), self._issue("TEST-6", "ASSIGNED", 2),
-                  self._issue("TEST-7", "NEW", 1), self._issue("TEST-8", "Code Review", 2),  # not a law 07 status
+                  self._issue("TEST-7", "NEW", 1), self._issue("TEST-8", "Code Review", 2),  # review (the workflows' own name)
                   self._issue("TEST-9", "", 1), self._issue("TEST-10", "Closed", 5),
                   self._issue("TEST-11", "Verified", 1)]
         out = self._final(issues)
-        self.assertEqual(out["still_open"], {"open_issues": 9, "open_sp": 13, "review_issues": 3, "review_sp": 4,
-                                             "work_issues": 4, "work_sp": 6, "other_issues": 2, "other_sp": 3})
+        self.assertEqual(out["still_open"], {"open_issues": 9, "open_sp": 13, "review_issues": 4, "review_sp": 6,
+                                             "work_issues": 4, "work_sp": 6, "other_issues": 1, "other_sp": 1})
         self.assertEqual(cr._still_open_text(out["still_open"]),
-                         "9 still open (13 SP): 3 in review or testing (4 SP), 4 in progress or to do (6 SP), "
-                         "2 other status (3 SP)")
+                         "9 still open (13 SP): 4 in review or testing (6 SP), 4 in progress or to do (6 SP), "
+                         "1 other status (1 SP)")
         self.assertEqual([(f["key"], f["label"]) for f in out["items"]],
                          [("TEST-4", "blocked by TEST-9")])  # no carry-over
         header = cr._sprint_header(out, [])

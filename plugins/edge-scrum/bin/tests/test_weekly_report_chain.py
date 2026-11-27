@@ -30,9 +30,10 @@ import chai_jira_adapter as ad  # noqa: E402
 import chai_report as cr  # noqa: E402
 import scrum_context as sc  # noqa: E402
 import velocity_cache as vc  # noqa: E402
+import weekly_report_files as wr  # noqa: E402
 from _jira_transforms import extract_blocked_by, normalize_name  # noqa: E402
 from tests.test_chai_epic_fields import (  # noqa: E402
-    EPICS_JQL, EPICS_MIX, PARENTS, WEEKLY_SKILL, skill_owner_snippet, skill_snippet)
+    EPICS_JQL, EPICS_MIX, PARENTS, skill_snippet)
 from tests.test_chai_jira_adapter import (  # noqa: E402
     HINT, MORE_MATCH, ROSTER_MD, fetch_by_skill, jira_keys, manifest_page, send_page)
 from tests.test_scrum_context import SCRUM_CONTEXT_SKILL  # noqa: E402
@@ -182,16 +183,17 @@ def _closed(block_text):
     return re.search(r"\| Status: Closed \|", block_text) is not None
 
 
-RELEASE_HEALTH_SKILL = os.path.join(os.path.dirname(__file__), "..", "..", "chai", "release-health", "SKILL.md")
+WEEKLY_SKILL = os.path.join(os.path.dirname(__file__), "..", "..", "chai", "weekly-report", "SKILL.md")
+REFINEMENT_FEATURES_JQL = ('project = OCPSTRAT AND issuetype = Feature AND labels in ("ocpedge-plan", "microshift") '
+                           'AND "Target Version" = "openshift-{release}" AND status != Closed '
+                           'AND (resolution is EMPTY OR resolution not in (Duplicate, Obsolete))')
 
 
 def features_jql(w, release, open_only=False):
-    """release-health's features query for ``release``, verbatim from its SKILL: the
-    refinement one (``open_only``: ``status != Closed``) or the rank-ordered release one."""
-    with open(RELEASE_HEALTH_SKILL, encoding="utf-8") as fh:
-        found = re.findall(r'`(project = OCPSTRAT AND issuetype = Feature [^`]*"openshift-X\.Y"[^`]*)`', fh.read())
-    jql = next(q for q in found if ("status != Closed" in q) == open_only)
-    return jql.replace("OCPSTRAT", w["projects"]["features"], 1).replace("X.Y", release)
+    """The features query for ``release``, as the weekly report script sends it: the refinement
+    one (``open_only``: ``status != Closed``, the old plan's) or the rank-ordered release one."""
+    jql = REFINEMENT_FEATURES_JQL if open_only else wr.FEATURES_JQL
+    return jql.replace("OCPSTRAT", w["projects"]["features"], 1).format(release=release)
 
 
 def targeting(items, sent):
@@ -405,14 +407,20 @@ class Sandbox:
         return self.write(f"{name}_raw.json", {"issues": adapted["issues"]})
 
 
-def skill_build_snippet():
-    """The build-and-post code block from weekly-health-report/SKILL.md, verbatim."""
-    return skill_snippet("build_report(")
+def build(sprint, computed, missing, mentions, scrum_master, gaps):
+    """The report as the weekly report script builds it: ``failure`` (the "not posted" line,
+    or None), ``report``, ``top_post_text`` and ``replies``."""
+    failure = cr.sprint_health_failure(sprint, missing)
+    if failure is not None:
+        return {"failure": failure}
+    report = cr.build_report(sprint, computed, missing, mentions, team_owner=scrum_master, epic_gaps=gaps)
+    return {"failure": None, "report": report, "top_post_text": report["top_post_text"],
+            "replies": report["replies"]}
 
 
 def skill_end_steps():
     """``{"scheduled run": [steps], "interactive run (DM)": [steps]}``: the coordinator's steps,
-    in order, when sprint health is incomplete, from the ``text`` block in step 6 of the weekly SKILL."""
+    in order, when the report cannot be posted, from the ``text`` block of the weekly-report SKILL."""
     with open(WEEKLY_SKILL, encoding="utf-8") as fh:
         text = fh.read()
     block = re.search(r"```text\n(scheduled run: 1\. .*?)```", text, re.DOTALL).group(1)
@@ -565,8 +573,8 @@ class LegacyRun:
         scope = {"chai_report": cr, "gate_fetch": self.fetch("feature_gate", gate_jql, gate_items)}
         if self.w["after_gate"]:
             self.w["after_gate"](self.w)
-        exec(skill_snippet("release_feature_gate("), {}, scope)  # noqa: S102 - our own SKILL text
-        gate, candidates = scope["gate"], scope["candidates"]
+        gate = cr.release_feature_gate(scope["gate_fetch"])
+        candidates = gate["releases"]
         # Steps 1.2-1.4: Product Pages, scrum-context with no argument and per candidate release.
         base = {"today": self.today, "board_id": BOARD, "sprints": board(self.active),
                 "schedules": self.product_pages(candidates), "engineer_count": 3, "absences": []}
@@ -576,10 +584,9 @@ class LegacyRun:
         release_results = list(self.release_results.values())
         windows = [result["release"] for result in release_results]
         # Step 2: the SKILL's block, verbatim.
-        scope = {"chai_report": cr, "context": self.ctx, "windows": windows, "gate": gate}
-        exec(skill_snippet("select_sections("), {}, scope)  # noqa: S102 - our own SKILL text
-        self.missing += scope["missing"]
-        return scope["sections"]
+        sections, missing = cr.select_sections(self.ctx, windows, gate)
+        self.missing += missing
+        return sections
 
     # -- velocity (sprint-health step 4), computed once
     def velocity(self):
@@ -773,12 +780,10 @@ class LegacyRun:
         return cr.epic_field_gaps(epics, batches)
 
     def mentions(self, sprint, computed, gaps):
-        scope = {"sprint": sprint, "computed": computed, "gaps": gaps, "scrum_master": SCRUM_MASTER}
-        exec(skill_owner_snippet(), {}, scope)  # noqa: S102 - our own SKILL text
-        self.owners = scope["owners"]
+        self.owners = wr.report_owners(sprint, computed, gaps, SCRUM_MASTER)
         contacts = {normalize_name(c["display_name"]): c for c in self.roster["contacts"]}
         out = {}
-        for owner in scope["owners"]:
+        for owner in self.owners:
             row = contacts.get(normalize_name(owner))
             user = SLACK.get(row["email"]) if row and row["email"] else None
             if user:
@@ -812,9 +817,7 @@ class LegacyRun:
                                            + 6 + len(sections) + attaches)
         mentions = self.mentions(sprint, computed, gaps)
         self.steps["slack"]["lookup"] += len(self.owners)
-        scope = {"chai_report": cr, "sprint": sprint, "computed": computed, "missing": self.missing,
-                 "mentions": mentions, "scrum_master": SCRUM_MASTER, "gaps": gaps}
-        exec(skill_build_snippet(), {}, scope)  # noqa: S102 - our own SKILL text
+        scope = build(sprint, computed, self.missing, mentions, SCRUM_MASTER, gaps)
         if scope["failure"] is not None:  # sprint health incomplete: nothing is posted
             self.status = scope["failure"]  # the run ends with the SKILL's step-6 end steps
             self.final_steps = end_steps(scope["failure"], self.w["interactive"])
@@ -965,17 +968,16 @@ class WeeklyRun(LegacyRun):
     def gate_and_sections(self, gate_fetch):
         self.take_left("feature_gate")
         scope = {"chai_report": cr, "gate_fetch": gate_fetch}
-        exec(skill_snippet("release_feature_gate("), {}, scope)  # noqa: S102 - our own SKILL text
-        gate, candidates = scope["gate"], scope["candidates"]
+        gate = cr.release_feature_gate(scope["gate_fetch"])
+        candidates = gate["releases"]
         base = {"today": self.today, "board_id": BOARD, "schedules": self.product_pages(candidates),
                 "sprints": self.listing(), "engineer_count": 3, "absences": []}
         self.ctx = sc.build_context(base)
         self.release_results = {r: sc.build_context(dict(base, release=r)) for r in candidates}
         windows = [result["release"] for result in self.release_results.values()]
-        scope = {"chai_report": cr, "context": self.ctx, "windows": windows, "gate": gate}
-        exec(skill_snippet("select_sections("), {}, scope)  # noqa: S102 - our own SKILL text
-        self.missing += scope["missing"]
-        return scope["sections"]
+        sections, missing = cr.select_sections(self.ctx, windows, gate)
+        self.missing += missing
+        return sections
 
     def velocity_from(self, closed, hits, to_fetch, fetched, stored, digest):
         files, complete = [], []
@@ -1289,9 +1291,7 @@ class WeeklyRun(LegacyRun):
         mentions = self.mentions(sprint, computed, gaps)
         self.steps["slack"]["lookup"] += len(self.owners)
         self.steps["python"]["sandbox"] += 1  # the build block, after the Slack lookups
-        scope = {"chai_report": cr, "sprint": sprint, "computed": computed, "missing": self.missing,
-                 "mentions": mentions, "scrum_master": SCRUM_MASTER, "gaps": gaps}
-        exec(skill_build_snippet(), {}, scope)  # noqa: S102 - our own SKILL text
+        scope = build(sprint, computed, self.missing, mentions, SCRUM_MASTER, gaps)
         if scope["failure"] is not None:  # sprint health incomplete: nothing is posted
             self.status = scope["failure"]  # the run ends with the SKILL's step-6 end steps
             self.final_steps = end_steps(scope["failure"], self.w["interactive"])
@@ -1775,16 +1775,12 @@ class ReleaseGateChainTest(unittest.TestCase):
         self.assertEqual(run.pp_calls, [{"kind": "release", "public_parent_id": 990001},
                                         {"kind": "release", "public_parent_id": 990001, "cursor": "1"}])
 
-    def test_skills_request_the_issuelinks_field(self):
-        chai = os.path.join(BIN, "..", "chai")
-        for skill, reads in (("release-health", 2), ("sprint-health", 1)):
-            with self.subTest(skill=skill), open(os.path.join(chai, skill, "SKILL.md"), encoding="utf-8") as fh:
-                text = fh.read()
-                self.assertGreaterEqual(text.count('fields="issuelinks"'), reads)
+    def test_the_script_reads_links_with_the_issuelinks_field(self):
+        with open(os.path.join(BIN, "weekly_report_files.py"), encoding="utf-8") as fh:
+            self.assertIn('{"issue_key": key, "fields": "issuelinks"}', fh.read())
 
-    def test_gate_query_is_the_skill_query(self):
-        with open(WEEKLY_SKILL, encoding="utf-8") as fh:
-            self.assertIn(f"`{GATE_JQL}`", fh.read())
+    def test_gate_query_is_the_script_query(self):
+        self.assertEqual(GATE_JQL, wr.GATE_JQL)
 
     def test_product_pages_listing_failure_leaves_release_sections_out(self):
         posted, _ = weekly(day(14, 2), 14, lambda w: w.update(pp_fails=True))
@@ -1973,10 +1969,11 @@ def duplicates_only(w):
 
 def final_week_mix(w):
     """Open sprint issues in every stage: review or testing (Review, ON_QA), in progress
-    or to do (In Progress, To Do, one unpointed), and a status law 07 does not name."""
+    or to do (In Progress, To Do, one unpointed), and a status no workflow of the three
+    projects has ("Testing")."""
     cur = sprint_value(14, "active")
     for key, status, sp in (("TEST-14", "Review", "2.0"), ("TEST-15", "ON_QA", "1.0"), ("TEST-16", "To Do", "2.0"),
-                            ("TEST-17", "Code Review", "1.0")):
+                            ("TEST-17", "Testing", "1.0")):
         w["sprint"][key] = block(key, status=status, fields=[f"customfield_10020: {cur}", f"customfield_10028: {sp}"])
 
 
