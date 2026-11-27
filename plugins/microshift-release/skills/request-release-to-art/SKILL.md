@@ -99,7 +99,7 @@ version first and reuse matches to avoid duplicates.
    ```text
    Hi, I've opened <ART_KEY> (<ART_URL>) requesting MicroShift X.Y.Z builds (due date <ART_DUE_DATE>). Please help create RPMs and bootc images, thanks!
    Reason: <TEXT>
-   cc @Pablo Acevedo @Rama kasturi @AlejandroGullon @Tami Love
+   cc @microshift-help @Tami Love
    ```
 
    Have the user select actual mentions and post the message. Do not claim it
