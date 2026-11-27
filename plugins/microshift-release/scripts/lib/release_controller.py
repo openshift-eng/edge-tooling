@@ -57,22 +57,23 @@ def get_specific_release(stream, version):
 def check_ocp_payload_accepted(version):
     """Check if OCP payload for X.Y.Z is accepted on the release controller.
 
-    Uses the 4-stable stream API to look up the exact version.
+    Uses the {major}-stable stream API to look up the exact version.
 
     Args:
-        version: Full version, e.g., "4.21.8".
+        version: Full version, e.g., "4.21.8" or "5.0.3".
 
     Returns:
         str: "available", "not_available", or "failed".
     """
     parts = version.split(".")
-    if len(parts) < 2:
+    if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit():
         return "not_available"
 
-    minor = f"{parts[0]}.{parts[1]}"
+    major = parts[0]
+    minor = f"{major}.{parts[1]}"
 
-    # Try the stable stream API for an exact match
-    for stream in [f"{minor}.0-0.nightly", "4-stable"]:
+    # Try the nightly and major-specific stable stream APIs for an exact match
+    for stream in [f"{minor}.0-0.nightly", f"{major}-stable"]:
         release = get_specific_release(stream, version)
         if release:
             phase = release.get("phase", "")
