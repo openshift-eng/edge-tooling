@@ -25,7 +25,8 @@ ART_TEMPLATE="ART-11857"
 QE_TEMPLATE="USHIFT-6945"
 QE_PARENT="USHIFT-4531"
 ART_LABEL="art:microshift:manual-zstream"
-DEFAULT_CC_USER_IDS="U026BG77CDD U028C6K6AH5 U01LDR1DY5V USCCU4Z0W"
+DEFAULT_CC_GROUP_IDS="S0B2YQT76RL" # @microshift-help
+DEFAULT_CC_USER_IDS="U01LDR1DY5V"  # @Tami Love
 
 DRY_RUN=false
 FORCE=false
@@ -74,7 +75,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 ${SKIP_SLACK} && ${RESEND_SLACK} && die "--skip-slack and --resend-slack are mutually exclusive"
-reject_webhook_in_text "${JIRA_BASE_URL} ${ARGS[*]} ${REASON} ${SLACK_CC_USER_IDS:-}"
+reject_webhook_in_text "${JIRA_BASE_URL} ${ARGS[*]} ${REASON} ${SLACK_CC_GROUP_IDS:-} ${SLACK_CC_USER_IDS:-}"
 
 [[ ${#ARGS[@]} -eq 3 ]] || die "Expected 3 args: <VERSION> <ART_DUE_DATE> <RELEASE_DATE>"
 VERSION="${ARGS[0]}"
@@ -395,8 +396,13 @@ fi
 
 # Slack Notification
 if ${SKIP_SLACK} || ${ART_CREATED} || ${RESEND_SLACK}; then
-  ALL_USERS="$(echo "${DEFAULT_CC_USER_IDS} ${SLACK_CC_USER_IDS:-}" | tr ' ' '\n' | grep -v '^$' | sort -u)"
+  ALL_GROUPS="$(printf '%s %s\n' "${DEFAULT_CC_GROUP_IDS}" "${SLACK_CC_GROUP_IDS:-}" | tr ' ' '\n' | awk 'NF' | sort -u)"
+  ALL_USERS="$(printf '%s %s\n' "${DEFAULT_CC_USER_IDS}" "${SLACK_CC_USER_IDS:-}" | tr ' ' '\n' | awk 'NF' | sort -u)"
   CC_STR=""
+  while IFS= read -r gid; do
+    [[ -n "${gid}" ]] || continue
+    CC_STR+="<!subteam^${gid}> "
+  done <<< "${ALL_GROUPS}"
   while IFS= read -r uid; do
     [[ -n "${uid}" ]] || continue
     CC_STR+="<@${uid}> "
@@ -409,12 +415,21 @@ if ${SKIP_SLACK} || ${ART_CREATED} || ${RESEND_SLACK}; then
   reject_webhook_in_text "${MSG}"
 
   if ${SKIP_SLACK}; then
-    # For manual copy-paste, emit plain text with a bare URL (Slack's <url|text>/<@id> markup only renders via the API/webhook).
+    # For manual copy-paste, emit plain text with a bare URL (Slack's <url|text>/<@id>/<!subteam> markup only renders via the API/webhook).
     MSG_HUMAN="Hi, I've opened ${ART_KEY} (${JIRA_BASE_URL}/browse/${ART_KEY}) ${REQUEST_TAIL}"
     MSG_HUMAN+=$'\nReason: '"${REASON}"
     log "Slack notification skipped (--skip-slack). Paste this into Slack:"
     printf '%s\n' "----- 8< ----- Slack message ----- 8< -----" "${MSG_HUMAN}" "----- 8< ----------------------- 8< -----" >&2
-    [[ -n "${ALL_USERS}" ]] && log "Then @-mention these people (IDs can't be pasted as mentions): $(echo "${ALL_USERS}" | tr '\n' ' ')"
+    MENTION_HINTS=""
+    while IFS= read -r id; do
+      [[ -n "${id}" ]] || continue
+      case "${id}" in
+        S0B2YQT76RL) MENTION_HINTS+="@microshift-help (${id}) " ;;
+        U01LDR1DY5V) MENTION_HINTS+="@Tami Love (${id}) " ;;
+        *) MENTION_HINTS+="${id} " ;;
+      esac
+    done <<< "$(printf '%s\n%s\n' "${ALL_GROUPS}" "${ALL_USERS}" | awk 'NF')"
+    [[ -n "${MENTION_HINTS}" ]] && log "Then @-mention these groups/people (IDs can't be pasted as mentions): ${MENTION_HINTS% }"
   elif ${DRY_RUN}; then
     log "[DRY RUN] Would send the notification for ${ART_KEY} (message, reason, and URL redacted)."
   else

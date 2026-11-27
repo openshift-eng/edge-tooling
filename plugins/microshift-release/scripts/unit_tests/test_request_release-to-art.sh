@@ -26,6 +26,7 @@ run_case() {
     JIRA_USERNAME="operator@example.test" \
     JIRA_API_TOKEN="${SYNTHETIC_VALUE}" \
     SLACK_WEBHOOK_URL="${CASE_WEBHOOK_URL-${SYNTHETIC_WEBHOOK}}" \
+    SLACK_CC_GROUP_IDS="${CASE_SLACK_CC_GROUP_IDS:-}" \
     MOCK_SCENARIO="${scenario}" MOCK_ART_KEY="ART-55" MOCK_QE_KEY="USHIFT-66" \
     MOCK_REQUEST_LOG="${CASE_DIR}/requests.jsonl" \
     MOCK_SLACK_LOG="${CASE_DIR}/slack.jsonl" \
@@ -47,8 +48,11 @@ jq -e -s '
       {type: {id: "500"}, inwardIssue: {key: "USHIFT-202"}, outwardIssue: {key: "ART-101"}},
       {type: {id: "501"}, inwardIssue: {key: "USHIFT-202"}, outwardIssue: {key: "USHIFT-6945"}}]
 ' "${CASE_DIR}/requests.jsonl" >/dev/null
-jq -e -s 'length == 1 and (.[0].text | contains("ART-101"))' \
-  "${CASE_DIR}/slack.jsonl" >/dev/null
+jq -e -s '
+  length == 1
+  and (.[0].text | contains("ART-101"))
+  and (.[0].text | endswith("\ncc <!subteam^S0B2YQT76RL> <@U01LDR1DY5V>"))
+' "${CASE_DIR}/slack.jsonl" >/dev/null
 
 # Related is non-directional: Jira may report the ART key as inwardIssue.
 run_case inward_link
@@ -156,7 +160,18 @@ run_case dry_run --dry-run
 jq -e -s 'all(.[]; .method == "GET")' "${CASE_DIR}/requests.jsonl" >/dev/null
 run_case new_success --skip-slack
 test ! -s "${CASE_DIR}/slack.jsonl"
+grep -Fq '@microshift-help (S0B2YQT76RL)' "${CASE_DIR}/stderr"
+grep -Fq '@Tami Love (U01LDR1DY5V)' "${CASE_DIR}/stderr"
+CASE_SLACK_CC_GROUP_IDS="S9999999999"
+run_case new_success --skip-slack
+test ! -s "${CASE_DIR}/slack.jsonl"
+grep -Fq 'S9999999999' "${CASE_DIR}/stderr"
+unset CASE_SLACK_CC_GROUP_IDS
 unset CASE_WEBHOOK_URL
+CASE_SLACK_CC_GROUP_IDS="S9999999999"
+run_case new_success
+jq -e -s 'length == 1 and (.[0].text | contains("<!subteam^S9999999999>"))' "${CASE_DIR}/slack.jsonl" >/dev/null
+unset CASE_SLACK_CC_GROUP_IDS
 
 CASE_REASON="${SYNTHETIC_WEBHOOK}"
 for mode in --force --dry-run --skip-slack; do
@@ -171,4 +186,18 @@ for mode in --force --dry-run --skip-slack; do
     exit 1
   fi
 done
+unset CASE_REASON
+
+CASE_SLACK_CC_GROUP_IDS="${SYNTHETIC_WEBHOOK}"
+if run_case validation --skip-slack; then
+  printf 'FAIL: webhook URL was accepted in SLACK_CC_GROUP_IDS\n' >&2
+  exit 1
+fi
+test ! -s "${CASE_DIR}/requests.jsonl"
+grep -Fq 'Slack webhook URL must not appear' "${CASE_DIR}/stderr"
+if grep -Fq "${SYNTHETIC_WEBHOOK}" "${CASE_DIR}/stdout" "${CASE_DIR}/stderr"; then
+  printf 'FAIL: SLACK_CC_GROUP_IDS disclosed webhook URL\n' >&2
+  exit 1
+fi
+unset CASE_SLACK_CC_GROUP_IDS
 printf 'PASS: webhook security checks\n'
